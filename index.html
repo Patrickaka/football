@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>足球比分预测</title>
+<style>
+  :root {
+    --bg: #0f1419; --card: #1a2230; --card2: #222d3d;
+    --line: #2c3a4e; --text: #e6edf3; --muted: #8b98a9;
+    --accent: #2ea043; --accent2: #3fb950; --warn: #d29922;
+    --home: #4493f8; --draw: #8b98a9; --away: #f85149;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+    line-height: 1.6; padding: 24px 16px;
+  }
+  .wrap { max-width: 860px; margin: 0 auto; }
+  header { text-align: center; margin-bottom: 24px; }
+  header h1 { font-size: 24px; font-weight: 600; }
+  header p { color: var(--muted); font-size: 13px; margin-top: 4px; }
+
+  .search { width: 100%; padding: 12px 16px; font-size: 15px;
+    background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+    color: var(--text); margin-bottom: 16px; outline: none; }
+  .search:focus { border-color: var(--accent); }
+
+  .league-group { margin-bottom: 18px; }
+  .league-title { font-size: 13px; color: var(--accent2); font-weight: 600;
+    margin: 0 4px 8px; letter-spacing: .5px; }
+  .match {
+    display: flex; align-items: center; gap: 12px;
+    background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+    padding: 12px 16px; margin-bottom: 8px; cursor: pointer; transition: .15s;
+  }
+  .match:hover { border-color: var(--accent); background: var(--card2); transform: translateX(2px); }
+  .match .time { color: var(--muted); font-size: 12px; min-width: 78px; }
+  .match .teams { flex: 1; font-size: 15px; }
+  .match .teams .vs { color: var(--muted); margin: 0 8px; font-size: 13px; }
+  .match .arrow { color: var(--muted); }
+
+  .status { text-align: center; color: var(--muted); padding: 40px 0; font-size: 15px; }
+  .status.error { color: var(--away); }
+  .spinner { display: inline-block; width: 22px; height: 22px; border: 3px solid var(--line);
+    border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite;
+    vertical-align: middle; margin-right: 8px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .back { display: inline-flex; align-items: center; gap: 6px; cursor: pointer;
+    color: var(--accent2); font-size: 14px; margin-bottom: 16px; user-select: none; }
+  .back:hover { text-decoration: underline; }
+
+  .match-head { text-align: center; margin-bottom: 20px; }
+  .match-head .names { font-size: 22px; font-weight: 600; }
+  .match-head .names b { color: var(--accent2); }
+  .match-head .meta { color: var(--muted); font-size: 13px; margin-top: 4px; }
+
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+    padding: 16px 18px; margin-bottom: 14px; }
+  .card h3 { font-size: 15px; margin-bottom: 12px; color: var(--accent2);
+    display: flex; align-items: center; gap: 6px; }
+  .row { display: flex; justify-content: space-between; gap: 12px;
+    font-size: 14px; padding: 4px 0; }
+  .row .k { color: var(--muted); }
+  .row .v { text-align: right; }
+
+  .probbar { display: flex; height: 22px; border-radius: 6px; overflow: hidden;
+    margin: 6px 0 10px; font-size: 11px; }
+  .probbar > div { display: flex; align-items: center; justify-content: center;
+    color: #fff; white-space: nowrap; overflow: hidden; }
+  .seg-home { background: var(--home); } .seg-draw { background: var(--draw); }
+  .seg-away { background: var(--away); } .seg-over { background: var(--accent); }
+  .seg-under { background: #6e7681; }
+
+  .score { display: flex; align-items: center; gap: 12px; padding: 8px 0;
+    border-bottom: 1px solid var(--line); }
+  .score:last-child { border-bottom: none; }
+  .score .rank { color: var(--muted); font-size: 13px; min-width: 26px; }
+  .score .sc { font-size: 16px; font-weight: 600; min-width: 96px; }
+  .score .res { font-size: 12px; padding: 1px 8px; border-radius: 20px; }
+  .res-主胜 { background: rgba(68,147,248,.2); color: var(--home); }
+  .res-平局 { background: rgba(139,152,169,.2); color: var(--draw); }
+  .res-客胜 { background: rgba(248,81,73,.2); color: var(--away); }
+  .score .bar { flex: 1; height: 8px; background: var(--card2); border-radius: 4px; overflow: hidden; }
+  .score .bar > i { display: block; height: 100%; background: var(--accent); }
+  .score .pct { font-size: 13px; min-width: 52px; text-align: right; color: var(--accent2); }
+
+  .rec { background: linear-gradient(135deg, #1a2230, #1e2a1e);
+    border: 1px solid var(--accent); border-radius: 12px; padding: 16px 18px; margin-bottom: 12px; }
+  .rec .title { font-size: 20px; font-weight: 700; }
+  .rec .title .star { color: var(--warn); }
+  .rec .sub { color: var(--muted); font-size: 13px; margin: 4px 0 8px; }
+  .rec .reasons { font-size: 13px; }
+  .rec .reasons span { display: inline-block; background: var(--card2);
+    border-radius: 20px; padding: 2px 10px; margin: 3px 4px 0 0; }
+
+  .disclaimer { color: var(--muted); font-size: 12px; text-align: center;
+    margin-top: 20px; line-height: 1.7; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>⚽ 足球比分预测</h1>
+    <p>数据来源：odds.500.com（多家博彩公司平均值） · 泊松概率模型</p>
+  </header>
+  <div id="app"></div>
+  <div class="disclaimer">
+    ⚠ 以上分析仅为概率统计参考，体育赛事结果受多种不确定因素影响，<br>
+    不构成任何投注建议。请理性对待！
+  </div>
+</div>
+
+<script>
+const app = document.getElementById('app');
+let allMatches = [];
+
+const pct = x => (x * 100).toFixed(1) + '%';
+const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c =>
+  ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+function loading(text) {
+  app.innerHTML = `<div class="status"><span class="spinner"></span>${esc(text)}</div>`;
+}
+function showError(text) {
+  app.innerHTML = `<div class="status error">✗ ${esc(text)}</div>`;
+}
+
+async function loadMatches() {
+  loading('正在联网获取今日比赛列表…');
+  try {
+    const data = await fetch('/api/matches').then(r => r.json());
+    if (data.error) return showError(data.error);
+    allMatches = data.matches || [];
+    if (!allMatches.length) return showError('未找到任何比赛数据，请稍后重试。');
+    renderList('');
+  } catch (e) {
+    showError('网络请求失败：' + e.message);
+  }
+}
+
+function renderList(filter) {
+  const kw = filter.trim();
+  const list = kw
+    ? allMatches.filter(m => (m.home + m.away + (m.league || '')).includes(kw))
+    : allMatches;
+
+  const groups = {};
+  list.forEach(m => { (groups[m.league || '其它'] ||= []).push(m); });
+
+  let html = `<input class="search" id="search" placeholder="🔍 搜索球队或联赛…"
+      value="${esc(kw)}" autocomplete="off">`;
+  html += `<div class="status" style="padding:4px 0 12px;font-size:13px">共 ${list.length} 场比赛</div>`;
+
+  if (!list.length) {
+    html += `<div class="status">没有匹配的比赛</div>`;
+  }
+  for (const [league, ms] of Object.entries(groups)) {
+    html += `<div class="league-group"><div class="league-title">${esc(league)}</div>`;
+    ms.forEach(m => {
+      html += `<div class="match" data-id="${esc(m.match_id)}">
+        <span class="time">${esc(m.time || '')}</span>
+        <span class="teams">${esc(m.home)}<span class="vs">vs</span>${esc(m.away)}</span>
+        <span class="arrow">›</span></div>`;
+    });
+    html += `</div>`;
+  }
+  app.innerHTML = html;
+
+  const search = document.getElementById('search');
+  search.oninput = () => renderList(search.value);
+  search.focus();
+  const pos = search.value.length;
+  search.setSelectionRange(pos, pos);
+
+  app.querySelectorAll('.match').forEach(el => {
+    el.onclick = () => {
+      const m = allMatches.find(x => String(x.match_id) === el.dataset.id);
+      if (m) predict(m);
+    };
+  });
+}
+
+async function predict(m) {
+  loading(`正在抓取 ${m.home} vs ${m.away} 的赔率数据…`);
+  const q = new URLSearchParams({
+    match_id: m.match_id, home: m.home, away: m.away,
+    league: m.league || '', time: m.time || ''
+  });
+  try {
+    const data = await fetch('/api/predict?' + q).then(r => r.json());
+    if (data.error) {
+      app.innerHTML = backBtn() + `<div class="status error">✗ ${esc(data.error)}</div>`;
+      bindBack();
+      return;
+    }
+    renderResult(data.result);
+  } catch (e) {
+    app.innerHTML = backBtn() + `<div class="status error">网络请求失败：${esc(e.message)}</div>`;
+    bindBack();
+  }
+}
+
+const backBtn = () => `<div class="back" id="back">‹ 返回比赛列表</div>`;
+function bindBack() {
+  const b = document.getElementById('back');
+  if (b) b.onclick = () => renderList('');
+}
+
+function probBar(segs) {
+  return `<div class="probbar">` + segs.map(s =>
+    `<div class="seg-${s.cls}" style="width:${(s.p * 100).toFixed(1)}%">${s.label}</div>`
+  ).join('') + `</div>`;
+}
+
+function renderResult(r) {
+  const { match: m, asian: a, euro: e, total: t, model: md } = r;
+  const top = md.top_scores;
+  const maxProb = top[0].prob;
+
+  let html = backBtn();
+  html += `<div class="match-head">
+    <div class="names"><b>${esc(m.home)}</b> <span style="color:var(--muted)">vs</span> <b>${esc(m.away)}</b></div>
+    <div class="meta">${esc(m.league || '')} ${esc(m.time || '')}</div></div>`;
+
+  html += `<div class="card"><h3>🀄 亚盘分析</h3>
+    <div class="row"><span class="k">让球走势</span><span class="v">${esc(a.handicap_trend)}</span></div>
+    <div class="row"><span class="k">水位走势</span><span class="v">${esc(a.water_trend)}</span></div>
+    <div class="row"><span class="k">终盘真实概率</span><span class="v">主受让方 ${pct(a.close_prob.home_recv)} / 让球方 ${pct(a.close_prob.away_give)}</span></div>
+    <div class="row"><span class="k">终盘判断</span><span class="v">${esc(a.favor_desc)}，${esc(a.diff_desc)}</span></div></div>`;
+
+  html += `<div class="card"><h3>💶 欧赔分析</h3>
+    ${probBar([
+      { cls: 'home', p: e.close.home, label: '主胜 ' + pct(e.close.home) },
+      { cls: 'draw', p: e.close.draw, label: '平 ' + pct(e.close.draw) },
+      { cls: 'away', p: e.close.away, label: '客胜 ' + pct(e.close.away) },
+    ])}
+    <div class="row"><span class="k">变化趋势</span><span class="v">${esc(e.changes.length ? e.changes.join('，') : '赔率稳定')}</span></div></div>`;
+
+  html += `<div class="card"><h3>📊 大小球分析</h3>
+    ${probBar([
+      { cls: 'over', p: t.close_prob.over, label: '大 ' + pct(t.close_prob.over) },
+      { cls: 'under', p: t.close_prob.under, label: '小 ' + pct(t.close_prob.under) },
+    ])}
+    <div class="row"><span class="k">终盘盘口线</span><span class="v">${esc(t.close_line)}</span></div>
+    <div class="row"><span class="k">判断</span><span class="v">${esc(t.lean_desc)}</span></div>
+    <div class="row"><span class="k">期望总进球</span><span class="v">${t.expected_goals[0]}-${t.expected_goals[1]} 球</span></div></div>`;
+
+  html += `<div class="card"><h3>🎯 Top 5 候选比分 <span style="color:var(--muted);font-weight:400;font-size:12px">（欧赔校准后真实概率）</span></h3>
+    <div class="row" style="padding-bottom:8px"><span class="k">泊松期望进球</span><span class="v">主队 λ=${md.lam_home.toFixed(2)} / 客队 λ=${md.lam_away.toFixed(2)}</span></div>`;
+  top.forEach((s, i) => {
+    html += `<div class="score">
+      <span class="rank">#${i + 1}</span>
+      <span class="sc">${esc(m.home)} ${s.home} - ${s.away} ${esc(m.away)}</span>
+      <span class="res res-${s.result}">${s.result}</span>
+      <span class="bar"><i style="width:${(s.prob / maxProb * 100).toFixed(0)}%"></i></span>
+      <span class="pct">${pct(s.prob)}</span></div>`;
+  });
+  html += `</div>`;
+
+  html += `<h3 style="color:var(--accent2);font-size:15px;margin:18px 0 10px">⭐ 推荐：最可能的 2 个比分</h3>`;
+  md.recommend.forEach((s, i) => {
+    html += `<div class="rec">
+      <div class="title"><span class="star">★</span> ${esc(m.home)} ${s.home} : ${s.away} ${esc(m.away)} <span class="star">★</span></div>
+      <div class="sub">第${i + 1}推荐 · 结果：${s.result} · 比分概率 ${pct(s.prob)}</div>
+      <div class="reasons">${s.reasons.map(x => `<span>${esc(x)}</span>`).join('')}</div></div>`;
+  });
+
+  app.innerHTML = html;
+  bindBack();
+}
+
+loadMatches();
+</script>
+</body>
+</html>
