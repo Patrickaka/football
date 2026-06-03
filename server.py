@@ -7,8 +7,12 @@
 然后浏览器打开 http://localhost:8000
 """
 
+import os
 import sys
 import json
+import hmac
+import base64
+import socket
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
@@ -18,13 +22,35 @@ import football
 
 sys.stdout.reconfigure(encoding='utf-8')
 
-HOST = '127.0.0.1'
-PORT = 8000
+HOST = '0.0.0.0'  # 监听所有网卡，局域网/公网（经端口转发或隧道）可访问
+PORT = int(os.environ.get('FOOTBALL_PORT', '9000'))
 INDEX_FILE = Path(__file__).parent / 'index.html'
+
+# 公网暴露时务必设置鉴权。两种方式（可并用）：
+#   多用户: FOOTBALL_USERS="alice:pass1,bob:pass2"
+#   单用户: FOOTBALL_USER=alice FOOTBALL_PASS=pass1
+def _load_credentials():
+    """解析鉴权凭据为 {用户名: 密码}；无任何配置则返回空（不启用鉴权）"""
+    creds = {}
+    for pair in os.environ.get('FOOTBALL_USERS', '').split(','):
+        user, sep, pwd = pair.strip().partition(':')
+        if sep and user.strip() and pwd.strip():
+            creds[user.strip()] = pwd.strip()
+    single_user = os.environ.get('FOOTBALL_USER', '').strip()
+    single_pass = os.environ.get('FOOTBALL_PASS', '').strip()
+    if single_user and single_pass:
+        creds.setdefault(single_user, single_pass)
+    return creds
+
+
+CREDENTIALS = _load_credentials()
+AUTH_ENABLED = bool(CREDENTIALS)
 
 
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
+        if not self._authorized():
+            return
         route = urlparse(self.path)
         if route.path == '/':
             self._serve_index()
@@ -35,6 +61,25 @@ class Handler(BaseHTTPRequestHandler):
             self._serve_json(self._predict_payload(params))
         else:
             self._send(404, 'text/plain; charset=utf-8', b'Not Found')
+
+    def _authorized(self):
+        """启用鉴权时校验 HTTP Basic 凭据；未启用则放行"""
+        if not AUTH_ENABLED:
+            return True
+        header = self.headers.get('Authorization', '')
+        if header.startswith('Basic '):
+            try:
+                user, _, pwd = base64.b64decode(header[6:]).decode('utf-8').partition(':')
+                expected = CREDENTIALS.get(user)
+                if expected is not None and hmac.compare_digest(pwd, expected):
+                    return True
+            except (ValueError, UnicodeDecodeError):
+                pass
+        self.send_response(401)
+        self.send_header('WWW-Authenticate', 'Basic realm="football"')
+        self.send_header('Content-Length', '0')
+        self.end_headers()
+        return False
 
     def _serve_index(self):
         try:
@@ -81,16 +126,53 @@ class Handler(BaseHTTPRequestHandler):
         sys.stderr.write(f"  {self.address_string()} - {fmt % args}\n")
 
 
+def _is_private_lan(ip):
+    """是否为常见家庭/办公局域网段（排除代理/VPN 虚拟段如 198.18.x）"""
+    if ip.startswith('192.168.') or ip.startswith('10.'):
+        return True
+    parts = ip.split('.')
+    return len(parts) == 4 and parts[0] == '172' and parts[1].isdigit() and 16 <= int(parts[1]) <= 31
+
+
+def _candidate_ips():
+    """收集本机所有非回环 IPv4，私有局域网段排在前面"""
+    ips = set()
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+        try:
+            s.connect(('10.255.255.255', 1))
+            ips.add(s.getsockname()[0])
+        except OSError:
+            pass
+    try:
+        for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+            ips.add(info[4][0])
+    except OSError:
+        pass
+    ips.discard('127.0.0.1')
+    return sorted(ips, key=lambda ip: (not _is_private_lan(ip), ip))
+
+
 def main():
     server = ThreadingHTTPServer((HOST, PORT), Handler)
-    url = f'http://localhost:{PORT}'
+    local_url = f'http://localhost:{PORT}'
+    candidates = _candidate_ips()
     print("=" * 50)
     print("  足球比分预测 - 网页服务已启动")
-    print(f"  访问地址: {url}")
+    print(f"  本机访问:   {local_url}")
+    if candidates:
+        print(f"  局域网访问: http://{candidates[0]}:{PORT}  （手机/其它设备用这个）")
+        if len(candidates) > 1:
+            others = '  '.join(f'http://{ip}:{PORT}' for ip in candidates[1:])
+            print(f"  其它候选地址（若上面连不上，依次试）: {others}")
+    if AUTH_ENABLED:
+        print(f"  鉴权: 已启用 HTTP Basic（用户: {', '.join(sorted(CREDENTIALS))}）")
+    else:
+        print("  鉴权: 未启用 ⚠ 公网暴露前请设置 FOOTBALL_USERS 或 FOOTBALL_USER/PASS")
+    print("  公网访问: 用隧道（cloudflared/ngrok）或路由器端口转发，详见 README")
     print("  按 Ctrl+C 停止")
     print("=" * 50)
     try:
-        webbrowser.open(url)
+        webbrowser.open(local_url)
     except Exception:
         pass
     try:
