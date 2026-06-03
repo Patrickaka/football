@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<base href="/football/">
 <title>足球比分预测</title>
 <style>
   :root {
@@ -131,7 +132,7 @@ function showError(text) {
 async function loadMatches() {
   loading('正在联网获取今日比赛列表…');
   try {
-    const data = await fetch('/api/matches').then(r => r.json());
+    const data = await fetch('api/matches').then(r => r.json());
     if (data.error) return showError(data.error);
     allMatches = data.matches || [];
     if (!allMatches.length) return showError('未找到任何比赛数据，请稍后重试。');
@@ -190,7 +191,7 @@ async function predict(m) {
     league: m.league || '', time: m.time || ''
   });
   try {
-    const data = await fetch('/api/predict?' + q).then(r => r.json());
+    const data = await fetch('api/predict?' + q).then(r => r.json());
     if (data.error) {
       app.innerHTML = backBtn() + `<div class="status error">✗ ${esc(data.error)}</div>`;
       bindBack();
