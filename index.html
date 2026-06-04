@@ -3,7 +3,6 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<base href="/football/">
 <title>足球比分预测</title>
 <style>
   :root {
@@ -133,6 +132,27 @@ const pct = x => (x * 100).toFixed(1) + '%';
 const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c =>
   ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
+/** 本地根路径部署为 ''；子路径如 /football/ 时自动加前缀 */
+function apiPrefix() {
+  const p = location.pathname;
+  if (p === '/football' || p.startsWith('/football/')) return '/football';
+  return '';
+}
+
+async function fetchJson(path) {
+  const url = apiPrefix() + path;
+  const r = await fetch(url);
+  const text = await r.text();
+  if (!r.ok) {
+    throw new Error(r.status === 404 ? `接口不存在: ${url}` : text.slice(0, 120));
+  }
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error('响应不是 JSON: ' + text.slice(0, 60));
+  }
+}
+
 function loading(text) {
   searchWrap.style.display = 'none';
   app.innerHTML = `<div class="status"><span class="spinner"></span>${esc(text)}</div>`;
@@ -145,7 +165,7 @@ function showError(text) {
 async function loadMatches() {
   loading('正在联网获取今日比赛列表…');
   try {
-    const data = await fetch('api/matches').then(r => r.json());
+    const data = await fetchJson('/api/matches');
     if (data.error) return showError(data.error);
     allMatches = data.matches || [];
     if (!allMatches.length) return showError('未找到任何比赛数据，请稍后重试。');
@@ -238,7 +258,7 @@ async function predict(m) {
     league: m.league || '', time: m.time || ''
   });
   try {
-    const data = await fetch('api/predict?' + q).then(r => r.json());
+    const data = await fetchJson('/api/predict?' + q);
     if (data.error) {
       app.innerHTML = backBtn() + `<div class="status error">✗ ${esc(data.error)}</div>`;
       bindBack();

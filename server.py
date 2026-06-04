@@ -48,19 +48,30 @@ AUTH_ENABLED = bool(CREDENTIALS)
 
 
 class Handler(BaseHTTPRequestHandler):
+    @staticmethod
+    def _normalize_path(path):
+        """兼容子路径部署（如反代到 /football/）与本地根路径访问"""
+        p = path.split('?', 1)[0].rstrip('/') or '/'
+        if p == '/football':
+            return '/'
+        if p.startswith('/football/'):
+            return p[len('/football'):] or '/'
+        return p
+
     def do_GET(self):
         if not self._authorized():
             return
         route = urlparse(self.path)
-        if route.path == '/':
+        path = self._normalize_path(route.path)
+        if path == '/':
             self._serve_index()
-        elif route.path == '/api/matches':
+        elif path == '/api/matches':
             self._serve_json(self._matches_payload())
-        elif route.path == '/api/predict':
+        elif path == '/api/predict':
             params = parse_qs(route.query)
             self._serve_json(self._predict_payload(params))
         else:
-            self._send(404, 'text/plain; charset=utf-8', b'Not Found')
+            self._send_json_error(404, f'Not Found: {route.path}')
 
     def _authorized(self):
         """启用鉴权时校验 HTTP Basic 凭据；未启用则放行"""
@@ -92,6 +103,10 @@ class Handler(BaseHTTPRequestHandler):
     def _serve_json(self, payload):
         body = json.dumps(payload, ensure_ascii=False).encode('utf-8')
         self._send(200, 'application/json; charset=utf-8', body)
+
+    def _send_json_error(self, status, message):
+        body = json.dumps({'error': message}, ensure_ascii=False).encode('utf-8')
+        self._send(status, 'application/json; charset=utf-8', body)
 
     def _matches_payload(self):
         try:
