@@ -32,7 +32,8 @@ SUM_SOFT_SIGMA = 3.2
 SPAN_SOFT_SIGMA = 1.4
 
 # 推荐注数（直选为带顺序的三位数）
-RECOMMEND_GROUPS = 10
+RECOMMEND_GROUPS = 15
+ZHIXUAN_TOP3 = 3
 ZU6_POOL_SIZE = 5
 ZU6_FOUR_SIZE = 4
 
@@ -359,7 +360,7 @@ def backtest(numbers, trials=BACKTEST_TRIALS):
     if len(numbers) < trials + RECENT_WINDOW + 5:
         trials = max(20, len(numbers) - RECENT_WINDOW - 5)
 
-    hit_top10 = hit_ge2 = hit_sum_band = hit_zu6_pool = hit_zu6_four = zu6_draws = 0
+    hit_top = hit_top3 = hit_ge2 = hit_sum_band = hit_zu6_pool = hit_zu6_four = zu6_draws = 0
     start = len(numbers) - trials
 
     for i in range(start, len(numbers)):
@@ -381,7 +382,9 @@ def backtest(numbers, trials=BACKTEST_TRIALS):
         act_s = f"{actual[0]}{actual[1]}{actual[2]}"
 
         if act_s in top_nums:
-            hit_top10 += 1
+            hit_top += 1
+        if act_s in top_nums[:ZHIXUAN_TOP3]:
+            hit_top3 += 1
         pred_digits = {int(ch) for s in top_nums for ch in s}
         if len(pred_digits & set(actual)) >= 2:
             hit_ge2 += 1
@@ -400,8 +403,11 @@ def backtest(numbers, trials=BACKTEST_TRIALS):
     n = trials
     return {
         "trials": n,
-        "top10_hit": hit_top10,
-        "top10_rate": hit_top10 / n,
+        "top_hit": hit_top,
+        "top_rate": hit_top / n,
+        "top3_hit": hit_top3,
+        "top3_rate": hit_top3 / n,
+        "recommend_groups": RECOMMEND_GROUPS,
         "ge2_digit_rate": hit_ge2 / n,
         "sum_band_rate": hit_sum_band / n,
         "zu6_draws": zu6_draws,
@@ -450,6 +456,23 @@ def run_prediction(data=None):
             "digits": [{"digit": d, "score": round(s, 1)} for d, s in pr],
         })
 
+    miss_global = []
+    for d in range(10):
+        mv = miss_value(numbers, d)
+        if mv >= 8:
+            miss_global.append({"digit": d, "miss": mv})
+    miss_global.sort(key=lambda x: -x["miss"])
+
+    miss_position = []
+    for pos, name in enumerate(pos_names):
+        top = sorted(range(10), key=lambda x: -miss_value(numbers, x, position=pos))[:3]
+        miss_position.append({
+            "name": name,
+            "digits": [{"digit": d, "miss": miss_value(numbers, d, position=pos)} for d in top],
+        })
+
+    sum_tails = [{"tail": t, "count": c} for t, c in meta_raw["sum_tail_freq"].most_common(5)]
+
     return {
         "period": periods[-1],
         "total_periods": len(numbers),
@@ -462,6 +485,11 @@ def run_prediction(data=None):
         "kill": kill,
         "rank_top10": [{"digit": d, "score": round(s, 1)} for d, s in rank[:10]],
         "position_top": position_top,
+        "miss_global": miss_global,
+        "miss_position": miss_position,
+        "sum_tails": sum_tails,
+        "recommend_groups": RECOMMEND_GROUPS,
+        "recent_window": RECENT_WINDOW,
         "sum_span": {
             "sum_center": round(meta["sum_center"], 1),
             "hot_sums": meta["hot_sums"],
@@ -474,6 +502,7 @@ def run_prediction(data=None):
             "miss_zu6": form_prob["miss_zu6"],
             "miss_zu3": form_prob["miss_zu3"],
             "recent": {k: round(v, 4) for k, v in form_prob["recent_p"].items()},
+            "hist": {k: round(v, 4) for k, v in form_prob["hist_p"].items()},
             "markov": {k: round(v, 4) for k, v in form_prob["markov_p"].items()},
             "blend": {k: round(v, 4) for k, v in form_prob["blend_p"].items()},
             "theory": THEORY_FORM_P,
@@ -483,6 +512,7 @@ def run_prediction(data=None):
             "digits_str": "".join(map(str, zu6_four)),
             "combos": z6_straight,
         },
+        "zhixuan_top3": [{"num": num, "score": round(w, 1)} for w, num in zhixuan_top[:ZHIXUAN_TOP3]],
         "zhixuan": [{"num": num, "score": round(w, 1)} for w, num in zhixuan_top],
         "backtest": bt,
     }
@@ -504,8 +534,8 @@ def print_report(result):
     print(f"  上期 {result['period']} 期: {result['last_draw']}  ({lf}，连出 {form['streak']} 期)")
     print(f"  形态预估 → 组六 {form['blend']['zu6']*100:.1f}%  |  组三 {form['blend']['zu3']*100:.1f}%  |  豹子 {form['blend']['baozi']*100:.1f}%")
     print(f"  组六四码 → {z6['digits_str']}  (覆盖: {', '.join(z6['combos'])})")
-    if result["zhixuan"]:
-        top3 = ", ".join(x["num"] for x in result["zhixuan"][:3])
+    if result["zhixuan_top3"]:
+        top3 = ", ".join(x["num"] for x in result["zhixuan_top3"])
         print(f"  直选Top3 → {top3}")
 
     print("\n" + "=" * 70)
@@ -513,6 +543,13 @@ def print_report(result):
     print("=" * 70)
     for item in result["hot_digits"]:
         print(f"  热号 {item['digit']} -> 加权{item['weight']:.1f}")
+
+    print("\n遗漏分析（分位+全局）")
+    for item in result.get("miss_global", []):
+        print(f"  数字{item['digit']} 全局遗漏{item['miss']}期")
+    for block in result.get("miss_position", []):
+        for item in block["digits"]:
+            print(f"  {block['name']}位 数字{item['digit']} 遗漏{item['miss']}期")
 
     print("\n上期号码:", result["last_draw"])
     print("邻号:", result["neighbors"])
@@ -543,6 +580,8 @@ def print_report(result):
     print("\n和值/跨度（软约束中心）")
     print(f"  和值中心 {ss['sum_center']}，推荐区间 {ss['hot_sums']}")
     print(f"  跨度中心 {ss['span_center']}，推荐 {ss['hot_spans']}")
+    if result.get("sum_tails"):
+        print("  和值尾TOP5:", [(x["tail"], x["count"]) for x in result["sum_tails"]])
 
     print("\n综合评分 TOP10")
     for item in result["rank_top10"]:
@@ -560,6 +599,12 @@ def print_report(result):
     print("  覆盖 4 注组六:", ", ".join(z6["combos"]))
 
     print("\n" + "=" * 70)
+    print("【直选Top3推荐】（百十个位顺序一致）")
+    print("=" * 70)
+    for idx, item in enumerate(result.get("zhixuan_top3", []), start=1):
+        print(f"  {idx}. {item['num']}  评分={item['score']:.1f}")
+
+    print("\n" + "=" * 70)
     print(f"【直选推荐 {RECOMMEND_GROUPS} 注】（百十个位顺序一致）")
     print("=" * 70)
     print("  杀码参考:", result["kill"], "（含杀码组合已排除）")
@@ -572,7 +617,8 @@ def print_report(result):
     print("滚动回测（仅供参考）")
     print("=" * 70)
     print(f"  回测期数: {bt['trials']}")
-    print(f"  直选{RECOMMEND_GROUPS}注命中: {bt['top10_rate']*100:.1f}%  ({bt['top10_hit']}/{bt['trials']})")
+    print(f"  直选{RECOMMEND_GROUPS}注命中: {bt['top_rate']*100:.1f}%  ({bt['top_hit']}/{bt['trials']})")
+    print(f"  直选Top3命中: {bt['top3_rate']*100:.1f}%  ({bt['top3_hit']}/{bt['trials']})")
     print(f"  推荐池至少中2个数字: {bt['ge2_digit_rate']*100:.1f}%")
     print(f"  和值落在预测带±4: {bt['sum_band_rate']*100:.1f}%")
     if bt["zu6_draws"]:
