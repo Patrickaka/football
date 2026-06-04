@@ -41,6 +41,44 @@ TOTAL_LEAN_THRESHOLD = 0.55
 # 泊松比分矩阵枚举的单队最大进球数
 MAX_GOALS = 7
 
+# 初/终盘融合权重（终盘为主，初盘平滑噪声）
+CLOSE_BLEND_WEIGHT = 0.72
+
+# λ 网格拟合：粗搜步长、细搜步长与半径
+LAMBDA_COARSE_STEP = 0.12
+LAMBDA_FINE_STEP = 0.04
+LAMBDA_FINE_RADIUS = 0.18
+
+# 拟合目标权重：1X2 / 总进球 / 净胜球(反推) / 大小球分布 / 球队攻防先验
+FIT_W_1X2 = 3.0
+FIT_W_TOTAL = 1.4
+FIT_W_SUPREMACY = 2.0
+FIT_W_OU_DIST = 0.9
+FIT_W_TEAM = 1.35
+
+# 净胜球：亚盘反推 vs 欧赔反推 的融合权重（不再使用让球盘数值本身）
+SUP_ASIAN_WEIGHT = 0.48
+SUP_EURO_WEIGHT = 0.52
+
+# 联赛场均进球基准（用于球队攻防强度归一化）
+AVG_LEAGUE_GOAL = 1.35
+HOME_VENUE_ATTACK_BOOST = 1.06
+
+# 比分冷热：相对历史基准频率的比值阈值
+HEAT_RATIO_HOT = 0.70
+HEAT_RATIO_COLD = 1.32
+HEAT_FILTER_PENALTY = 0.62
+COLD_FILTER_BONUS = 1.18
+
+# 常见比分历史基准频率（用于冷热，非市场赔率）
+SCORE_BASELINE_FREQ = {
+    (0, 0): 0.082, (1, 0): 0.095, (0, 1): 0.072, (1, 1): 0.118,
+    (2, 0): 0.071, (0, 2): 0.048, (2, 1): 0.092, (1, 2): 0.058,
+    (2, 2): 0.042, (3, 0): 0.038, (0, 3): 0.022, (3, 1): 0.048,
+    (1, 3): 0.028, (3, 2): 0.032, (2, 3): 0.022, (4, 0): 0.018,
+    (0, 4): 0.010, (4, 1): 0.022, (1, 4): 0.012, (3, 3): 0.014,
+}
+
 # 仅亚盘/大小球走 HTML 抓取（无平均值 JSON 接口）；欧赔走 JSON
 ODDS_PAGES = {
     'yazhi': '亚盘',
@@ -326,6 +364,93 @@ def fetch_daxiao(match_id):
     }
 
 
+RECENT_FORM_PAT = re.compile(
+    r'近(\d+)场战绩.*?'
+    r'<span class="ying">(\d+)胜</span>.*?'
+    r'<span class="ping">(\d+)平</span>.*?'
+    r'<span class="shu">(\d+)负</span>.*?'
+    r'进<span class="ying">(\d+)球</span>失<span class="shu">(\d+)球</span>',
+    re.DOTALL,
+)
+
+
+def _team_in_context(ctx, name):
+    """队名与上下文模糊匹配（兼容简称）"""
+    if not name:
+        return False
+    if name in ctx:
+        return True
+    for n in (4, 3, 2):
+        if len(name) >= n and name[-n:] in ctx:
+            return True
+    return False
+
+
+def _parse_recent_form(groups):
+    n, gf, ga = int(groups[0]), int(groups[4]), int(groups[5])
+    n = max(n, 1)
+    return {'games': n, 'gf': gf, 'ga': ga, 'attack': gf / n, 'defense': ga / n}
+
+
+def fetch_team_strength(match_id, home, away):
+    """
+    从数据分析页抓取主客队近10场及主客场进球/失球，换算攻防强度。
+    返回 None 表示页面无数据（不影响主流程）。
+    """
+    try:
+        html = fetch(f'{BASE}/fenxi/shuju-{match_id}.shtml')
+    except (urllib.error.URLError, ValueError, OSError):
+        return None
+
+    tagged = []
+    for m in RECENT_FORM_PAT.finditer(html):
+        # 仅用紧邻战绩前的短上下文识别队名，避免多场数据串台
+        ctx = _html_to_text(html[max(0, m.start() - 140):m.start()])
+        tagged.append({'ctx': ctx, 'stats': _parse_recent_form(m.groups())})
+
+    if len(tagged) < 2:
+        return None
+
+    home_all = away_all = home_venue = away_venue = None
+    for item in tagged:
+        ctx, st = item['ctx'], item['stats']
+        if _team_in_context(ctx, home):
+            if home_all is None:
+                home_all = st
+            elif home_venue is None:
+                home_venue = st
+        elif _team_in_context(ctx, away):
+            if away_all is None:
+                away_all = st
+            elif away_venue is None:
+                away_venue = st
+
+    if not home_all or not away_all:
+        return None
+
+    hv = home_venue or home_all
+    av = away_venue or away_all
+    attack_home = _blend_close_open(hv['attack'], home_all['attack'], 0.68)
+    defense_home = _blend_close_open(hv['defense'], home_all['defense'], 0.68)
+    attack_away = _blend_close_open(av['attack'], away_all['attack'], 0.68)
+    defense_away = _blend_close_open(av['defense'], away_all['defense'], 0.68)
+
+    return {
+        'home_recent': home_all,
+        'away_recent': away_all,
+        'home_venue': hv,
+        'away_venue': av,
+        'attack_home': attack_home,
+        'defense_home': defense_home,
+        'attack_away': attack_away,
+        'defense_away': defense_away,
+        'summary': (
+            f"主队近{home_all['games']}场 进{home_all['gf']}失{home_all['ga']}；"
+            f"客队近{away_all['games']}场 进{away_all['gf']}失{away_all['ga']}"
+        ),
+    }
+
+
 # ===================== 分析函数 =====================
 
 def remove_vig(o1, o2, o3=None):
@@ -385,6 +510,7 @@ def analyze_asian(data):
 
     return {
         'handicap': hcap,
+        'open_handicap': op['handicap'],
         'favor': favor, 'favor_desc': favor_desc, 'diff_desc': diff_desc,
         'diff_range': diff_range,
         'handicap_trend': handicap_trend, 'water_trend': water_trend,
@@ -411,6 +537,7 @@ def analyze_euro(data):
     return {
         'open': {'home': ph_o, 'draw': pd_o, 'away': pa_o},
         'close': {'home': ph_c, 'draw': pd_c, 'away': pa_c},
+        'raw_odds': {'open': dict(op), 'close': dict(cl)},
         'changes': changes,
     }
 
@@ -445,8 +572,13 @@ def analyze_total(data):
         lo = max(0, int(line))
         expected_goals = [lo, lo + 2]
 
+    implied_total = implied_total_goals(line, po_c)
+    open_implied = implied_total_goals(op['line'], po_o)
+
     return {
         'open_line': op['line'], 'close_line': line,
+        'implied_total': implied_total,
+        'open_implied_total': open_implied,
         'lean': lean, 'lean_desc': lean_desc,
         'open_prob': {'over': po_o, 'under': pu_o},
         'close_prob': {'over': po_c, 'under': pu_c},
@@ -463,48 +595,385 @@ def _outcome(h, a):
     return 'home' if h > a else 'draw' if h == a else 'away'
 
 
+def _blend_close_open(close_val, open_val, close_weight=CLOSE_BLEND_WEIGHT):
+    """终盘为主、初盘为辅的线性融合"""
+    if open_val is None:
+        return close_val
+    w = close_weight
+    return w * close_val + (1.0 - w) * open_val
+
+
+def _poisson_tail_over(lam_total, line):
+    """泊松总进球模型下 P(总进球 > line)；四分盘按相邻半球盘各半权重"""
+    frac = round((line * 4) % 4)
+    if frac in (1, 3):
+        low, high = line - 0.25, line + 0.25
+        return 0.5 * _poisson_tail_over(lam_total, low) + 0.5 * _poisson_tail_over(lam_total, high)
+    k_min = math.floor(line + 0.501)
+    prob = 0.0
+    for k in range(k_min, 30):
+        prob += _poisson_pmf(k, lam_total)
+    return min(1.0, prob)
+
+
+def implied_total_goals(line, p_over, tol=1e-4):
+    """由大小球盘口线与去水大球概率反推期望总进球 λ_total"""
+    p_over = max(0.02, min(0.98, p_over))
+    lo, hi = 0.3, 6.5
+    for _ in range(48):
+        mid = (lo + hi) / 2
+        if _poisson_tail_over(mid, line) < p_over:
+            lo = mid
+        else:
+            hi = mid
+    return (lo + hi) / 2
+
+
+def _dc_tau(h, a, lam_home, lam_away, rho):
+    """Dixon-Coles 低比分相关修正因子（修正独立泊松对 0-0/1-1 的偏差）"""
+    if h > 1 or a > 1:
+        return 1.0
+    if h == 0 and a == 0:
+        return 1.0 - lam_home * lam_away * rho
+    if h == 0 and a == 1:
+        return 1.0 + lam_home * rho
+    if h == 1 and a == 0:
+        return 1.0 + lam_away * rho
+    if h == 1 and a == 1:
+        return 1.0 - rho
+    return 1.0
+
+
+def _matrix_margins(matrix):
+    """从比分矩阵汇总 1X2 边缘概率"""
+    margins = {'home': 0.0, 'draw': 0.0, 'away': 0.0}
+    for (h, a), prob in matrix.items():
+        margins[_outcome(h, a)] += prob
+    return margins
+
+
+def _asian_payout_home(diff, handicap):
+    """亚盘主队结算单位：1=全赢, 0.5=半赢, 0=走水, -0.5=半输, -1=全输"""
+    frac = round((handicap * 4) % 4)
+    if frac in (1, 3):
+        low, high = handicap - 0.25, handicap + 0.25
+        return 0.5 * _asian_payout_home(diff, low) + 0.5 * _asian_payout_home(diff, high)
+    adj = diff - handicap
+    if adj > 1e-9:
+        return 1.0
+    if abs(adj) <= 1e-9:
+        return 0.0
+    return -1.0
+
+
+def _asian_cover_prob(lam_home, lam_away, handicap, rho=0.0):
+    """泊松比分矩阵下主队赢盘（含半赢）概率"""
+    matrix = build_score_matrix(lam_home, lam_away, rho=rho)
+    cover = 0.0
+    for (h, a), prob in matrix.items():
+        pay = _asian_payout_home(h - a, handicap)
+        if pay > 0:
+            cover += prob
+        elif pay == 0.5:
+            cover += 0.5 * prob
+    return cover
+
+
+def asian_implied_supremacy(
+    handicap, p_home_cover, p_away_cover,
+    total_hint=2.5, open_handicap=None, open_hp=None, open_ap=None,
+):
+    """
+    由让球盘 + 上下盘真实概率反推期望净胜球（不再把盘口线当作净胜球）。
+    在泊松框架下二分搜索 μ，使 P(主队赢盘) ≈ 去水后主胜概率。
+    """
+    p_home = max(0.05, min(0.95, p_home_cover))
+    if open_handicap is not None and open_hp is not None:
+        handicap = _blend_close_open(handicap, open_handicap)
+        p_home = _blend_close_open(p_home, open_hp)
+
+    lo, hi = -3.5, 3.5
+    for _ in range(52):
+        mid = (lo + hi) / 2
+        lam_h = max(0.08, (total_hint + mid) / 2)
+        lam_a = max(0.08, (total_hint - mid) / 2)
+        pc = _asian_cover_prob(lam_h, lam_a, handicap)
+        if pc < p_home:
+            lo = mid
+        else:
+            hi = mid
+    return (lo + hi) / 2
+
+
+def euro_implied_supremacy(p_home, p_draw, p_away, total_hint=2.5):
+    """由欧赔 1X2 真实概率反推期望净胜球（独立于亚盘让球数值）"""
+    p_home, p_draw, p_away = max(p_home, 0.02), max(p_draw, 0.02), max(p_away, 0.02)
+    lo, hi = -3.5, 3.5
+    for _ in range(52):
+        mid = (lo + hi) / 2
+        lam_h = max(0.08, (total_hint + mid) / 2)
+        lam_a = max(0.08, (total_hint - mid) / 2)
+        margins = _matrix_margins(build_score_matrix(lam_h, lam_a))
+        if margins['home'] < p_home:
+            lo = mid
+        else:
+            hi = mid
+    return (lo + hi) / 2
+
+
+def euro_implied_lambdas(p_home, p_draw, p_away, total_hint):
+    """由欧赔 1X2 直接拟合主客队 λ（作为球队强度融合的先验）"""
+    return _fit_lambda_grid(
+        euro_implied_supremacy(p_home, p_draw, p_away, total_hint),
+        total_hint, p_home, p_draw, p_away, rho=0.0,
+        ou_targets=None, team_lambdas=None,
+    )
+
+
+def blend_market_supremacy(sup_asian, sup_euro):
+    """融合亚盘与欧赔反推的净胜球"""
+    return SUP_ASIAN_WEIGHT * sup_asian + SUP_EURO_WEIGHT * sup_euro
+
+
+def team_poisson_lambdas(strength, total_target):
+    """
+    用攻防强度构造 λ：主队进攻×客队防守×主场系数。
+    defense 为场均失球（对手防守弱则失球多 → 因子更大）。
+    """
+    avg = AVG_LEAGUE_GOAL
+    atk_h = strength['attack_home'] / avg
+    def_a = strength['defense_away'] / avg
+    atk_a = strength['attack_away'] / avg
+    def_h = strength['defense_home'] / avg
+    lam_home = max(0.08, atk_h * def_a * avg * HOME_VENUE_ATTACK_BOOST)
+    lam_away = max(0.08, atk_a * def_h * avg)
+    scale = total_target / max(lam_home + lam_away, 0.1)
+    return lam_home * scale, lam_away * scale
+
+
+def _ou_total_distribution(lam_total, max_k=6):
+    return {_k: _poisson_pmf(_k, lam_total) for _k in range(max_k + 1)}
+
+
+def _matrix_total_margins(matrix, max_k=6):
+    margins = {k: 0.0 for k in range(max_k + 1)}
+    for (h, a), prob in matrix.items():
+        t = min(h + a, max_k)
+        margins[t] += prob
+    return margins
+
+
 def estimate_lambdas(supremacy, total_line, min_lambda=0.05):
-    """由净胜球(亚盘让球)与总进球(大小球盘口)解出主客队期望进球 λ"""
+    """由净胜球与总进球快速解 λ（兜底）"""
     lam_home = max(min_lambda, (total_line + supremacy) / 2)
     lam_away = max(min_lambda, (total_line - supremacy) / 2)
     return lam_home, lam_away
 
 
-def build_score_matrix(lam_home, lam_away, max_goals=MAX_GOALS):
-    """以独立泊松分布构建比分联合概率矩阵 {(h,a): prob}"""
-    return {
-        (h, a): _poisson_pmf(h, lam_home) * _poisson_pmf(a, lam_away)
-        for h in range(max_goals + 1)
-        for a in range(max_goals + 1)
-    }
+def _fit_lambda_grid(
+    supremacy, target_total, p_home, p_draw, p_away, rho=0.0,
+    ou_targets=None, team_lambdas=None, euro_lambdas=None,
+):
+    """λ 网格搜索：1X2 + 反推净胜球 + 大小球分布 + 球队/欧赔先验"""
+    targets = (p_home, p_draw, p_away)
+    if euro_lambdas:
+        best = euro_lambdas
+    elif team_lambdas:
+        best = team_lambdas
+    else:
+        best = estimate_lambdas(supremacy, target_total)
+    best_err = float('inf')
+
+    def _search(step, center=None, radius=2.5):
+        nonlocal best, best_err
+        if center is None:
+            starts = [i * step for i in range(int(2.6 / step) + 1)]
+            pairs = ((lh, la) for lh in starts for la in starts)
+        else:
+            lh0, la0 = center
+            n = int(radius / step) + 1
+            pairs = (
+                (max(0.08, lh0 + di * step), max(0.08, la0 + dj * step))
+                for di in range(-n, n + 1)
+                for dj in range(-n, n + 1)
+            )
+        for lam_h, lam_a in pairs:
+            matrix = build_score_matrix(lam_h, lam_a, rho=rho)
+            margins = _matrix_margins(matrix)
+            err_1x2 = sum((margins[k] - targets[i]) ** 2 for i, k in enumerate(('home', 'draw', 'away')))
+            err_total = (lam_h + lam_a - target_total) ** 2
+            err_sup = (lam_h - lam_a - supremacy) ** 2
+            err = FIT_W_1X2 * err_1x2 + FIT_W_TOTAL * err_total + FIT_W_SUPREMACY * err_sup
+            if ou_targets:
+                model_ou = _matrix_total_margins(matrix)
+                err += FIT_W_OU_DIST * sum(
+                    (model_ou[k] - ou_targets[k]) ** 2 for k in ou_targets
+                )
+            if team_lambdas:
+                err += FIT_W_TEAM * (
+                    (lam_h - team_lambdas[0]) ** 2 + (lam_a - team_lambdas[1]) ** 2
+                )
+            if err < best_err:
+                best_err = err
+                best = (lam_h, lam_a)
+        return best
+
+    lh, la = _search(LAMBDA_COARSE_STEP)
+    return _search(LAMBDA_FINE_STEP, center=(lh, la), radius=LAMBDA_FINE_RADIUS)
+
+
+def _estimate_dc_rho(lam_home, lam_away, p_draw_target):
+    """根据欧赔平局概率估计 Dixon-Coles 相关系数 ρ（负值抬高 0-0/1-1 权重）"""
+    base = build_score_matrix(lam_home, lam_away, rho=0.0)
+    p_draw_base = _matrix_margins(base)['draw']
+    gap = p_draw_target - p_draw_base
+    if gap > 0.025:
+        return -0.16
+    if gap < -0.015:
+        return -0.06
+    return -0.11
+
+
+def build_score_matrix(lam_home, lam_away, max_goals=MAX_GOALS, rho=0.0):
+    """泊松比分矩阵；rho≠0 时施加 Dixon-Coles 低比分修正并归一化"""
+    cells = {}
+    for h in range(max_goals + 1):
+        for a in range(max_goals + 1):
+            cells[(h, a)] = (
+                _dc_tau(h, a, lam_home, lam_away, rho)
+                * _poisson_pmf(h, lam_home)
+                * _poisson_pmf(a, lam_away)
+            )
+    total = sum(cells.values())
+    if total <= 0:
+        return cells
+    return {cell: prob / total for cell, prob in cells.items()}
 
 
 def calibrate_to_euro(matrix, p_home, p_draw, p_away):
-    """按欧赔 1X2 真实概率缩放比分矩阵，使三种结果的边缘概率与欧赔一致"""
+    """按欧赔 1X2 缩放矩阵（保留作兜底；主流程已用 λ 拟合替代）"""
     targets = {'home': p_home, 'draw': p_draw, 'away': p_away}
-    model = {'home': 0.0, 'draw': 0.0, 'away': 0.0}
-    for (h, a), prob in matrix.items():
-        model[_outcome(h, a)] += prob
-
+    model = _matrix_margins(matrix)
     adjusted = {}
     for (h, a), prob in matrix.items():
         outcome = _outcome(h, a)
         scale = targets[outcome] / model[outcome] if model[outcome] > 0 else 0.0
         adjusted[(h, a)] = prob * scale
-
     total = sum(adjusted.values())
     if total <= 0:
         return matrix
     return {cell: prob / total for cell, prob in adjusted.items()}
 
 
-def predict_scores(supremacy, total_line, p_home, p_draw, p_away):
-    """泊松模型：解 λ → 构建比分矩阵 → 欧赔校准 → 按真实概率降序返回"""
-    lam_home, lam_away = estimate_lambdas(supremacy, total_line)
-    matrix = build_score_matrix(lam_home, lam_away)
-    matrix = calibrate_to_euro(matrix, p_home, p_draw, p_away)
+def fit_lambdas_from_markets(
+    supremacy, total_line, p_over,
+    p_home, p_draw, p_away,
+    open_total_line=None, team_strength=None, euro_lambdas=None,
+):
+    """大小球反推总进球 + 反推净胜球 + 欧赔/球队先验，网格拟合 λ"""
+    line = _blend_close_open(total_line, open_total_line)
+    target_total = implied_total_goals(line, p_over)
+    ou_targets = _ou_total_distribution(target_total)
+    team_lams = None
+    if team_strength:
+        team_lams = team_poisson_lambdas(team_strength, target_total)
+    lam_home, lam_away = _fit_lambda_grid(
+        supremacy, target_total, p_home, p_draw, p_away, rho=0.0,
+        ou_targets=ou_targets, team_lambdas=team_lams, euro_lambdas=euro_lambdas,
+    )
+    rho = _estimate_dc_rho(lam_home, lam_away, p_draw)
+    lam_home, lam_away = _fit_lambda_grid(
+        supremacy, target_total, p_home, p_draw, p_away, rho=rho,
+        ou_targets=ou_targets, team_lambdas=team_lams, euro_lambdas=euro_lambdas,
+    )
+    return lam_home, lam_away, target_total, rho
+
+
+def _baseline_freq(h, a):
+    return SCORE_BASELINE_FREQ.get((h, a), 0.018)
+
+
+def score_heat_label(h, a, model_prob):
+    """
+    比分冷热：模型概率 vs 历史常见比分基准。
+    冷=相对基准偏高（模型更看好但市场常忽视）；热=相对基准偏低（过热难出）。
+    """
+    base = _baseline_freq(h, a)
+    if base <= 0:
+        return 'neutral', 1.0
+    ratio = model_prob / base
+    if ratio >= HEAT_RATIO_COLD:
+        return 'cold', ratio
+    if ratio <= HEAT_RATIO_HOT:
+        return 'hot', ratio
+    return 'neutral', ratio
+
+
+def _heat_filter_weight(heat):
+    if heat == 'hot':
+        return HEAT_FILTER_PENALTY
+    if heat == 'cold':
+        return COLD_FILTER_BONUS
+    return 1.0
+
+
+def predict_scores(asian, euro, total, team_strength=None):
+    """泊松 + DC：亚盘/欧赔反推净胜球 + 大小球分布 + 球队攻防 → 拟合 λ"""
+    p_home = euro['close']['home']
+    p_draw = euro['close']['draw']
+    p_away = euro['close']['away']
+    p_over = total['close_prob']['over']
+    line = total['close_line']
+    open_line = total.get('open_line')
+
+    target_total_pre = total.get('implied_total') or implied_total_goals(line, p_over)
+    sup_asian = asian.get('implied_supremacy')
+    if sup_asian is None:
+        sup_asian = asian_implied_supremacy(
+            asian['handicap'], asian['close_prob']['home_recv'],
+            asian['close_prob']['away_give'], target_total_pre,
+            open_handicap=asian.get('open_handicap'),
+            open_hp=asian['open_prob']['home_recv'],
+            open_ap=asian['open_prob']['away_give'],
+        )
+    sup_euro = euro.get('implied_supremacy')
+    if sup_euro is None:
+        sup_euro = euro_implied_supremacy(p_home, p_draw, p_away, target_total_pre)
+    supremacy = blend_market_supremacy(sup_asian, sup_euro)
+
+    euro_lams = None
+    el = euro.get('implied_lambdas')
+    if el:
+        euro_lams = (el['home'], el['away'])
+
+    try:
+        lam_home, lam_away, target_total, rho = fit_lambdas_from_markets(
+            supremacy, line, p_over, p_home, p_draw, p_away,
+            open_total_line=open_line, team_strength=team_strength, euro_lambdas=euro_lams,
+        )
+        matrix = build_score_matrix(lam_home, lam_away, rho=rho)
+        margins = _matrix_margins(matrix)
+        err = sum(
+            (margins[k] - t) ** 2
+            for k, t in zip(('home', 'draw', 'away'), (p_home, p_draw, p_away))
+        )
+        if err > 0.012:
+            matrix = calibrate_to_euro(matrix, p_home, p_draw, p_away)
+    except (ValueError, ZeroDivisionError, OverflowError):
+        lam_home, lam_away = estimate_lambdas(supremacy, line)
+        matrix = build_score_matrix(lam_home, lam_away)
+        matrix = calibrate_to_euro(matrix, p_home, p_draw, p_away)
+        target_total = line
+        supremacy = supremacy
+
     candidates = sorted(matrix.items(), key=lambda kv: -kv[1])
-    return candidates, lam_home, lam_away
+    meta = {
+        'supremacy_asian': sup_asian,
+        'supremacy_euro': sup_euro,
+        'supremacy_blended': supremacy,
+        'target_total': target_total,
+    }
+    return candidates, lam_home, lam_away, meta
 
 
 # ===================== 综合分析 =====================
@@ -513,11 +982,52 @@ def _result_label(h, a):
     return "主胜" if h > a else "平局" if h == a else "客胜"
 
 
-def _score_entry(h, a, prob):
-    return {'home': h, 'away': a, 'prob': prob, 'result': _result_label(h, a)}
+def _score_entry(h, a, prob, heat_info=None):
+    entry = {'home': h, 'away': a, 'prob': prob, 'result': _result_label(h, a)}
+    if heat_info:
+        entry['heat'] = heat_info[0]
+        entry['heat_ratio'] = round(heat_info[1], 2)
+    return entry
 
 
-def _recommend_reasons(h, a, asian, euro, total):
+def _alignment_score(h, a, asian, euro, total):
+    """赔率信号一致性得分（0~1），用于在概率接近时优选更贴合市场的比分"""
+    diff = h - a
+    favor, diff_range, hcap = asian['favor'], asian['diff_range'], asian['handicap']
+    p_home, p_draw, p_away = euro['close']['home'], euro['close']['draw'], euro['close']['away']
+    lo, hi = total['expected_goals']
+    score = 0.0
+
+    if favor == 'home' and diff > 0 and diff_range[0] <= diff <= diff_range[1]:
+        score += 0.35
+    elif favor == 'away' and diff < 0 and diff_range[0] <= -diff <= diff_range[1]:
+        score += 0.35
+    elif favor == 'even' and diff == 0:
+        score += 0.25
+
+    top = max(p_home, p_draw, p_away)
+    if diff > 0 and p_home >= top - 0.03:
+        score += 0.3
+    elif diff < 0 and p_away >= top - 0.03:
+        score += 0.3
+    elif diff == 0 and p_draw >= top - 0.03:
+        score += 0.3
+
+    goals = h + a
+    if lo <= goals <= hi:
+        score += 0.25
+    elif abs(goals - (lo + hi) / 2) <= 1.0:
+        score += 0.12
+
+    if total['lean'] == 'over' and goals >= total['close_line']:
+        score += 0.1
+    elif total['lean'] == 'under' and goals <= total['close_line']:
+        score += 0.1
+
+    return min(1.0, score)
+
+
+def _recommend_reasons(h, a, asian, euro, total, team=None, heat=None):
     """为单个推荐比分生成理由列表"""
     diff = h - a
     favor, diff_range, hcap = asian['favor'], asian['diff_range'], asian['handicap']
@@ -525,6 +1035,8 @@ def _recommend_reasons(h, a, asian, euro, total):
     lo, hi = total['expected_goals']
 
     reasons = []
+    if team:
+        reasons.append(f"攻防强度 λ≈{team['attack_home']:.2f}/{team['attack_away']:.2f}进")
     if favor == 'home' and diff > 0 and diff_range[0] <= diff <= diff_range[1]:
         reasons.append(f"符合主让{hcap}球盘口预期")
     elif favor == 'away' and diff < 0 and diff_range[0] <= -diff <= diff_range[1]:
@@ -539,35 +1051,87 @@ def _recommend_reasons(h, a, asian, euro, total):
         reasons.append(f"欧赔平局概率{p_draw*100:.0f}%")
     if lo <= h + a <= hi:
         reasons.append(f"总进球{h+a}球在预期区间")
+    if heat == 'cold':
+        reasons.append("冷门口比分（模型概率高于历史基准）")
+    elif heat == 'hot':
+        reasons.append("热门比分（已降权）")
     return reasons or ["综合赔率推断"]
 
 
+def _pick_recommendations(candidates, asian, euro, total, n=2, pool=12):
+    """Top 池内按 概率×一致性×冷热权重 选取，过热比分降权"""
+    pool = min(pool, len(candidates))
+    scored = []
+    for (h, a), prob in candidates[:pool]:
+        align = _alignment_score(h, a, asian, euro, total)
+        heat, _ = score_heat_label(h, a, prob)
+        w = _heat_filter_weight(heat)
+        scored.append(((h, a), prob, align, heat, prob * (1.0 + 0.45 * align) * w))
+    scored.sort(key=lambda x: -x[4])
+    seen = set()
+    picked = []
+    for (h, a), prob, _, _heat, _ in scored:
+        if (h, a) in seen:
+            continue
+        seen.add((h, a))
+        picked.append((h, a, prob))
+        if len(picked) >= n:
+            break
+    if len(picked) < n:
+        for (h, a), prob in candidates:
+            if (h, a) not in seen:
+                picked.append((h, a, prob))
+                if len(picked) >= n:
+                    break
+    return picked
+
+
 def analyze_match(match):
-    """抓取指定比赛三类赔率并运行泊松模型，返回完整结果 dict"""
+    """抓取赔率 + 球队攻防 + 泊松模型，返回完整结果 dict"""
     mid = match['match_id']
+    home, away = match.get('home', ''), match.get('away', '')
     asian = analyze_asian(fetch_yazhi(mid))
     euro = analyze_euro(fetch_ouzhi(mid))
     total = analyze_total(fetch_daxiao(mid))
+    team = fetch_team_strength(mid, home, away)
 
+    target_total = total['implied_total']
     p_home, p_draw, p_away = euro['close']['home'], euro['close']['draw'], euro['close']['away']
-    candidates, lam_home, lam_away = predict_scores(
-        asian['handicap'], total['close_line'], p_home, p_draw, p_away
+
+    asian['implied_supremacy'] = asian_implied_supremacy(
+        asian['handicap'], asian['close_prob']['home_recv'], asian['close_prob']['away_give'],
+        target_total, open_handicap=asian.get('open_handicap'),
+        open_hp=asian['open_prob']['home_recv'], open_ap=asian['open_prob']['away_give'],
+    )
+    euro['implied_supremacy'] = euro_implied_supremacy(p_home, p_draw, p_away, target_total)
+    euro['implied_lambdas'] = dict(
+        zip(('home', 'away'), euro_implied_lambdas(p_home, p_draw, p_away, target_total))
     )
 
-    top_scores = [_score_entry(h, a, prob) for (h, a), prob in candidates[:5]]
-    recommend = [
-        {**_score_entry(h, a, prob), 'reasons': _recommend_reasons(h, a, asian, euro, total)}
-        for (h, a), prob in candidates[:2]
+    candidates, lam_home, lam_away, meta = predict_scores(asian, euro, total, team_strength=team)
+
+    top_scores = [
+        _score_entry(h, a, prob, score_heat_label(h, a, prob))
+        for (h, a), prob in candidates[:5]
     ]
+    recommend = []
+    for h, a, prob in _pick_recommendations(candidates, asian, euro, total):
+        heat, _ = score_heat_label(h, a, prob)
+        recommend.append({
+            **_score_entry(h, a, prob, (heat, _)),
+            'reasons': _recommend_reasons(h, a, asian, euro, total, team, heat=heat),
+        })
 
     return {
         'match': {k: match.get(k) for k in ('home', 'away', 'league', 'time', 'match_id')},
         'asian': asian,
         'euro': euro,
         'total': total,
+        'team': team,
         'model': {
             'lam_home': lam_home, 'lam_away': lam_away,
             'top_scores': top_scores, 'recommend': recommend,
+            **meta,
         },
     }
 
@@ -640,11 +1204,16 @@ def main():
     render_cli(result)
 
 
+def _heat_tag(heat):
+    return {'cold': '❄冷', 'hot': '🔥热', 'neutral': '—'}.get(heat, '—')
+
+
 def render_cli(result):
     """将 analyze_match 的结果渲染为命令行报告"""
     match, asian, euro, total, model = (
         result['match'], result['asian'], result['euro'], result['total'], result['model']
     )
+    team = result.get('team')
     home, away = match['home'], match['away']
 
     print("\n" + "=" * 65)
@@ -658,19 +1227,33 @@ def render_cli(result):
     print(f"  初盘真实概率: 主受让方 {op['home_recv']*100:.1f}% / 让球方 {op['away_give']*100:.1f}%")
     print(f"  终盘真实概率: 主受让方 {cl['home_recv']*100:.1f}% / 让球方 {cl['away_give']*100:.1f}%")
     print(f"  终盘判断: {asian['favor_desc']}，{asian['diff_desc']}")
+    if asian.get('implied_supremacy') is not None:
+        print(f"  反推净胜球: {asian['implied_supremacy']:+.2f}（非盘口线 {asian['handicap']:+.2f}）")
 
     eo, ec = euro['open'], euro['close']
     print("\n【欧赔分析】（多家博彩公司平均值）")
     print(f"  初盘: 主胜{eo['home']*100:.1f}% | 平{eo['draw']*100:.1f}% | 客胜{eo['away']*100:.1f}%")
     print(f"  终盘: 主胜{ec['home']*100:.1f}% | 平{ec['draw']*100:.1f}% | 客胜{ec['away']*100:.1f}%")
     print(f"  变化趋势: {', '.join(euro['changes']) if euro['changes'] else '赔率稳定'}")
+    if euro.get('implied_supremacy') is not None:
+        print(f"  欧赔反推净胜球: {euro['implied_supremacy']:+.2f}")
+    el = euro.get('implied_lambdas')
+    if el:
+        print(f"  欧赔隐含 λ: 主{el['home']:.2f} / 客{el['away']:.2f}")
 
     to, tc = total['open_prob'], total['close_prob']
     print("\n【大小球分析】（多家博彩公司平均值）")
     print(f"  初盘: 线{total['open_line']} | 大{to['over']*100:.1f}% / 小{to['under']*100:.1f}%")
     print(f"  终盘: 线{total['close_line']} | 大{tc['over']*100:.1f}% / 小{tc['under']*100:.1f}%")
     print(f"  判断: {total['lean_desc']}")
+    print(f"  泊松反推总进球: {total.get('implied_total', 0):.2f}")
     print(f"  期望总进球区间: {total['expected_goals'][0]}-{total['expected_goals'][1]}球")
+
+    if team:
+        print("\n【球队攻防强度】（500.com 近10场 + 主客场）")
+        print(f"  {team['summary']}")
+        print(f"  主队进攻{team['attack_home']:.2f}球/场 防守{team['defense_home']:.2f}失/场")
+        print(f"  客队进攻{team['attack_away']:.2f}球/场 防守{team['defense_away']:.2f}失/场")
 
     print("\n" + "=" * 65)
     print("【综合信号汇总】")
@@ -685,16 +1268,19 @@ def render_cli(result):
     dominant = max([('主胜', ec['home']), ('平局', ec['draw']), ('客胜', ec['away'])], key=lambda x: x[1])
     print(f"  欧赔最高概率结果: {dominant[0]} ({dominant[1]*100:.1f}%)")
     print(f"  期望总进球: {total['expected_goals'][0]}-{total['expected_goals'][1]} 球")
+    if model.get('supremacy_blended') is not None:
+        print(f"  融合净胜球: 亚{model.get('supremacy_asian', 0):+.2f} + 欧{model.get('supremacy_euro', 0):+.2f} → {model['supremacy_blended']:+.2f}")
     print(f"  泊松期望进球: 主队 λ={model['lam_home']:.2f} / 客队 λ={model['lam_away']:.2f}")
 
     print("\n" + "=" * 65)
-    print("【Top 5 候选比分】（欧赔校准后真实概率）")
+    print("【Top 5 候选比分】（含冷热标记）")
     print("=" * 65)
     top_prob = model['top_scores'][0]['prob']
     for i, s in enumerate(model['top_scores'], 1):
         bar = "█" * int(s['prob'] / top_prob * 20)
+        heat = _heat_tag(s.get('heat', 'neutral'))
         print(f"  #{i}: {home} {s['home']} - {s['away']} {away}  [{s['result']}]  "
-              f"概率:{s['prob']*100:.1f}%  {bar}")
+              f"概率:{s['prob']*100:.1f}%  {heat}  {bar}")
 
     print("\n" + "=" * 65)
     print("【推荐：最可能的2个比分】")

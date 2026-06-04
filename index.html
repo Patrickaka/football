@@ -107,6 +107,7 @@
     <h1>⚽ 足球比分预测</h1>
     <p>数据来源：odds.500.com（多家博彩公司平均值） · 泊松概率模型</p>
   </header>
+  <div id="search-wrap" style="display:none"></div>
   <div id="app"></div>
   <div class="disclaimer">
     ⚠ 以上分析仅为概率统计参考，体育赛事结果受多种不确定因素影响，<br>
@@ -116,16 +117,20 @@
 
 <script>
 const app = document.getElementById('app');
+const searchWrap = document.getElementById('search-wrap');
 let allMatches = [];
+let listFilter = '';
 
 const pct = x => (x * 100).toFixed(1) + '%';
 const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c =>
   ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 function loading(text) {
+  searchWrap.style.display = 'none';
   app.innerHTML = `<div class="status"><span class="spinner"></span>${esc(text)}</div>`;
 }
 function showError(text) {
+  searchWrap.style.display = 'none';
   app.innerHTML = `<div class="status error">✗ ${esc(text)}</div>`;
 }
 
@@ -136,14 +141,45 @@ async function loadMatches() {
     if (data.error) return showError(data.error);
     allMatches = data.matches || [];
     if (!allMatches.length) return showError('未找到任何比赛数据，请稍后重试。');
-    renderList('');
+    showListView('');
   } catch (e) {
     showError('网络请求失败：' + e.message);
   }
 }
 
-function renderList(filter) {
-  const kw = filter.trim();
+function ensureSearchBox() {
+  let search = document.getElementById('search');
+  if (search) return search;
+
+  search = document.createElement('input');
+  search.type = 'search';
+  search.className = 'search';
+  search.id = 'search';
+  search.placeholder = '🔍 搜索球队或联赛…';
+  search.autocomplete = 'off';
+  search.setAttribute('lang', 'zh-CN');
+  search.setAttribute('enterkeyhint', 'search');
+
+  search.addEventListener('compositionstart', () => {
+    search.dataset.composing = '1';
+  });
+  search.addEventListener('compositionend', () => {
+    delete search.dataset.composing;
+    listFilter = search.value;
+    renderMatchList();
+  });
+  search.addEventListener('input', () => {
+    if (search.dataset.composing) return;
+    listFilter = search.value;
+    renderMatchList();
+  });
+
+  searchWrap.appendChild(search);
+  return search;
+}
+
+function renderMatchList() {
+  const kw = listFilter.trim();
   const list = kw
     ? allMatches.filter(m => (m.home + m.away + (m.league || '')).includes(kw))
     : allMatches;
@@ -151,10 +187,7 @@ function renderList(filter) {
   const groups = {};
   list.forEach(m => { (groups[m.league || '其它'] ||= []).push(m); });
 
-  let html = `<input class="search" id="search" placeholder="🔍 搜索球队或联赛…"
-      value="${esc(kw)}" autocomplete="off">`;
-  html += `<div class="status" style="padding:4px 0 12px;font-size:13px">共 ${list.length} 场比赛</div>`;
-
+  let html = `<div class="status" style="padding:4px 0 12px;font-size:13px">共 ${list.length} 场比赛</div>`;
   if (!list.length) {
     html += `<div class="status">没有匹配的比赛</div>`;
   }
@@ -170,12 +203,6 @@ function renderList(filter) {
   }
   app.innerHTML = html;
 
-  const search = document.getElementById('search');
-  search.oninput = () => renderList(search.value);
-  search.focus();
-  const pos = search.value.length;
-  search.setSelectionRange(pos, pos);
-
   app.querySelectorAll('.match').forEach(el => {
     el.onclick = () => {
       const m = allMatches.find(x => String(x.match_id) === el.dataset.id);
@@ -184,7 +211,19 @@ function renderList(filter) {
   });
 }
 
+function showListView(filter) {
+  listFilter = filter == null ? listFilter : filter;
+  searchWrap.style.display = '';
+  const search = ensureSearchBox();
+  if (search.value !== listFilter) search.value = listFilter;
+  renderMatchList();
+  search.focus();
+  const pos = search.value.length;
+  search.setSelectionRange(pos, pos);
+}
+
 async function predict(m) {
+  searchWrap.style.display = 'none';
   loading(`正在抓取 ${m.home} vs ${m.away} 的赔率数据…`);
   const q = new URLSearchParams({
     match_id: m.match_id, home: m.home, away: m.away,
@@ -207,7 +246,7 @@ async function predict(m) {
 const backBtn = () => `<div class="back" id="back">‹ 返回比赛列表</div>`;
 function bindBack() {
   const b = document.getElementById('back');
-  if (b) b.onclick = () => renderList('');
+  if (b) b.onclick = () => showListView(listFilter);
 }
 
 function probBar(segs) {
@@ -216,8 +255,10 @@ function probBar(segs) {
   ).join('') + `</div>`;
 }
 
+const heatLabel = h => ({ cold: '❄冷', hot: '🔥热', neutral: '' }[h] || '');
+
 function renderResult(r) {
-  const { match: m, asian: a, euro: e, total: t, model: md } = r;
+  const { match: m, asian: a, euro: e, total: t, model: md, team: tm } = r;
   const top = md.top_scores;
   const maxProb = top[0].prob;
 
@@ -230,7 +271,8 @@ function renderResult(r) {
     <div class="row"><span class="k">让球走势</span><span class="v">${esc(a.handicap_trend)}</span></div>
     <div class="row"><span class="k">水位走势</span><span class="v">${esc(a.water_trend)}</span></div>
     <div class="row"><span class="k">终盘真实概率</span><span class="v">主受让方 ${pct(a.close_prob.home_recv)} / 让球方 ${pct(a.close_prob.away_give)}</span></div>
-    <div class="row"><span class="k">终盘判断</span><span class="v">${esc(a.favor_desc)}，${esc(a.diff_desc)}</span></div></div>`;
+    <div class="row"><span class="k">终盘判断</span><span class="v">${esc(a.favor_desc)}，${esc(a.diff_desc)}</span></div>
+    ${a.implied_supremacy != null ? `<div class="row"><span class="k">反推净胜球</span><span class="v">${a.implied_supremacy >= 0 ? '+' : ''}${a.implied_supremacy.toFixed(2)}（非盘口 ${a.handicap}）</span></div>` : ''}</div>`;
 
   html += `<div class="card"><h3>💶 欧赔分析</h3>
     ${probBar([
@@ -238,7 +280,9 @@ function renderResult(r) {
       { cls: 'draw', p: e.close.draw, label: '平 ' + pct(e.close.draw) },
       { cls: 'away', p: e.close.away, label: '客胜 ' + pct(e.close.away) },
     ])}
-    <div class="row"><span class="k">变化趋势</span><span class="v">${esc(e.changes.length ? e.changes.join('，') : '赔率稳定')}</span></div></div>`;
+    <div class="row"><span class="k">变化趋势</span><span class="v">${esc(e.changes.length ? e.changes.join('，') : '赔率稳定')}</span></div>
+    ${e.implied_supremacy != null ? `<div class="row"><span class="k">欧赔反推净胜球</span><span class="v">${e.implied_supremacy >= 0 ? '+' : ''}${e.implied_supremacy.toFixed(2)}</span></div>` : ''}
+    ${e.implied_lambdas ? `<div class="row"><span class="k">欧赔隐含λ</span><span class="v">主 ${e.implied_lambdas.home.toFixed(2)} / 客 ${e.implied_lambdas.away.toFixed(2)}</span></div>` : ''}</div>`;
 
   html += `<div class="card"><h3>📊 大小球分析</h3>
     ${probBar([
@@ -247,9 +291,17 @@ function renderResult(r) {
     ])}
     <div class="row"><span class="k">终盘盘口线</span><span class="v">${esc(t.close_line)}</span></div>
     <div class="row"><span class="k">判断</span><span class="v">${esc(t.lean_desc)}</span></div>
+    <div class="row"><span class="k">反推总进球λ</span><span class="v">${(t.implied_total || 0).toFixed(2)}</span></div>
     <div class="row"><span class="k">期望总进球</span><span class="v">${t.expected_goals[0]}-${t.expected_goals[1]} 球</span></div></div>`;
 
-  html += `<div class="card"><h3>🎯 Top 5 候选比分 <span style="color:var(--muted);font-weight:400;font-size:12px">（欧赔校准后真实概率）</span></h3>
+  if (tm) {
+    html += `<div class="card"><h3>⚔️ 球队攻防（近10场）</h3>
+      <div class="row"><span class="k">概况</span><span class="v">${esc(tm.summary)}</span></div>
+      <div class="row"><span class="k">主队</span><span class="v">进 ${tm.attack_home.toFixed(2)} / 失 ${tm.defense_home.toFixed(2)} 每场</span></div>
+      <div class="row"><span class="k">客队</span><span class="v">进 ${tm.attack_away.toFixed(2)} / 失 ${tm.defense_away.toFixed(2)} 每场</span></div></div>`;
+  }
+
+  html += `<div class="card"><h3>🎯 Top 5 候选比分 <span style="color:var(--muted);font-weight:400;font-size:12px">（含冷热过滤）</span></h3>
     <div class="row" style="padding-bottom:8px"><span class="k">泊松期望进球</span><span class="v">主队 λ=${md.lam_home.toFixed(2)} / 客队 λ=${md.lam_away.toFixed(2)}</span></div>`;
   top.forEach((s, i) => {
     html += `<div class="score">
@@ -257,7 +309,7 @@ function renderResult(r) {
       <span class="sc">${esc(m.home)} ${s.home} - ${s.away} ${esc(m.away)}</span>
       <span class="res res-${s.result}">${s.result}</span>
       <span class="bar"><i style="width:${(s.prob / maxProb * 100).toFixed(0)}%"></i></span>
-      <span class="pct">${pct(s.prob)}</span></div>`;
+      <span class="pct">${pct(s.prob)} ${heatLabel(s.heat)}</span></div>`;
   });
   html += `</div>`;
 
