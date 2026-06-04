@@ -1,10 +1,12 @@
 # 福彩3D预测器 V3.1+（标准库版，准确率优化）
 # Python 3.10+
 import math
+import random
 import re
 import sys
 import urllib.request
 from collections import Counter, defaultdict
+from contextlib import contextmanager
 from itertools import combinations, product
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -15,7 +17,9 @@ if hasattr(sys.stdout, "reconfigure"):
 
 URL = "https://www.8300.cn/kjhhis/3/200.html"
 
-RECENT_WINDOW = 60
+RECENT_WINDOWS = (30, 45, 60, 90)
+RECENT_WINDOW = 90  # 展示用最大窗口
+WINDOW_BACKTEST_TRIALS = 40
 EXP_DECAY = 0.96
 BACKTEST_TRIALS = 80
 
@@ -28,6 +32,10 @@ W_LAST_APPEAR = 2.5
 W_NEIGHBOR = 2.0
 W_ROAD_MATCH = 1.5
 W_DANMA_HIT = 4.0
+W_KILL_PENALTY = 6.0  # 杀码出现在组合中时每码扣分（软约束，非硬杀）
+W_CONSECUTIVE = 1.5   # 含相邻连号（如 12、67）
+W_POS_REPEAT = 1.2    # 与上期同位重复（直选复刻），每码
+W_RATIO_MATCH = 1.8   # 奇偶比 / 大小比与近期热门匹配
 SUM_SOFT_SIGMA = 3.2
 SPAN_SOFT_SIGMA = 1.4
 
@@ -36,6 +44,60 @@ RECOMMEND_GROUPS = 15
 ZHIXUAN_TOP3 = 3
 ZU6_POOL_SIZE = 5
 ZU6_FOUR_SIZE = 4
+
+# 马尔可夫转移：拉普拉斯平滑系数 α（加法平滑，α=1 即标准 Laplace）
+MARKOV_LAPLACE_ALPHA = 1.0
+
+# 可调评分权重（供 search_weights 搜索）
+TUNABLE_WEIGHTS = (
+    "W_HOT_GLOBAL",
+    "W_HOT_POS",
+    "W_MISS_HIGH",
+    "W_MISS_MID",
+    "W_MARKOV",
+    "W_LAST_APPEAR",
+    "W_NEIGHBOR",
+    "W_ROAD_MATCH",
+    "W_DANMA_HIT",
+    "W_KILL_PENALTY",
+    "SUM_SOFT_SIGMA",
+    "SPAN_SOFT_SIGMA",
+)
+
+# 随机搜索时各参数相对默认值的缩放范围 (low, high)
+WEIGHT_SEARCH_RANGES = {
+    "W_HOT_GLOBAL": (0.5, 2.0),
+    "W_HOT_POS": (0.5, 2.0),
+    "W_MISS_HIGH": (0.4, 2.5),
+    "W_MISS_MID": (0.4, 2.5),
+    "W_MARKOV": (0.5, 2.0),
+    "W_LAST_APPEAR": (0.3, 2.5),
+    "W_NEIGHBOR": (0.3, 2.5),
+    "W_ROAD_MATCH": (0.0, 3.0),
+    "W_DANMA_HIT": (0.5, 2.5),
+    "W_KILL_PENALTY": (3.0, 12.0),
+    "SUM_SOFT_SIGMA": (2.0, 5.0),
+    "SPAN_SOFT_SIGMA": (0.8, 2.2),
+}
+
+
+def default_weights():
+    """当前默认评分权重快照"""
+    return {k: globals()[k] for k in TUNABLE_WEIGHTS}
+
+
+@contextmanager
+def patch_weights(weights):
+    """临时覆盖模块级权重，供回测/搜索使用"""
+    saved = {k: globals()[k] for k in TUNABLE_WEIGHTS}
+    for k in TUNABLE_WEIGHTS:
+        if k in weights:
+            globals()[k] = weights[k]
+    try:
+        yield
+    finally:
+        for k, v in saved.items():
+            globals()[k] = v
 
 
 def fetch_data(url=URL):
@@ -94,6 +156,14 @@ def build_markov(numbers, position):
     return trans
 
 
+def markov_prob_smoothed(row, states, alpha=MARKOV_LAPLACE_ALPHA):
+    """转移概率 P(next|prev)，拉普拉斯平滑：(count + α) / (total + α·|S|)"""
+    states = list(states)
+    row_total = sum(row.values())
+    denom = row_total + alpha * len(states)
+    return {s: (row.get(s, 0) + alpha) / denom for s in states}
+
+
 def gaussian_score(value, center, sigma):
     if sigma <= 0:
         return 0.0
@@ -101,9 +171,93 @@ def gaussian_score(value, center, sigma):
     return math.exp(-0.5 * z * z)
 
 
-def analyze_sum_span(sums, spans):
-    recent_s = sums[-RECENT_WINDOW:]
-    recent_p = spans[-RECENT_WINDOW:]
+def _recent_slice(series, window):
+    return series[-window:] if len(series) > window else list(series)
+
+
+def odd_even_key(triple):
+    """奇偶比 (奇数个数, 偶数个数)"""
+    odds = sum(1 for d in triple if d % 2 == 1)
+    return odds, 3 - odds
+
+
+def big_small_key(triple):
+    """大小比 (大数个数, 小数个数)，0-4 小、5-9 大"""
+    big = sum(1 for d in triple if d >= 5)
+    return big, 3 - big
+
+
+def ratio_label(key, kind="oe"):
+    a, b = key
+    if kind == "oe":
+        return f"{a}奇{b}偶"
+    return f"{a}大{b}小"
+
+
+def has_consecutive_digits(a, b, c):
+    """是否存在相邻连号（差值为 1，不含 9-0）"""
+    digits = (a, b, c)
+    for i in range(3):
+        for j in range(i + 1, 3):
+            if abs(digits[i] - digits[j]) == 1:
+                return True
+    return False
+
+
+def position_repeat_count(triple, last_draw):
+    """与上期同位置重复个数（直选复刻）"""
+    return sum(1 for i in range(3) if triple[i] == last_draw[i])
+
+
+def analyze_patterns(numbers, window=RECENT_WINDOW):
+    """统计近窗连号占比、奇偶比/大小比频次"""
+    recent = _recent_slice(numbers, window)
+    oe_freq = Counter()
+    bs_freq = Counter()
+    consec_w = 0.0
+    w = 1.0
+    for n in reversed(recent):
+        oe_freq[odd_even_key(n)] += w
+        bs_freq[big_small_key(n)] += w
+        if has_consecutive_digits(*n):
+            consec_w += w
+        w *= EXP_DECAY
+    total = sum(oe_freq.values()) or 1.0
+    return {
+        "oe_freq": oe_freq,
+        "bs_freq": bs_freq,
+        "consec_rate": consec_w / total,
+    }
+
+
+def ensemble_patterns(numbers, window_weights):
+    """多窗口加权集成形态模式统计"""
+    oe_acc = Counter()
+    bs_acc = Counter()
+    consec_rate = 0.0
+    for w, wt in window_weights.items():
+        p = analyze_patterns(numbers, window=w)
+        for k, v in p["oe_freq"].items():
+            oe_acc[k] += wt * v
+        for k, v in p["bs_freq"].items():
+            bs_acc[k] += wt * v
+        consec_rate += wt * p["consec_rate"]
+    oe_total = sum(oe_acc.values()) or 1.0
+    bs_total = sum(bs_acc.values()) or 1.0
+    return {
+        "oe_freq": oe_acc,
+        "bs_freq": bs_acc,
+        "oe_total": oe_total,
+        "bs_total": bs_total,
+        "hot_oe_set": {k for k, _ in oe_acc.most_common(3)},
+        "hot_bs_set": {k for k, _ in bs_acc.most_common(3)},
+        "consec_rate": consec_rate,
+    }
+
+
+def analyze_sum_span(sums, spans, window=RECENT_WINDOW):
+    recent_s = _recent_slice(sums, window)
+    recent_p = _recent_slice(spans, window)
     w_s = exp_weighted_counts(recent_s)
     w_p = exp_weighted_counts(recent_p)
 
@@ -119,8 +273,33 @@ def analyze_sum_span(sums, spans):
     }
 
 
-def digit_scores(numbers):
-    recent = numbers[-RECENT_WINDOW:]
+def ensemble_sum_span(sums, spans, window_weights):
+    """多窗口加权集成和值/跨度中心与热号"""
+    sum_center = span_center = 0.0
+    hot_sums_vote = Counter()
+    hot_spans_vote = Counter()
+    tail_acc = Counter()
+    for w, wt in window_weights.items():
+        r = analyze_sum_span(sums, spans, window=w)
+        sum_center += wt * r["sum_center"]
+        span_center += wt * r["span_center"]
+        for s in r["hot_sums"]:
+            hot_sums_vote[s] += wt
+        for s in r["hot_spans"]:
+            hot_spans_vote[s] += wt
+        for tail, cnt in r["sum_tail_freq"].items():
+            tail_acc[tail] += wt * cnt
+    return {
+        "sum_center": sum_center,
+        "span_center": span_center,
+        "hot_sums": [x for x, _ in hot_spans_vote.most_common(6)],
+        "hot_spans": [x for x, _ in hot_spans_vote.most_common(4)],
+        "sum_tail_freq": tail_acc,
+    }
+
+
+def digit_scores(numbers, window=RECENT_WINDOW):
+    recent = _recent_slice(numbers, window)
     last = numbers[-1]
     score = [0.0] * 10
 
@@ -136,9 +315,8 @@ def digit_scores(numbers):
         trans = build_markov(numbers, pos)
         prev_d = last[pos]
         row = trans.get(prev_d, Counter())
-        total = sum(row.values()) or 1
-        for d, c in row.items():
-            score[d] += W_MARKOV * (c / total)
+        for d, p in markov_prob_smoothed(row, range(10)).items():
+            score[d] += W_MARKOV * p
 
     for d in range(10):
         mv = miss_value(numbers, d)
@@ -164,18 +342,29 @@ def digit_scores(numbers):
     return score, freq_all
 
 
-def position_digit_scores(numbers, position):
+def ensemble_digit_scores(numbers, window_weights):
+    combined = [0.0] * 10
+    freq_combined = Counter()
+    for w, wt in window_weights.items():
+        sc, freq = digit_scores(numbers, window=w)
+        for d in range(10):
+            combined[d] += wt * sc[d]
+        for d, c in freq.items():
+            freq_combined[d] += wt * c
+    return combined, freq_combined
+
+
+def position_digit_scores(numbers, position, window=RECENT_WINDOW):
     """单码分位评分（百/十/个）"""
-    recent = [n[position] for n in numbers[-RECENT_WINDOW:]]
+    recent = [n[position] for n in _recent_slice(numbers, window)]
     last_d = numbers[-1][position]
     sc = [0.0] * 10
     for d, _ in exp_weighted_counts(recent).most_common(4):
         sc[d] += W_HOT_POS + 1
     trans = build_markov(numbers, position)
     row = trans.get(last_d, Counter())
-    total = sum(row.values()) or 1
-    for d, c in row.items():
-        sc[d] += W_MARKOV * (c / total)
+    for d, p in markov_prob_smoothed(row, range(10)).items():
+        sc[d] += W_MARKOV * p
     mv = miss_value(numbers, None, position=position)
     for d in range(10):
         miss_p = miss_value(numbers, d, position=position)
@@ -189,61 +378,54 @@ def position_digit_scores(numbers, position):
     return sc
 
 
-def pick_dan_tuo_kill(score):
-    rank = sorted(enumerate(score), key=lambda x: x[1], reverse=True)
-    danma = [rank[0][0], rank[1][0]]
-    tuoma = [x[0] for x in rank[2:6]]
-    kill = [rank[-1][0]] if rank[-1][1] + 3 < rank[-2][1] else [x[0] for x in rank[-2:]]
-    return danma, tuoma, kill, rank
+def ensemble_position_digit_scores(numbers, position, window_weights):
+    sc = [0.0] * 10
+    for w, wt in window_weights.items():
+        ps = position_digit_scores(numbers, position, window=w)
+        for d in range(10):
+            sc[d] += wt * ps[d]
+    return sc
 
 
-def pick_zu6_four(score, kill=None):
-    """组六四码：选评分最高的 4 个不同数字（优先避开杀码）"""
-    return pick_zu6_pool(score, kill, pool_size=ZU6_FOUR_SIZE)
+def default_window_weights():
+    n = len(RECENT_WINDOWS)
+    return {w: 1.0 / n for w in RECENT_WINDOWS}
 
 
-def zu6_notes_from_digits(digits):
-    """N 码组六 → C(N,3) 注组六组合"""
-    combos = [tuple(sorted(c)) for c in combinations(digits, 3)]
-    return combos, ["".join(map(str, c)) for c in combos]
+def compute_window_weights(numbers, trials=WINDOW_BACKTEST_TRIALS):
+    """回测各窗口 Top3 命中表现，拉普拉斯先验后归一化为集成权重"""
+    max_w = max(RECENT_WINDOWS)
+    if len(numbers) < max_w + 10:
+        return default_window_weights(), {}
 
+    trials = min(trials, len(numbers) - max_w - 5)
+    trials = max(10, trials)
+    raw = {w: 0.0 for w in RECENT_WINDOWS}
+    start = len(numbers) - trials
 
-def pick_zu6_pool(score, kill=None, pool_size=ZU6_POOL_SIZE):
-    """组六复式选号：默认五码 → 10 注组六"""
-    kill = set(kill or [])
-    rank = sorted(enumerate(score), key=lambda x: x[1], reverse=True)
-    picked = []
-    for d, _ in rank:
-        if d in kill:
-            continue
-        picked.append(d)
-        if len(picked) == pool_size:
-            break
-    if len(picked) < pool_size:
-        for d, _ in rank:
-            if d not in picked:
-                picked.append(d)
-            if len(picked) == pool_size:
-                break
-    return sorted(picked)
+    for i in range(start, len(numbers)):
+        train = numbers[:i]
+        actual = numbers[i]
+        act_s = f"{actual[0]}{actual[1]}{actual[2]}"
+        for w in RECENT_WINDOWS:
+            if len(train) < w:
+                continue
+            sums = [sum(x) for x in train]
+            spans = [calc_span(x) for x in train]
+            meta = build_ranking_meta(train, {w: 1.0}, sums, spans, tail_top=4)
+            sc, _ = digit_scores(train, window=w)
+            dan, _, kill, _ = pick_dan_tuo_kill(sc)
+            top = rank_triplets(sc, dan, kill, meta, top_n=ZHIXUAN_TOP3)
+            top_nums = [t[1] for t in top]
+            if act_s in top_nums:
+                raw[w] += 1.0
+            elif len({int(c) for s in top_nums for c in s} & set(actual)) >= 2:
+                raw[w] += 0.25
 
-
-def rank_zu6_groups(score, digits, danma, kill, meta, top_n=RECOMMEND_GROUPS):
-    """从复式号码中按评分排出 top_n 注组六（五码时恰好 10 注）"""
-    ranked = []
-    for combo in combinations(digits, 3):
-        a, b, c = combo
-        w = triplet_weight(a, b, c, score, danma, kill, meta)
-        if w < 0:
-            continue
-        ranked.append((w, "".join(map(str, (a, b, c)))))
-    ranked.sort(key=lambda x: -x[0])
-    return ranked[:top_n]
-
-
-def is_zu6_draw(triple):
-    """开奖号为组六（三码各不相同）"""
-    return len(set(triple)) == 3
+    prior = 1.0
+    total = sum(raw[w] + prior for w in RECENT_WINDOWS)
+    weights = {w: (raw[w] + prior) / total for w in RECENT_WINDOWS}
+    return weights, {w: round(raw[w], 1) for w in RECENT_WINDOWS}
 
 
 def classify_form(triple):
@@ -268,15 +450,26 @@ def form_miss(forms, target):
     return len(forms)
 
 
-def analyze_form_probability(numbers):
+def _form_recent_p(forms, window):
+    recent = _recent_slice(forms, window)
+    w_cnt = exp_weighted_counts(recent)
+    w_total = sum(w_cnt.values()) or 1.0
+    return {k: w_cnt.get(k, 0) / w_total for k in THEORY_FORM_P}
+
+
+def analyze_form_probability(numbers, window_weights=None):
     """估算本期开出组六/组三/豹子的概率（多源融合）"""
     forms = [classify_form(n) for n in numbers]
     last_form = forms[-1]
 
-    recent = forms[-RECENT_WINDOW:]
-    w_cnt = exp_weighted_counts(recent)
-    w_total = sum(w_cnt.values()) or 1.0
-    recent_p = {k: w_cnt.get(k, 0) / w_total for k in THEORY_FORM_P}
+    if window_weights:
+        recent_p = {k: 0.0 for k in THEORY_FORM_P}
+        for w, wt in window_weights.items():
+            rp = _form_recent_p(forms, w)
+            for k in THEORY_FORM_P:
+                recent_p[k] += wt * rp[k]
+    else:
+        recent_p = _form_recent_p(forms, RECENT_WINDOW)
 
     hist_cnt = Counter(forms)
     hist_total = len(forms)
@@ -286,8 +479,8 @@ def analyze_form_probability(numbers):
     for i in range(len(forms) - 1):
         trans[forms[i]][forms[i + 1]] += 1
     row = trans.get(last_form, Counter())
-    row_total = sum(row.values()) or 1.0
-    markov_p = {k: row.get(k, 0) / row_total for k in THEORY_FORM_P}
+    row_total = sum(row.values())
+    markov_p = markov_prob_smoothed(row, THEORY_FORM_P)
 
     blend = {}
     for k in THEORY_FORM_P:
@@ -320,14 +513,61 @@ def analyze_form_probability(numbers):
     }
 
 
-def triplet_weight(a, b, c, score, danma, kill, meta):
-    if a in kill or b in kill or c in kill:
-        return -1
+def pick_dan_tuo_kill(score):
+    rank = sorted(enumerate(score), key=lambda x: x[1], reverse=True)
+    danma = [rank[0][0], rank[1][0]]
+    tuoma = [x[0] for x in rank[2:6]]
+    kill = [rank[-1][0]] if rank[-1][1] + 3 < rank[-2][1] else [x[0] for x in rank[-2:]]
+    return danma, tuoma, kill, rank
 
+
+def pick_zu6_four(score, kill=None):
+    """组六四码：按有效分选 4 个号（杀码降权）"""
+    return pick_zu6_pool(score, kill, pool_size=ZU6_FOUR_SIZE)
+
+
+def zu6_notes_from_digits(digits):
+    """N 码组六 → C(N,3) 注组六组合"""
+    combos = [tuple(sorted(c)) for c in combinations(digits, 3)]
+    return combos, ["".join(map(str, c)) for c in combos]
+
+
+def _effective_digit_score(score, digit, kill=None):
+    """单码有效分：杀码降权而非排除"""
+    kill_set = set(kill or [])
+    return score[digit] - (W_KILL_PENALTY if digit in kill_set else 0.0)
+
+
+def pick_zu6_pool(score, kill=None, pool_size=ZU6_POOL_SIZE):
+    """组六复式选号：按有效分取 top N（杀码降权）"""
+    rank = sorted(range(10), key=lambda d: -_effective_digit_score(score, d, kill))
+    return sorted(rank[:pool_size])
+
+
+def rank_zu6_groups(score, digits, danma, kill, meta, top_n=RECOMMEND_GROUPS):
+    """从复式号码中按评分排出 top_n 注组六（五码时恰好 10 注）"""
+    ranked = []
+    for combo in combinations(digits, 3):
+        a, b, c = combo
+        w = triplet_weight(a, b, c, score, danma, kill, meta)
+        ranked.append((w, "".join(map(str, (a, b, c)))))
+    ranked.sort(key=lambda x: -x[0])
+    return ranked[:top_n]
+
+
+def is_zu6_draw(triple):
+    """开奖号为组六（三码各不相同）"""
+    return len(set(triple)) == 3
+
+
+def triplet_weight(a, b, c, score, danma, kill, meta):
+    kill_set = set(kill or [])
     w = score[a] + score[b] + score[c]
     for x in (a, b, c):
         if x in danma:
             w += W_DANMA_HIT
+        if x in kill_set:
+            w -= W_KILL_PENALTY
 
     s = a + b + c
     w += 8.0 * gaussian_score(s, meta["sum_center"], SUM_SOFT_SIGMA)
@@ -342,6 +582,22 @@ def triplet_weight(a, b, c, score, danma, kill, meta):
     if (s % 10) in meta["sum_tail_top"]:
         w += 1.0
 
+    if has_consecutive_digits(a, b, c):
+        w += W_CONSECUTIVE
+
+    last_draw = meta.get("last_draw")
+    if last_draw:
+        w += W_POS_REPEAT * position_repeat_count((a, b, c), last_draw)
+
+    oe = odd_even_key((a, b, c))
+    bs = big_small_key((a, b, c))
+    oe_freq = meta.get("oe_freq")
+    bs_freq = meta.get("bs_freq")
+    if oe_freq:
+        w += W_RATIO_MATCH * oe_freq.get(oe, 0) / meta.get("oe_total", 1)
+    if bs_freq:
+        w += W_RATIO_MATCH * bs_freq.get(bs, 0) / meta.get("bs_total", 1)
+
     return w
 
 
@@ -349,33 +605,48 @@ def rank_triplets(score, danma, kill, meta, top_n=20):
     pool = []
     for a, b, c in product(range(10), repeat=3):
         w = triplet_weight(a, b, c, score, danma, kill, meta)
-        if w < 0:
-            continue
         pool.append((w, f"{a}{b}{c}"))
     pool.sort(key=lambda x: -x[0])
     return pool[:top_n]
 
 
-def backtest(numbers, trials=BACKTEST_TRIALS):
-    if len(numbers) < trials + RECENT_WINDOW + 5:
-        trials = max(20, len(numbers) - RECENT_WINDOW - 5)
+def _meta_from_raw(meta_raw, tail_top=5):
+    return {
+        **meta_raw,
+        "hot_sum_set": set(meta_raw["hot_sums"]),
+        "hot_span_set": set(meta_raw["hot_spans"]),
+        "sum_tail_top": {t for t, _ in meta_raw["sum_tail_freq"].most_common(tail_top)},
+    }
+
+
+def build_ranking_meta(numbers, window_weights, sums=None, spans=None, tail_top=5):
+    """和值/跨度 + 连号/奇偶/大小模式，供直选排序使用"""
+    if sums is None:
+        sums = [sum(x) for x in numbers]
+    if spans is None:
+        spans = [calc_span(x) for x in numbers]
+    meta = _meta_from_raw(ensemble_sum_span(sums, spans, window_weights), tail_top=tail_top)
+    meta.update(ensemble_patterns(numbers, window_weights))
+    meta["last_draw"] = numbers[-1]
+    return meta
+
+
+def backtest(numbers, trials=BACKTEST_TRIALS, window_weights=None):
+    max_w = max(RECENT_WINDOWS)
+    if len(numbers) < trials + max_w + 5:
+        trials = max(20, len(numbers) - max_w - 5)
 
     hit_top = hit_top3 = hit_ge2 = hit_sum_band = hit_zu6_pool = hit_zu6_four = zu6_draws = 0
     start = len(numbers) - trials
+    ww = window_weights or compute_window_weights(numbers[:start])[0]
 
     for i in range(start, len(numbers)):
         train = numbers[:i]
         actual = numbers[i]
         sums = [sum(x) for x in train]
         spans = [calc_span(x) for x in train]
-        meta_raw = analyze_sum_span(sums, spans)
-        meta = {
-            **meta_raw,
-            "hot_sum_set": set(meta_raw["hot_sums"]),
-            "hot_span_set": set(meta_raw["hot_spans"]),
-            "sum_tail_top": {t for t, _ in meta_raw["sum_tail_freq"].most_common(4)},
-        }
-        sc, _ = digit_scores(train)
+        meta = build_ranking_meta(train, ww, sums, spans, tail_top=4)
+        sc, _ = ensemble_digit_scores(train, ww)
         dan, _, kill, _ = pick_dan_tuo_kill(sc)
         top = rank_triplets(sc, dan, kill, meta, top_n=RECOMMEND_GROUPS)
         top_nums = [t[1] for t in top]
@@ -418,6 +689,172 @@ def backtest(numbers, trials=BACKTEST_TRIALS):
     }
 
 
+def backtest_objective(bt, metric="top3_rate"):
+    """从回测结果提取优化目标"""
+    if metric == "composite":
+        return (
+            0.55 * bt["top3_rate"]
+            + 0.30 * bt["top_rate"]
+            + 0.15 * bt["ge2_digit_rate"]
+        )
+    if metric not in bt:
+        raise ValueError(f"未知 metric: {metric}")
+    return bt[metric]
+
+
+def evaluate_weights(
+    numbers,
+    weights,
+    trials=60,
+    window_weights=None,
+    metric="top3_rate",
+    recompute_window_weights=False,
+):
+    """给定权重在历史数据上跑滚动回测，返回 (目标值, 回测详情)"""
+    with patch_weights(weights):
+        if recompute_window_weights or window_weights is None:
+            ww, _ = compute_window_weights(
+                numbers, trials=min(WINDOW_BACKTEST_TRIALS, max(20, trials // 2))
+            )
+        else:
+            ww = window_weights
+        bt = backtest(numbers, trials=trials, window_weights=ww)
+    return backtest_objective(bt, metric), bt
+
+
+def _sample_random_weights(base, rng):
+    """在默认权重附近随机采样一组候选参数"""
+    candidate = {}
+    for k in TUNABLE_WEIGHTS:
+        lo, hi = WEIGHT_SEARCH_RANGES.get(k, (0.5, 2.0))
+        if k.endswith("_SIGMA"):
+            candidate[k] = rng.uniform(lo, hi)
+        else:
+            candidate[k] = base[k] * rng.uniform(lo, hi)
+    return candidate
+
+
+def _mutate_weights(weights, base, rng, scale=0.15):
+    """在最优解附近做局部扰动"""
+    candidate = dict(weights)
+    k = rng.choice(TUNABLE_WEIGHTS)
+    lo, hi = WEIGHT_SEARCH_RANGES.get(k, (0.5, 2.0))
+    if k.endswith("_SIGMA"):
+        delta = (hi - lo) * scale * rng.uniform(-1, 1)
+        candidate[k] = max(lo, min(hi, candidate[k] + delta))
+    else:
+        candidate[k] = max(0.1, candidate[k] * (1 + scale * rng.uniform(-1, 1)))
+    return candidate
+
+
+def search_weights(
+    numbers=None,
+    iterations=80,
+    backtest_trials=60,
+    metric="top3_rate",
+    seed=42,
+    refine_rounds=30,
+    verbose=True,
+):
+    """
+    随机搜索 + 局部 refine，最大化历史回测命中率。
+
+    metric: top3_rate | top_rate | ge2_digit_rate | composite
+    返回 dict：baseline / best / improvement / history
+    """
+    if numbers is None:
+        numbers = [x[2] for x in fetch_data()]
+    if not numbers:
+        return {"error": "未获取到数据"}
+
+    rng = random.Random(seed)
+    base = default_weights()
+    fixed_ww, _ = compute_window_weights(numbers)
+
+    if verbose:
+        print(f"参数搜索: {iterations} 次随机采样 + {refine_rounds} 次局部 refine")
+        print(f"回测期数={backtest_trials}, 目标={metric}, 窗口权重固定（加速搜索）")
+
+    _, baseline_bt = evaluate_weights(
+        numbers, base, trials=backtest_trials, window_weights=fixed_ww, metric=metric
+    )
+    baseline_score = backtest_objective(baseline_bt, metric)
+    best_weights = dict(base)
+    best_score = baseline_score
+    best_bt = baseline_bt
+    history = []
+
+    for i in range(iterations):
+        candidate = _sample_random_weights(base, rng)
+        score, bt = evaluate_weights(
+            numbers, candidate, trials=backtest_trials, window_weights=fixed_ww, metric=metric
+        )
+        history.append({"phase": "random", "score": score, "weights": candidate})
+        if score > best_score:
+            best_score, best_weights, best_bt = score, candidate, bt
+            if verbose:
+                print(f"  [random {i + 1:3d}] 新最优 {score * 100:.2f}%  top3={bt['top3_rate'] * 100:.1f}%")
+
+    for i in range(refine_rounds):
+        candidate = _mutate_weights(best_weights, base, rng)
+        score, bt = evaluate_weights(
+            numbers, candidate, trials=backtest_trials, window_weights=fixed_ww, metric=metric
+        )
+        history.append({"phase": "refine", "score": score, "weights": candidate})
+        if score > best_score:
+            best_score, best_weights, best_bt = score, candidate, bt
+            if verbose:
+                print(f"  [refine {i + 1:3d}] 新最优 {score * 100:.2f}%  top3={bt['top3_rate'] * 100:.1f}%")
+
+    return {
+        "metric": metric,
+        "backtest_trials": backtest_trials,
+        "baseline": {"weights": base, "score": baseline_score, "backtest": baseline_bt},
+        "best": {"weights": best_weights, "score": best_score, "backtest": best_bt},
+        "improvement": best_score - baseline_score,
+        "history_len": len(history),
+    }
+
+
+def print_search_report(result):
+    """打印权重搜索结果"""
+    if result.get("error"):
+        print(result["error"])
+        return
+
+    base_w = result["baseline"]["weights"]
+    best_w = result["best"]["weights"]
+    base_bt = result["baseline"]["backtest"]
+    best_bt = result["best"]["backtest"]
+
+    print("\n" + "=" * 70)
+    print("【评分权重搜索】")
+    print("=" * 70)
+    print(f"  目标指标: {result['metric']}  |  回测期数: {result['backtest_trials']}")
+    print(f"  基线 {result['baseline']['score'] * 100:.2f}%  →  最优 {result['best']['score'] * 100:.2f}%  "
+          f"(+{result['improvement'] * 100:.2f}%)")
+
+    print("\n  回测对比:")
+    for label, bt in ("基线", base_bt), ("最优", best_bt):
+        print(
+            f"    {label}: Top3 {bt['top3_rate'] * 100:.1f}% ({bt['top3_hit']}/{bt['trials']})  "
+            f"| Top{RECOMMEND_GROUPS} {bt['top_rate'] * 100:.1f}%  "
+            f"| ≥2码 {bt['ge2_digit_rate'] * 100:.1f}%"
+        )
+
+    print("\n  权重变化 (默认 → 最优):")
+    for k in TUNABLE_WEIGHTS:
+        b, n = base_w[k], best_w[k]
+        delta = ((n / b - 1) * 100) if b else 0
+        print(f"    {k:16s}  {b:6.2f}  →  {n:6.2f}  ({delta:+.0f}%)")
+
+    print("\n  可复制到 lottery3d.py 顶部:")
+    for k in TUNABLE_WEIGHTS:
+        v = best_w[k]
+        fmt = f"{v:.2f}" if isinstance(v, float) and not v.is_integer() else str(int(v) if v == int(v) else v)
+        print(f"    {k} = {fmt}")
+
+
 def run_prediction(data=None):
     """运行预测，返回 JSON 可序列化 dict；data 为 None 时自动抓取。"""
     if data is None:
@@ -430,27 +867,24 @@ def run_prediction(data=None):
     sums = [sum(x) for x in numbers]
     spans = [calc_span(x) for x in numbers]
 
-    meta_raw = analyze_sum_span(sums, spans)
-    meta = {
-        **meta_raw,
-        "hot_sum_set": set(meta_raw["hot_sums"]),
-        "hot_span_set": set(meta_raw["hot_spans"]),
-        "sum_tail_top": {t for t, _ in meta_raw["sum_tail_freq"].most_common(5)},
-    }
+    window_weights, window_scores = compute_window_weights(numbers)
+    meta_raw = ensemble_sum_span(sums, spans, window_weights)
+    meta = build_ranking_meta(numbers, window_weights, sums, spans, tail_top=5)
+    pat = {k: meta[k] for k in ("consec_rate", "oe_freq", "bs_freq", "oe_total", "bs_total")}
 
-    score, freq_all = digit_scores(numbers)
+    score, freq_all = ensemble_digit_scores(numbers, window_weights)
     danma, tuoma, kill, rank = pick_dan_tuo_kill(score)
-    form_prob = analyze_form_probability(numbers)
+    form_prob = analyze_form_probability(numbers, window_weights=window_weights)
     zu6_four = pick_zu6_four(score, kill)
     _, z6_straight = zu6_notes_from_digits(zu6_four)
     zhixuan_top = rank_triplets(score, danma, kill, meta, top_n=RECOMMEND_GROUPS)
-    bt = backtest(numbers)
+    bt = backtest(numbers, window_weights=window_weights)
 
     last_num = numbers[-1]
     pos_names = ("百", "十", "个")
     position_top = []
     for pos, name in enumerate(pos_names):
-        pr = sorted(enumerate(position_digit_scores(numbers, pos)), key=lambda x: -x[1])[:5]
+        pr = sorted(enumerate(ensemble_position_digit_scores(numbers, pos, window_weights)), key=lambda x: -x[1])[:5]
         position_top.append({
             "name": name,
             "digits": [{"digit": d, "score": round(s, 1)} for d, s in pr],
@@ -489,12 +923,28 @@ def run_prediction(data=None):
         "miss_position": miss_position,
         "sum_tails": sum_tails,
         "recommend_groups": RECOMMEND_GROUPS,
-        "recent_window": RECENT_WINDOW,
+        "recent_windows": list(RECENT_WINDOWS),
+        "window_weights": {str(k): round(v, 4) for k, v in window_weights.items()},
+        "window_scores": window_scores,
         "sum_span": {
             "sum_center": round(meta["sum_center"], 1),
             "hot_sums": meta["hot_sums"],
             "span_center": round(meta["span_center"], 1),
             "hot_spans": meta["hot_spans"],
+        },
+        "patterns": {
+            "consecutive_rate": round(pat["consec_rate"], 4),
+            "odd_even_top": [
+                {"label": ratio_label(k, "oe"), "weight": round(v, 2)}
+                for k, v in pat["oe_freq"].most_common(4)
+            ],
+            "big_small_top": [
+                {"label": ratio_label(k, "bs"), "weight": round(v, 2)}
+                for k, v in pat["bs_freq"].most_common(4)
+            ],
+            "last_odd_even": ratio_label(odd_even_key(last_num), "oe"),
+            "last_big_small": ratio_label(big_small_key(last_num), "bs"),
+            "last_has_consecutive": has_consecutive_digits(*last_num),
         },
         "form": {
             "last_label": FORM_LABELS[form_prob["last_form"]],
@@ -538,8 +988,18 @@ def print_report(result):
         top3 = ", ".join(x["num"] for x in result["zhixuan_top3"])
         print(f"  直选Top3 → {top3}")
 
+    ww = result.get("window_weights", {})
+    ws = result.get("window_scores", {})
+    if ww:
+        parts = [
+            f"{k}期权重{float(ww[k])*100:.0f}%"
+            + (f"(得分{ws.get(int(k), ws.get(k))})" if ws.get(int(k), ws.get(k)) is not None else "")
+            for k in ww
+        ]
+        print(f"  动态窗口集成: {', '.join(parts)}")
+
     print("\n" + "=" * 70)
-    print(f"热号分析（指数加权近{RECENT_WINDOW}期）")
+    print(f"热号分析（多窗口集成 {list(result.get('recent_windows', RECENT_WINDOWS))}）")
     print("=" * 70)
     for item in result["hot_digits"]:
         print(f"  热号 {item['digit']} -> 加权{item['weight']:.1f}")
@@ -558,8 +1018,8 @@ def print_report(result):
     print("【本期形态概率】（组六 / 组三 / 豹子）")
     print("=" * 70)
     print(f"  上期形态: {lf}（已连续 {form['streak']} 期）")
-    print(f"  组六遗漏: {form['miss_zu6']} 期  |  组三遗漏: {form['miss_zu3']} 期")
-    print(f"  近{RECENT_WINDOW}期: 组六 {form['recent']['zu6']*100:.1f}%  "
+    print(f"  形态遗漏: 组六 {form['miss_zu6']} 期  |  组三 {form['miss_zu3']} 期")
+    print(f"  近态(多窗口集成): 组六 {form['recent']['zu6']*100:.1f}%  "
           f"组三 {form['recent']['zu3']*100:.1f}%  "
           f"豹子 {form['recent']['baozi']*100:.1f}%")
     print(
@@ -582,6 +1042,17 @@ def print_report(result):
     print(f"  跨度中心 {ss['span_center']}，推荐 {ss['hot_spans']}")
     if result.get("sum_tails"):
         print("  和值尾TOP5:", [(x["tail"], x["count"]) for x in result["sum_tails"]])
+
+    pat = result.get("patterns")
+    if pat:
+        print("\n模式特征（连号 / 奇偶 / 大小 / 同位复刻）")
+        print(f"  近态连号占比: {pat['consecutive_rate']*100:.1f}%")
+        print(f"  上期: {pat['last_odd_even']} · {pat['last_big_small']}"
+              f"{' · 含连号' if pat['last_has_consecutive'] else ''}")
+        oe_top = ", ".join(f"{x['label']}({x['weight']})" for x in pat.get("odd_even_top", [])[:3])
+        bs_top = ", ".join(f"{x['label']}({x['weight']})" for x in pat.get("big_small_top", [])[:3])
+        print(f"  热门奇偶比: {oe_top}")
+        print(f"  热门大小比: {bs_top}")
 
     print("\n综合评分 TOP10")
     for item in result["rank_top10"]:
@@ -607,7 +1078,7 @@ def print_report(result):
     print("\n" + "=" * 70)
     print(f"【直选推荐 {RECOMMEND_GROUPS} 注】（百十个位顺序一致）")
     print("=" * 70)
-    print("  杀码参考:", result["kill"], "（含杀码组合已排除）")
+    print("  杀码参考:", result["kill"], f"（含杀码组合每码 -{W_KILL_PENALTY} 分降权）")
     print("-" * 70)
     for idx, item in enumerate(result["zhixuan"], start=1):
         print(f"  {idx:02d}. {item['num']}  评分={item['score']:.1f}")
@@ -638,9 +1109,47 @@ def print_report(result):
     print("\n  说明: 3D 开奖具有随机性，回测用于观察候选池收缩效果，不构成投注建议。")
 
 
-def main():
+def main(argv=None):
+    import argparse
+
+    parser = argparse.ArgumentParser(description="福彩3D预测器 V3.1+")
+    parser.add_argument(
+        "--search-weights",
+        action="store_true",
+        help="在历史数据上搜索最优评分权重（随机搜索+局部 refine）",
+    )
+    parser.add_argument("--search-iters", type=int, default=80, help="随机搜索次数")
+    parser.add_argument("--search-refine", type=int, default=30, help="局部 refine 次数")
+    parser.add_argument("--search-trials", type=int, default=60, help="每次评估的回测期数")
+    parser.add_argument(
+        "--search-metric",
+        default="top3_rate",
+        choices=("top3_rate", "top_rate", "ge2_digit_rate", "composite"),
+        help="优化目标",
+    )
+    parser.add_argument("--search-seed", type=int, default=42, help="随机种子")
+    args = parser.parse_args(argv)
+
     print("抓取数据中...")
-    print_report(run_prediction())
+    data = fetch_data()
+    numbers = [x[2] for x in data] if data else []
+
+    if args.search_weights:
+        if not numbers:
+            print("未获取到数据")
+            return
+        result = search_weights(
+            numbers=numbers,
+            iterations=args.search_iters,
+            backtest_trials=args.search_trials,
+            metric=args.search_metric,
+            seed=args.search_seed,
+            refine_rounds=args.search_refine,
+        )
+        print_search_report(result)
+        return
+
+    print_report(run_prediction(data))
 
 
 if __name__ == "__main__":

@@ -511,7 +511,6 @@ function renderLottery3d(r) {
   const maxScore = r.zhixuan[0]?.score || 1;
   const n = r.zhixuan.length;
   const top3 = r.zhixuan_top3 || r.zhixuan.slice(0, 3);
-  const win = r.recent_window || 60;
 
   let html = '';
 
@@ -527,6 +526,9 @@ function renderLottery3d(r) {
     </div>
     <div class="row"><span class="k">组六四码</span><span class="v" style="letter-spacing:3px;font-weight:700;color:var(--accent2)">${esc(z6.digits_str)}</span></div>
     <div class="row"><span class="k">覆盖组六</span><span class="v">${esc(z6.combos.join(', '))}</span></div>
+    ${r.window_weights ? `<div class="row"><span class="k">动态窗口</span><span class="v">${
+      Object.entries(r.window_weights).map(([k,v]) => k + '期 ' + pct(parseFloat(v))).join(' · ')
+    }</span></div>` : ''}
   </div>`;
 
   // ── 直选 Top3（独立醒目块）──
@@ -540,8 +542,12 @@ function renderLottery3d(r) {
   html += `</div>`;
 
   // ── 热号分析 ──
-  html += `<div class="section-title">热号分析（指数加权近${win}期）</div>`;
-  html += `<div class="card">
+  html += `<div class="card"><h3>🔥 热号分析（多窗口集成）</h3>
+    <div class="note" style="margin-bottom:8px">窗口 ${esc((r.recent_windows || [30,45,60,90]).join(' / '))} 期 · 权重 ${
+      r.window_weights
+        ? Object.entries(r.window_weights).map(([k,v]) => k + '期 ' + pct(parseFloat(v))).join(' · ')
+        : '均等'
+    }</div>
     <div class="digit-grid">${r.hot_digits.map(h =>
       `<div class="digit-cell"><div class="d">${h.digit}</div><div class="s">加权 ${h.weight}</div></div>`
     ).join('')}</div>
@@ -576,7 +582,7 @@ function renderLottery3d(r) {
   html += `<div class="card">
     <div class="row"><span class="k">上期形态</span><span class="v">${esc(f.last_label)}（已连续 ${f.streak} 期）</span></div>
     <div class="row"><span class="k">形态遗漏</span><span class="v">组六 ${f.miss_zu6} 期 · 组三 ${f.miss_zu3} 期</span></div>
-    <div class="row"><span class="k">近${win}期</span><span class="v">组六 ${pct(f.recent.zu6)} · 组三 ${pct(f.recent.zu3)} · 豹子 ${pct(f.recent.baozi)}</span></div>
+    <div class="row"><span class="k">近态(多窗口)</span><span class="v">组六 ${pct(f.recent.zu6)} · 组三 ${pct(f.recent.zu3)} · 豹子 ${pct(f.recent.baozi)}</span></div>
     <div class="row"><span class="k">全历史</span><span class="v">组六 ${pct(f.hist?.zu6 || 0)} · 组三 ${pct(f.hist?.zu3 || 0)} · 豹子 ${pct(f.hist?.baozi || 0)}</span></div>
     <div class="row"><span class="k">上期${esc(f.last_label)}→下期</span><span class="v">组六 ${pct(f.markov.zu6)} · 组三 ${pct(f.markov.zu3)} · 豹子 ${pct(f.markov.baozi)}（样本 ${f.markov_samples}）</span></div>
     <div style="font-size:12px;color:var(--muted);margin:10px 0 4px">综合预估（近态+转移+历史+理论）</div>
@@ -597,10 +603,22 @@ function renderLottery3d(r) {
   </div>`;
 
   if (r.sum_tails && r.sum_tails.length) {
-    html += `<div class="section-title">和值尾 TOP5（近${win}期）</div>`;
+    html += `<div class="section-title">和值尾 TOP5（多窗口集成）</div>`;
     html += `<div class="card"><div class="digit-grid">${r.sum_tails.map(t =>
       `<div class="digit-cell"><div class="d">尾${t.tail}</div><div class="s">${t.count}次</div></div>`
     ).join('')}</div></div>`;
+  }
+
+  if (r.patterns) {
+    const p = r.patterns;
+    html += `<div class="section-title">模式特征（连号 / 奇偶 / 大小）</div>`;
+    html += `<div class="card">
+      <div class="row"><span class="k">近态连号占比</span><span class="v">${pct(p.consecutive_rate)}</span></div>
+      <div class="row"><span class="k">上期形态</span><span class="v">${esc(p.last_odd_even)} · ${esc(p.last_big_small)}${p.last_has_consecutive ? ' · 含连号' : ''}</span></div>
+      <div class="row"><span class="k">热门奇偶比</span><span class="v">${esc((p.odd_even_top || []).map(x => x.label + '(' + x.weight + ')').join(' · '))}</span></div>
+      <div class="row"><span class="k">热门大小比</span><span class="v">${esc((p.big_small_top || []).map(x => x.label + '(' + x.weight + ')').join(' · '))}</span></div>
+      <div class="note" style="margin-top:8px">直选排序时对连号、同位复刻、奇偶/大小比近态匹配加分</div>
+    </div>`;
   }
 
   // ── 综合评分 ──
@@ -623,7 +641,7 @@ function renderLottery3d(r) {
   html += `<div class="section-title">【组六四码推荐】（选 4 个号打组六复式即可）</div>`;
   html += `<div class="highlight">
     <div class="big">${esc(z6.digits_str)}</div>
-    <div class="sub">杀码参考 ${esc(r.kill.join(', '))}（四码中已尽量避开）</div>
+    <div class="sub">杀码参考 ${esc(r.kill.join(', '))}（组六选号时杀码降权）</div>
     <div class="sub">覆盖 4 注组六</div>
     <div class="tags">${z6.combos.map(c => `<span class="tag">${esc(c)}</span>`).join('')}</div>
     <div class="note">对应直选形态：${esc(z6.combos.join(', '))}</div>
@@ -632,7 +650,7 @@ function renderLottery3d(r) {
   // ── 直选 ──
   html += `<div class="section-title">【直选推荐 ${n} 注】（百十个位顺序一致）</div>`;
   html += `<div class="card">
-    <div class="note" style="margin-bottom:10px">杀码参考 ${esc(r.kill.join(', '))}（含杀码组合已排除）</div>`;
+    <div class="note" style="margin-bottom:10px">杀码参考 ${esc(r.kill.join(', '))}（含杀码组合降权，非硬杀）</div>`;
   r.zhixuan.forEach((item, i) => {
     html += `<div class="zhixuan">
       <span class="rank">${String(i + 1).padStart(2, '0')}</span>
