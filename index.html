@@ -53,6 +53,28 @@
   .zhixuan .bar > i { display: block; height: 100%; background: var(--accent); }
   .zhixuan .score { color: var(--accent2); min-width: 48px; text-align: right; }
 
+  .digit-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; margin: 8px 0; }
+  .digit-cell { background: var(--card2); border-radius: 8px; padding: 8px 4px; text-align: center; font-size: 13px; }
+  .digit-cell .d { font-size: 18px; font-weight: 700; color: var(--accent2); }
+  .digit-cell .s { font-size: 11px; color: var(--muted); margin-top: 2px; }
+  .pos-block { margin-bottom: 10px; font-size: 13px; }
+  .pos-block .pos-name { color: var(--muted); margin-bottom: 4px; }
+  .pos-tags span { display: inline-block; background: var(--card2); border-radius: 6px;
+    padding: 3px 8px; margin: 2px 4px 0 0; font-size: 13px; }
+
+  .section-title {
+    font-size: 14px; font-weight: 600; color: var(--accent2);
+    margin: 18px 0 10px; padding-bottom: 6px; border-bottom: 1px solid var(--line);
+  }
+  .section-title:first-child { margin-top: 0; }
+  .note { font-size: 12px; color: var(--muted); margin: 6px 0 0; line-height: 1.6; }
+  .miss-row { font-size: 13px; padding: 3px 0; color: var(--text); }
+  .miss-row .miss-n { color: var(--warn); font-weight: 600; }
+  .blend-row { display: flex; gap: 10px; flex-wrap: wrap; margin: 8px 0; font-size: 14px; }
+  .blend-row span { background: var(--card2); border-radius: 8px; padding: 6px 12px; }
+  .blend-row .star { color: var(--accent2); font-weight: 700; }
+  .probbar-3d { height: 28px; font-size: 12px; font-weight: 600; }
+
   .search { width: 100%; padding: 12px 16px; font-size: 15px;
     background: var(--card); border: 1px solid var(--line); border-radius: 10px;
     color: var(--text); margin-bottom: 16px; outline: none; }
@@ -176,10 +198,12 @@ const TAB_META = {
   football: {
     title: '⚽ 足球比分预测',
     desc: '数据来源：odds.500.com（多家博彩公司平均值） · 泊松概率模型',
+    disclaimer: '⚠ 以上分析仅为概率统计参考，体育赛事结果受多种不确定因素影响，不构成任何投注建议。请理性对待！',
   },
   lottery3d: {
     title: '🎲 福彩3D预测',
-    desc: '数据来源：8300.cn 近200期 · 形态概率 + 组六四码 + 直选推荐',
+    desc: '数据来源：8300.cn 近200期 · 形态概率 + 组六四码 + 直选Top3/Top15',
+    disclaimer: '⚠ 3D 开奖具有随机性，以上分析仅为历史统计参考，回测用于观察候选池收缩效果，不构成任何投注建议。',
   },
 };
 
@@ -454,12 +478,13 @@ function switchTab(tab) {
   const meta = TAB_META[tab] || TAB_META.football;
   pageTitle.textContent = meta.title;
   pageDesc.textContent = meta.desc;
+  document.getElementById('disclaimer').innerHTML = meta.disclaimer;
   location.hash = tab === 'lottery3d' ? '3d' : 'football';
   if (tab === 'football') {
     if (!allMatches.length) loadMatches();
     else showListView();
-  } else if (tab === 'lottery3d' && !lottery3dLoaded) {
-    loadLottery3d();
+  } else if (tab === 'lottery3d') {
+    loadLottery3d(true);
   }
 }
 
@@ -468,38 +493,179 @@ document.querySelectorAll('.tab').forEach(el => {
 });
 
 function formProbBar(blend) {
-  return probBar([
+  const segs = [
     { cls: 'zu6', p: blend.zu6, label: '组六 ' + pct(blend.zu6) },
     { cls: 'zu3', p: blend.zu3, label: '组三 ' + pct(blend.zu3) },
     { cls: 'baozi', p: blend.baozi, label: '豹子 ' + pct(blend.baozi) },
-  ]);
+  ];
+  return '<div class="probbar probbar-3d">' + segs.map(s =>
+    `<div class="seg-${s.cls}" style="width:${Math.max(s.p * 100, 8).toFixed(1)}%">${s.label}</div>`
+  ).join('') + '</div>';
 }
 
 function renderLottery3d(r) {
   const f = r.form;
+  const ss = r.sum_span;
+  const z6 = r.zu6_four;
+  const bt = r.backtest;
   const maxScore = r.zhixuan[0]?.score || 1;
-  let html = `<div class="card">
-    <h3>📋 基本信息</h3>
-    <div class="row"><span class="k">最近一期</span><span class="v">${esc(r.period)} 期 · ${esc(r.last_draw)}</span></div>
-    <div class="row"><span class="k">邻号</span><span class="v">${esc(r.neighbors.join(', '))}</span></div>
-    <div class="row"><span class="k">杀码参考</span><span class="v">${esc(r.kill.join(', '))}</span></div>
-    <div class="row"><span class="k">和值中心</span><span class="v">${r.sum_span.sum_center}（${esc(r.sum_span.hot_sums.join(', '))}）</span></div>
-  </div>`;
-  html += `<div class="card"><h3>📊 本期形态概率</h3>
-    <div class="row"><span class="k">上期形态</span><span class="v">${esc(f.last_label)}（连续 ${f.streak} 期）</span></div>
-    <div class="row"><span class="k">遗漏</span><span class="v">组六 ${f.miss_zu6} 期 · 组三 ${f.miss_zu3} 期</span></div>
-    <div style="font-size:12px;color:var(--muted);margin:8px 0 4px">综合预估</div>
-    ${formProbBar(f.blend)}
-    <div class="row"><span class="k">近60期</span><span class="v">组六 ${pct(f.recent.zu6)} · 组三 ${pct(f.recent.zu3)} · 豹子 ${pct(f.recent.baozi)}</span></div>
-    <div class="row"><span class="k">上期→下期</span><span class="v">组六 ${pct(f.markov.zu6)} · 组三 ${pct(f.markov.zu3)} · 豹子 ${pct(f.markov.baozi)}（${f.markov_samples}期）</span></div>
-  </div>`;
+  const n = r.zhixuan.length;
+  const top3 = r.zhixuan_top3 || r.zhixuan.slice(0, 3);
+
+  let html = '';
+
+  // ── 本期摘要 ──
+  html += `<div class="section-title">【本期摘要】</div>`;
   html += `<div class="highlight">
-    <div style="font-size:14px;color:var(--accent2);margin-bottom:8px">组六四码推荐</div>
-    <div class="big">${esc(r.zu6_four.digits_str)}</div>
-    <div class="sub">组六复式 · 覆盖 ${r.zu6_four.combos.length} 注</div>
-    <div class="tags">${r.zu6_four.combos.map(c => `<span class="tag">${esc(c)}</span>`).join('')}</div>
+    <div class="row"><span class="k">上期开奖</span><span class="v">${esc(r.period)} 期 · <b style="letter-spacing:3px">${esc(r.last_draw)}</b></span></div>
+    <div class="row"><span class="k">形态</span><span class="v">${esc(f.last_label)}（连续 ${f.streak} 期）</span></div>
+    <div class="blend-row">
+      <span class="star">组六 ${pct(f.blend.zu6)}</span>
+      <span class="star">组三 ${pct(f.blend.zu3)}</span>
+      <span>豹子 ${pct(f.blend.baozi)}</span>
+    </div>
+    <div class="row"><span class="k">组六四码</span><span class="v" style="letter-spacing:3px;font-weight:700;color:var(--accent2)">${esc(z6.digits_str)}</span></div>
+    <div class="row"><span class="k">覆盖组六</span><span class="v">${esc(z6.combos.join(', '))}</span></div>
+    ${r.window_weights ? `<div class="row"><span class="k">动态窗口</span><span class="v">${
+      Object.entries(r.window_weights).map(([k,v]) => k + '期 ' + pct(parseFloat(v))).join(' · ')
+    }</span></div>` : ''}
   </div>`;
-  html += `<div class="card"><h3>🎯 直选推荐 Top10</h3>`;
+
+  // ── 直选 Top3（独立醒目块）──
+  html += `<div class="section-title">【直选Top3推荐】（百十个位顺序一致）</div>`;
+  html += `<div class="highlight" style="border-color:var(--warn)">`;
+  top3.forEach((item, i) => {
+    html += `<div class="row"><span class="k">第${i + 1}推荐</span>
+      <span class="v"><b style="font-size:22px;letter-spacing:4px;color:var(--accent2)">${esc(item.num)}</b> · 评分 ${item.score.toFixed(1)}</span></div>`;
+  });
+  html += `<div class="sub" style="margin-top:8px">Top3 号码：${esc(top3.map(x => x.num).join(', '))}</div>`;
+  html += `</div>`;
+
+  // ── 热号分析 ──
+  html += `<div class="card"><h3>🔥 热号分析（多窗口集成）</h3>
+    <div class="note" style="margin-bottom:8px">窗口 ${esc((r.recent_windows || [30,45,60,90]).join(' / '))} 期 · 权重 ${
+      r.window_weights
+        ? Object.entries(r.window_weights).map(([k,v]) => k + '期 ' + pct(parseFloat(v))).join(' · ')
+        : '均等'
+    }</div>
+    <div class="digit-grid">${r.hot_digits.map(h =>
+      `<div class="digit-cell"><div class="d">${h.digit}</div><div class="s">加权 ${h.weight}</div></div>`
+    ).join('')}</div>
+    <div class="row"><span class="k">胆码</span><span class="v">${esc(r.danma.join(', '))}</span></div>
+    <div class="row"><span class="k">拖码</span><span class="v">${esc(r.tuoma.join(', '))}</span></div>
+    <div class="row"><span class="k">杀码</span><span class="v">${esc(r.kill.join(', '))}</span></div>
+  </div>`;
+
+  // ── 遗漏分析 ──
+  html += `<div class="section-title">遗漏分析（分位 + 全局）</div>`;
+  html += `<div class="card">`;
+  if (r.miss_global && r.miss_global.length) {
+    r.miss_global.forEach(item => {
+      html += `<div class="miss-row">数字 ${item.digit} 全局遗漏 <span class="miss-n">${item.miss}</span> 期</div>`;
+    });
+  } else {
+    html += `<div class="note">暂无全局遗漏 ≥8 期的数字</div>`;
+  }
+  if (r.miss_position) {
+    r.miss_position.forEach(block => {
+      block.digits.forEach(item => {
+        html += `<div class="miss-row">${esc(block.name)}位 数字 ${item.digit} 遗漏 <span class="miss-n">${item.miss}</span> 期</div>`;
+      });
+    });
+  }
+  html += `<div class="row" style="margin-top:10px"><span class="k">上期号码</span><span class="v">${esc(r.last_draw)}</span></div>`;
+  html += `<div class="row"><span class="k">邻号</span><span class="v">${esc(r.neighbors.join(', '))}</span></div>`;
+  html += `</div>`;
+
+  // ── 形态概率 ──
+  html += `<div class="section-title">【本期形态概率】（组六 / 组三 / 豹子）</div>`;
+  html += `<div class="card">
+    <div class="row"><span class="k">上期形态</span><span class="v">${esc(f.last_label)}（已连续 ${f.streak} 期）</span></div>
+    <div class="row"><span class="k">形态遗漏</span><span class="v">组六 ${f.miss_zu6} 期 · 组三 ${f.miss_zu3} 期</span></div>
+    <div class="row"><span class="k">近态(多窗口)</span><span class="v">组六 ${pct(f.recent.zu6)} · 组三 ${pct(f.recent.zu3)} · 豹子 ${pct(f.recent.baozi)}</span></div>
+    <div class="row"><span class="k">全历史</span><span class="v">组六 ${pct(f.hist?.zu6 || 0)} · 组三 ${pct(f.hist?.zu3 || 0)} · 豹子 ${pct(f.hist?.baozi || 0)}</span></div>
+    <div class="row"><span class="k">上期${esc(f.last_label)}→下期</span><span class="v">组六 ${pct(f.markov.zu6)} · 组三 ${pct(f.markov.zu3)} · 豹子 ${pct(f.markov.baozi)}（样本 ${f.markov_samples}）</span></div>
+    <div style="font-size:12px;color:var(--muted);margin:10px 0 4px">综合预估（近态+转移+历史+理论）</div>
+    ${formProbBar(f.blend)}
+    <div class="blend-row">
+      <span class="star">★ 组六 ${pct(f.blend.zu6)}</span>
+      <span class="star">★ 组三 ${pct(f.blend.zu3)}</span>
+      <span>豹子 ${pct(f.blend.baozi)}</span>
+    </div>
+    <div class="row"><span class="k">理论基准</span><span class="v">组六 ${pct(f.theory.zu6)} · 组三 ${pct(f.theory.zu3)} · 豹子 ${pct(f.theory.baozi)}</span></div>
+  </div>`;
+
+  // ── 和值/跨度 ──
+  html += `<div class="section-title">和值 / 跨度（软约束中心）</div>`;
+  html += `<div class="card">
+    <div class="row"><span class="k">和值中心</span><span class="v">${ss.sum_center}（推荐 ${esc(ss.hot_sums.join(', '))}）</span></div>
+    <div class="row"><span class="k">跨度中心</span><span class="v">${ss.span_center}（推荐 ${esc(ss.hot_spans.join(', '))}）</span></div>
+  </div>`;
+
+  if (r.sum_tails && r.sum_tails.length) {
+    html += `<div class="section-title">和值尾 TOP5（多窗口集成）</div>`;
+    html += `<div class="card"><div class="digit-grid">${r.sum_tails.map(t =>
+      `<div class="digit-cell"><div class="d">尾${t.tail}</div><div class="s">${t.count}次</div></div>`
+    ).join('')}</div></div>`;
+  }
+
+  if (r.patterns) {
+    const p = r.patterns;
+    html += `<div class="section-title">模式特征（连号 / 奇偶 / 大小）</div>`;
+    html += `<div class="card">
+      <div class="row"><span class="k">近态连号占比</span><span class="v">${pct(p.consecutive_rate)}</span></div>
+      <div class="row"><span class="k">上期形态</span><span class="v">${esc(p.last_odd_even)} · ${esc(p.last_big_small)}${p.last_has_consecutive ? ' · 含连号' : ''}</span></div>
+      <div class="row"><span class="k">热门奇偶比</span><span class="v">${esc((p.odd_even_top || []).map(x => x.label + '(' + x.weight + ')').join(' · '))}</span></div>
+      <div class="row"><span class="k">热门大小比</span><span class="v">${esc((p.big_small_top || []).map(x => x.label + '(' + x.weight + ')').join(' · '))}</span></div>
+      <div class="note" style="margin-top:8px">直选排序时对连号、同位复刻、奇偶/大小比近态匹配加分</div>
+    </div>`;
+  }
+
+  if (r.transition) {
+    const tr = r.transition;
+    const dyn = tr.dynamic || {};
+    html += `<div class="section-title">上期→本期转移（动态调权）</div>`;
+    html += `<div class="card">
+      <div class="note" style="margin-bottom:8px">基于近 ${tr.pairs_analyzed} 对开奖统计 · 随机基准：同位10% · 重号27%</div>
+      <div class="row"><span class="k">同位复刻</span><span class="v">${tr.pos_repeat_rate.map(x =>
+        esc(x.name) + ' ' + pct(x.rate) + '(×' + x.vs_random + ')'
+      ).join(' · ')}</span></div>
+      <div class="row"><span class="k">同位个数</span><span class="v">${esc(Object.entries(tr.repeat_dist || {}).map(([k,v]) => k + ' ' + v + '%').join(' · '))}</span></div>
+      <div class="row"><span class="k">重号 / 全同 / 同集</span><span class="v">${pct(tr.digit_reuse_rate)} · ${pct(tr.full_repeat_rate)} · ${pct(tr.same_set_rate)}</span></div>
+      <div class="row"><span class="k">动态权重</span><span class="v">同位 ${dyn.w_pos_repeat ?? '—'} · 重号 ${dyn.w_last_appear ?? '—'} · 全同 -${dyn.w_full_repeat_penalty ?? '—'} · 同集 -${dyn.w_same_set_penalty ?? '—'}</span></div>
+    </div>`;
+  }
+
+  // ── 综合评分 ──
+  html += `<div class="section-title">综合评分 TOP10</div>`;
+  html += `<div class="card"><div class="digit-grid" style="grid-template-columns:repeat(5,1fr)">${r.rank_top10.map(x =>
+    `<div class="digit-cell"><div class="d">${x.digit}</div><div class="s">${x.score}分</div></div>`
+  ).join('')}</div></div>`;
+
+  // ── 分位推荐 ──
+  html += `<div class="section-title">分位推荐（各位 Top5）</div>`;
+  html += `<div class="card">`;
+  r.position_top.forEach(block => {
+    html += `<div class="pos-block"><div class="pos-name">${esc(block.name)}位</div><div class="pos-tags">`;
+    block.digits.forEach(x => { html += `<span>${x.digit}(${x.score})</span>`; });
+    html += `</div></div>`;
+  });
+  html += `</div>`;
+
+  // ── 组六四码 ──
+  html += `<div class="section-title">【组六四码推荐】（选 4 个号打组六复式即可）</div>`;
+  html += `<div class="highlight">
+    <div class="big">${esc(z6.digits_str)}</div>
+    <div class="sub">杀码参考 ${esc(r.kill.join(', '))}（组六选号时杀码降权）</div>
+    <div class="sub">覆盖 4 注组六</div>
+    <div class="tags">${z6.combos.map(c => `<span class="tag">${esc(c)}</span>`).join('')}</div>
+    <div class="note">对应直选形态：${esc(z6.combos.join(', '))}</div>
+  </div>`;
+
+  // ── 直选 ──
+  html += `<div class="section-title">【直选推荐 ${n} 注】（百十个位顺序一致）</div>`;
+  html += `<div class="card">
+    <div class="note" style="margin-bottom:10px">杀码参考 ${esc(r.kill.join(', '))}（含杀码组合降权，非硬杀）</div>`;
   r.zhixuan.forEach((item, i) => {
     html += `<div class="zhixuan">
       <span class="rank">${String(i + 1).padStart(2, '0')}</span>
@@ -507,20 +673,41 @@ function renderLottery3d(r) {
       <span class="bar"><i style="width:${(item.score / maxScore * 100).toFixed(0)}%"></i></span>
       <span class="score">${item.score.toFixed(1)}</span></div>`;
   });
-  html += '</div>';
-  const bt = r.backtest;
-  html += `<div class="card"><h3>📈 滚动回测</h3>
+  html += `</div>`;
+
+  // ── 回测 ──
+  html += `<div class="section-title">滚动回测（仅供参考）</div>`;
+  html += `<div class="card">
     <div class="row"><span class="k">回测期数</span><span class="v">${bt.trials}</span></div>
-    <div class="row"><span class="k">直选10注命中</span><span class="v">${pct(bt.top10_rate)} (${bt.top10_hit}/${bt.trials})</span></div>
-    <div class="row"><span class="k">组六四码命中</span><span class="v">${bt.zu6_draws ? pct(bt.zu6_four_rate) + ' (' + bt.zu6_four_hit + '/' + bt.zu6_draws + ')' : '—'}</span></div>
+    <div class="row"><span class="k">直选Top3命中</span><span class="v">${pct(bt.top3_rate)} (${bt.top3_hit}/${bt.trials})</span></div>
+    <div class="row"><span class="k">直选${n}注命中</span><span class="v">${pct(bt.top_rate)} (${bt.top_hit}/${bt.trials})</span></div>
+    <div class="row"><span class="k">推荐池至少中2个数字</span><span class="v">${pct(bt.ge2_digit_rate)}</span></div>
+    <div class="row"><span class="k">和值落在预测带±4</span><span class="v">${pct(bt.sum_band_rate)}</span></div>
+    <div class="row"><span class="k">组六四码命中</span><span class="v">${bt.zu6_draws ? pct(bt.zu6_four_rate) + ' (' + bt.zu6_four_hit + '/' + bt.zu6_draws + '，开奖为组六时)' : '—'}</span></div>
+    <div class="row"><span class="k">五码组六池含开奖三码</span><span class="v">${bt.zu6_draws ? pct(bt.zu6_pool_rate) + ' (' + bt.zu6_pool_hit + '/' + bt.zu6_draws + ')' : '—'}</span></div>
   </div>`;
+
+  // ── 统计 ──
+  html += `<div class="section-title">统计信息</div>`;
+  html += `<div class="card">
+    <div class="row"><span class="k">总期数</span><span class="v">${r.total_periods}</span></div>
+    <div class="row"><span class="k">最近一期</span><span class="v">${esc(r.period)}</span></div>
+    <div class="row"><span class="k">平均和值</span><span class="v">${r.avg_sum}</span></div>
+  </div>`;
+
+  html += `<div class="status" style="padding:12px 0;font-size:13px">
+    <span style="cursor:pointer;color:var(--accent2)" id="refresh-3d">↻ 重新抓取数据并计算</span>
+  </div>`;
+
   app3d.innerHTML = html;
+  document.getElementById('refresh-3d').onclick = () => loadLottery3d(true);
 }
 
-async function loadLottery3d() {
+async function loadLottery3d(force) {
+  if (lottery3dLoaded && !force) return;
   app3d.innerHTML = `<div class="status"><span class="spinner"></span>正在抓取开奖数据并计算…</div>`;
   try {
-    const data = await fetchJson('/api/3d');
+    const data = await fetchJson('/api/3d?_=' + Date.now());
     if (data.error) {
       app3d.innerHTML = `<div class="status error">✗ ${esc(data.error)}</div>`;
       return;

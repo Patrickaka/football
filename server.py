@@ -15,36 +15,16 @@ import hmac
 import base64
 import socket
 import webbrowser
-import importlib.util
+import importlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 from pathlib import Path
 
 import football
+import lottery3d
 
 _ROOT = Path(__file__).parent
 INDEX_FILE = _ROOT / 'index.html'
-
-
-def _load_lottery_3d():
-    pkg = _ROOT / '3d'
-    spec = importlib.util.spec_from_file_location(
-        'lottery_3d', pkg / '__init__.py',
-        submodule_search_locations=[str(pkg)],
-    )
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = mod
-    spec.loader.exec_module(mod)
-    return mod
-
-
-try:
-    lottery_3d = _load_lottery_3d()
-except Exception as _e:
-    lottery_3d = None
-    _LOTTERY_3D_ERR = str(_e)
-else:
-    _LOTTERY_3D_ERR = None
 
 sys.stdout.reconfigure(encoding='utf-8')
 
@@ -129,7 +109,12 @@ class Handler(BaseHTTPRequestHandler):
 
     def _serve_json(self, payload):
         body = json.dumps(payload, ensure_ascii=False).encode('utf-8')
-        self._send(200, 'application/json; charset=utf-8', body)
+        self.send_response(200)
+        self.send_header('Content-Type', 'application/json; charset=utf-8')
+        self.send_header('Content-Length', str(len(body)))
+        self.send_header('Cache-Control', 'no-store')
+        self.end_headers()
+        self.wfile.write(body)
 
     def _send_json_error(self, status, message):
         body = json.dumps({'error': message}, ensure_ascii=False).encode('utf-8')
@@ -158,10 +143,9 @@ class Handler(BaseHTTPRequestHandler):
             return {'error': f'赔率分析失败: {e}'}
 
     def _lottery_3d_payload(self):
-        if lottery_3d is None:
-            return {'error': f'3D 模块加载失败: {_LOTTERY_3D_ERR}'}
         try:
-            return {'result': lottery_3d.run_prediction()}
+            importlib.reload(lottery3d)
+            return {'result': lottery3d.run_prediction()}
         except Exception as e:
             return {'error': f'3D 预测失败: {e}'}
 
