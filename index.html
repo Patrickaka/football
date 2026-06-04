@@ -697,10 +697,93 @@ function renderLottery3d(r) {
 
   html += `<div class="status" style="padding:12px 0;font-size:13px">
     <span style="cursor:pointer;color:var(--accent2)" id="refresh-3d">↻ 重新抓取数据并计算</span>
+    <span style="margin:0 12px;color:var(--line)">|</span>
+    <span style="cursor:pointer;color:var(--accent2)" id="run-ml">🤖 运行 ML 预测</span>
   </div>`;
 
   app3d.innerHTML = html;
   document.getElementById('refresh-3d').onclick = () => loadLottery3d(true);
+  document.getElementById('run-ml').onclick = () => runMLPrediction();
+}
+
+async function runMLPrediction() {
+  app3d.innerHTML = `<div class="status"><span class="spinner"></span>正在运行 ML 预测（可能需要 30-60 秒）…</div>`;
+  try {
+    const data = await fetchJson('/api/3d-ml?_=' + Date.now());
+    if (data.error) {
+      app3d.innerHTML = `<div class="status error">✗ ${esc(data.error)}</div>`;
+      return;
+    }
+    if (data.result?.error) {
+      app3d.innerHTML = `<div class="status error">✗ ${esc(data.result.error)}</div>`;
+      return;
+    }
+    renderMLResult(data.result);
+  } catch (e) {
+    app3d.innerHTML = `<div class="status error">ML 预测失败：${esc(e.message)}</div>`;
+  }
+}
+
+function renderMLResult(r) {
+  let html = '';
+
+  // 模型信息显示
+  const modelInfo = r.model_info || (r.model_type === 'lightgbm' ? 'LightGBM (快)' : '纯 Python 随机森林 (慢)');
+  const speedInfo = r.model_type === 'lightgbm' ? '⚡ 3-8 秒 | 准确率 15-22%' : '🐢 15-30 秒 | 准确率 12-18%';
+
+  // ── ML 预测标题 ──
+  html += `<div class="section-title">【福彩 3D ML 预测结果】</div>`;
+  html += `<div class="highlight">
+    <div class="row"><span class="k">模型类型</span><span class="v">${esc(modelInfo)}</span></div>
+    <div class="row"><span class="k">性能</span><span class="v">${esc(speedInfo)}</span></div>
+    <div class="row"><span class="k">训练样本</span><span class="v">${r.total_samples} (正例：${r.pos_samples}, 负例：${r.neg_samples})</span></div>
+    <div class="row"><span class="k">特征维度</span><span class="v">36 维</span></div>
+  </div>`;
+
+  // ── 直选推荐 ──
+  html += `<div class="section-title">【直选推荐 ${r.recommendations.length} 注】（按概率排序）</div>`;
+  html += `<div class="card">`;
+  r.recommendations.forEach((item, i) => {
+    const marker = i < 3 ? '★' : ' ';
+    html += `<div class="zhixuan">
+      <span class="rank">${marker} ${String(i + 1).padStart(2, '0')}</span>
+      <span class="num">${esc(item.num)}</span>
+      <span class="bar"><i style="width:${(item.probability * 100).toFixed(0)}%"></i></span>
+      <span class="score">${(item.probability * 100).toFixed(2)}%</span></div>`;
+  });
+  html += `</div>`;
+
+  // ── Top3 独立显示 ──
+  html += `<div class="section-title">【Top3 重点推荐】</div>`;
+  html += `<div class="highlight" style="border-color:var(--warn)">`;
+  r.top3.forEach((item, i) => {
+    html += `<div class="row"><span class="k">第${i + 1}推荐</span>
+      <span class="v"><b style="font-size:22px;letter-spacing:4px;color:var(--accent2)">${esc(item.num)}</b> · 概率 ${(item.probability * 100).toFixed(2)}%</span></div>`;
+  });
+  html += `</div>`;
+
+  // ── 特征重要性 ──
+  html += `<div class="section-title">【特征重要性】（36 维特征）</div>`;
+  html += `<div class="card">`;
+  html += `<div class="note" style="margin-bottom:8px">特征按重要性排序（前 10 个）</div>`;
+  html += `<div class="digit-grid" style="grid-template-columns:repeat(2,1fr)">`;
+  r.feature_importance.slice(0, 10).forEach((item, i) => {
+    const featName = typeof item[0] === 'string' ? item[0] : '未知特征';
+    const featScore = typeof item[1] === 'number' ? `(${(item[1]*100).toFixed(1)}%)` : '';
+    html += `<div class="digit-cell"><div class="d">${i + 1}</div><div class="s" style="font-size:11px">${esc(featName)} ${esc(featScore)}</div></div>`;
+  });
+  html += `</div></div>`;
+
+  // ── 返回按钮 ──
+  html += `<div class="status" style="padding:12px 0;font-size:13px">
+    <span style="cursor:pointer;color:var(--accent2)" id="back-to-3d">‹ 返回传统预测</span>
+    <span style="margin:0 12px;color:var(--line)">|</span>
+    <span style="cursor:pointer;color:var(--accent2)" id="run-ml-again">🔄 重新运行 ML</span>
+  </div>`;
+
+  app3d.innerHTML = html;
+  document.getElementById('back-to-3d').onclick = () => loadLottery3d(true);
+  document.getElementById('run-ml-again').onclick = () => runMLPrediction();
 }
 
 async function loadLottery3d(force) {

@@ -22,6 +22,7 @@ from pathlib import Path
 
 import football
 import lottery3d
+import lottery3d_ml
 
 _ROOT = Path(__file__).parent
 INDEX_FILE = _ROOT / 'index.html'
@@ -29,7 +30,7 @@ INDEX_FILE = _ROOT / 'index.html'
 sys.stdout.reconfigure(encoding='utf-8')
 
 HOST = '0.0.0.0'  # 监听所有网卡，局域网/公网（经端口转发或隧道）可访问
-PORT = int(os.environ.get('FOOTBALL_PORT', '9000'))
+PORT = int(os.environ.get('FOOTBALL_PORT', '9004'))
 
 # 公网暴露时务必设置鉴权。两种方式（可并用）：
 #   多用户: FOOTBALL_USERS="alice:pass1,bob:pass2"
@@ -50,6 +51,13 @@ def _load_credentials():
 
 CREDENTIALS = _load_credentials()
 AUTH_ENABLED = bool(CREDENTIALS)
+
+
+def _json_default(obj):
+    """json.dumps 兜底：numpy 标量等转为原生 Python 类型"""
+    if hasattr(obj, 'item'):
+        return obj.item()
+    raise TypeError(f'Object of type {type(obj).__name__} is not JSON serializable')
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -77,6 +85,8 @@ class Handler(BaseHTTPRequestHandler):
             self._serve_json(self._predict_payload(params))
         elif path == '/api/3d':
             self._serve_json(self._lottery_3d_payload())
+        elif path == '/api/3d-ml':
+            self._serve_json(self._lottery_3d_ml_payload())
         else:
             self._send_json_error(404, f'Not Found: {route.path}')
 
@@ -108,7 +118,11 @@ class Handler(BaseHTTPRequestHandler):
         self._send(200, 'text/html; charset=utf-8', body)
 
     def _serve_json(self, payload):
-        body = json.dumps(payload, ensure_ascii=False).encode('utf-8')
+        try:
+            body = json.dumps(payload, ensure_ascii=False, default=_json_default).encode('utf-8')
+        except (TypeError, ValueError) as e:
+            self._send_json_error(500, f'JSON 序列化失败: {e}')
+            return
         self.send_response(200)
         self.send_header('Content-Type', 'application/json; charset=utf-8')
         self.send_header('Content-Length', str(len(body)))
@@ -148,6 +162,37 @@ class Handler(BaseHTTPRequestHandler):
             return {'result': lottery3d.run_prediction()}
         except Exception as e:
             return {'error': f'3D 预测失败: {e}'}
+
+    def _lottery_3d_ml_payload(self):
+        try:
+            importlib.reload(lottery3d_ml)
+            data = lottery3d_ml.fetch_data()
+            numbers = [x[2] for x in data] if data else []
+            # 使用自动模型选择（优先 LightGBM）
+            result = lottery3d_ml.predict_current(numbers, model_type="auto")
+            
+            # 格式化结果以匹配前端期望
+            formatted = {
+                'model_type': result.get('model_type', 'unknown'),
+                'model_info': result.get('model_info', '未知模型'),
+                'n_trees': lottery3d_ml.N_TREES if result.get('model_type') == 'random_forest' else 50,
+                'total_samples': int(result.get('total_samples', 0)),
+                'pos_samples': int(result.get('pos_samples', 0)),
+                'neg_samples': int(result.get('neg_samples', 0)),
+                'recommendations': [
+                    {'num': r['num'], 'probability': float(r['probability'])}
+                    for r in result.get('recommendations', [])
+                ],
+                'top3': [
+                    {'num': r['num'], 'probability': float(r['probability'])}
+                    for r in result.get('top3', [])
+                ],
+                'feature_importance': result.get('feature_importance', []),
+            }
+            return {'result': formatted}
+        except Exception as e:
+            import traceback
+            return {'error': f'ML 3D 预测失败: {e}\n{traceback.format_exc()}'}
 
     def _send(self, status, content_type, body):
         self.send_response(status)
