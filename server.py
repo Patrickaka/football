@@ -1,10 +1,11 @@
 """
-足球比分预测 - 网页服务
+预测服务 - 网页服务
 ========================
 标准库 http.server 实现，零第三方依赖。
+集成：足球比分预测 + 福彩3D预测
 
 运行：python3 server.py
-然后浏览器打开 http://localhost:8000
+然后浏览器打开 http://localhost:9000
 """
 
 import os
@@ -14,17 +15,41 @@ import hmac
 import base64
 import socket
 import webbrowser
+import importlib.util
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 from pathlib import Path
 
 import football
 
+_ROOT = Path(__file__).parent
+INDEX_FILE = _ROOT / 'index.html'
+
+
+def _load_lottery_3d():
+    pkg = _ROOT / '3d'
+    spec = importlib.util.spec_from_file_location(
+        'lottery_3d', pkg / '__init__.py',
+        submodule_search_locations=[str(pkg)],
+    )
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+try:
+    lottery_3d = _load_lottery_3d()
+except Exception as _e:
+    lottery_3d = None
+    _LOTTERY_3D_ERR = str(_e)
+else:
+    _LOTTERY_3D_ERR = None
+
 sys.stdout.reconfigure(encoding='utf-8')
 
 HOST = '0.0.0.0'  # 监听所有网卡，局域网/公网（经端口转发或隧道）可访问
 PORT = int(os.environ.get('FOOTBALL_PORT', '9000'))
-INDEX_FILE = Path(__file__).parent / 'index.html'
 
 # 公网暴露时务必设置鉴权。两种方式（可并用）：
 #   多用户: FOOTBALL_USERS="alice:pass1,bob:pass2"
@@ -70,6 +95,8 @@ class Handler(BaseHTTPRequestHandler):
         elif path == '/api/predict':
             params = parse_qs(route.query)
             self._serve_json(self._predict_payload(params))
+        elif path == '/api/3d':
+            self._serve_json(self._lottery_3d_payload())
         else:
             self._send_json_error(404, f'Not Found: {route.path}')
 
@@ -130,6 +157,14 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:
             return {'error': f'赔率分析失败: {e}'}
 
+    def _lottery_3d_payload(self):
+        if lottery_3d is None:
+            return {'error': f'3D 模块加载失败: {_LOTTERY_3D_ERR}'}
+        try:
+            return {'result': lottery_3d.run_prediction()}
+        except Exception as e:
+            return {'error': f'3D 预测失败: {e}'}
+
     def _send(self, status, content_type, body):
         self.send_response(status)
         self.send_header('Content-Type', content_type)
@@ -172,8 +207,8 @@ def main():
     local_url = f'http://localhost:{PORT}'
     candidates = _candidate_ips()
     print("=" * 50)
-    print("  足球比分预测 - 网页服务已启动")
-    print(f"  本机访问:   {local_url}")
+    print("  预测服务 - 网页服务已启动")
+    print(f"  本机访问:   {local_url}  （Tab 切换：足球 / 福彩3D）")
     if candidates:
         print(f"  局域网访问: http://{candidates[0]}:{PORT}  （手机/其它设备用这个）")
         if len(candidates) > 1:

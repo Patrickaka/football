@@ -3,13 +3,14 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>足球比分预测</title>
+<title>预测助手</title>
 <style>
   :root {
     --bg: #0f1419; --card: #1a2230; --card2: #222d3d;
     --line: #2c3a4e; --text: #e6edf3; --muted: #8b98a9;
     --accent: #2ea043; --accent2: #3fb950; --warn: #d29922;
     --home: #4493f8; --draw: #8b98a9; --away: #f85149;
+    --zu6: #4493f8; --zu3: #f85149; --baozi: #6e7681;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body {
@@ -21,6 +22,36 @@
   header { text-align: center; margin-bottom: 24px; }
   header h1 { font-size: 24px; font-weight: 600; }
   header p { color: var(--muted); font-size: 13px; margin-top: 4px; }
+
+  .tabs { display: flex; margin-bottom: 20px; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  .tab {
+    flex: 1; padding: 12px 8px; text-align: center; cursor: pointer;
+    background: var(--card); color: var(--muted); font-size: 15px; font-weight: 500;
+    border: none; transition: .15s;
+  }
+  .tab:hover { color: var(--text); background: var(--card2); }
+  .tab.active { background: var(--card2); color: var(--accent2); box-shadow: inset 0 -2px 0 var(--accent); }
+  .tab-panel { display: none; }
+  .tab-panel.active { display: block; }
+
+  .highlight {
+    background: linear-gradient(135deg, #1a2230, #1e2a1e);
+    border: 1px solid var(--accent); border-radius: 12px;
+    padding: 16px 18px; margin-bottom: 14px; text-align: center;
+  }
+  .highlight .big { font-size: 32px; font-weight: 700; letter-spacing: 6px; color: var(--accent2); }
+  .highlight .sub { color: var(--muted); font-size: 13px; margin-top: 6px; }
+  .tags { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 10px; }
+  .tag { background: var(--card2); border-radius: 8px; padding: 6px 12px; font-size: 14px; font-weight: 600; }
+  .seg-zu6 { background: var(--zu6); } .seg-zu3 { background: var(--zu3); } .seg-baozi { background: var(--baozi); }
+  .zhixuan { display: flex; align-items: center; gap: 12px; padding: 8px 0;
+    border-bottom: 1px solid var(--line); font-size: 14px; }
+  .zhixuan:last-child { border-bottom: none; }
+  .zhixuan .rank { color: var(--muted); min-width: 28px; }
+  .zhixuan .num { font-size: 18px; font-weight: 700; min-width: 48px; letter-spacing: 2px; }
+  .zhixuan .bar { flex: 1; height: 8px; background: var(--card2); border-radius: 4px; overflow: hidden; }
+  .zhixuan .bar > i { display: block; height: 100%; background: var(--accent); }
+  .zhixuan .score { color: var(--accent2); min-width: 48px; text-align: right; }
 
   .search { width: 100%; padding: 12px 16px; font-size: 15px;
     background: var(--card); border: 1px solid var(--line); border-radius: 10px;
@@ -111,22 +142,46 @@
 <body>
 <div class="wrap">
   <header>
-    <h1>⚽ 足球比分预测</h1>
-    <p>数据来源：odds.500.com（多家博彩公司平均值） · 泊松概率模型</p>
+    <h1 id="page-title">⚽ 足球比分预测</h1>
+    <p id="page-desc">数据来源：odds.500.com（多家博彩公司平均值） · 泊松概率模型</p>
   </header>
-  <div id="search-wrap" style="display:none"></div>
-  <div id="app"></div>
-  <div class="disclaimer">
-    ⚠ 以上分析仅为概率统计参考，体育赛事结果受多种不确定因素影响，<br>
-    不构成任何投注建议。请理性对待！
+  <div class="tabs" role="tablist">
+    <button type="button" class="tab active" data-tab="football" role="tab">⚽ 足球预测</button>
+    <button type="button" class="tab" data-tab="lottery3d" role="tab">🎲 福彩3D</button>
+  </div>
+  <div id="panel-football" class="tab-panel active">
+    <div id="search-wrap" style="display:none"></div>
+    <div id="app"></div>
+  </div>
+  <div id="panel-lottery3d" class="tab-panel">
+    <div id="app-3d"></div>
+  </div>
+  <div class="disclaimer" id="disclaimer">
+    ⚠ 以上分析仅为概率统计参考，不构成任何投注建议。请理性对待！
   </div>
 </div>
 
 <script>
 const app = document.getElementById('app');
+const app3d = document.getElementById('app-3d');
 const searchWrap = document.getElementById('search-wrap');
+const pageTitle = document.getElementById('page-title');
+const pageDesc = document.getElementById('page-desc');
 let allMatches = [];
 let listFilter = '';
+let activeTab = 'football';
+let lottery3dLoaded = false;
+
+const TAB_META = {
+  football: {
+    title: '⚽ 足球比分预测',
+    desc: '数据来源：odds.500.com（多家博彩公司平均值） · 泊松概率模型',
+  },
+  lottery3d: {
+    title: '🎲 福彩3D预测',
+    desc: '数据来源：8300.cn 近200期 · 形态概率 + 组六四码 + 直选推荐',
+  },
+};
 
 const pct = x => (x * 100).toFixed(1) + '%';
 const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c =>
@@ -388,7 +443,105 @@ function renderResult(r) {
   bindBack();
 }
 
-loadMatches();
+function switchTab(tab) {
+  activeTab = tab;
+  document.querySelectorAll('.tab').forEach(el => {
+    el.classList.toggle('active', el.dataset.tab === tab);
+  });
+  document.querySelectorAll('.tab-panel').forEach(el => {
+    el.classList.toggle('active', el.id === 'panel-' + tab);
+  });
+  const meta = TAB_META[tab] || TAB_META.football;
+  pageTitle.textContent = meta.title;
+  pageDesc.textContent = meta.desc;
+  location.hash = tab === 'lottery3d' ? '3d' : 'football';
+  if (tab === 'football') {
+    if (!allMatches.length) loadMatches();
+    else showListView();
+  } else if (tab === 'lottery3d' && !lottery3dLoaded) {
+    loadLottery3d();
+  }
+}
+
+document.querySelectorAll('.tab').forEach(el => {
+  el.onclick = () => switchTab(el.dataset.tab);
+});
+
+function formProbBar(blend) {
+  return probBar([
+    { cls: 'zu6', p: blend.zu6, label: '组六 ' + pct(blend.zu6) },
+    { cls: 'zu3', p: blend.zu3, label: '组三 ' + pct(blend.zu3) },
+    { cls: 'baozi', p: blend.baozi, label: '豹子 ' + pct(blend.baozi) },
+  ]);
+}
+
+function renderLottery3d(r) {
+  const f = r.form;
+  const maxScore = r.zhixuan[0]?.score || 1;
+  let html = `<div class="card">
+    <h3>📋 基本信息</h3>
+    <div class="row"><span class="k">最近一期</span><span class="v">${esc(r.period)} 期 · ${esc(r.last_draw)}</span></div>
+    <div class="row"><span class="k">邻号</span><span class="v">${esc(r.neighbors.join(', '))}</span></div>
+    <div class="row"><span class="k">杀码参考</span><span class="v">${esc(r.kill.join(', '))}</span></div>
+    <div class="row"><span class="k">和值中心</span><span class="v">${r.sum_span.sum_center}（${esc(r.sum_span.hot_sums.join(', '))}）</span></div>
+  </div>`;
+  html += `<div class="card"><h3>📊 本期形态概率</h3>
+    <div class="row"><span class="k">上期形态</span><span class="v">${esc(f.last_label)}（连续 ${f.streak} 期）</span></div>
+    <div class="row"><span class="k">遗漏</span><span class="v">组六 ${f.miss_zu6} 期 · 组三 ${f.miss_zu3} 期</span></div>
+    <div style="font-size:12px;color:var(--muted);margin:8px 0 4px">综合预估</div>
+    ${formProbBar(f.blend)}
+    <div class="row"><span class="k">近60期</span><span class="v">组六 ${pct(f.recent.zu6)} · 组三 ${pct(f.recent.zu3)} · 豹子 ${pct(f.recent.baozi)}</span></div>
+    <div class="row"><span class="k">上期→下期</span><span class="v">组六 ${pct(f.markov.zu6)} · 组三 ${pct(f.markov.zu3)} · 豹子 ${pct(f.markov.baozi)}（${f.markov_samples}期）</span></div>
+  </div>`;
+  html += `<div class="highlight">
+    <div style="font-size:14px;color:var(--accent2);margin-bottom:8px">组六四码推荐</div>
+    <div class="big">${esc(r.zu6_four.digits_str)}</div>
+    <div class="sub">组六复式 · 覆盖 ${r.zu6_four.combos.length} 注</div>
+    <div class="tags">${r.zu6_four.combos.map(c => `<span class="tag">${esc(c)}</span>`).join('')}</div>
+  </div>`;
+  html += `<div class="card"><h3>🎯 直选推荐 Top10</h3>`;
+  r.zhixuan.forEach((item, i) => {
+    html += `<div class="zhixuan">
+      <span class="rank">${String(i + 1).padStart(2, '0')}</span>
+      <span class="num">${esc(item.num)}</span>
+      <span class="bar"><i style="width:${(item.score / maxScore * 100).toFixed(0)}%"></i></span>
+      <span class="score">${item.score.toFixed(1)}</span></div>`;
+  });
+  html += '</div>';
+  const bt = r.backtest;
+  html += `<div class="card"><h3>📈 滚动回测</h3>
+    <div class="row"><span class="k">回测期数</span><span class="v">${bt.trials}</span></div>
+    <div class="row"><span class="k">直选10注命中</span><span class="v">${pct(bt.top10_rate)} (${bt.top10_hit}/${bt.trials})</span></div>
+    <div class="row"><span class="k">组六四码命中</span><span class="v">${bt.zu6_draws ? pct(bt.zu6_four_rate) + ' (' + bt.zu6_four_hit + '/' + bt.zu6_draws + ')' : '—'}</span></div>
+  </div>`;
+  app3d.innerHTML = html;
+}
+
+async function loadLottery3d() {
+  app3d.innerHTML = `<div class="status"><span class="spinner"></span>正在抓取开奖数据并计算…</div>`;
+  try {
+    const data = await fetchJson('/api/3d');
+    if (data.error) {
+      app3d.innerHTML = `<div class="status error">✗ ${esc(data.error)}</div>`;
+      return;
+    }
+    if (data.result?.error) {
+      app3d.innerHTML = `<div class="status error">✗ ${esc(data.result.error)}</div>`;
+      return;
+    }
+    lottery3dLoaded = true;
+    renderLottery3d(data.result);
+  } catch (e) {
+    app3d.innerHTML = `<div class="status error">加载失败：${esc(e.message)}</div>`;
+  }
+}
+
+function initPage() {
+  const hash = location.hash.replace('#', '');
+  switchTab(hash === '3d' ? 'lottery3d' : 'football');
+}
+
+initPage();
 </script>
 </body>
 </html>
