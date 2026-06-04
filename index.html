@@ -1325,9 +1325,9 @@ function renderLottery(r) {
     const back = item.back?.map(n => String(n).padStart(2, '0')).join(' ') || '-';
     html += `<div class="row" style="${i > 0 ? 'border-top:1px solid var(--line);margin-top:8px;padding-top:8px' : ''}">
       <span class="k" style="width:100px">${item.issue || '未知期'}</span>
-      <span style="font-size:18px;font-weight:700;color:var(--accent2)">${front}</span>
+      <span style="font-size:18px;font-weight:700;color:#f85149">${front}</span>
       <span style="color:var(--muted)">+</span>
-      <span style="font-size:18px;font-weight:700;color:#f85149">${back}</span>
+      <span style="font-size:18px;font-weight:700;color:#4493f8">${back}</span>
       <span style="color:var(--muted);font-size:12px">${item.date || ''}</span>
     </div>`;
   });
@@ -1498,9 +1498,9 @@ async function getLotteryRecommend() {
       html += `<div class="highlight" style="margin-bottom:8px">
         <div style="display:flex;justify-content:center;align-items:center;gap:12px">
           <span style="font-size:12px;color:var(--muted)">${idx + 1}.</span>
-          <span class="big" style="letter-spacing:4px">${front}</span>
+          <span class="big" style="letter-spacing:4px;color:#f85149">${front}</span>
           <span style="color:var(--muted);font-size:24px">+</span>
-          <span class="big" style="letter-spacing:4px;color:#f85149">${back}</span>
+          <span class="big" style="letter-spacing:4px;color:#4493f8">${back}</span>
         </div>
       </div>`;
     });
@@ -1634,9 +1634,9 @@ async function getLotteryEnsemble() {
     // 预测号码
     html += `<div class="highlight">
       <div style="display:flex;justify-content:center;align-items:center;gap:12px">
-        <span class="big" style="letter-spacing:4px">${front}</span>
+        <span class="big" style="letter-spacing:4px;color:#f85149">${front}</span>
         <span style="color:var(--muted);font-size:24px">+</span>
-        <span class="big" style="letter-spacing:4px;color:#f85149">${back}</span>
+        <span class="big" style="letter-spacing:4px;color:#4493f8">${back}</span>
       </div>
       <div class="sub">投票策略：${result.method || 'voting'}</div>
     </div>`;
