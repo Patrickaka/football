@@ -38,6 +38,9 @@ EURO_PROB_TREND_EPS = 0.02
 # 大小球倾向阈值：单边真实概率达到该值才判定为大/小球倾向
 TOTAL_LEAN_THRESHOLD = 0.55
 
+# 凯利指数：某项高于返还率超过该值视为「打出难度大」
+KELLY_BIAS_EPS = 2.0
+
 # 泊松比分矩阵枚举的单队最大进球数
 MAX_GOALS = 7
 
@@ -342,8 +345,14 @@ def fetch_ouzhi(match_id):
 
     close, open_ = series[0], series[-1]
     return {
-        'open': {'home': open_[0], 'draw': open_[1], 'away': open_[2]},
-        'close': {'home': close[0], 'draw': close[1], 'away': close[2]},
+        'open': {
+            'home': open_[0], 'draw': open_[1], 'away': open_[2],
+            'return_rate': float(open_[3]) if len(open_) > 3 else None,
+        },
+        'close': {
+            'home': close[0], 'draw': close[1], 'away': close[2],
+            'return_rate': float(close[3]) if len(close) > 3 else None,
+        },
     }
 
 
@@ -519,8 +528,85 @@ def analyze_asian(data):
     }
 
 
+def _return_rate_from_odds(home, draw, away):
+    """由欧赔估算理论返还率（%），JSON 无返还率字段时兜底"""
+    total = 1.0 / home + 1.0 / draw + 1.0 / away
+    return 100.0 / total if total > 0 else 92.0
+
+
+def kelly_index_triple(home_odds, draw_odds, away_odds, p_home, p_draw, p_away):
+    """三项凯利指数（%）= 赔率 × 去水概率 × 100，与 500.com 口径一致"""
+    return {
+        'home': home_odds * p_home * 100,
+        'draw': draw_odds * p_draw * 100,
+        'away': away_odds * p_away * 100,
+    }
+
+
+def _kelly_outcome_label(key):
+    return {'home': '主胜', 'draw': '平局', 'away': '客胜'}[key]
+
+
+def analyze_kelly(ouzhi_data, probs_open, probs_close):
+    """
+    欧赔凯利指数分析：初/终盘凯利、返还率对比、离散度与打出难度提示。
+    probs 通常取同一组欧赔去水概率（与计算凯利的赔率对应）。
+    """
+    op, cl = ouzhi_data['open'], ouzhi_data['close']
+    ph_o, pd_o, pa_o = probs_open
+    ph_c, pd_c, pa_c = probs_close
+
+    rr_o = op.get('return_rate') or _return_rate_from_odds(op['home'], op['draw'], op['away'])
+    rr_c = cl.get('return_rate') or _return_rate_from_odds(cl['home'], cl['draw'], cl['away'])
+
+    k_open = kelly_index_triple(op['home'], op['draw'], op['away'], ph_o, pd_o, pa_o)
+    k_close = kelly_index_triple(cl['home'], cl['draw'], cl['away'], ph_c, pd_c, pa_c)
+    delta = {k: k_close[k] - k_open[k] for k in k_close}
+
+    labels = ('home', 'draw', 'away')
+    spread = max(k_close.values()) - min(k_close.values())
+    hardest = max(labels, key=lambda k: k_close[k] - rr_c)
+    favored = min(labels, key=lambda k: k_close[k] - rr_c)
+
+    risks, favors, kelly_changes = [], [], []
+    for k in labels:
+        name = _kelly_outcome_label(k)
+        diff = k_close[k] - rr_c
+        if diff > KELLY_BIAS_EPS:
+            risks.append(f"{name}凯利{k_close[k]:.1f}高于返还率{rr_c:.1f}（+{diff:.1f}）→ 打出偏难")
+        elif diff < -KELLY_BIAS_EPS:
+            favors.append(f"{name}凯利{k_close[k]:.1f}低于返还率（{diff:.1f}）→ 相对看好")
+        if abs(delta[k]) >= 1.0:
+            arrow = '↑' if delta[k] > 0 else '↓'
+            kelly_changes.append(f"{name}凯利{arrow}{abs(delta[k]):.1f}")
+
+    if spread >= 4.0:
+        bias_desc = f"凯利离散度{spread:.1f}，庄家态度分化明显"
+    else:
+        bias_desc = f"凯利离散度{spread:.1f}，三项较为均衡"
+
+    summary_parts = [bias_desc, f"最难项倾向{_kelly_outcome_label(hardest)}"]
+    if favors:
+        summary_parts.append(favors[0])
+    summary = '；'.join(summary_parts)
+
+    return {
+        'return_rate': {'open': rr_o, 'close': rr_c},
+        'open': k_open,
+        'close': k_close,
+        'delta': delta,
+        'spread': spread,
+        'hardest': hardest,
+        'favored': favored,
+        'risks': risks,
+        'favors': favors,
+        'kelly_changes': kelly_changes,
+        'summary': summary,
+    }
+
+
 def analyze_euro(data):
-    """解析欧赔，返回初终盘 1X2 真实概率与变化趋势"""
+    """解析欧赔，返回初终盘 1X2 真实概率、凯利指数与变化趋势"""
     op, cl = data['open'], data['close']
 
     ph_o, pd_o, pa_o = remove_vig(op['home'], op['draw'], op['away'])
@@ -534,10 +620,13 @@ def analyze_euro(data):
     if pd_c - pd_o > EURO_PROB_TREND_EPS: changes.append(f"平局概率↑{(pd_c-pd_o)*100:.1f}%")
     elif pd_c - pd_o < -EURO_PROB_TREND_EPS: changes.append(f"平局概率↓{(pd_o-pd_c)*100:.1f}%")
 
+    kelly = analyze_kelly(data, (ph_o, pd_o, pa_o), (ph_c, pd_c, pa_c))
+
     return {
         'open': {'home': ph_o, 'draw': pd_o, 'away': pa_o},
         'close': {'home': ph_c, 'draw': pd_c, 'away': pa_c},
         'raw_odds': {'open': dict(op), 'close': dict(cl)},
+        'kelly': kelly,
         'changes': changes,
     }
 
@@ -1055,6 +1144,20 @@ def _recommend_reasons(h, a, asian, euro, total, team=None, heat=None):
         reasons.append("冷门口比分（模型概率高于历史基准）")
     elif heat == 'hot':
         reasons.append("热门比分（已降权）")
+    kelly = euro.get('kelly')
+    if kelly:
+        fav = kelly.get('favored')
+        hard = kelly.get('hardest')
+        if fav == 'home' and diff > 0:
+            reasons.append("凯利指数相对看好主胜")
+        elif fav == 'away' and diff < 0:
+            reasons.append("凯利指数相对看好客胜")
+        elif fav == 'draw' and diff == 0:
+            reasons.append("凯利指数相对看好平局")
+        if hard == 'home' and diff > 0:
+            reasons.append("凯利提示主胜打出难度偏大")
+        elif hard == 'away' and diff < 0:
+            reasons.append("凯利提示客胜打出难度偏大")
     return reasons or ["综合赔率推断"]
 
 
@@ -1240,6 +1343,22 @@ def render_cli(result):
     el = euro.get('implied_lambdas')
     if el:
         print(f"  欧赔隐含 λ: 主{el['home']:.2f} / 客{el['away']:.2f}")
+
+    kelly = euro.get('kelly')
+    if kelly:
+        ko, kc = kelly['open'], kelly['close']
+        rr = kelly['return_rate']['close']
+        print("\n【凯利指数分析】（欧赔 × 去水概率 × 100）")
+        print(f"  理论返还率: 初盘{kelly['return_rate']['open']:.1f}% → 终盘{rr:.1f}%")
+        print(f"  初盘凯利: 主胜{ko['home']:.1f} | 平{ko['draw']:.1f} | 客胜{ko['away']:.1f}")
+        print(f"  终盘凯利: 主胜{kc['home']:.1f} | 平{kc['draw']:.1f} | 客胜{kc['away']:.1f}")
+        if kelly['kelly_changes']:
+            print(f"  凯利变化: {', '.join(kelly['kelly_changes'])}")
+        if kelly['risks']:
+            print(f"  风险提示: {'；'.join(kelly['risks'])}")
+        if kelly['favors']:
+            print(f"  相对看好: {'；'.join(kelly['favors'])}")
+        print(f"  综合: {kelly['summary']}")
 
     to, tc = total['open_prob'], total['close_prob']
     print("\n【大小球分析】（多家博彩公司平均值）")

@@ -22,8 +22,8 @@ def test_ouzhi_json_first_is_close():
     ]
     football.fetch_json = lambda url, referer=None: series
     oz = football.fetch_ouzhi('x')
-    assert oz['close'] == {'home': 1.52, 'draw': 3.88, 'away': 6.11}, oz['close']
-    assert oz['open'] == {'home': 1.46, 'draw': 4.03, 'away': 6.39}, oz['open']
+    assert oz['close']['home'] == 1.52 and oz['close']['return_rate'] == 92.6
+    assert oz['open']['home'] == 1.46 and oz['open']['return_rate'] == 91.8
 
 
 def test_daxiao_first_triple_is_open():

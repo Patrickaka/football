@@ -97,6 +97,14 @@
   .rec .reasons span { display: inline-block; background: var(--card2);
     border-radius: 20px; padding: 2px 10px; margin: 3px 4px 0 0; }
 
+  .kelly-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px;
+    margin: 10px 0 8px; font-size: 13px; text-align: center; }
+  .kelly-cell { background: var(--card2); border-radius: 8px; padding: 8px 4px; }
+  .kelly-cell .lbl { color: var(--muted); font-size: 11px; }
+  .kelly-cell .val { font-weight: 600; margin-top: 2px; }
+  .kelly-cell.high { border: 1px solid rgba(248,81,73,.45); }
+  .kelly-cell.low { border: 1px solid rgba(46,160,67,.45); }
+
   .disclaimer { color: var(--muted); font-size: 12px; text-align: center;
     margin-top: 20px; line-height: 1.7; }
 </style>
@@ -257,6 +265,20 @@ function probBar(segs) {
 
 const heatLabel = h => ({ cold: '❄冷', hot: '🔥热', neutral: '' }[h] || '');
 
+function kellyCells(k, rr) {
+  const items = [
+    ['主胜', 'home', 'home'], ['平', 'draw', 'draw'], ['客胜', 'away', 'away'],
+  ];
+  return items.map(([lbl, key, cls]) => {
+    const v = k[key];
+    const diff = v - rr;
+    let box = 'kelly-cell';
+    if (diff > 2) box += ' high';
+    else if (diff < -2) box += ' low';
+    return `<div class="${box}"><div class="lbl">${lbl}</div><div class="val" style="color:var(--${cls === 'draw' ? 'draw' : cls})">${v.toFixed(1)}</div></div>`;
+  }).join('');
+}
+
 function renderResult(r) {
   const { match: m, asian: a, euro: e, total: t, model: md, team: tm } = r;
   const top = md.top_scores;
@@ -283,6 +305,18 @@ function renderResult(r) {
     <div class="row"><span class="k">变化趋势</span><span class="v">${esc(e.changes.length ? e.changes.join('，') : '赔率稳定')}</span></div>
     ${e.implied_supremacy != null ? `<div class="row"><span class="k">欧赔反推净胜球</span><span class="v">${e.implied_supremacy >= 0 ? '+' : ''}${e.implied_supremacy.toFixed(2)}</span></div>` : ''}
     ${e.implied_lambdas ? `<div class="row"><span class="k">欧赔隐含λ</span><span class="v">主 ${e.implied_lambdas.home.toFixed(2)} / 客 ${e.implied_lambdas.away.toFixed(2)}</span></div>` : ''}</div>`;
+
+  if (e.kelly) {
+    const k = e.kelly, rr = k.return_rate.close;
+    html += `<div class="card"><h3>📐 凯利指数</h3>
+      <div class="row"><span class="k">理论返还率</span><span class="v">初 ${k.return_rate.open.toFixed(1)}% → 终 ${rr.toFixed(1)}%</span></div>
+      <div style="font-size:12px;color:var(--muted);margin:6px 0 2px">初盘</div>
+      <div class="kelly-grid">${kellyCells(k.open, k.return_rate.open)}</div>
+      <div style="font-size:12px;color:var(--muted);margin:6px 0 2px">终盘 <span style="color:var(--warn)">高=难出 · 低=看好</span></div>
+      <div class="kelly-grid">${kellyCells(k.close, rr)}</div>
+      ${k.kelly_changes.length ? `<div class="row"><span class="k">凯利变化</span><span class="v">${esc(k.kelly_changes.join('，'))}</span></div>` : ''}
+      <div class="row"><span class="k">综合</span><span class="v">${esc(k.summary)}</span></div></div>`;
+  }
 
   html += `<div class="card"><h3>📊 大小球分析</h3>
     ${probBar([
