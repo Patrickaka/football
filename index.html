@@ -207,7 +207,7 @@ const TAB_META = {
   },
 };
 
-const pct = x => (x * 100).toFixed(1) + '%';
+const pct = x => x != null ? (x * 100).toFixed(1) + '%' : '0%';
 const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c =>
   ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
@@ -369,7 +369,7 @@ function kellyCells(k, rr) {
     ['主胜', 'home', 'home'], ['平', 'draw', 'draw'], ['客胜', 'away', 'away'],
   ];
   return items.map(([lbl, key, cls]) => {
-    const v = k[key];
+    const v = k[key] != null ? k[key] : 0;
     const diff = v - rr;
     let box = 'kelly-cell';
     if (diff > 2) box += ' high';
@@ -380,15 +380,44 @@ function kellyCells(k, rr) {
 
 function renderResult(r) {
   const { match: m, asian: a, euro: e, total: t, model: md, team: tm, confidence: cf, league_profile: lp } = r;
-  const top = md.top_scores;
+  const top = md && md.top_scores ? md.top_scores : [];
+  if (!top.length) {
+    app.innerHTML = backBtn() + `<div class="status error">✗ 未找到预测结果</div>`;
+    bindBack();
+    return;
+  }
   const maxProb = top[0].prob;
+
+  // 模型配置信息
+  const modelTypeNames = {
+    'poisson': '泊松分布',
+    'negative_binomial': '负二项分布',
+    'bayesian': '贝叶斯推断',
+    'ensemble': '多模型集成'
+  };
+  const calibMethodNames = {
+    'platt': 'Platt缩放',
+    'isotonic': '等渗回归'
+  };
+  
+  let modelInfo = [];
+  if (md.model_type) {
+    modelInfo.push(`模型: ${modelTypeNames[md.model_type] || md.model_type}`);
+  }
+  if (md.calibrated) {
+    modelInfo.push(`校准: ${calibMethodNames[md.calibration_method] || md.calibration_method}`);
+  }
+  if (md.ensemble_size) {
+    modelInfo.push(`集成: ${md.ensemble_size}模型`);
+  }
 
   let html = backBtn();
   html += `<div class="match-head">
     <div class="names"><b>${esc(m.home)}</b> <span style="color:var(--muted)">vs</span> <b>${esc(m.away)}</b></div>
     <div class="meta">${esc(m.league || '')} ${esc(m.time || '')}</div>
-    ${lp && lp.name && lp.name !== 'default' ? `<div class="meta">联赛模型 ${esc(lp.name)} · 场均 ${lp.avg_goal.toFixed(2)} 球</div>` : ''}
-    ${cf ? `<div class="meta" style="color:${cf.level === 'low' ? 'var(--away)' : 'var(--accent2)'}">置信度 ${esc(cf.label)} (${(cf.score * 100).toFixed(0)}%)</div>` : ''}</div>`;
+    ${lp && lp.name && lp.name !== 'default' && lp.avg_goal != null ? `<div class="meta">联赛模型 ${esc(lp.name)} · 场均 ${lp.avg_goal.toFixed(2)} 球</div>` : ''}
+    ${modelInfo.length ? `<div class="meta" style="color:${'var(--warn)'}">${modelInfo.join(' · ')}</div>` : ''}
+    ${cf && cf.score != null ? `<div class="meta" style="color:${cf.level === 'low' ? 'var(--away)' : 'var(--accent2)'}">置信度 ${esc(cf.label)} (${(cf.score * 100).toFixed(0)}%)</div>` : ''}</div>`;
 
   html += `<div class="card"><h3>🀄 亚盘分析</h3>
     <div class="row"><span class="k">让球走势</span><span class="v">${esc(a.handicap_trend)}</span></div>
@@ -406,18 +435,22 @@ function renderResult(r) {
     <div class="row"><span class="k">变化趋势</span><span class="v">${esc(e.changes.length ? e.changes.join('，') : '赔率稳定')}</span></div>
     ${e.momentum && e.momentum.summary ? `<div class="row"><span class="k">欧赔走势</span><span class="v">${esc(e.momentum.summary)}</span></div>` : ''}
     ${e.implied_supremacy != null ? `<div class="row"><span class="k">欧赔反推净胜球</span><span class="v">${e.implied_supremacy >= 0 ? '+' : ''}${e.implied_supremacy.toFixed(2)}</span></div>` : ''}
-    ${e.implied_lambdas ? `<div class="row"><span class="k">欧赔隐含λ</span><span class="v">主 ${e.implied_lambdas.home.toFixed(2)} / 客 ${e.implied_lambdas.away.toFixed(2)}</span></div>` : ''}</div>`;
+    ${e.implied_lambdas && e.implied_lambdas.home != null && e.implied_lambdas.away != null ? `<div class="row"><span class="k">欧赔隐含λ</span><span class="v">主 ${e.implied_lambdas.home.toFixed(2)} / 客 ${e.implied_lambdas.away.toFixed(2)}</span></div>` : ''}</div>`;
 
-  if (e.kelly) {
-    const k = e.kelly, rr = k.return_rate.close;
+  if (e.kelly && e.kelly.return_rate) {
+    const k = e.kelly;
+    const rrOpen = k.return_rate.open != null ? k.return_rate.open : 0;
+    const rrClose = k.return_rate.close != null ? k.return_rate.close : 0;
     html += `<div class="card"><h3>📐 凯利指数</h3>
-      <div class="row"><span class="k">理论返还率</span><span class="v">初 ${k.return_rate.open.toFixed(1)}% → 终 ${rr.toFixed(1)}%</span></div>
+      <div class="row"><span class="k">理论返还率</span><span class="v">初 ${rrOpen.toFixed(1)}% → 终 ${rrClose.toFixed(1)}%</span></div>
       <div style="font-size:12px;color:var(--muted);margin:6px 0 2px">初盘</div>
-      <div class="kelly-grid">${kellyCells(k.open, k.return_rate.open)}</div>
+      <div class="kelly-grid">${k.open ? kellyCells(k.open, rrOpen) : ''}</div>
       <div style="font-size:12px;color:var(--muted);margin:6px 0 2px">终盘 <span style="color:var(--warn)">高=难出 · 低=看好</span></div>
-      <div class="kelly-grid">${kellyCells(k.close, rr)}</div>
-      ${k.kelly_changes.length ? `<div class="row"><span class="k">凯利变化</span><span class="v">${esc(k.kelly_changes.join('，'))}</span></div>` : ''}
-      <div class="row"><span class="k">综合</span><span class="v">${esc(k.summary)}</span></div></div>`;
+      <div class="kelly-grid">${k.close ? kellyCells(k.close, rrClose) : ''}</div>
+      ${k.kelly_changes && k.kelly_changes.length ? `<div class="row"><span class="k">凯利变化</span><span class="v">${esc(k.kelly_changes.join('，'))}</span></div>` : ''}
+      ${k.trend && k.trend.slope != null ? `<div class="row"><span class="k">凯利斜率</span><span class="v">${k.trend.slope > 0 ? '↑' : '↓'} ${Math.abs(k.trend.slope).toFixed(3)}</span></div>` : ''}
+      ${k.trend && k.trend.crossing ? `<div class="row"><span class="k" style="color:var(--warn)">交叉预警</span><span class="v" style="color:var(--warn)">${esc(k.trend.crossing)}</span></div>` : ''}
+      <div class="row"><span class="k">综合</span><span class="v">${esc(k.summary || '')}</span></div></div>`;
   }
 
   html += `<div class="card"><h3>📊 大小球分析</h3>
@@ -431,36 +464,65 @@ function renderResult(r) {
     <div class="row"><span class="k">期望总进球</span><span class="v">${t.expected_goals[0]}-${t.expected_goals[1]} 球</span></div></div>`;
 
   if (tm) {
+    const attackHome = tm.attack_home != null ? tm.attack_home : 0;
+    const defenseHome = tm.defense_home != null ? tm.defense_home : 0;
+    const attackAway = tm.attack_away != null ? tm.attack_away : 0;
+    const defenseAway = tm.defense_away != null ? tm.defense_away : 0;
     html += `<div class="card"><h3>⚔️ 球队攻防（近10场）</h3>
       <div class="row"><span class="k">概况</span><span class="v">${esc(tm.summary)}</span></div>
-      <div class="row"><span class="k">主队</span><span class="v">进 ${tm.attack_home.toFixed(2)} / 失 ${tm.defense_home.toFixed(2)} 每场</span></div>
-      <div class="row"><span class="k">客队</span><span class="v">进 ${tm.attack_away.toFixed(2)} / 失 ${tm.defense_away.toFixed(2)} 每场</span></div></div>`;
+      <div class="row"><span class="k">主队</span><span class="v">进 ${attackHome.toFixed(2)} / 失 ${defenseHome.toFixed(2)} 每场</span></div>
+      <div class="row"><span class="k">客队</span><span class="v">进 ${attackAway.toFixed(2)} / 失 ${defenseAway.toFixed(2)} 每场</span></div></div>`;
   }
 
+  const anomaly = r.anomaly;
+  if (anomaly && (anomaly.joint_water || anomaly.euro_asian_deviation)) {
+    html += `<div class="card"><h3>🎯 联合异常特征</h3>`;
+    if (anomaly.joint_water && anomaly.joint_water.joint_water_feature != null) {
+      html += `<div class="row"><span class="k">水位联动</span><span class="v">${esc(anomaly.joint_water.hint_desc || '无特殊信号')}</span></div>
+      <div class="row"><span class="k">联动系数</span><span class="v">${anomaly.joint_water.joint_water_feature > 0 ? '+' : ''}${anomaly.joint_water.joint_water_feature.toFixed(4)}</span></div>`;
+      if (anomaly.joint_water.hint_big_win) {
+        html += `<div class="row"><span class="k" style="color:var(--accent2)">大胜提示</span><span class="v" style="color:var(--accent2)">主队水位下降+大球水位下降，暗示主队可能大胜</span></div>`;
+      }
+    }
+    if (anomaly.euro_asian_deviation && anomaly.euro_asian_deviation.deviation != null) {
+      const dev = anomaly.euro_asian_deviation.deviation;
+      html += `<div class="row"><span class="k">亚欧偏差</span><span class="v">${dev > 0 ? '+' : ''}${dev.toFixed(2)} 球</span></div>
+      <div class="row"><span class="k">偏差解读</span><span class="v">${dev > 0.3 ? '欧赔更看好主胜' : dev < -0.3 ? '亚盘更看好主胜' : '偏差正常'}</span></div>`;
+    }
+    html += `</div>`;
+  }
+
+  const lamHome = md.lam_home != null ? md.lam_home : 0;
+  const lamAway = md.lam_away != null ? md.lam_away : 0;
   html += `<div class="card"><h3>🎯 Top 5 候选比分 <span style="color:var(--muted);font-weight:400;font-size:12px">（含冷热过滤）</span></h3>
-    <div class="row" style="padding-bottom:8px"><span class="k">泊松期望进球</span><span class="v">主队 λ=${md.lam_home.toFixed(2)} / 客队 λ=${md.lam_away.toFixed(2)}</span></div>`;
+    <div class="row" style="padding-bottom:8px"><span class="k">期望进球</span><span class="v">主队 λ=${lamHome.toFixed(2)} / 客队 λ=${lamAway.toFixed(2)}</span></div>`;
   top.forEach((s, i) => {
+    const prob = s.prob != null ? s.prob : 0;
+    const barWidth = maxProb > 0 ? (prob / maxProb * 100).toFixed(0) : 0;
     html += `<div class="score">
       <span class="rank">#${i + 1}</span>
       <span class="sc">${esc(m.home)} ${s.home} - ${s.away} ${esc(m.away)}</span>
       <span class="res res-${s.result}">${s.result}</span>
-      <span class="bar"><i style="width:${(s.prob / maxProb * 100).toFixed(0)}%"></i></span>
-      <span class="pct">${pct(s.prob)} ${heatLabel(s.heat)}</span></div>`;
+      <span class="bar"><i style="width:${barWidth}%"></i></span>
+      <span class="pct">${pct(prob)} ${heatLabel(s.heat)}</span></div>`;
   });
   html += `</div>`;
 
+  const recommend = md && md.recommend ? md.recommend : [];
   const recTitle = cf && cf.level === 'low'
     ? '⭐ 推荐：低置信仅 1 个比分'
-    : `⭐ 推荐：最可能的 ${md.recommend.length} 个比分`;
+    : `⭐ 推荐：最可能的 ${recommend.length} 个比分`;
   html += `<h3 style="color:var(--accent2);font-size:15px;margin:18px 0 10px">${recTitle}</h3>`;
   if (cf && cf.notes && cf.notes.length) {
     html += `<div class="status" style="padding:0 0 12px;font-size:13px;text-align:left">${cf.notes.map(esc).join('；')}</div>`;
   }
-  md.recommend.forEach((s, i) => {
+  recommend.forEach((s, i) => {
+    const recProb = s.prob != null ? s.prob : 0;
+    const reasons = s.reasons && s.reasons.length ? s.reasons : [];
     html += `<div class="rec">
       <div class="title"><span class="star">★</span> ${esc(m.home)} ${s.home} : ${s.away} ${esc(m.away)} <span class="star">★</span></div>
-      <div class="sub">第${i + 1}推荐 · 结果：${s.result} · 比分概率 ${pct(s.prob)}</div>
-      <div class="reasons">${s.reasons.map(x => `<span>${esc(x)}</span>`).join('')}</div></div>`;
+      <div class="sub">第${i + 1}推荐 · 结果：${s.result} · 比分概率 ${pct(recProb)}</div>
+      <div class="reasons">${reasons.map(x => `<span>${esc(x)}</span>`).join('')}</div></div>`;
   });
 
   app.innerHTML = html;

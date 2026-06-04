@@ -26,6 +26,24 @@ import lottery3d
 import lottery3d_ml
 from logger import setup_logger
 
+# 回测模块（延迟导入以加速启动）
+backtest = None
+hyperopt = None
+dynamic_threshold = None
+
+def _import_backtest_modules():
+    """延迟导入回测相关模块"""
+    global backtest, hyperopt, dynamic_threshold
+    if backtest is None:
+        import backtest as bt
+        backtest = bt
+    if hyperopt is None:
+        import hyperopt as ho
+        hyperopt = ho
+    if dynamic_threshold is None:
+        import dynamic_threshold as dt
+        dynamic_threshold = dt
+
 log = setup_logger('server')
 
 _ROOT = Path(__file__).parent
@@ -95,6 +113,18 @@ class Handler(BaseHTTPRequestHandler):
             self._serve_json(self._lottery_3d_payload())
         elif path == '/api/3d-ml':
             self._serve_json(self._lottery_3d_ml_payload())
+        elif path == '/api/calibrate':
+            params = parse_qs(route.query)
+            self._serve_json(self._calibrate_payload(params))
+        elif path == '/api/calibrate/list':
+            self._serve_json(self._calibrate_list_payload())
+        elif path == '/api/calibrate/clear':
+            self._serve_json(self._calibrate_clear_payload())
+        elif path == '/api/backtest':
+            params = parse_qs(route.query)
+            self._serve_json(self._backtest_payload(params))
+        elif path == '/api/backtest/threshold':
+            self._serve_json(self._threshold_payload())
         else:
             self._send_json_error(404, f'Not Found: {route.path}')
         self._log_request(200, start)
@@ -209,6 +239,72 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:
             self._log.error('ML 3D 预测失败', exc_info=True)
             return {'error': 'ML 3D 预测失败'}
+
+    def _calibrate_payload(self, params):
+        """手动触发联赛重新校准"""
+        league = params.get('league', [''])[0]
+        if not league:
+            return {'error': '缺少 league 参数'}
+        recent_matches = int(params.get('matches', ['10'])[0])
+        
+        try:
+            result = football.recalibrate_league(league, recent_matches=recent_matches)
+            return {'result': result}
+        except Exception as e:
+            self._log.error('校准失败 league=%s', league, exc_info=True)
+            return {'error': f'校准失败: {str(e)}'}
+
+    def _calibrate_list_payload(self):
+        """列出所有已校准的联赛"""
+        try:
+            leagues = football.list_calibrated_leagues()
+            return {'result': {'leagues': leagues, 'count': len(leagues)}}
+        except Exception as e:
+            self._log.error('获取校准列表失败', exc_info=True)
+            return {'error': f'获取失败: {str(e)}'}
+
+    def _calibrate_clear_payload(self):
+        """清空校准缓存"""
+        try:
+            result = football.clear_calibration_cache()
+            return {'result': result}
+        except Exception as e:
+            self._log.error('清空校准缓存失败', exc_info=True)
+            return {'error': f'清空失败: {str(e)}'}
+
+    def _backtest_payload(self, params):
+        """执行回测"""
+        try:
+            _import_backtest_modules()
+            
+            league = params.get('league', ['英超'])[0]
+            start_date = params.get('start', ['2024-01-01'])[0]
+            end_date = params.get('end', ['2024-06-30'])[0]
+            
+            result = backtest.run_backtest(league, start_date, end_date)
+            return {'result': result}
+        except Exception as e:
+            self._log.error('回测失败', exc_info=True)
+            return {'error': f'回测失败: {str(e)}'}
+
+    def _threshold_payload(self):
+        """获取动态阈值状态"""
+        try:
+            _import_backtest_modules()
+            
+            manager = dynamic_threshold.get_threshold_manager()
+            stats = manager.get_statistics()
+            thresholds = manager.get_thresholds()
+            
+            return {
+                'result': {
+                    'statistics': stats,
+                    'thresholds': thresholds
+                }
+            }
+        except Exception as e:
+            self._log.error('获取阈值状态失败', exc_info=True)
+            return {'error': f'获取失败: {str(e)}'}
 
     def _send(self, status, content_type, body):
         self.send_response(status)

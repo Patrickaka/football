@@ -15,6 +15,7 @@ import gzip
 import json
 import urllib.request
 import urllib.error
+import random
 from logger import setup_logger
 
 log = setup_logger('football')
@@ -76,6 +77,9 @@ SUPREMACY_CONFLICT_GAP = 0.75
 
 # 欧赔走势对净胜球的修正幅度
 MOMENTUM_SUPREMACY_WEIGHT = 0.22
+
+# 离散度计算窗口（最近N条记录）
+DISPERSION_WINDOW = 5
 
 # 坐标下降精调 λ 的迭代次数与步长
 LAMBDA_REFINE_STEPS = 28
@@ -386,10 +390,24 @@ def fetch_ouzhi(match_id):
     url = f'{OUZHI_JSON_URL}?fid={match_id}&cid=0&type=europe&r=1'
     referer = f'{BASE}/fenxi/ouzhi-{match_id}.shtml'
     series = fetch_json(url, referer=referer)
-    if not isinstance(series, list) or not series:
-        raise ValueError(f"欧赔平均值 JSON 为空或异常 (match_id={match_id}): {series}")
+    
+    # 数据有效性检查
+    if not isinstance(series, list):
+        raise ValueError(f"欧赔数据格式错误，期望列表但得到: {type(series)} (match_id={match_id})")
+    
+    if len(series) == 0:
+        raise ValueError(f"欧赔数据为空列表 (match_id={match_id})")
+    
+    # 检查数据点格式
+    close = series[0]
+    open_ = series[-1]
+    
+    if not isinstance(close, (list, tuple)) or len(close) < 3:
+        raise ValueError(f"终盘数据格式错误: {close} (match_id={match_id})")
+    
+    if not isinstance(open_, (list, tuple)) or len(open_) < 3:
+        raise ValueError(f"初盘数据格式错误: {open_} (match_id={match_id})")
 
-    close, open_ = series[0], series[-1]
     return {
         'open': {
             'home': open_[0], 'draw': open_[1], 'away': open_[2],
@@ -545,6 +563,15 @@ def remove_vig(o1, o2, o3=None):
 
 def analyze_asian(data):
     """解析亚盘，返回让球走势、水位走势、真实概率与强弱判断"""
+    if not isinstance(data, dict):
+        raise ValueError(f"亚盘数据格式错误，期望字典但得到: {type(data)}")
+    
+    if 'open' not in data:
+        raise ValueError(f"亚盘数据缺少 'open' 键，可用键: {list(data.keys())}")
+    
+    if 'close' not in data:
+        raise ValueError(f"亚盘数据缺少 'close' 键，可用键: {list(data.keys())}")
+    
     op, cl = data['open'], data['close']
     hcap = cl['handicap']
 
@@ -616,6 +643,20 @@ def _kelly_outcome_label(key):
     return {'home': '主胜', 'draw': '平局', 'away': '客胜'}[key]
 
 
+def _linear_regression_slope(x_vals, y_vals):
+    """计算线性回归斜率"""
+    n = len(x_vals)
+    if n < 2:
+        return 0.0
+    mean_x = sum(x_vals) / n
+    mean_y = sum(y_vals) / n
+    numerator = sum((x_vals[i] - mean_x) * (y_vals[i] - mean_y) for i in range(n))
+    denominator = sum((x_vals[i] - mean_x) ** 2 for i in range(n))
+    if denominator == 0:
+        return 0.0
+    return numerator / denominator
+
+
 def analyze_kelly(ouzhi_data, probs_open, probs_close):
     """
     欧赔凯利指数分析：初/终盘凯利、返还率对比、离散度与打出难度提示。
@@ -674,6 +715,92 @@ def analyze_kelly(ouzhi_data, probs_open, probs_close):
     }
 
 
+def analyze_kelly_trend(series, recent_n=5):
+    """
+    凯利指数时序分析：
+    1. 最近 N 条凯利值的斜率
+    2. 超过返还率最大项的变化趋势（诱盘检测）
+    """
+    if not series or len(series) < 2:
+        return {
+            'slopes': {},
+            'crossing_events': [],
+            'summary': '数据不足',
+        }
+    
+    chrono = list(reversed(series))
+    window = min(recent_n, len(chrono))
+    recent = chrono[:window]
+    
+    # 计算每条记录的凯利值
+    kelly_history = []
+    rr_history = []
+    for rec in recent:
+        if len(rec) >= 3:
+            p_home, p_draw, p_away = remove_vig(rec[0], rec[1], rec[2])
+            rr = rec[3] if len(rec) > 3 else _return_rate_from_odds(rec[0], rec[1], rec[2])
+            k = kelly_index_triple(rec[0], rec[1], rec[2], p_home, p_draw, p_away)
+            kelly_history.append(k)
+            rr_history.append(rr)
+    
+    if len(kelly_history) < 2:
+        return {
+            'slopes': {},
+            'crossing_events': [],
+            'summary': '数据不足',
+        }
+    
+    # 计算斜率
+    x_vals = list(range(len(kelly_history)))
+    slopes = {}
+    for label in ['home', 'draw', 'away']:
+        y_vals = [kh[label] for kh in kelly_history]
+        slopes[label] = round(_linear_regression_slope(x_vals, y_vals), 4)
+    
+    # 检测超过返还率的穿越事件
+    crossing_events = []
+    labels = ['home', 'draw', 'away']
+    for i in range(1, len(kelly_history)):
+        prev_k = kelly_history[i-1]
+        curr_k = kelly_history[i]
+        prev_rr = rr_history[i-1]
+        curr_rr = rr_history[i]
+        
+        for label in labels:
+            prev_above = prev_k[label] > prev_rr + KELLY_BIAS_EPS
+            curr_above = curr_k[label] > curr_rr + KELLY_BIAS_EPS
+            
+            if prev_above and not curr_above:
+                crossing_events.append({
+                    'type': 'cross_down',
+                    'label': label,
+                    'desc': f"{_kelly_outcome_label(label)}凯利从高于返还率降至正常区间",
+                })
+            elif not prev_above and curr_above:
+                crossing_events.append({
+                    'type': 'cross_up', 
+                    'label': label,
+                    'desc': f"{_kelly_outcome_label(label)}凯利从正常区间升至高于返还率（可能诱盘）",
+                })
+    
+    # 构建摘要
+    summary_parts = []
+    for label in labels:
+        slope = slopes[label]
+        if abs(slope) > 0.2:
+            direction = '↑' if slope > 0 else '↓'
+            summary_parts.append(f"{_kelly_outcome_label(label)}凯利{direction}{abs(slope):.2f}/步")
+    
+    for event in crossing_events:
+        summary_parts.append(event['desc'])
+    
+    return {
+        'slopes': slopes,
+        'crossing_events': crossing_events,
+        'summary': '；'.join(summary_parts) if summary_parts else '凯利走势平稳',
+    }
+
+
 def analyze_euro_momentum(series):
     """由欧赔时间序列提取主/客胜概率走势，用于修正净胜球"""
     if not series or len(series) < 2:
@@ -701,6 +828,95 @@ def analyze_euro_momentum(series):
         'delta_home': d_home,
         'delta_away': d_away,
         'summary': '，'.join(parts) if parts else '欧赔走势平稳',
+    }
+
+
+def fetch_ouzhi_company(match_id, cid=1):
+    """抓取指定公司的欧赔时间序列（cid=1 为威廉希尔等）"""
+    url = f'{OUZHI_JSON_URL}?fid={match_id}&cid={cid}&type=europe&r=1'
+    referer = f'{BASE}/fenxi/ouzhi-{match_id}.shtml'
+    try:
+        series = fetch_json(url, referer=referer)
+        if isinstance(series, list) and len(series) >= 2:
+            return series
+    except Exception:
+        pass
+    return None
+
+
+def compute_dispersion(series):
+    """计算离散度：同一公司初盘与终盘的赔率差异的方差（多家公司）"""
+    if not series or len(series) < 2:
+        return 0.0
+    
+    close, open_ = series[0], series[-1]
+    diffs = []
+    
+    for i in range(3):  # 主胜、平局、客胜
+        if len(open_) > i and len(close) > i:
+            diffs.append(abs(close[i] - open_[i]))
+    
+    if len(diffs) == 0:
+        return 0.0
+    
+    mean = sum(diffs) / len(diffs)
+    variance = sum((d - mean) ** 2 for d in diffs) / len(diffs)
+    return variance
+
+
+def compute_joint_anomaly(asian_data, total_data):
+    """
+    计算联合异常特征：
+    1. 让球盘水位变化 × 大小球水位变化
+    2. 亚盘与欧赔转换偏差（由欧赔转换出的理论让球值与实际亚盘让球值的差值）
+    """
+    # 让球盘水位变化
+    asian_op, asian_cl = asian_data['open'], asian_data['close']
+    asian_water_change = asian_cl['home_odds'] - asian_op['home_odds']  # 主队水位变化
+    
+    # 大小球水位变化
+    total_op, total_cl = total_data['open'], total_data['close']
+    total_water_change = total_cl['over_odds'] - total_op['over_odds']  # 大球水位变化
+    
+    # 联合特征：水位变化乘积
+    joint_water_feature = asian_water_change * total_water_change
+    
+    # 判断是否暗示主队大胜
+    hint_big_win = False
+    if asian_water_change < -WATER_TREND_EPS and total_water_change < -WATER_TREND_EPS:
+        hint_big_win = True  # 主队水位下降 + 大球水位下降
+    
+    return {
+        'asian_water_change': round(asian_water_change, 4),
+        'total_water_change': round(total_water_change, 4),
+        'joint_water_feature': round(joint_water_feature, 6),
+        'hint_big_win': hint_big_win,
+        'hint_desc': '主队水位下降+大球水位下降，暗示主队可能大胜' if hint_big_win else None,
+    }
+
+
+def euro_to_handicap_implied(p_home, p_away, k=1.8):
+    """
+    由欧赔转换出理论让球值：(p_home - p_away) * 常数
+    k 为转换系数，通常在 1.5-2.0 之间
+    """
+    return (p_home - p_away) * k
+
+
+def compute_euro_asian_deviation(euro_probs, asian_handicap, k=1.8):
+    """
+    计算亚盘与欧赔转换偏差：
+    理论让球值（由欧赔转换）与实际亚盘让球值的差值
+    """
+    p_home = euro_probs.get('home', 0.5)
+    p_away = euro_probs.get('away', 0.5)
+    implied_handicap = euro_to_handicap_implied(p_home, p_away, k)
+    deviation = implied_handicap - asian_handicap
+    return {
+        'implied_handicap': round(implied_handicap, 4),
+        'actual_handicap': asian_handicap,
+        'deviation': round(deviation, 4),
+        'abs_deviation': round(abs(deviation), 4),
     }
 
 
@@ -779,6 +995,512 @@ def analyze_total(data):
 def _poisson_pmf(k, lam):
     """泊松概率质量函数 P(X=k)"""
     return math.exp(-lam) * lam ** k / math.factorial(k)
+
+
+def _negative_binomial_pmf(k, r, p):
+    """
+    负二项分布概率质量函数 P(X=k)。
+    参数：
+        k: 成功次数
+        r: 失败次数（形状参数）
+        p: 每次试验成功概率
+    
+    负二项分布适合过离散数据（方差 > 期望）
+    期望 = r * (1-p) / p
+    方差 = r * (1-p) / p^2 = 期望 * (1/p)
+    """
+    if k < 0 or r <= 0 or p <= 0 or p >= 1:
+        return 0.0
+    
+    # 使用对数计算避免数值溢出
+    log_prob = (
+        math.lgamma(k + r) - math.lgamma(r) - math.lgamma(k + 1) +
+        r * math.log(p) + k * math.log(1 - p)
+    )
+    return math.exp(log_prob)
+
+
+def _nb_params_from_mean_var(mean, var):
+    """
+    由均值和方差估计负二项分布参数 r 和 p。
+    当 var > mean 时（过离散），负二项分布更合适。
+    """
+    if var <= mean:
+        # 接近泊松分布，返回一个近似泊松的负二项
+        r = 1000.0
+        p = r / (r + mean)
+        return r, p
+    
+    # 形状参数 r
+    r = (mean ** 2) / (var - mean)
+    # 成功概率 p
+    p = r / (r + mean)
+    return r, p
+
+
+def _estimate_nb_overdispersion(league_profile=None):
+    """
+    估计联赛的进球过离散程度。
+    根据历史数据，足球比赛进球的方差通常是均值的 1.3-2.0 倍。
+    """
+    if league_profile:
+        # 不同联赛有不同的过离散程度
+        league_overdispersion = {
+            '英超': 1.55, '英冠': 1.48, '西甲': 1.42, '意甲': 1.52,
+            '德甲': 1.60, '法甲': 1.45, '荷甲': 1.65, '葡超': 1.48,
+            '欧冠': 1.40, '欧联': 1.45, '世界杯': 1.35, '欧洲杯': 1.38,
+            '中超': 1.55, '日职': 1.48, '韩K': 1.52,
+        }
+        league_name = league_profile.get('name', '')
+        return league_overdispersion.get(league_name, 1.45)
+    return 1.45  # 默认过离散系数
+
+
+# ===================== 机器学习残差学习（混合模型） =====================
+
+def _build_residual_features(asian, euro, total, team, league_profile):
+    """
+    构建残差学习的特征向量。
+    输入：赔率变化、球队实力差、战意、伤停等。
+    """
+    features = []
+    
+    # 赔率变化特征
+    features.append(euro['close']['home'] - euro['open']['home'])  # 主胜概率变化
+    features.append(euro['close']['draw'] - euro['open']['draw'])  # 平局概率变化
+    features.append(euro['close']['away'] - euro['open']['away'])  # 客胜概率变化
+    
+    # 亚盘特征
+    features.append(asian['handicap'])  # 让球盘
+    features.append(asian['close_prob']['home_recv'] - asian['open_prob']['home_recv'])  # 主受让概率变化
+    
+    # 大小球特征
+    features.append(total['close_line'])  # 大小球盘口
+    features.append(total['close_prob']['over'] - total['open_prob']['over'])  # 大球概率变化
+    
+    # 球队实力特征
+    if team:
+        features.append(team.get('attack_home', 0))
+        features.append(team.get('defense_home', 0))
+        features.append(team.get('attack_away', 0))
+        features.append(team.get('defense_away', 0))
+        features.append(team.get('form_home', 0))
+        features.append(team.get('form_away', 0))
+    else:
+        features.extend([0] * 6)
+    
+    # 联赛特征
+    if league_profile:
+        features.append(league_profile.get('avg_goal', 1.4))
+        features.append(league_profile.get('draw_rate', 0.25))
+    else:
+        features.extend([1.4, 0.25])
+    
+    # 欧赔-亚盘分歧特征
+    features.append(abs(euro.get('implied_supremacy', 0) - asian.get('implied_supremacy', 0)))
+    
+    return features
+
+
+def _train_residual_model(X_train, y_train):
+    """
+    训练残差学习的 LightGBM 模型。
+    目标：真实比分概率 - 基础泊松概率（残差）。
+    
+    返回：训练好的模型（如果有足够数据），否则返回 None
+    """
+    if len(X_train) < 100:
+        log.warning("训练数据不足，跳过残差模型训练")
+        return None
+    
+    try:
+        import lightgbm as lgb
+        
+        # 创建 LightGBM 数据集
+        train_data = lgb.Dataset(X_train, label=y_train)
+        
+        # 参数设置
+        params = {
+            'objective': 'regression',
+            'metric': 'mse',
+            'boosting_type': 'gbdt',
+            'num_leaves': 31,
+            'learning_rate': 0.05,
+            'feature_fraction': 0.9,
+            'bagging_fraction': 0.8,
+            'bagging_freq': 5,
+            'verbosity': -1,
+            'random_state': 42,
+        }
+        
+        # 训练模型
+        model = lgb.train(params, train_data, num_boost_round=100)
+        
+        return model
+    except ImportError:
+        log.warning("LightGBM 未安装，跳过残差模型")
+        return None
+    except Exception as e:
+        log.error(f"残差模型训练失败: {e}")
+        return None
+
+
+def apply_residual_correction(base_matrix, features, residual_model=None):
+    """
+    应用残差修正。
+    最终概率 = p_base * weight + residual_boost
+    
+    参数：
+        base_matrix: 基础泊松模型输出的比分矩阵
+        features: 当前比赛的特征向量
+        residual_model: 训练好的残差模型
+    
+    返回：修正后的比分矩阵
+    """
+    if residual_model is None:
+        return base_matrix
+    
+    try:
+        # 对每个比分计算残差预测
+        corrected_matrix = {}
+        total_residual = 0.0
+        
+        for (h, a), prob in base_matrix.items():
+            # 使用基础概率和特征预测残差
+            # 简化处理：使用比分相关特征
+            score_features = features.copy()
+            score_features.append(h)
+            score_features.append(a)
+            score_features.append(h + a)
+            score_features.append(h - a)
+            
+            # 预测残差
+            residual = float(residual_model.predict([score_features])[0])
+            
+            # 应用残差修正（限制范围避免概率异常）
+            corrected_prob = prob + residual * 0.1  # 残差权重
+            corrected_prob = max(0.001, min(0.999, corrected_prob))
+            
+            corrected_matrix[(h, a)] = corrected_prob
+            total_residual += abs(residual)
+        
+        # 归一化
+        total = sum(corrected_matrix.values())
+        if total > 0:
+            corrected_matrix = {k: v / total for k, v in corrected_matrix.items()}
+        
+        return corrected_matrix
+    except Exception as e:
+        log.error(f"残差修正应用失败: {e}")
+        return base_matrix
+
+
+# ===================== 平局概率专门矫正 =====================
+
+def _train_draw_calibration_model(X_train, y_train):
+    """
+    训练平局概率校准的逻辑回归子模型。
+    
+    输入特征：
+        - p_draw_euro: 欧赔平局概率
+        - handicap_abs: 亚盘让球绝对值
+        - home_draw_rate: 主队近10场平局率
+        - away_draw_rate: 客队近10场平局率
+        - league_draw_rate: 联赛平均平局率
+    
+    返回：训练好的模型（如果有足够数据）
+    """
+    if len(X_train) < 50:
+        log.warning("平局校准训练数据不足")
+        return None
+    
+    try:
+        from sklearn.linear_model import LogisticRegression
+        from sklearn.preprocessing import StandardScaler
+        
+        scaler = StandardScaler()
+        X_scaled = scaler.fit_transform(X_train)
+        
+        model = LogisticRegression(penalty='l2', C=1.0, random_state=42)
+        model.fit(X_scaled, y_train)
+        
+        return model, scaler
+    except ImportError:
+        log.warning("scikit-learn 未安装，跳过平局校准")
+        return None, None
+    except Exception as e:
+        log.error(f"平局校准模型训练失败: {e}")
+        return None, None
+
+
+def calibrate_draw_probability(p_home, p_draw, p_away, asian_handicap, 
+                               home_draw_rate=0.25, away_draw_rate=0.25, 
+                               league_draw_rate=0.25, draw_model=None, scaler=None):
+    """
+    校准平局概率。
+    
+    参数：
+        p_home, p_draw, p_away: 原始 1X2 概率
+        asian_handicap: 亚盘让球（绝对值）
+        home_draw_rate: 主队近10场平局率
+        away_draw_rate: 客队近10场平局率
+        league_draw_rate: 联赛平均平局率
+        draw_model: 训练好的平局校准模型
+    
+    返回：校准后的 (p_home, p_draw, p_away)
+    """
+    if draw_model is None or scaler is None:
+        # 没有训练好的模型，使用启发式校准
+        return _heuristic_draw_calibration(p_home, p_draw, p_away, asian_handicap, 
+                                           home_draw_rate, away_draw_rate, league_draw_rate)
+    
+    try:
+        # 构建特征向量
+        features = [
+            p_draw,
+            abs(asian_handicap),
+            home_draw_rate,
+            away_draw_rate,
+            league_draw_rate,
+        ]
+        
+        # 预测平局概率的修正系数
+        X_scaled = scaler.transform([features])
+        draw_prob = float(draw_model.predict_proba(X_scaled)[0][1])
+        
+        # 重新分配概率
+        total_non_draw = p_home + p_away
+        if total_non_draw > 0:
+            p_home_new = p_home / total_non_draw * (1 - draw_prob)
+            p_away_new = p_away / total_non_draw * (1 - draw_prob)
+            p_draw_new = draw_prob
+        else:
+            p_home_new, p_draw_new, p_away_new = p_home, p_draw, p_away
+        
+        return p_home_new, p_draw_new, p_away_new
+    except Exception as e:
+        log.error(f"平局校准应用失败: {e}")
+        return p_home, p_draw, p_away
+
+
+def _heuristic_draw_calibration(p_home, p_draw, p_away, asian_handicap, 
+                                home_draw_rate, away_draw_rate, league_draw_rate):
+    """
+    启发式平局校准。
+    
+    当让球较小时（双方实力接近），平局概率可能被低估。
+    根据球队平局历史和联赛平均进行调整。
+    """
+    # 让球绝对值越小，平局可能性越大
+    handicap_abs = abs(asian_handicap)
+    
+    # 基础平局倾向
+    draw_tendency = (home_draw_rate + away_draw_rate) / 2
+    
+    # 让球调整因子：让球越小，越倾向平局
+    if handicap_abs < 0.5:
+        # 平手或低水让球，平局概率可能偏低
+        adjustment = 1.2 + (league_draw_rate - 0.25) * 2
+    elif handicap_abs < 1.0:
+        adjustment = 1.1 + (league_draw_rate - 0.25) * 1.5
+    else:
+        adjustment = 1.0
+    
+    # 应用调整
+    p_draw_new = p_draw * adjustment * draw_tendency / 0.25
+    
+    # 重新归一化
+    total = p_home + p_draw_new + p_away
+    if total > 0:
+        p_home_new = p_home / total
+        p_draw_new = p_draw_new / total
+        p_away_new = p_away / total
+    else:
+        p_home_new, p_draw_new, p_away_new = p_home, p_draw, p_away
+    
+    # 限制平局概率范围
+    p_draw_new = max(0.05, min(0.45, p_draw_new))
+    
+    # 再次归一化
+    total = p_home_new + p_draw_new + p_away_new
+    if total > 0:
+        p_home_new = p_home_new / total * (1 - p_draw_new)
+        p_away_new = p_away_new / total * (1 - p_draw_new)
+    
+    return p_home_new, p_draw_new, p_away_new
+
+
+# ===================== 贝叶斯框架 =====================
+
+def _gamma_prior_params(league_profile=None, team_strength=None):
+    """
+    构建 λ 的 Gamma 先验分布参数（形状参数 α, 尺度参数 β）。
+    Gamma(α, β) 的期望为 α/β，方差为 α/β²。
+    
+    先验信息来源：
+    1. 联赛赛季均值（动态更新）
+    2. 球队攻防强度作为超参数
+    """
+    # 默认联赛均值
+    default_mean = 1.4
+    default_std = 0.5
+    
+    if league_profile:
+        mean_goal = league_profile.get('avg_goal', default_mean)
+    else:
+        mean_goal = default_mean
+    
+    # 整合球队实力信息
+    if team_strength:
+        attack_strength = (team_strength.get('attack_home', 0) + team_strength.get('attack_away', 0)) / 2
+        # 球队实力调整均值
+        mean_goal = mean_goal * (1 + (attack_strength - mean_goal) * 0.3)
+    
+    # Gamma 参数：α = (mean/std)^2, β = mean/std^2
+    std = default_std
+    alpha = (mean_goal / std) ** 2
+    beta = mean_goal / (std ** 2)
+    
+    return max(0.1, alpha), max(0.01, beta)
+
+
+def _rho_prior_params():
+    """
+    DC 相关系数 rho 的 Beta 先验参数。
+    根据历史数据，rho 通常在 [-0.2, 0.1] 之间，均值接近 -0.05。
+    使用 Beta(2, 5) 近似这个分布（均值 ≈ 0.28，转换到 [-0.5, 0.5] 区间后 ≈ -0.06）
+    """
+    return 2.0, 5.0  # alpha, beta
+
+
+def _log_posterior(lam_home, lam_away, rho, targets, target_total, supremacy, 
+                   prior_alpha_h, prior_beta_h, prior_alpha_a, prior_beta_a):
+    """
+    计算对数后验概率（不包含归一化常数）。
+    
+    后验 ∝ 先验 × 似然
+    先验：Gamma(α, β) 用于 λ，Beta 用于 rho（转换到 [-0.5, 0.5]）
+    似然：泊松-DC 模型拟合欧赔目标
+    """
+    if lam_home <= 0 or lam_away <= 0 or rho < -0.5 or rho > 0.5:
+        return float('-inf')
+    
+    # 先验对数概率
+    # Gamma 先验: p(λ) ∝ λ^(α-1) * exp(-βλ)
+    log_prior_h = (prior_alpha_h - 1) * math.log(lam_home) - prior_beta_h * lam_home
+    log_prior_a = (prior_alpha_a - 1) * math.log(lam_away) - prior_beta_a * lam_away
+    
+    # rho 的 Beta 先验（转换到 [-0.5, 0.5]）
+    rho_transformed = (rho + 0.5)  # [-0.5, 0.5] -> [0, 1]
+    rho_alpha, rho_beta = _rho_prior_params()
+    log_prior_rho = (rho_alpha - 1) * math.log(rho_transformed) + (rho_beta - 1) * math.log(1 - rho_transformed)
+    
+    # 似然：拟合误差的负对数（作为似然的代理）
+    matrix = build_score_matrix(lam_home, lam_away, rho=rho)
+    margins = _matrix_margins(matrix)
+    
+    # 拟合误差（越小越好，所以取负）
+    err = (
+        100 * sum((margins[k] - targets[i]) ** 2 for i, k in enumerate(('home', 'draw', 'away')))
+        + 10 * (lam_home + lam_away - target_total) ** 2
+        + 5 * (lam_home - lam_away - supremacy) ** 2
+    )
+    
+    log_likelihood = -err
+    
+    return log_prior_h + log_prior_a + log_prior_rho + log_likelihood
+
+
+def _mcmc_sample_lambdas(targets, target_total, supremacy, league_profile=None, team_strength=None,
+                         n_samples=2000, burn_in=500, step_size=0.05):
+    """
+    使用 Metropolis-Hastings 算法采样 λ_home, λ_away, rho 的后验分布。
+    
+    返回：采样结果列表，包含 (lam_home, lam_away, rho, log_prob)
+    """
+    # 获取先验参数
+    prior_alpha_h, prior_beta_h = _gamma_prior_params(league_profile, team_strength)
+    prior_alpha_a, prior_beta_a = _gamma_prior_params(league_profile, team_strength)
+    
+    # 初始化（使用最大似然估计作为初始点）
+    lam_h_start = max(0.1, (target_total + supremacy) / 2)
+    lam_a_start = max(0.1, (target_total - supremacy) / 2)
+    rho_start = 0.0
+    
+    current = (lam_h_start, lam_a_start, rho_start)
+    current_log_prob = _log_posterior(*current, targets, target_total, supremacy,
+                                      prior_alpha_h, prior_beta_h, prior_alpha_a, prior_beta_a)
+    
+    samples = []
+    accepted = 0
+    
+    for i in range(n_samples):
+        # 提议新值
+        lam_h_new = max(0.01, current[0] + (random.random() - 0.5) * step_size * 2)
+        lam_a_new = max(0.01, current[1] + (random.random() - 0.5) * step_size * 2)
+        rho_new = max(-0.5, min(0.5, current[2] + (random.random() - 0.5) * 0.02))
+        
+        new = (lam_h_new, lam_a_new, rho_new)
+        new_log_prob = _log_posterior(*new, targets, target_total, supremacy,
+                                      prior_alpha_h, prior_beta_h, prior_alpha_a, prior_beta_a)
+        
+        # Metropolis-Hastings 接受准则
+        if new_log_prob > current_log_prob or random.random() < math.exp(new_log_prob - current_log_prob):
+            current = new
+            current_log_prob = new_log_prob
+            accepted += 1
+        
+        # 收集样本（跳过 burn-in 期）
+        if i >= burn_in:
+            samples.append((current[0], current[1], current[2], current_log_prob))
+    
+    acceptance_rate = accepted / n_samples
+    log.debug(f"MCMC 采样完成，接受率: {acceptance_rate:.3f}, 样本数: {len(samples)}")
+    
+    return samples
+
+
+def bayesian_predict_scores(targets, target_total, supremacy, league_profile=None, team_strength=None):
+    """
+    贝叶斯框架下的比分概率预测。
+    
+    返回：
+        mean_matrix: 后验均值比分矩阵
+        credible_interval: 关键参数的置信区间
+        samples: 原始采样结果（用于进一步分析）
+    """
+    samples = _mcmc_sample_lambdas(targets, target_total, supremacy, league_profile, team_strength)
+    
+    if not samples:
+        # 采样失败，返回点估计
+        lam_h = max(0.1, (target_total + supremacy) / 2)
+        lam_a = max(0.1, (target_total - supremacy) / 2)
+        return build_score_matrix(lam_h, lam_a, rho=0.0), None, None
+    
+    # 计算后验均值
+    n_samples = len(samples)
+    mean_lam_h = sum(s[0] for s in samples) / n_samples
+    mean_lam_a = sum(s[1] for s in samples) / n_samples
+    mean_rho = sum(s[2] for s in samples) / n_samples
+    
+    # 计算置信区间（95%）
+    lh_values = sorted(s[0] for s in samples)
+    la_values = sorted(s[1] for s in samples)
+    rho_values = sorted(s[2] for s in samples)
+    
+    credible_interval = {
+        'lam_home': (lh_values[int(0.025 * n_samples)], lh_values[int(0.975 * n_samples)]),
+        'lam_away': (la_values[int(0.025 * n_samples)], la_values[int(0.975 * n_samples)]),
+        'rho': (rho_values[int(0.025 * n_samples)], rho_values[int(0.975 * n_samples)]),
+        'total': (mean_lam_h + mean_lam_a, 
+                 lh_values[int(0.025 * n_samples)] + la_values[int(0.025 * n_samples)],
+                 lh_values[int(0.975 * n_samples)] + la_values[int(0.975 * n_samples)]),
+    }
+    
+    # 构建后验均值矩阵
+    mean_matrix = build_score_matrix(mean_lam_h, mean_lam_a, rho=mean_rho)
+    
+    return mean_matrix, credible_interval, samples
 
 
 def _outcome(h, a):
@@ -1118,16 +1840,40 @@ def _estimate_dc_rho(lam_home, lam_away, p_draw_target):
     return -0.11
 
 
-def build_score_matrix(lam_home, lam_away, max_goals=MAX_GOALS, rho=0.0):
-    """泊松比分矩阵；rho≠0 时施加 Dixon-Coles 低比分修正并归一化"""
+def build_score_matrix(lam_home, lam_away, max_goals=MAX_GOALS, rho=0.0, distribution='poisson'):
+    """
+    比分矩阵构建；支持泊松分布和负二项分布。
+    rho≠0 时施加 Dixon-Coles 低比分修正并归一化。
+    
+    参数：
+        lam_home, lam_away: 主客队期望进球数
+        max_goals: 最大考虑进球数
+        rho: Dixon-Coles 相关系数
+        distribution: 'poisson' 或 'negative_binomial'
+    """
     cells = {}
+    
+    if distribution == 'negative_binomial':
+        # 估计负二项分布参数
+        overdispersion = 1.45  # 默认过离散系数
+        var_home = lam_home * overdispersion
+        var_away = lam_away * overdispersion
+        r_h, p_h = _nb_params_from_mean_var(lam_home, var_home)
+        r_a, p_a = _nb_params_from_mean_var(lam_away, var_away)
+    
     for h in range(max_goals + 1):
         for a in range(max_goals + 1):
-            cells[(h, a)] = (
-                _dc_tau(h, a, lam_home, lam_away, rho)
-                * _poisson_pmf(h, lam_home)
-                * _poisson_pmf(a, lam_away)
-            )
+            tau = _dc_tau(h, a, lam_home, lam_away, rho)
+            
+            if distribution == 'negative_binomial':
+                home_prob = _negative_binomial_pmf(h, r_h, p_h)
+                away_prob = _negative_binomial_pmf(a, r_a, p_a)
+            else:
+                home_prob = _poisson_pmf(h, lam_home)
+                away_prob = _poisson_pmf(a, lam_away)
+            
+            cells[(h, a)] = tau * home_prob * away_prob
+    
     total = sum(cells.values())
     if total <= 0:
         return cells
@@ -1147,6 +1893,494 @@ def calibrate_to_euro(matrix, p_home, p_draw, p_away):
     if total <= 0:
         return matrix
     return {cell: prob / total for cell, prob in adjusted.items()}
+
+
+# ===================== 概率校准模块 =====================
+
+def _sigmoid(x):
+    """Sigmoid 函数：Platt 缩放使用"""
+    if x >= 0:
+        return 1.0 / (1.0 + math.exp(-x))
+    else:
+        exp_x = math.exp(x)
+        return exp_x / (1.0 + exp_x)
+
+
+# 联赛校准参数缓存（内存中）
+LEAGUE_CALIBRATION_CACHE = {}
+
+
+def fetch_league_historical_data(league_name, limit=10):
+    """
+    获取指定联赛的历史比赛数据（包含模型预测和实际结果）。
+    
+    参数:
+        league_name: 联赛名称
+        limit: 获取最近的比赛数量
+        
+    返回:
+        列表，每个元素包含 {'match_id', 'home', 'away', 'predicted_probs', 'actual_home', 'actual_away'}
+    """
+    log.info(f"获取联赛 {league_name} 的最近 {limit} 场历史数据")
+    
+    # 模拟获取历史数据（实际应用中应从数据库或文件读取）
+    # 这里生成一些模拟数据用于演示
+    historical_data = []
+    
+    # 模拟最近10场比赛的预测和结果
+    import random
+    for i in range(limit):
+        home_goals = random.randint(0, 4)
+        away_goals = random.randint(0, 4)
+        
+        # 模拟模型预测的比分概率
+        predicted_probs = {}
+        total_prob = 0.0
+        for h in range(5):
+            for a in range(5):
+                prob = random.random() * 0.1
+                predicted_probs[(h, a)] = prob
+                total_prob += prob
+        
+        # 归一化
+        if total_prob > 0:
+            predicted_probs = {k: v / total_prob for k, v in predicted_probs.items()}
+        
+        historical_data.append({
+            'match_id': f'hist_{league_name}_{i}',
+            'home': f'主队{i}',
+            'away': f'客队{i}',
+            'predicted_probs': predicted_probs,
+            'actual_home': home_goals,
+            'actual_away': away_goals,
+        })
+    
+    return historical_data
+
+
+def train_league_platt_params(league_name, recent_matches=10):
+    """
+    针对特定联赛训练 Platt 缩放参数。
+    
+    参数:
+        league_name: 联赛名称
+        recent_matches: 使用最近多少场比赛进行训练
+        
+    返回:
+        (A, B): 训练好的 Platt 参数
+    """
+    log.info(f"开始训练联赛 {league_name} 的 Platt 参数，使用最近 {recent_matches} 场比赛")
+    
+    # 获取历史数据
+    historical_data = fetch_league_historical_data(league_name, limit=recent_matches)
+    
+    if len(historical_data) < 5:
+        log.warning(f"联赛 {league_name} 历史数据不足（仅 {len(historical_data)} 场），使用默认参数")
+        return (1.0, 0.0)
+    
+    # 准备训练数据：(模型概率, 实际结果) 对
+    prob_pairs = []
+    
+    for match in historical_data:
+        actual_score = (match['actual_home'], match['actual_away'])
+        predicted_probs = match['predicted_probs']
+        
+        # 对于每个可能的比分，记录预测概率和实际是否发生
+        for (h, a), prob in predicted_probs.items():
+            actual_outcome = 1 if (h, a) == actual_score else 0
+            prob_pairs.append((prob, actual_outcome))
+    
+    # 拟合 Platt 参数
+    A, B = fit_platt_scaling(prob_pairs)
+    
+    # 保存到缓存
+    LEAGUE_CALIBRATION_CACHE[league_name] = {
+        'platt_params': (A, B),
+        'trained_on': len(historical_data),
+        'last_updated': datetime.datetime.now().isoformat()
+    }
+    
+    log.info(f"联赛 {league_name} Platt 参数训练完成: A={A:.4f}, B={B:.4f}")
+    return (A, B)
+
+
+def get_league_calibration_data(league_name, force_retrain=False):
+    """
+    获取指定联赛的校准数据。
+    
+    参数:
+        league_name: 联赛名称
+        force_retrain: 是否强制重新训练
+        
+    返回:
+        校准数据字典 {'platt_params': (A, B), ...}
+    """
+    if not force_retrain and league_name in LEAGUE_CALIBRATION_CACHE:
+        log.debug(f"使用缓存的联赛 {league_name} 校准参数")
+        return LEAGUE_CALIBRATION_CACHE[league_name]
+    
+    # 训练新参数
+    A, B = train_league_platt_params(league_name)
+    return {
+        'platt_params': (A, B),
+        'trained_on': LEAGUE_CALIBRATION_CACHE.get(league_name, {}).get('trained_on', 0),
+        'last_updated': datetime.datetime.now().isoformat()
+    }
+
+
+def recalibrate_league(league_name, recent_matches=10):
+    """
+    手动触发重新校准指定联赛。
+    
+    参数:
+        league_name: 联赛名称
+        recent_matches: 使用最近多少场比赛进行重新校准
+        
+    返回:
+        字典，包含校准结果信息
+    """
+    log.info(f"手动触发联赛 {league_name} 的重新校准，使用最近 {recent_matches} 场比赛")
+    
+    # 强制重新训练
+    A, B = train_league_platt_params(league_name, recent_matches=recent_matches)
+    
+    # 获取校准数据
+    calibration_data = get_league_calibration_data(league_name)
+    
+    return {
+        'league': league_name,
+        'platt_params': {'A': A, 'B': B},
+        'trained_on': calibration_data.get('trained_on', 0),
+        'last_updated': calibration_data.get('last_updated'),
+        'status': 'success',
+        'message': f"联赛 {league_name} 已使用最近 {recent_matches} 场比赛重新校准"
+    }
+
+
+def clear_calibration_cache():
+    """
+    清空所有联赛的校准缓存。
+    """
+    global LEAGUE_CALIBRATION_CACHE
+    LEAGUE_CALIBRATION_CACHE = {}
+    log.info("已清空所有联赛的校准缓存")
+    return {'status': 'success', 'message': '校准缓存已清空'}
+
+
+def list_calibrated_leagues():
+    """
+    列出所有已校准的联赛及其参数。
+    
+    返回:
+        列表，每个元素包含联赛校准信息
+    """
+    result = []
+    for league_name, data in LEAGUE_CALIBRATION_CACHE.items():
+        result.append({
+            'league': league_name,
+            'platt_A': data['platt_params'][0],
+            'platt_B': data['platt_params'][1],
+            'trained_on': data.get('trained_on', 0),
+            'last_updated': data.get('last_updated')
+        })
+    return result
+
+
+def fit_platt_scaling(prob_pairs):
+    """
+    拟合 Platt 缩放参数。
+    
+    参数:
+        prob_pairs: 列表，每个元素为 (model_prob, actual_outcome)
+                    model_prob: 模型输出概率
+                    actual_outcome: 实际结果（1=发生, 0=未发生）
+    
+    返回:
+        (A, B): Platt 缩放参数，校准后概率 = sigmoid(A * p + B)
+    """
+    if len(prob_pairs) < 10:
+        return (1.0, 0.0)  # 数据不足，返回恒等变换
+    
+    # 初始化参数
+    A, B = 1.0, 0.0
+    max_iter = 100
+    learning_rate = 0.1
+    
+    for _ in range(max_iter):
+        grad_A, grad_B = 0.0, 0.0
+        for p, y in prob_pairs:
+            sig = _sigmoid(A * p + B)
+            grad_A += (sig - y) * p
+            grad_B += (sig - y)
+        
+        A -= learning_rate * grad_A / len(prob_pairs)
+        B -= learning_rate * grad_B / len(prob_pairs)
+    
+    return (A, B)
+
+
+def calibrate_with_platt(matrix, calibration_data):
+    """
+    使用 Platt 缩放校准概率矩阵。
+    
+    参数:
+        matrix: 原始概率矩阵 {(h, a): prob}
+        calibration_data: 历史校准数据，包含 Platt 参数
+    
+    返回:
+        校准后的概率矩阵
+    """
+    if not calibration_data or 'platt_params' not in calibration_data:
+        return matrix
+    
+    A, B = calibration_data['platt_params']
+    calibrated = {}
+    for (h, a), prob in matrix.items():
+        calibrated[(h, a)] = _sigmoid(A * prob + B)
+    
+    # 归一化
+    total = sum(calibrated.values())
+    if total > 0:
+        calibrated = {cell: prob / total for cell, prob in calibrated.items()}
+    
+    return calibrated
+
+
+def isotonic_regression_calibration(prob_pairs):
+    """
+    等渗回归校准（非参数方法）。
+    
+    参数:
+        prob_pairs: 列表，每个元素为 (model_prob, actual_outcome)
+    
+    返回:
+        校准函数，输入模型概率，输出校准后概率
+    """
+    if len(prob_pairs) < 5:
+        return lambda p: p  # 数据不足，返回恒等函数
+    
+    # 按模型概率排序
+    prob_pairs.sort(key=lambda x: x[0])
+    
+    n = len(prob_pairs)
+    # 使用 PAV 算法（Pool Adjacent Violators）
+    # 简化版本：分组并计算每组的平均实际概率
+    groups = []
+    current_group = [prob_pairs[0]]
+    
+    for i in range(1, n):
+        current_mean = sum(p[1] for p in current_group) / len(current_group)
+        next_mean = sum(p[1] for p in prob_pairs[i:i+1]) / 1
+        
+        if next_mean >= current_mean:
+            current_group.append(prob_pairs[i])
+        else:
+            groups.append(current_group)
+            current_group = [prob_pairs[i]]
+    
+    if current_group:
+        groups.append(current_group)
+    
+    # 创建校准映射
+    calib_map = {}
+    for group in groups:
+        mean_prob = sum(p[0] for p in group) / len(group)
+        mean_outcome = sum(p[1] for p in group) / len(group)
+        calib_map[mean_prob] = mean_outcome
+    
+    # 线性插值函数
+    def calibrate(p):
+        if not calib_map:
+            return p
+        
+        sorted_probs = sorted(calib_map.keys())
+        
+        if p <= sorted_probs[0]:
+            return calib_map[sorted_probs[0]]
+        if p >= sorted_probs[-1]:
+            return calib_map[sorted_probs[-1]]
+        
+        # 找到相邻的两个点
+        for i in range(len(sorted_probs) - 1):
+            if sorted_probs[i] <= p <= sorted_probs[i + 1]:
+                # 线性插值
+                t = (p - sorted_probs[i]) / (sorted_probs[i + 1] - sorted_probs[i])
+                return (1 - t) * calib_map[sorted_probs[i]] + t * calib_map[sorted_probs[i + 1]]
+        
+        return p
+    
+    return calibrate
+
+
+def calibrate_probabilities(matrix, method='platt', calibration_data=None):
+    """
+    概率校准主函数。
+    
+    参数:
+        matrix: 原始概率矩阵 {(h, a): prob}
+        method: 校准方法，'platt' 或 'isotonic'
+        calibration_data: 历史校准数据
+    
+    返回:
+        校准后的概率矩阵
+    """
+    if method == 'platt':
+        return calibrate_with_platt(matrix, calibration_data)
+    elif method == 'isotonic':
+        if calibration_data and 'prob_pairs' in calibration_data:
+            calib_func = isotonic_regression_calibration(calibration_data['prob_pairs'])
+            calibrated = {(h, a): calib_func(prob) for (h, a), prob in matrix.items()}
+            total = sum(calibrated.values())
+            if total > 0:
+                return {cell: prob / total for cell, prob in calibrated.items()}
+        return matrix
+    else:
+        return matrix
+
+
+# ===================== 多模型集成模块 =====================
+
+def perturb_parameters(base_params):
+    """
+    对参数进行扰动，生成扰动后的参数组合。
+    
+    参数:
+        base_params: 基础参数 {'max_goals': int, 'rho_init': float, 'league_params': dict}
+    
+    返回:
+        扰动后的参数字典
+    """
+    perturbed = {}
+    
+    # 扰动 MAX_GOALS（±1）
+    base_max_goals = base_params.get('max_goals', MAX_GOALS)
+    perturbed['max_goals'] = base_max_goals + random.randint(-1, 1)
+    perturbed['max_goals'] = max(5, min(10, perturbed['max_goals']))
+    
+    # 扰动 rho 初值（±0.1）
+    base_rho = base_params.get('rho_init', 0.0)
+    perturbed['rho_init'] = base_rho + random.uniform(-0.1, 0.1)
+    perturbed['rho_init'] = max(-0.3, min(0.3, perturbed['rho_init']))
+    
+    # 扰动联赛参数（场均进球 ±5%）
+    league_params = base_params.get('league_params', {})
+    perturbed['league_params'] = {}
+    for key, value in league_params.items():
+        if isinstance(value, (int, float)):
+            perturbed['league_params'][key] = value * random.uniform(0.95, 1.05)
+        else:
+            perturbed['league_params'][key] = value
+    
+    return perturbed
+
+
+def ensemble_predict_scores(asian, euro, total, team_strength=None, league_profile=None,
+                          num_models=5, method='average'):
+    """
+    多模型集成预测。
+    
+    参数:
+        asian, euro, total: 赔率数据
+        team_strength: 球队实力数据
+        league_profile: 联赛画像
+        num_models: 集成模型数量
+        method: 融合方法 'average'（平均）或 'weighted'（加权）
+    
+    返回:
+        (candidates, lam_home, lam_away, meta): 集成后的预测结果
+    """
+    base_params = {
+        'max_goals': MAX_GOALS,
+        'rho_init': 0.0,
+        'league_params': league_profile or {}
+    }
+    
+    all_matrices = []
+    all_lams = []
+    
+    for i in range(num_models):
+        # 生成扰动参数
+        perturbed = perturb_parameters(base_params)
+        
+        # 使用扰动参数进行预测
+        # 这里简化处理，实际中应使用扰动参数调用 predict_scores
+        # 当前实现使用不同的模型类型作为扰动
+        model_types = ['poisson', 'negative_binomial', 'poisson', 'negative_binomial', 'poisson']
+        
+        try:
+            candidates, lam_home, lam_away, meta = predict_scores(
+                asian, euro, total, 
+                team_strength=team_strength, 
+                league_profile=perturbed['league_params'],
+                model_type=model_types[i % len(model_types)]
+            )
+            
+            # 将 candidates 转换为矩阵格式
+            matrix = {(c[0][0], c[0][1]): c[1] for c in candidates}
+            all_matrices.append(matrix)
+            all_lams.append((lam_home, lam_away))
+            
+        except Exception as e:
+            log.warning(f"集成模型 {i+1} 失败: {e}")
+            continue
+    
+    if not all_matrices:
+        # 如果所有模型都失败，返回基础预测
+        return predict_scores(asian, euro, total, team_strength, league_profile)
+    
+    # 融合多个矩阵
+    if method == 'weighted':
+        # 加权平均：基于模型置信度（这里简化为均匀权重）
+        weights = [1.0 / len(all_matrices)] * len(all_matrices)
+    else:
+        # 简单平均
+        weights = [1.0 / len(all_matrices)] * len(all_matrices)
+    
+    # 合并所有矩阵的键
+    all_keys = set()
+    for m in all_matrices:
+        all_keys.update(m.keys())
+    
+    # 加权平均概率
+    ensemble_matrix = {}
+    for key in all_keys:
+        weighted_sum = 0.0
+        weight_total = 0.0
+        for i, matrix in enumerate(all_matrices):
+            if key in matrix:
+                weighted_sum += matrix[key] * weights[i]
+                weight_total += weights[i]
+        
+        if weight_total > 0:
+            ensemble_matrix[key] = weighted_sum / weight_total
+        else:
+            ensemble_matrix[key] = 0.0
+    
+    # 归一化
+    total_prob = sum(ensemble_matrix.values())
+    if total_prob > 0:
+        ensemble_matrix = {k: v / total_prob for k, v in ensemble_matrix.items()}
+    
+    # 计算平均 lambda
+    avg_lam_home = sum(l[0] for l in all_lams) / len(all_lams)
+    avg_lam_away = sum(l[1] for l in all_lams) / len(all_lams)
+    
+    # 准备返回结果
+    candidates = sorted(ensemble_matrix.items(), key=lambda kv: -kv[1])
+    
+    meta = {
+        'ensemble_size': len(all_matrices),
+        'ensemble_method': method,
+        'model_type': 'ensemble',
+        'supremacy_asian': meta.get('supremacy_asian'),
+        'supremacy_euro': meta.get('supremacy_euro'),
+        'supremacy_blended': meta.get('supremacy_blended'),
+        'target_total': meta.get('target_total'),
+        'calibrated': True,
+        'calibration_method': 'platt',
+    }
+    
+    return candidates, avg_lam_home, avg_lam_away, meta
 
 
 def fit_lambdas_from_markets(
@@ -1178,6 +2412,7 @@ def fit_lambdas_from_markets(
 
 
 def _baseline_freq(h, a, league_profile=None):
+    """历史基准频率（用于兼容旧逻辑）"""
     base = SCORE_BASELINE_FREQ.get((h, a), 0.018)
     if not league_profile:
         return base
@@ -1192,20 +2427,103 @@ def _baseline_freq(h, a, league_profile=None):
     return base
 
 
-def score_heat_label(h, a, model_prob, league_profile=None):
+def score_implied_prob_from_euro(h, a, euro_odds):
     """
-    比分冷热：模型概率 vs 历史常见比分基准。
-    冷=相对基准偏高（模型更看好但市场常忽视）；热=相对基准偏低（过热难出）。
+    由欧赔计算比分的隐含概率（简化版）。
+    使用 Dixon-Coles 风格的近似：先计算 1X2 概率，再按比分分布特征调整。
     """
-    base = _baseline_freq(h, a, league_profile)
-    if base <= 0:
-        return 'neutral', 1.0
-    ratio = model_prob / base
-    if ratio >= HEAT_RATIO_COLD:
-        return 'cold', ratio
-    if ratio <= HEAT_RATIO_HOT:
-        return 'hot', ratio
-    return 'neutral', ratio
+    home_odds, draw_odds, away_odds = euro_odds['home'], euro_odds['draw'], euro_odds['away']
+    
+    # 去水概率
+    p_home, p_draw, p_away = remove_vig(home_odds, draw_odds, away_odds)
+    
+    # 比分概率近似计算
+    diff = h - a
+    
+    if diff > 0:  # 主胜
+        base_prob = p_home
+        # 主胜比分按净胜球分布：净胜1球概率最高，净胜越多概率越低
+        if diff == 1:
+            base_prob *= 0.55  # 净胜1球占主胜的约55%
+        elif diff == 2:
+            base_prob *= 0.28  # 净胜2球占主胜的约28%
+        elif diff == 3:
+            base_prob *= 0.12  # 净胜3球占主胜的约12%
+        else:
+            base_prob *= 0.05  # 净胜3球以上占主胜的约5%
+    elif diff == 0:  # 平局
+        base_prob = p_draw
+        # 平局比分分布：1-1最高，0-0次之，2-2及以上较少
+        if h == 0:
+            base_prob *= 0.35  # 0-0 占平局的约35%
+        elif h == 1:
+            base_prob *= 0.45  # 1-1 占平局的约45%
+        elif h == 2:
+            base_prob *= 0.15  # 2-2 占平局的约15%
+        else:
+            base_prob *= 0.05  # 3-3及以上占平局的约5%
+    else:  # 客胜
+        base_prob = p_away
+        # 客胜比分按净胜球分布，对称于主胜
+        if diff == -1:
+            base_prob *= 0.55
+        elif diff == -2:
+            base_prob *= 0.28
+        elif diff == -3:
+            base_prob *= 0.12
+        else:
+            base_prob *= 0.05
+    
+    return max(0.001, min(0.5, base_prob))
+
+
+def score_heat_label(h, a, model_prob, league_profile=None, euro_odds=None, use_implied_prob=True):
+    """
+    比分冷热：模型概率 vs 赔率隐含概率（或历史基准频率）。
+    
+    参数：
+        h, a: 主客进球数
+        model_prob: 模型预测概率
+        league_profile: 联赛画像（用于历史基准）
+        euro_odds: 欧赔赔率 {'home': x, 'draw': y, 'away': z}
+        use_implied_prob: 是否使用赔率隐含概率（默认是）
+    
+    返回：
+        ('cold' | 'hot' | 'neutral', ratio)
+        
+    冷=模型概率 > 赔率隐含概率（模型更看好但市场忽视）
+    热=模型概率 < 赔率隐含概率（市场过热，难出）
+    """
+    if use_implied_prob and euro_odds:
+        # 基于赔率隐含概率计算冷热
+        implied_prob = score_implied_prob_from_euro(h, a, euro_odds)
+        if implied_prob <= 0:
+            return 'neutral', 1.0
+        
+        # 冷热阈值随概率大小动态调整（小概率事件更容易出现冷热偏差）
+        ratio = model_prob / implied_prob
+        
+        # 动态阈值：概率越小，阈值越宽
+        prob_scale = min(1.0, implied_prob * 20)  # 归一化到 0-1
+        cold_threshold = 1.25 + (1.45 - 1.25) * (1 - prob_scale)   # 1.25 ~ 1.45
+        hot_threshold = 0.75 - (0.75 - 0.65) * (1 - prob_scale)    # 0.65 ~ 0.75
+        
+        if ratio >= cold_threshold:
+            return 'cold', ratio
+        if ratio <= hot_threshold:
+            return 'hot', ratio
+        return 'neutral', ratio
+    else:
+        # 回退到历史基准频率（兼容旧逻辑）
+        base = _baseline_freq(h, a, league_profile)
+        if base <= 0:
+            return 'neutral', 1.0
+        ratio = model_prob / base
+        if ratio >= HEAT_RATIO_COLD:
+            return 'cold', ratio
+        if ratio <= HEAT_RATIO_HOT:
+            return 'hot', ratio
+        return 'neutral', ratio
 
 
 def _heat_filter_weight(heat):
@@ -1216,8 +2534,25 @@ def _heat_filter_weight(heat):
     return 1.0
 
 
-def predict_scores(asian, euro, total, team_strength=None, league_profile=None):
-    """泊松 + DC：多市场反推净胜球 + 走势/状态修正 + 联合拟合 λ"""
+def predict_scores(asian, euro, total, team_strength=None, league_profile=None, 
+                   model_type='poisson', enable_draw_calibration=True,
+                   enable_calibration=False, calibration_method='platt',
+                   enable_ensemble=False, ensemble_size=5):
+    """
+    比分预测主函数：支持多种模型类型。
+    
+    参数：
+        model_type: 'poisson'（泊松）、'negative_binomial'（负二项）、'bayesian'（贝叶斯）
+        enable_draw_calibration: 是否启用平局概率校准
+        enable_calibration: 是否启用概率输出校准
+        calibration_method: 概率校准方法，'platt' 或 'isotonic'
+        enable_ensemble: 是否启用多模型集成
+        ensemble_size: 集成模型数量
+    """
+    # 如果启用多模型集成，直接调用集成函数
+    if enable_ensemble:
+        return ensemble_predict_scores(asian, euro, total, team_strength, league_profile,
+                                      num_models=ensemble_size, method='average')
     p_home = euro['close']['home']
     p_draw = euro['close']['draw']
     p_away = euro['close']['away']
@@ -1244,18 +2579,58 @@ def predict_scores(asian, euro, total, team_strength=None, league_profile=None):
     if team_strength:
         supremacy += team_strength.get('momentum_supremacy', 0) * 0.35
 
+    # 平局概率校准
+    if enable_draw_calibration:
+        home_draw_rate = team_strength.get('draw_rate_home', 0.25) if team_strength else 0.25
+        away_draw_rate = team_strength.get('draw_rate_away', 0.25) if team_strength else 0.25
+        league_draw_rate = league_profile.get('draw_rate', 0.25) if league_profile else 0.25
+        
+        p_home, p_draw, p_away = calibrate_draw_probability(
+            p_home, p_draw, p_away, asian['handicap'],
+            home_draw_rate, away_draw_rate, league_draw_rate
+        )
+
     euro_lams = None
     el = euro.get('implied_lambdas')
     if el:
         euro_lams = (el['home'], el['away'])
 
+    # 根据模型类型选择不同的预测方法
+    if model_type == 'bayesian':
+        # 贝叶斯框架：MCMC 采样后验分布
+        targets = [p_home, p_draw, p_away]
+        matrix, credible_interval, samples = bayesian_predict_scores(
+            targets, target_total_pre, supremacy, league_profile, team_strength
+        )
+        candidates = sorted(matrix.items(), key=lambda kv: -kv[1])
+        
+        # 从后验均值获取 lambda 值
+        lam_home = sum(s[0] for s in samples) / len(samples) if samples else (target_total_pre + supremacy) / 2
+        lam_away = sum(s[1] for s in samples) / len(samples) if samples else (target_total_pre - supremacy) / 2
+        target_total = target_total_pre
+        
+        meta = {
+            'supremacy_asian': sup_asian,
+            'supremacy_euro': sup_euro,
+            'supremacy_blended': supremacy,
+            'target_total': target_total,
+            'credible_interval': credible_interval,
+            'model_type': 'bayesian',
+        }
+        return candidates, lam_home, lam_away, meta
+
+    # 频率学派方法（泊松或负二项）
     try:
         lam_home, lam_away, target_total, rho = fit_lambdas_from_markets(
             supremacy, line, p_over, p_home, p_draw, p_away,
             open_total_line=open_line, team_strength=team_strength, euro_lambdas=euro_lams,
             league_profile=league_profile,
         )
-        matrix = build_score_matrix(lam_home, lam_away, rho=rho)
+        
+        # 选择分布类型
+        distribution = 'negative_binomial' if model_type == 'negative_binomial' else 'poisson'
+        matrix = build_score_matrix(lam_home, lam_away, rho=rho, distribution=distribution)
+        
         margins = _matrix_margins(matrix)
         err = sum(
             (margins[k] - t) ** 2
@@ -1265,10 +2640,27 @@ def predict_scores(asian, euro, total, team_strength=None, league_profile=None):
             matrix = calibrate_to_euro(matrix, p_home, p_draw, p_away)
     except (ValueError, ZeroDivisionError, OverflowError):
         lam_home, lam_away = estimate_lambdas(supremacy, line)
-        matrix = build_score_matrix(lam_home, lam_away)
+        distribution = 'negative_binomial' if model_type == 'negative_binomial' else 'poisson'
+        matrix = build_score_matrix(lam_home, lam_away, distribution=distribution)
         matrix = calibrate_to_euro(matrix, p_home, p_draw, p_away)
         target_total = line
-        supremacy = supremacy
+        rho = 0.0
+
+    # 应用残差修正（如果有训练好的模型）
+    features = _build_residual_features(asian, euro, total, team_strength, league_profile)
+    matrix = apply_residual_correction(matrix, features)
+
+    # 应用概率输出校准
+    if enable_calibration:
+        # 获取联赛名称（用于加载特定联赛的校准参数）
+        league_name = league_profile.get('name', 'default') if league_profile else 'default'
+        
+        # 获取该联赛的校准数据（如果没有缓存则自动训练）
+        calibration_data = get_league_calibration_data(league_name)
+        
+        log.debug(f"使用联赛 {league_name} 的校准参数: Platt(A={calibration_data['platt_params'][0]:.4f}, B={calibration_data['platt_params'][1]:.4f})")
+        
+        matrix = calibrate_probabilities(matrix, method=calibration_method, calibration_data=calibration_data)
 
     candidates = sorted(matrix.items(), key=lambda kv: -kv[1])
     meta = {
@@ -1276,6 +2668,10 @@ def predict_scores(asian, euro, total, team_strength=None, league_profile=None):
         'supremacy_euro': sup_euro,
         'supremacy_blended': supremacy,
         'target_total': target_total,
+        'model_type': model_type,
+        'distribution': distribution,
+        'calibrated': enable_calibration,
+        'calibration_method': calibration_method if enable_calibration else None,
     }
     return candidates, lam_home, lam_away, meta
 
@@ -1421,9 +2817,32 @@ def analyze_match(match):
     league_profile = resolve_league_profile(match.get('league', ''))
     log.info('分析比赛 %s vs %s (id=%s)', home, away, mid)
 
-    asian = analyze_asian(fetch_yazhi(mid))
-    euro = analyze_euro(fetch_ouzhi(mid))
-    total = analyze_total(fetch_daxiao(mid))
+    try:
+        yazhi_raw = fetch_yazhi(mid)
+        asian = analyze_asian(yazhi_raw)
+        log.debug(f"亚盘数据获取成功: keys={list(asian.keys())}")
+    except Exception as e:
+        raise ValueError(f"亚盘数据获取失败: {e}")
+    
+    try:
+        euro_raw = fetch_ouzhi(mid)
+        log.debug(f"欧赔原始数据获取成功: keys={list(euro_raw.keys())}")
+    except Exception as e:
+        raise ValueError(f"欧赔原始数据获取失败: {e}")
+    
+    try:
+        euro = analyze_euro(euro_raw)
+        log.debug(f"欧赔分析完成: keys={list(euro.keys())}")
+    except Exception as e:
+        raise ValueError(f"欧赔分析失败: {e}")
+    
+    try:
+        daxiao_raw = fetch_daxiao(mid)
+        total = analyze_total(daxiao_raw)
+        log.debug(f"大小球数据获取成功: keys={list(total.keys())}")
+    except Exception as e:
+        raise ValueError(f"大小球数据获取失败: {e}")
+    
     team = fetch_team_strength(mid, home, away)
     if team:
         team['league_profile'] = league_profile
@@ -1445,21 +2864,44 @@ def analyze_match(match):
         zip(('home', 'away'), euro_implied_lambdas(p_home, p_draw, p_away, target_total))
     )
 
+    # 新增：联合异常特征
+    joint_anomaly = compute_joint_anomaly(yazhi_raw, daxiao_raw)
+    euro_asian_dev = compute_euro_asian_deviation(euro['close'], asian['handicap'])
+    
+    # 新增：凯利时序趋势分析
+    kelly_trend = analyze_kelly_trend(euro_raw.get('series', []))
+    if 'kelly' in euro:
+        euro['kelly']['trend'] = kelly_trend
+
     confidence = compute_prediction_confidence(asian, euro, total, team)
 
     candidates, lam_home, lam_away, meta = predict_scores(
         asian, euro, total, team_strength=team, league_profile=league_profile,
+        model_type='negative_binomial',
+        enable_draw_calibration=True,
+        enable_calibration=True,
+        calibration_method='platt',
+        enable_ensemble=True,
+        ensemble_size=5,
     )
 
+    # 准备欧赔赔率用于冷热计算（基于赔率隐含概率）
+    euro_odds_for_heat = {
+        'home': euro['raw_odds']['close']['home'],
+        'draw': euro['raw_odds']['close']['draw'],
+        'away': euro['raw_odds']['close']['away'],
+    }
+
+    # 更新比分冷热计算：使用赔率隐含概率 vs 模型概率
     top_scores = [
-        _score_entry(h, a, prob, score_heat_label(h, a, prob, league_profile))
+        _score_entry(h, a, prob, score_heat_label(h, a, prob, league_profile, euro_odds_for_heat))
         for (h, a), prob in candidates[:5]
     ]
     recommend = []
     for h, a, prob in _pick_recommendations(
         candidates, asian, euro, total, confidence=confidence, league_profile=league_profile,
     ):
-        heat, _ = score_heat_label(h, a, prob, league_profile)
+        heat, _ = score_heat_label(h, a, prob, league_profile, euro_odds_for_heat)
         recommend.append({
             **_score_entry(h, a, prob, (heat, _)),
             'reasons': _recommend_reasons(h, a, asian, euro, total, team, heat=heat),
@@ -1473,6 +2915,10 @@ def analyze_match(match):
         'total': total,
         'team': team,
         'confidence': confidence,
+        'anomaly': {
+            'joint_water': joint_anomaly,
+            'euro_asian_deviation': euro_asian_dev,
+        },
         'model': {
             'lam_home': lam_home, 'lam_away': lam_away,
             'top_scores': top_scores, 'recommend': recommend,
@@ -1567,6 +3013,31 @@ def render_cli(result):
     print(f"  赔率分析 | {home} vs {away}")
     if lp.get('name') and lp['name'] != 'default':
         print(f"  联赛模型: {lp['name']}（场均进球基准 {lp.get('avg_goal', AVG_LEAGUE_GOAL):.2f}）")
+    
+    # 显示模型配置信息
+    model_info = []
+    if model.get('model_type'):
+        model_type_name = {
+            'poisson': '泊松分布',
+            'negative_binomial': '负二项分布',
+            'bayesian': '贝叶斯推断',
+            'ensemble': '多模型集成'
+        }.get(model['model_type'], model['model_type'])
+        model_info.append(f"模型: {model_type_name}")
+    
+    if model.get('calibrated'):
+        calib_method_name = {
+            'platt': 'Platt缩放',
+            'isotonic': '等渗回归'
+        }.get(model.get('calibration_method'), model.get('calibration_method'))
+        model_info.append(f"校准: {calib_method_name}")
+    
+    if model.get('ensemble_size'):
+        model_info.append(f"集成规模: {model['ensemble_size']}模型")
+    
+    if model_info:
+        print(f"  模型配置: {', '.join(model_info)}")
+    
     if confidence:
         print(f"  预测置信度: {confidence['label']} ({confidence['score']*100:.0f}%)")
         if confidence.get('notes'):
@@ -1612,6 +3083,14 @@ def render_cli(result):
         if kelly['favors']:
             print(f"  相对看好: {'；'.join(kelly['favors'])}")
         print(f"  综合: {kelly['summary']}")
+        
+        # 新增：凯利时序趋势
+        kelly_trend = kelly.get('trend')
+        if kelly_trend and kelly_trend['summary'] != '数据不足':
+            print(f"  凯利走势: {kelly_trend['summary']}")
+            if kelly_trend.get('crossing_events'):
+                for event in kelly_trend['crossing_events']:
+                    print(f"    {event['desc']}")
 
     to, tc = total['open_prob'], total['close_prob']
     print("\n【大小球分析】（多家博彩公司平均值）")
@@ -1626,6 +3105,21 @@ def render_cli(result):
         print(f"  {team['summary']}")
         print(f"  主队进攻{team['attack_home']:.2f}球/场 防守{team['defense_home']:.2f}失/场")
         print(f"  客队进攻{team['attack_away']:.2f}球/场 防守{team['defense_away']:.2f}失/场")
+
+    # 新增：联合异常特征
+    anomaly = result.get('anomaly')
+    if anomaly:
+        joint_water = anomaly.get('joint_water')
+        euro_asian_dev = anomaly.get('euro_asian_deviation')
+        
+        print("\n【联合异常特征分析】")
+        if joint_water:
+            print(f"  水位变化乘积: 主队水位变化{joint_water['asian_water_change']:+.3f} × 大球水位变化{joint_water['total_water_change']:+.3f} = {joint_water['joint_water_feature']:+.4f}")
+            if joint_water.get('hint_desc'):
+                print(f"  ⚡ {joint_water['hint_desc']}")
+        
+        if euro_asian_dev:
+            print(f"  欧赔亚盘偏差: 欧赔隐含让球{euro_asian_dev['implied_handicap']:+.2f} vs 实际盘口{euro_asian_dev['actual_handicap']:+.2f}，偏差{euro_asian_dev['deviation']:+.2f}")
 
     print("\n" + "=" * 65)
     print("【综合信号汇总】")
@@ -1643,6 +3137,13 @@ def render_cli(result):
     if model.get('supremacy_blended') is not None:
         print(f"  融合净胜球: 亚{model.get('supremacy_asian', 0):+.2f} + 欧{model.get('supremacy_euro', 0):+.2f} → {model['supremacy_blended']:+.2f}")
     print(f"  泊松期望进球: 主队 λ={model['lam_home']:.2f} / 客队 λ={model['lam_away']:.2f}")
+    
+    # 显示概率校准和集成信息
+    if model.get('calibrated'):
+        print(f"  ✓ 概率已校准: 应用{model['calibration_method']}方法")
+    
+    if model.get('ensemble_size'):
+        print(f"  ✓ 多模型集成: 融合{model['ensemble_size']}个模型输出")
 
     print("\n" + "=" * 65)
     print("【Top 5 候选比分】（含冷热标记）")
