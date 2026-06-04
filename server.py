@@ -21,10 +21,13 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 from pathlib import Path
 
-import football
-import lottery3d
-import lottery3d_ml
-from logger import setup_logger
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
+
+from src.football import fetch_match_list, analyze_match
+from src.lottery3d import run_prediction
+from src.lottery3d.ml import fetch_data, predict_current, N_TREES
+from src.pailie5 import get_pailie5_analyzer
+from src.logger import setup_logger
 
 # 回测模块（延迟导入以加速启动）
 backtest = None
@@ -113,6 +116,31 @@ class Handler(BaseHTTPRequestHandler):
             self._serve_json(self._lottery_3d_payload())
         elif path == '/api/3d-ml':
             self._serve_json(self._lottery_3d_ml_payload())
+        elif path == '/api/pailie5':
+            self._serve_json(self._pailie5_payload())
+        elif path == '/api/pailie5/recommend':
+            params = parse_qs(route.query)
+            self._serve_json(self._pailie5_recommend_payload(params))
+        elif path == '/api/pailie5/backtest':
+            params = parse_qs(route.query)
+            self._serve_json(self._pailie5_backtest_payload(params))
+        elif path == '/api/pailie5/optimize':
+            self._serve_json(self._pailie5_optimize_payload())
+        elif path == '/api/pailie5/markov':
+            self._serve_json(self._pailie5_markov_payload())
+        elif path == '/api/pailie5/filter':
+            params = parse_qs(route.query)
+            self._serve_json(self._pailie5_filter_payload(params))
+        elif path == '/api/pailie5/rank':
+            params = parse_qs(route.query)
+            self._serve_json(self._pailie5_rank_payload(params))
+        elif path == '/api/pailie5/ensemble':
+            params = parse_qs(route.query)
+            self._serve_json(self._pailie5_ensemble_payload(params))
+        elif path == '/api/pailie5/cycles':
+            self._serve_json(self._pailie5_cycles_payload())
+        elif path == '/api/pailie5/contribution':
+            self._serve_json(self._pailie5_contribution_payload())
         elif path == '/api/calibrate':
             params = parse_qs(route.query)
             self._serve_json(self._calibrate_payload(params))
@@ -181,7 +209,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def _matches_payload(self):
         try:
-            return {'matches': football.fetch_match_list()}
+            return {'matches': fetch_match_list()}
         except Exception:
             self._log.error('获取比赛列表失败', exc_info=True)
             return {'error': '获取比赛列表失败'}
@@ -198,30 +226,28 @@ class Handler(BaseHTTPRequestHandler):
             'time': params.get('time', [''])[0],
         }
         try:
-            return {'result': football.analyze_match(match)}
+            return {'result': analyze_match(match)}
         except Exception:
             self._log.error('赔率分析失败 match_id=%s', match_id, exc_info=True)
             return {'error': '赔率分析失败'}
 
     def _lottery_3d_payload(self):
         try:
-            importlib.reload(lottery3d)
-            return {'result': lottery3d.run_prediction()}
+            return {'result': run_prediction()}
         except Exception:
             self._log.error('3D 预测失败', exc_info=True)
             return {'error': '3D 预测失败'}
 
     def _lottery_3d_ml_payload(self):
         try:
-            importlib.reload(lottery3d_ml)
-            data = lottery3d_ml.fetch_data()
+            data = fetch_data()
             numbers = [x[2] for x in data] if data else []
-            result = lottery3d_ml.predict_current(numbers, model_type="auto")
+            result = predict_current(numbers, model_type="auto")
 
             formatted = {
                 'model_type': result.get('model_type', 'unknown'),
                 'model_info': result.get('model_info', '未知模型'),
-                'n_trees': lottery3d_ml.N_TREES if result.get('model_type') == 'random_forest' else 50,
+                'n_trees': N_TREES if result.get('model_type') == 'random_forest' else 50,
                 'total_samples': int(result.get('total_samples', 0)),
                 'pos_samples': int(result.get('pos_samples', 0)),
                 'neg_samples': int(result.get('neg_samples', 0)),
@@ -240,6 +266,185 @@ class Handler(BaseHTTPRequestHandler):
             self._log.error('ML 3D 预测失败', exc_info=True)
             return {'error': 'ML 3D 预测失败'}
 
+    def _pailie5_payload(self):
+        """获取排列五统计分析"""
+        try:
+            analyzer = get_pailie5_analyzer()
+            stats = analyzer.get_statistics()
+            recent = analyzer.get_recent_results(10)
+            
+            return {
+                'result': {
+                    'statistics': stats,
+                    'recent_results': recent,
+                }
+            }
+        except Exception:
+            self._log.error('排列五分析失败', exc_info=True)
+            return {'error': '排列五分析失败'}
+
+    def _pailie5_recommend_payload(self, params):
+        """获取排列五推荐号码"""
+        try:
+            analyzer = get_pailie5_analyzer()
+            method = params.get('method', ['balanced'])[0]
+            
+            recommendations = []
+            for _ in range(5):
+                nums = analyzer.generate_recommendation(method)
+                recommendations.append(nums)
+            
+            return {
+                'result': {
+                    'method': method,
+                    'recommendations': recommendations,
+                    'hot_numbers': analyzer.get_hot_numbers(5),
+                    'cold_numbers': analyzer.get_cold_numbers(5),
+                }
+            }
+        except Exception:
+            self._log.error('排列五推荐失败', exc_info=True)
+            return {'error': '排列五推荐失败'}
+
+    def _pailie5_backtest_payload(self, params):
+        """排列五历史回测"""
+        try:
+            analyzer = get_pailie5_analyzer()
+            method = params.get('method', ['bayesian'])[0]
+            periods = int(params.get('periods', [30])[0])
+            
+            result = analyzer.backtest(method=method, test_periods=periods)
+            
+            return {'result': result}
+        except Exception:
+            self._log.error('排列五回测失败', exc_info=True)
+            return {'error': '排列五回测失败'}
+
+    def _pailie5_optimize_payload(self):
+        """排列五自动权重优化"""
+        try:
+            analyzer = get_pailie5_analyzer()
+            weights = analyzer.optimize_weights()
+            
+            return {'result': weights}
+        except Exception:
+            self._log.error('排列五权重优化失败', exc_info=True)
+            return {'error': '排列五权重优化失败'}
+
+    def _pailie5_markov_payload(self):
+        """排列五马尔可夫链预测"""
+        try:
+            analyzer = get_pailie5_analyzer()
+            recent = analyzer.get_recent_results(2)
+            recent_numbers = [r['numbers'] for r in recent]
+            prediction = analyzer.predict_with_markov(recent_numbers)
+            
+            return {
+                'result': {
+                    'recent_results': recent_numbers,
+                    'prediction': prediction
+                }
+            }
+        except Exception:
+            self._log.error('排列五马尔可夫预测失败', exc_info=True)
+            return {'error': '排列五马尔可夫预测失败'}
+
+    def _pailie5_filter_payload(self, params):
+        """排列五多条件缩水"""
+        try:
+            analyzer = get_pailie5_analyzer()
+            
+            # 生成候选号码
+            candidates = []
+            for _ in range(100):
+                candidates.append(analyzer.generate_recommendation('balanced'))
+            
+            # 解析条件参数
+            conditions = {}
+            
+            if 'sum_min' in params and 'sum_max' in params:
+                conditions['sum_range'] = (int(params['sum_min'][0]), int(params['sum_max'][0]))
+            
+            if 'span_min' in params and 'span_max' in params:
+                conditions['span_range'] = (int(params['span_min'][0]), int(params['span_max'][0]))
+            
+            if 'odd_min' in params and 'odd_max' in params:
+                conditions['odd_count'] = (int(params['odd_min'][0]), int(params['odd_max'][0]))
+            
+            if 'big_min' in params and 'big_max' in params:
+                conditions['big_count'] = (int(params['big_min'][0]), int(params['big_max'][0]))
+            
+            # 应用筛选
+            filtered = analyzer.multi_condition_filter(candidates, conditions)
+            
+            return {
+                'result': {
+                    'conditions': conditions,
+                    'total_candidates': len(candidates),
+                    'filtered_count': len(filtered),
+                    'filtered': filtered[:20]  # 返回前20个
+                }
+            }
+        except Exception:
+            self._log.error('排列五多条件缩水失败', exc_info=True)
+            return {'error': '排列五多条件缩水失败'}
+
+    def _pailie5_rank_payload(self, params):
+        """排列五排名模型 - Top-N排序"""
+        try:
+            analyzer = get_pailie5_analyzer()
+            top_n = int(params.get('top_n', [5])[0])
+            
+            # 获取排名结果
+            ranked = analyzer.rank_model(top_n=top_n)
+            
+            return {
+                'result': {
+                    'top_n': top_n,
+                    'ranked_numbers': [{'number': n, 'score': s} for n, s in ranked]
+                }
+            }
+        except Exception:
+            self._log.error('排列五排名模型失败', exc_info=True)
+            return {'error': '排列五排名模型失败'}
+
+    def _pailie5_ensemble_payload(self, params):
+        """排列五多模型集成投票"""
+        try:
+            analyzer = get_pailie5_analyzer()
+            method = params.get('method', ['voting'])[0]
+            
+            result = analyzer.ensemble_predict(method=method)
+            
+            return {'result': result}
+        except Exception:
+            self._log.error('排列五集成预测失败', exc_info=True)
+            return {'error': '排列五集成预测失败'}
+
+    def _pailie5_cycles_payload(self):
+        """排列五周期与状态识别"""
+        try:
+            analyzer = get_pailie5_analyzer()
+            
+            cycles = analyzer.identify_cycles()
+            
+            return {'result': cycles}
+        except Exception:
+            self._log.error('排列五周期识别失败', exc_info=True)
+            return {'error': '排列五周期识别失败'}
+
+    def _pailie5_contribution_payload(self):
+        """排列五特征贡献度分析"""
+        try:
+            analyzer = get_pailie5_analyzer()
+            
+            contributions = analyzer.feature_contribution()
+            
+            return {'result': contributions}
+        except Exception:
+            self._log.error('排列五特征贡献度分析失败', exc_info=True)
+            return {'error': '排列五特征贡献度分析失败'}
+
     def _calibrate_payload(self, params):
         """手动触发联赛重新校准"""
         league = params.get('league', [''])[0]
@@ -248,7 +453,8 @@ class Handler(BaseHTTPRequestHandler):
         recent_matches = int(params.get('matches', ['10'])[0])
         
         try:
-            result = football.recalibrate_league(league, recent_matches=recent_matches)
+            from src.football import recalibrate_league
+            result = recalibrate_league(league, recent_matches=recent_matches)
             return {'result': result}
         except Exception as e:
             self._log.error('校准失败 league=%s', league, exc_info=True)
@@ -257,7 +463,8 @@ class Handler(BaseHTTPRequestHandler):
     def _calibrate_list_payload(self):
         """列出所有已校准的联赛"""
         try:
-            leagues = football.list_calibrated_leagues()
+            from src.football import list_calibrated_leagues
+            leagues = list_calibrated_leagues()
             return {'result': {'leagues': leagues, 'count': len(leagues)}}
         except Exception as e:
             self._log.error('获取校准列表失败', exc_info=True)
@@ -266,7 +473,8 @@ class Handler(BaseHTTPRequestHandler):
     def _calibrate_clear_payload(self):
         """清空校准缓存"""
         try:
-            result = football.clear_calibration_cache()
+            from src.football import clear_calibration_cache
+            result = clear_calibration_cache()
             return {'result': result}
         except Exception as e:
             self._log.error('清空校准缓存失败', exc_info=True)
