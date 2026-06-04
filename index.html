@@ -300,14 +300,16 @@ function kellyCells(k, rr) {
 }
 
 function renderResult(r) {
-  const { match: m, asian: a, euro: e, total: t, model: md, team: tm } = r;
+  const { match: m, asian: a, euro: e, total: t, model: md, team: tm, confidence: cf, league_profile: lp } = r;
   const top = md.top_scores;
   const maxProb = top[0].prob;
 
   let html = backBtn();
   html += `<div class="match-head">
     <div class="names"><b>${esc(m.home)}</b> <span style="color:var(--muted)">vs</span> <b>${esc(m.away)}</b></div>
-    <div class="meta">${esc(m.league || '')} ${esc(m.time || '')}</div></div>`;
+    <div class="meta">${esc(m.league || '')} ${esc(m.time || '')}</div>
+    ${lp && lp.name && lp.name !== 'default' ? `<div class="meta">联赛模型 ${esc(lp.name)} · 场均 ${lp.avg_goal.toFixed(2)} 球</div>` : ''}
+    ${cf ? `<div class="meta" style="color:${cf.level === 'low' ? 'var(--away)' : 'var(--accent2)'}">置信度 ${esc(cf.label)} (${(cf.score * 100).toFixed(0)}%)</div>` : ''}</div>`;
 
   html += `<div class="card"><h3>🀄 亚盘分析</h3>
     <div class="row"><span class="k">让球走势</span><span class="v">${esc(a.handicap_trend)}</span></div>
@@ -323,6 +325,7 @@ function renderResult(r) {
       { cls: 'away', p: e.close.away, label: '客胜 ' + pct(e.close.away) },
     ])}
     <div class="row"><span class="k">变化趋势</span><span class="v">${esc(e.changes.length ? e.changes.join('，') : '赔率稳定')}</span></div>
+    ${e.momentum && e.momentum.summary ? `<div class="row"><span class="k">欧赔走势</span><span class="v">${esc(e.momentum.summary)}</span></div>` : ''}
     ${e.implied_supremacy != null ? `<div class="row"><span class="k">欧赔反推净胜球</span><span class="v">${e.implied_supremacy >= 0 ? '+' : ''}${e.implied_supremacy.toFixed(2)}</span></div>` : ''}
     ${e.implied_lambdas ? `<div class="row"><span class="k">欧赔隐含λ</span><span class="v">主 ${e.implied_lambdas.home.toFixed(2)} / 客 ${e.implied_lambdas.away.toFixed(2)}</span></div>` : ''}</div>`;
 
@@ -367,7 +370,13 @@ function renderResult(r) {
   });
   html += `</div>`;
 
-  html += `<h3 style="color:var(--accent2);font-size:15px;margin:18px 0 10px">⭐ 推荐：最可能的 2 个比分</h3>`;
+  const recTitle = cf && cf.level === 'low'
+    ? '⭐ 推荐：低置信仅 1 个比分'
+    : `⭐ 推荐：最可能的 ${md.recommend.length} 个比分`;
+  html += `<h3 style="color:var(--accent2);font-size:15px;margin:18px 0 10px">${recTitle}</h3>`;
+  if (cf && cf.notes && cf.notes.length) {
+    html += `<div class="status" style="padding:0 0 12px;font-size:13px;text-align:left">${cf.notes.map(esc).join('；')}</div>`;
+  }
   md.recommend.forEach((s, i) => {
     html += `<div class="rec">
       <div class="title"><span class="star">★</span> ${esc(m.home)} ${s.home} : ${s.away} ${esc(m.away)} <span class="star">★</span></div>

@@ -63,9 +63,47 @@ FIT_W_TEAM = 1.35
 SUP_ASIAN_WEIGHT = 0.48
 SUP_EURO_WEIGHT = 0.52
 
-# 联赛场均进球基准（用于球队攻防强度归一化）
+# 联赛场均进球基准（用于球队攻防强度归一化，可被联赛配置覆盖）
 AVG_LEAGUE_GOAL = 1.35
 HOME_VENUE_ATTACK_BOOST = 1.06
+
+# 净胜球亚盘/欧赔严重分歧时改等权融合
+SUPREMACY_CONFLICT_GAP = 0.75
+
+# 欧赔走势对净胜球的修正幅度
+MOMENTUM_SUPREMACY_WEIGHT = 0.22
+
+# 坐标下降精调 λ 的迭代次数与步长
+LAMBDA_REFINE_STEPS = 28
+LAMBDA_REFINE_STEP0 = 0.07
+
+# 预测置信度：低于该值仅推荐 1 个比分
+CONFIDENCE_LOW_THRESHOLD = 0.52
+CONFIDENCE_HIGH_THRESHOLD = 0.72
+
+# 联赛画像：场均进球、主场加成、低比分倾向（乘在 0-2 球基准频率上）
+LEAGUE_PROFILES = {
+    'default': {'avg_goal': 1.35, 'home_boost': 1.06, 'low_score': 1.0, 'draw_mult': 1.0},
+    '英超': {'avg_goal': 1.48, 'home_boost': 1.08, 'low_score': 0.92, 'draw_mult': 0.95},
+    '英冠': {'avg_goal': 1.42, 'home_boost': 1.07, 'low_score': 0.94, 'draw_mult': 0.96},
+    '西甲': {'avg_goal': 1.38, 'home_boost': 1.07, 'low_score': 1.02, 'draw_mult': 1.05},
+    '意甲': {'avg_goal': 1.28, 'home_boost': 1.05, 'low_score': 1.12, 'draw_mult': 1.08},
+    '德甲': {'avg_goal': 1.52, 'home_boost': 1.06, 'low_score': 0.90, 'draw_mult': 0.94},
+    '法甲': {'avg_goal': 1.32, 'home_boost': 1.06, 'low_score': 1.05, 'draw_mult': 1.02},
+    '荷甲': {'avg_goal': 1.55, 'home_boost': 1.05, 'low_score': 0.88, 'draw_mult': 0.93},
+    '葡超': {'avg_goal': 1.30, 'home_boost': 1.06, 'low_score': 1.04, 'draw_mult': 1.03},
+    '欧冠': {'avg_goal': 1.45, 'home_boost': 1.04, 'low_score': 0.96, 'draw_mult': 0.98},
+    '欧联': {'avg_goal': 1.40, 'home_boost': 1.05, 'low_score': 0.98, 'draw_mult': 1.0},
+    '世界杯': {'avg_goal': 1.38, 'home_boost': 1.03, 'low_score': 1.0, 'draw_mult': 1.0},
+    '欧洲杯': {'avg_goal': 1.36, 'home_boost': 1.04, 'low_score': 1.02, 'draw_mult': 1.02},
+    '友谊': {'avg_goal': 1.42, 'home_boost': 1.02, 'low_score': 0.98, 'draw_mult': 0.97},
+    '国际': {'avg_goal': 1.40, 'home_boost': 1.03, 'low_score': 1.0, 'draw_mult': 1.0},
+    '巴甲': {'avg_goal': 1.38, 'home_boost': 1.08, 'low_score': 0.95, 'draw_mult': 0.96},
+    '阿甲': {'avg_goal': 1.32, 'home_boost': 1.07, 'low_score': 1.0, 'draw_mult': 0.98},
+    '中超': {'avg_goal': 1.28, 'home_boost': 1.07, 'low_score': 1.06, 'draw_mult': 1.04},
+    '日职': {'avg_goal': 1.30, 'home_boost': 1.06, 'low_score': 1.04, 'draw_mult': 1.03},
+    '韩K': {'avg_goal': 1.26, 'home_boost': 1.06, 'low_score': 1.06, 'draw_mult': 1.04},
+}
 
 # 比分冷热：相对历史基准频率的比值阈值
 HEAT_RATIO_HOT = 0.70
@@ -353,6 +391,7 @@ def fetch_ouzhi(match_id):
             'home': close[0], 'draw': close[1], 'away': close[2],
             'return_rate': float(close[3]) if len(close) > 3 else None,
         },
+        'series': series,
     }
 
 
@@ -395,10 +434,29 @@ def _team_in_context(ctx, name):
     return False
 
 
+def resolve_league_profile(league_name):
+    """按联赛名称匹配画像，用于场均进球与比分先验"""
+    name = (league_name or '').strip()
+    profile = dict(LEAGUE_PROFILES['default'])
+    for key in sorted(LEAGUE_PROFILES, key=len, reverse=True):
+        if key != 'default' and key in name:
+            profile.update(LEAGUE_PROFILES[key])
+            profile['name'] = key
+            return profile
+    profile['name'] = 'default'
+    return profile
+
+
 def _parse_recent_form(groups):
-    n, gf, ga = int(groups[0]), int(groups[4]), int(groups[5])
+    n, w, d, l = int(groups[0]), int(groups[1]), int(groups[2]), int(groups[3])
+    gf, ga = int(groups[4]), int(groups[5])
     n = max(n, 1)
-    return {'games': n, 'gf': gf, 'ga': ga, 'attack': gf / n, 'defense': ga / n}
+    pts = w * 3 + d
+    return {
+        'games': n, 'wins': w, 'draws': d, 'losses': l,
+        'gf': gf, 'ga': ga, 'attack': gf / n, 'defense': ga / n,
+        'form_pts': pts / n,
+    }
 
 
 def fetch_team_strength(match_id, home, away):
@@ -444,6 +502,7 @@ def fetch_team_strength(match_id, home, away):
     attack_away = _blend_close_open(av['attack'], away_all['attack'], 0.68)
     defense_away = _blend_close_open(av['defense'], away_all['defense'], 0.68)
 
+    form_diff = home_all['form_pts'] - away_all['form_pts']
     return {
         'home_recent': home_all,
         'away_recent': away_all,
@@ -453,9 +512,11 @@ def fetch_team_strength(match_id, home, away):
         'defense_home': defense_home,
         'attack_away': attack_away,
         'defense_away': defense_away,
+        'form_diff': form_diff,
+        'momentum_supremacy': max(-0.35, min(0.35, form_diff * 0.12)),
         'summary': (
-            f"主队近{home_all['games']}场 进{home_all['gf']}失{home_all['ga']}；"
-            f"客队近{away_all['games']}场 进{away_all['gf']}失{away_all['ga']}"
+            f"主队近{home_all['games']}场 进{home_all['gf']}失{home_all['ga']}（{home_all['form_pts']:.1f}分/场）；"
+            f"客队近{away_all['games']}场 进{away_all['gf']}失{away_all['ga']}（{away_all['form_pts']:.1f}分/场）"
         ),
     }
 
@@ -605,8 +666,38 @@ def analyze_kelly(ouzhi_data, probs_open, probs_close):
     }
 
 
+def analyze_euro_momentum(series):
+    """由欧赔时间序列提取主/客胜概率走势，用于修正净胜球"""
+    if not series or len(series) < 2:
+        return {'shift_supremacy': 0.0, 'summary': '欧赔走势数据不足'}
+
+    chrono = list(reversed(series))
+    first = remove_vig(chrono[0][0], chrono[0][1], chrono[0][2])
+    last = remove_vig(chrono[-1][0], chrono[-1][1], chrono[-1][2])
+    d_home = last[0] - first[0]
+    d_away = last[2] - first[2]
+    shift = max(-0.45, min(0.45, (d_home - d_away) * 1.8))
+
+    parts = []
+    if d_home > EURO_PROB_TREND_EPS:
+        parts.append(f"主胜概率累积↑{d_home * 100:.1f}%")
+    elif d_home < -EURO_PROB_TREND_EPS:
+        parts.append(f"主胜概率累积↓{-d_home * 100:.1f}%")
+    if d_away > EURO_PROB_TREND_EPS:
+        parts.append(f"客胜概率累积↑{d_away * 100:.1f}%")
+    elif d_away < -EURO_PROB_TREND_EPS:
+        parts.append(f"客胜概率累积↓{-d_away * 100:.1f}%")
+
+    return {
+        'shift_supremacy': shift,
+        'delta_home': d_home,
+        'delta_away': d_away,
+        'summary': '，'.join(parts) if parts else '欧赔走势平稳',
+    }
+
+
 def analyze_euro(data):
-    """解析欧赔，返回初终盘 1X2 真实概率、凯利指数与变化趋势"""
+    """解析欧赔，返回初终盘 1X2 真实概率、凯利、走势与变化趋势"""
     op, cl = data['open'], data['close']
 
     ph_o, pd_o, pa_o = remove_vig(op['home'], op['draw'], op['away'])
@@ -621,12 +712,14 @@ def analyze_euro(data):
     elif pd_c - pd_o < -EURO_PROB_TREND_EPS: changes.append(f"平局概率↓{(pd_o-pd_c)*100:.1f}%")
 
     kelly = analyze_kelly(data, (ph_o, pd_o, pa_o), (ph_c, pd_c, pa_c))
+    momentum = analyze_euro_momentum(data.get('series', []))
 
     return {
         'open': {'home': ph_o, 'draw': pd_o, 'away': pa_o},
         'close': {'home': ph_c, 'draw': pd_c, 'away': pa_c},
         'raw_odds': {'open': dict(op), 'close': dict(cl)},
         'kelly': kelly,
+        'momentum': momentum,
         'changes': changes,
     }
 
@@ -820,21 +913,73 @@ def euro_implied_lambdas(p_home, p_draw, p_away, total_hint):
 
 
 def blend_market_supremacy(sup_asian, sup_euro):
-    """融合亚盘与欧赔反推的净胜球"""
+    """融合亚盘与欧赔反推净胜球；严重分歧时等权避免单边偏差"""
+    if sup_asian * sup_euro < 0 or abs(sup_asian - sup_euro) >= SUPREMACY_CONFLICT_GAP:
+        return 0.5 * sup_asian + 0.5 * sup_euro
     return SUP_ASIAN_WEIGHT * sup_asian + SUP_EURO_WEIGHT * sup_euro
 
 
-def team_poisson_lambdas(strength, total_target):
+def compute_prediction_confidence(asian, euro, total, team=None):
+    """
+    多市场信号一致性 → 置信度 0~1。
+    低置信时减少推荐条数并降权排序。
+    """
+    score = 1.0
+    notes = []
+    sup_a = asian.get('implied_supremacy', 0.0)
+    sup_e = euro.get('implied_supremacy', 0.0)
+
+    if sup_a * sup_e < 0:
+        score -= 0.32
+        notes.append('亚盘与欧赔净胜球方向相反')
+    elif abs(sup_a - sup_e) >= SUPREMACY_CONFLICT_GAP:
+        score -= 0.22
+        notes.append(f'净胜球分歧较大（亚{sup_a:+.2f}/欧{sup_e:+.2f}）')
+
+    kelly = euro.get('kelly') or {}
+    if kelly.get('spread', 99) < 2.5:
+        score -= 0.12
+        notes.append('凯利三项胶着')
+
+    if team and euro.get('implied_lambdas'):
+        target = total.get('implied_total', 2.5)
+        tl = team_poisson_lambdas(team, target, team.get('league_profile'))
+        el = euro['implied_lambdas']
+        gap = abs(el['home'] - tl[0]) + abs(el['away'] - tl[1])
+        if gap > 0.85:
+            score -= 0.14
+            notes.append('球队攻防λ与市场λ偏差大')
+
+    score = max(0.0, min(1.0, score))
+    if score >= CONFIDENCE_HIGH_THRESHOLD:
+        level, label = 'high', '高置信'
+    elif score >= CONFIDENCE_LOW_THRESHOLD:
+        level, label = 'medium', '中置信'
+    else:
+        level, label = 'low', '低置信（谨慎参考）'
+
+    return {
+        'score': round(score, 3),
+        'level': level,
+        'label': label,
+        'notes': notes,
+        'recommend_count': 2 if level != 'low' else 1,
+    }
+
+
+def team_poisson_lambdas(strength, total_target, league_profile=None):
     """
     用攻防强度构造 λ：主队进攻×客队防守×主场系数。
     defense 为场均失球（对手防守弱则失球多 → 因子更大）。
     """
-    avg = AVG_LEAGUE_GOAL
+    lp = league_profile or strength.get('league_profile') or LEAGUE_PROFILES['default']
+    avg = lp.get('avg_goal', AVG_LEAGUE_GOAL)
+    boost = lp.get('home_boost', HOME_VENUE_ATTACK_BOOST)
     atk_h = strength['attack_home'] / avg
     def_a = strength['defense_away'] / avg
     atk_a = strength['attack_away'] / avg
     def_h = strength['defense_home'] / avg
-    lam_home = max(0.08, atk_h * def_a * avg * HOME_VENUE_ATTACK_BOOST)
+    lam_home = max(0.08, atk_h * def_a * avg * boost)
     lam_away = max(0.08, atk_a * def_h * avg)
     scale = total_target / max(lam_home + lam_away, 0.1)
     return lam_home * scale, lam_away * scale
@@ -857,6 +1002,57 @@ def estimate_lambdas(supremacy, total_line, min_lambda=0.05):
     lam_home = max(min_lambda, (total_line + supremacy) / 2)
     lam_away = max(min_lambda, (total_line - supremacy) / 2)
     return lam_home, lam_away
+
+
+def _lambda_fit_error(
+    lam_pair, supremacy, target_total, targets, rho,
+    ou_targets=None, team_lambdas=None,
+):
+    """λ 拟合目标函数（越小越好）"""
+    lam_h, lam_a = lam_pair
+    matrix = build_score_matrix(lam_h, lam_a, rho=rho)
+    margins = _matrix_margins(matrix)
+    err = (
+        FIT_W_1X2 * sum((margins[k] - targets[i]) ** 2 for i, k in enumerate(('home', 'draw', 'away')))
+        + FIT_W_TOTAL * (lam_h + lam_a - target_total) ** 2
+        + FIT_W_SUPREMACY * (lam_h - lam_a - supremacy) ** 2
+    )
+    if ou_targets:
+        model_ou = _matrix_total_margins(matrix)
+        err += FIT_W_OU_DIST * sum((model_ou[k] - ou_targets[k]) ** 2 for k in ou_targets)
+    if team_lambdas:
+        err += FIT_W_TEAM * (
+            (lam_h - team_lambdas[0]) ** 2 + (lam_a - team_lambdas[1]) ** 2
+        )
+    return err
+
+
+def _fit_lambda_refine(
+    start, supremacy, target_total, targets, rho,
+    ou_targets=None, team_lambdas=None,
+):
+    """网格初解后的坐标下降精调"""
+    lh, la = start
+    err = _lambda_fit_error((lh, la), supremacy, target_total, targets, rho, ou_targets, team_lambdas)
+    step = LAMBDA_REFINE_STEP0
+    for _ in range(LAMBDA_REFINE_STEPS):
+        improved = False
+        for dh in (step, -step, 0):
+            for da in (step, -step, 0):
+                if dh == 0 and da == 0:
+                    continue
+                trial = (max(0.08, lh + dh), max(0.08, la + da))
+                te = _lambda_fit_error(
+                    trial, supremacy, target_total, targets, rho, ou_targets, team_lambdas,
+                )
+                if te + 1e-9 < err:
+                    lh, la, err = trial[0], trial[1], te
+                    improved = True
+        if not improved:
+            step *= 0.55
+            if step < 0.008:
+                break
+    return lh, la
 
 
 def _fit_lambda_grid(
@@ -887,28 +1083,19 @@ def _fit_lambda_grid(
                 for dj in range(-n, n + 1)
             )
         for lam_h, lam_a in pairs:
-            matrix = build_score_matrix(lam_h, lam_a, rho=rho)
-            margins = _matrix_margins(matrix)
-            err_1x2 = sum((margins[k] - targets[i]) ** 2 for i, k in enumerate(('home', 'draw', 'away')))
-            err_total = (lam_h + lam_a - target_total) ** 2
-            err_sup = (lam_h - lam_a - supremacy) ** 2
-            err = FIT_W_1X2 * err_1x2 + FIT_W_TOTAL * err_total + FIT_W_SUPREMACY * err_sup
-            if ou_targets:
-                model_ou = _matrix_total_margins(matrix)
-                err += FIT_W_OU_DIST * sum(
-                    (model_ou[k] - ou_targets[k]) ** 2 for k in ou_targets
-                )
-            if team_lambdas:
-                err += FIT_W_TEAM * (
-                    (lam_h - team_lambdas[0]) ** 2 + (lam_a - team_lambdas[1]) ** 2
-                )
+            err = _lambda_fit_error(
+                (lam_h, lam_a), supremacy, target_total, targets, rho, ou_targets, team_lambdas,
+            )
             if err < best_err:
                 best_err = err
                 best = (lam_h, lam_a)
         return best
 
     lh, la = _search(LAMBDA_COARSE_STEP)
-    return _search(LAMBDA_FINE_STEP, center=(lh, la), radius=LAMBDA_FINE_RADIUS)
+    lh, la = _search(LAMBDA_FINE_STEP, center=(lh, la), radius=LAMBDA_FINE_RADIUS)
+    return _fit_lambda_refine(
+        (lh, la), supremacy, target_total, targets, rho, ou_targets, team_lambdas,
+    )
 
 
 def _estimate_dc_rho(lam_home, lam_away, p_draw_target):
@@ -958,14 +1145,18 @@ def fit_lambdas_from_markets(
     supremacy, total_line, p_over,
     p_home, p_draw, p_away,
     open_total_line=None, team_strength=None, euro_lambdas=None,
+    league_profile=None,
 ):
-    """大小球反推总进球 + 反推净胜球 + 欧赔/球队先验，网格拟合 λ"""
+    """大小球反推总进球 + 反推净胜球 + 欧赔/球队先验，网格+坐标下降拟合 λ"""
     line = _blend_close_open(total_line, open_total_line)
+    lp = league_profile or LEAGUE_PROFILES['default']
+    avg_goal = lp.get('avg_goal', AVG_LEAGUE_GOAL)
     target_total = implied_total_goals(line, p_over)
+    target_total = max(avg_goal * 1.4, min(avg_goal * 3.2, target_total))
     ou_targets = _ou_total_distribution(target_total)
     team_lams = None
     if team_strength:
-        team_lams = team_poisson_lambdas(team_strength, target_total)
+        team_lams = team_poisson_lambdas(team_strength, target_total, lp)
     lam_home, lam_away = _fit_lambda_grid(
         supremacy, target_total, p_home, p_draw, p_away, rho=0.0,
         ou_targets=ou_targets, team_lambdas=team_lams, euro_lambdas=euro_lambdas,
@@ -978,16 +1169,27 @@ def fit_lambdas_from_markets(
     return lam_home, lam_away, target_total, rho
 
 
-def _baseline_freq(h, a):
-    return SCORE_BASELINE_FREQ.get((h, a), 0.018)
+def _baseline_freq(h, a, league_profile=None):
+    base = SCORE_BASELINE_FREQ.get((h, a), 0.018)
+    if not league_profile:
+        return base
+    low_mult = league_profile.get('low_score', 1.0)
+    draw_mult = league_profile.get('draw_mult', 1.0)
+    if h == a:
+        return base * draw_mult
+    if h + a <= 2:
+        return base * low_mult
+    if h + a >= 4:
+        return base / max(low_mult, 0.85)
+    return base
 
 
-def score_heat_label(h, a, model_prob):
+def score_heat_label(h, a, model_prob, league_profile=None):
     """
     比分冷热：模型概率 vs 历史常见比分基准。
     冷=相对基准偏高（模型更看好但市场常忽视）；热=相对基准偏低（过热难出）。
     """
-    base = _baseline_freq(h, a)
+    base = _baseline_freq(h, a, league_profile)
     if base <= 0:
         return 'neutral', 1.0
     ratio = model_prob / base
@@ -1006,8 +1208,8 @@ def _heat_filter_weight(heat):
     return 1.0
 
 
-def predict_scores(asian, euro, total, team_strength=None):
-    """泊松 + DC：亚盘/欧赔反推净胜球 + 大小球分布 + 球队攻防 → 拟合 λ"""
+def predict_scores(asian, euro, total, team_strength=None, league_profile=None):
+    """泊松 + DC：多市场反推净胜球 + 走势/状态修正 + 联合拟合 λ"""
     p_home = euro['close']['home']
     p_draw = euro['close']['draw']
     p_away = euro['close']['away']
@@ -1029,6 +1231,10 @@ def predict_scores(asian, euro, total, team_strength=None):
     if sup_euro is None:
         sup_euro = euro_implied_supremacy(p_home, p_draw, p_away, target_total_pre)
     supremacy = blend_market_supremacy(sup_asian, sup_euro)
+    mom = euro.get('momentum') or {}
+    supremacy += mom.get('shift_supremacy', 0) * MOMENTUM_SUPREMACY_WEIGHT
+    if team_strength:
+        supremacy += team_strength.get('momentum_supremacy', 0) * 0.35
 
     euro_lams = None
     el = euro.get('implied_lambdas')
@@ -1039,6 +1245,7 @@ def predict_scores(asian, euro, total, team_strength=None):
         lam_home, lam_away, target_total, rho = fit_lambdas_from_markets(
             supremacy, line, p_over, p_home, p_draw, p_away,
             open_total_line=open_line, team_strength=team_strength, euro_lambdas=euro_lams,
+            league_profile=league_profile,
         )
         matrix = build_score_matrix(lam_home, lam_away, rho=rho)
         margins = _matrix_margins(matrix)
@@ -1126,6 +1333,13 @@ def _recommend_reasons(h, a, asian, euro, total, team=None, heat=None):
     reasons = []
     if team:
         reasons.append(f"攻防强度 λ≈{team['attack_home']:.2f}/{team['attack_away']:.2f}进")
+        if team.get('form_diff', 0) > 0.35 and diff > 0:
+            reasons.append('主队近期状态更好')
+        elif team.get('form_diff', 0) < -0.35 and diff < 0:
+            reasons.append('客队近期状态更好')
+    mom = euro.get('momentum') or {}
+    if mom.get('summary') and mom['summary'] != '欧赔走势平稳':
+        reasons.append(mom['summary'])
     if favor == 'home' and diff > 0 and diff_range[0] <= diff <= diff_range[1]:
         reasons.append(f"符合主让{hcap}球盘口预期")
     elif favor == 'away' and diff < 0 and diff_range[0] <= -diff <= diff_range[1]:
@@ -1161,15 +1375,18 @@ def _recommend_reasons(h, a, asian, euro, total, team=None, heat=None):
     return reasons or ["综合赔率推断"]
 
 
-def _pick_recommendations(candidates, asian, euro, total, n=2, pool=12):
-    """Top 池内按 概率×一致性×冷热权重 选取，过热比分降权"""
+def _pick_recommendations(candidates, asian, euro, total, n=2, pool=12, confidence=None, league_profile=None):
+    """Top 池内按 概率×一致性×冷热×置信度 选取"""
+    if confidence:
+        n = confidence.get('recommend_count', n)
     pool = min(pool, len(candidates))
+    conf_w = confidence['score'] if confidence else 1.0
     scored = []
     for (h, a), prob in candidates[:pool]:
         align = _alignment_score(h, a, asian, euro, total)
-        heat, _ = score_heat_label(h, a, prob)
+        heat, _ = score_heat_label(h, a, prob, league_profile)
         w = _heat_filter_weight(heat)
-        scored.append(((h, a), prob, align, heat, prob * (1.0 + 0.45 * align) * w))
+        scored.append(((h, a), prob, align, heat, prob * (1.0 + 0.45 * align) * w * (0.65 + 0.35 * conf_w)))
     scored.sort(key=lambda x: -x[4])
     seen = set()
     picked = []
@@ -1193,12 +1410,20 @@ def analyze_match(match):
     """抓取赔率 + 球队攻防 + 泊松模型，返回完整结果 dict"""
     mid = match['match_id']
     home, away = match.get('home', ''), match.get('away', '')
+    league_profile = resolve_league_profile(match.get('league', ''))
+
     asian = analyze_asian(fetch_yazhi(mid))
     euro = analyze_euro(fetch_ouzhi(mid))
     total = analyze_total(fetch_daxiao(mid))
     team = fetch_team_strength(mid, home, away)
+    if team:
+        team['league_profile'] = league_profile
 
     target_total = total['implied_total']
+    lp_avg = league_profile.get('avg_goal', AVG_LEAGUE_GOAL)
+    target_total = max(lp_avg * 1.4, min(lp_avg * 3.2, target_total))
+    total['implied_total'] = target_total
+
     p_home, p_draw, p_away = euro['close']['home'], euro['close']['draw'], euro['close']['away']
 
     asian['implied_supremacy'] = asian_implied_supremacy(
@@ -1211,15 +1436,21 @@ def analyze_match(match):
         zip(('home', 'away'), euro_implied_lambdas(p_home, p_draw, p_away, target_total))
     )
 
-    candidates, lam_home, lam_away, meta = predict_scores(asian, euro, total, team_strength=team)
+    confidence = compute_prediction_confidence(asian, euro, total, team)
+
+    candidates, lam_home, lam_away, meta = predict_scores(
+        asian, euro, total, team_strength=team, league_profile=league_profile,
+    )
 
     top_scores = [
-        _score_entry(h, a, prob, score_heat_label(h, a, prob))
+        _score_entry(h, a, prob, score_heat_label(h, a, prob, league_profile))
         for (h, a), prob in candidates[:5]
     ]
     recommend = []
-    for h, a, prob in _pick_recommendations(candidates, asian, euro, total):
-        heat, _ = score_heat_label(h, a, prob)
+    for h, a, prob in _pick_recommendations(
+        candidates, asian, euro, total, confidence=confidence, league_profile=league_profile,
+    ):
+        heat, _ = score_heat_label(h, a, prob, league_profile)
         recommend.append({
             **_score_entry(h, a, prob, (heat, _)),
             'reasons': _recommend_reasons(h, a, asian, euro, total, team, heat=heat),
@@ -1227,10 +1458,12 @@ def analyze_match(match):
 
     return {
         'match': {k: match.get(k) for k in ('home', 'away', 'league', 'time', 'match_id')},
+        'league_profile': league_profile,
         'asian': asian,
         'euro': euro,
         'total': total,
         'team': team,
+        'confidence': confidence,
         'model': {
             'lam_home': lam_home, 'lam_away': lam_away,
             'top_scores': top_scores, 'recommend': recommend,
@@ -1317,10 +1550,18 @@ def render_cli(result):
         result['match'], result['asian'], result['euro'], result['total'], result['model']
     )
     team = result.get('team')
+    confidence = result.get('confidence')
+    lp = result.get('league_profile') or {}
     home, away = match['home'], match['away']
 
     print("\n" + "=" * 65)
     print(f"  赔率分析 | {home} vs {away}")
+    if lp.get('name') and lp['name'] != 'default':
+        print(f"  联赛模型: {lp['name']}（场均进球基准 {lp.get('avg_goal', AVG_LEAGUE_GOAL):.2f}）")
+    if confidence:
+        print(f"  预测置信度: {confidence['label']} ({confidence['score']*100:.0f}%)")
+        if confidence.get('notes'):
+            print(f"  说明: {'；'.join(confidence['notes'])}")
     print("=" * 65)
 
     op, cl = asian['open_prob'], asian['close_prob']
@@ -1338,6 +1579,9 @@ def render_cli(result):
     print(f"  初盘: 主胜{eo['home']*100:.1f}% | 平{eo['draw']*100:.1f}% | 客胜{eo['away']*100:.1f}%")
     print(f"  终盘: 主胜{ec['home']*100:.1f}% | 平{ec['draw']*100:.1f}% | 客胜{ec['away']*100:.1f}%")
     print(f"  变化趋势: {', '.join(euro['changes']) if euro['changes'] else '赔率稳定'}")
+    mom = euro.get('momentum') or {}
+    if mom.get('summary'):
+        print(f"  欧赔走势: {mom['summary']}")
     if euro.get('implied_supremacy') is not None:
         print(f"  欧赔反推净胜球: {euro['implied_supremacy']:+.2f}")
     el = euro.get('implied_lambdas')
@@ -1401,8 +1645,9 @@ def render_cli(result):
         print(f"  #{i}: {home} {s['home']} - {s['away']} {away}  [{s['result']}]  "
               f"概率:{s['prob']*100:.1f}%  {heat}  {bar}")
 
+    rec_n = len(model['recommend'])
     print("\n" + "=" * 65)
-    print("【推荐：最可能的2个比分】")
+    print(f"【推荐：最可能的{rec_n}个比分】")
     print("=" * 65)
     for rank, s in enumerate(model['recommend'], 1):
         print(f"\n  第{rank}推荐: ★ {home} {s['home']} : {s['away']} {away} ★")
