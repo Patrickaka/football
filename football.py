@@ -18,6 +18,15 @@ import urllib.error
 import random
 from logger import setup_logger
 
+# ELO 评分系统（延迟导入）
+try:
+    from elo import get_elo_system, elo_to_goals_expected, elo_to_strength_factor
+    ELO_AVAILABLE = True
+except ImportError:
+    ELO_AVAILABLE = False
+    log = setup_logger('football')
+    log.warning("ELO 模块未导入，将使用默认球队实力计算")
+
 log = setup_logger('football')
 
 sys.stdout.reconfigure(encoding='utf-8')
@@ -485,10 +494,15 @@ def _parse_recent_form(groups):
     }
 
 
-def fetch_team_strength(match_id, home, away):
+def fetch_team_strength(match_id, home, away, league_profile=None):
     """
     从数据分析页抓取主客队近10场及主客场进球/失球，换算攻防强度。
     返回 None 表示页面无数据（不影响主流程）。
+    
+    集成 ELO 评分系统：
+    - 获取球队 ELO 评分
+    - 将 ELO 转换为进球期望值 (xG)
+    - 返回包含 ELO 信息的综合实力数据
     """
     try:
         html = fetch(f'{BASE}/fenxi/shuju-{match_id}.shtml')
@@ -529,7 +543,37 @@ def fetch_team_strength(match_id, home, away):
     defense_away = _blend_close_open(av['defense'], away_all['defense'], 0.68)
 
     form_diff = home_all['form_pts'] - away_all['form_pts']
-    return {
+    
+    # ELO 评分集成
+    elo_home = elo_away = None
+    elo_xg_home = elo_xg_away = None
+    elo_strength_home = elo_strength_away = None
+    elo_prediction = None
+    
+    if ELO_AVAILABLE:
+        try:
+            elo = get_elo_system()
+            elo_home = elo.get_rating(home)
+            elo_away = elo.get_rating(away)
+            
+            # 计算基于 ELO 的进球期望值
+            elo_xg_home = elo_to_goals_expected(elo_home, elo_away)
+            elo_xg_away = elo_to_goals_expected(elo_away, elo_home)
+            
+            # 计算实力因子
+            elo_strength_home = elo_to_strength_factor(elo_home)
+            elo_strength_away = elo_to_strength_factor(elo_away)
+            
+            # 获取 ELO 预测
+            league_type = league_profile.get('name', '联赛') if league_profile else '联赛'
+            elo_prediction = elo.predict_match(home, away, league_type)
+            
+            log.debug(f"ELO 评分: {home}={elo_home:.2f}, {away}={elo_away:.2f}")
+            log.debug(f"ELO xG: {home}={elo_xg_home:.2f}, {away}={elo_xg_away:.2f}")
+        except Exception as e:
+            log.error(f"ELO 计算失败: {e}")
+
+    result = {
         'home_recent': home_all,
         'away_recent': away_all,
         'home_venue': hv,
@@ -545,6 +589,20 @@ def fetch_team_strength(match_id, home, away):
             f"客队近{away_all['games']}场 进{away_all['gf']}失{away_all['ga']}（{away_all['form_pts']:.1f}分/场）"
         ),
     }
+    
+    # 添加 ELO 相关数据
+    if ELO_AVAILABLE and elo_home is not None:
+        result.update({
+            'elo_home': elo_home,
+            'elo_away': elo_away,
+            'elo_xg_home': elo_xg_home,
+            'elo_xg_away': elo_xg_away,
+            'elo_strength_home': elo_strength_home,
+            'elo_strength_away': elo_strength_away,
+            'elo_prediction': elo_prediction,
+        })
+    
+    return result
 
 
 # ===================== 分析函数 =====================
@@ -1701,16 +1759,43 @@ def team_poisson_lambdas(strength, total_target, league_profile=None):
     """
     用攻防强度构造 λ：主队进攻×客队防守×主场系数。
     defense 为场均失球（对手防守弱则失球多 → 因子更大）。
+    
+    集成 ELO 评分系统：
+    - 使用 ELO 实力因子调整攻防强度
+    - ELO 评分高的球队会获得更高的进球期望值
     """
     lp = league_profile or strength.get('league_profile') or LEAGUE_PROFILES['default']
     avg = lp.get('avg_goal', AVG_LEAGUE_GOAL)
     boost = lp.get('home_boost', HOME_VENUE_ATTACK_BOOST)
+    
+    # 获取攻防强度
     atk_h = strength['attack_home'] / avg
     def_a = strength['defense_away'] / avg
     atk_a = strength['attack_away'] / avg
     def_h = strength['defense_home'] / avg
+    
+    # ELO 调整因子
+    elo_strength_h = strength.get('elo_strength_home', 1.0)
+    elo_strength_a = strength.get('elo_strength_away', 1.0)
+    
+    # 使用 ELO 实力因子调整攻防强度
+    # ELO 评分高的球队进攻能力更强，防守更稳固
+    atk_h *= elo_strength_h
+    def_h *= elo_strength_a  # 对手ELO高，我方防守压力大（失球可能更多）
+    atk_a *= elo_strength_a
+    def_a *= elo_strength_h  # 对手ELO高，我方进攻面对更强防守
+    
+    # 计算基础 lambda
     lam_home = max(0.08, atk_h * def_a * avg * boost)
     lam_away = max(0.08, atk_a * def_h * avg)
+    
+    # 如果有 ELO xG，进行融合
+    if 'elo_xg_home' in strength and 'elo_xg_away' in strength:
+        elo_weight = 0.3  # ELO 权重
+        lam_home = lam_home * (1 - elo_weight) + strength['elo_xg_home'] * elo_weight
+        lam_away = lam_away * (1 - elo_weight) + strength['elo_xg_away'] * elo_weight
+    
+    # 归一化到目标总进球
     scale = total_target / max(lam_home + lam_away, 0.1)
     return lam_home * scale, lam_away * scale
 
@@ -2843,7 +2928,7 @@ def analyze_match(match):
     except Exception as e:
         raise ValueError(f"大小球数据获取失败: {e}")
     
-    team = fetch_team_strength(mid, home, away)
+    team = fetch_team_strength(mid, home, away, league_profile)
     if team:
         team['league_profile'] = league_profile
 
