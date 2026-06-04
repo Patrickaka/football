@@ -14,6 +14,7 @@ import json
 import hmac
 import base64
 import socket
+import time
 import webbrowser
 import importlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -23,6 +24,9 @@ from pathlib import Path
 import football
 import lottery3d
 import lottery3d_ml
+from logger import setup_logger
+
+log = setup_logger('server')
 
 _ROOT = Path(__file__).parent
 INDEX_FILE = _ROOT / 'index.html'
@@ -61,6 +65,8 @@ def _json_default(obj):
 
 
 class Handler(BaseHTTPRequestHandler):
+    _log = log
+
     @staticmethod
     def _normalize_path(path):
         """兼容子路径部署（如反代到 /football/）与本地根路径访问"""
@@ -72,7 +78,9 @@ class Handler(BaseHTTPRequestHandler):
         return p
 
     def do_GET(self):
+        start = time.perf_counter()
         if not self._authorized():
+            self._log_request(401, start)
             return
         route = urlparse(self.path)
         path = self._normalize_path(route.path)
@@ -89,6 +97,12 @@ class Handler(BaseHTTPRequestHandler):
             self._serve_json(self._lottery_3d_ml_payload())
         else:
             self._send_json_error(404, f'Not Found: {route.path}')
+        self._log_request(200, start)
+
+    def _log_request(self, status, start):
+        elapsed = time.perf_counter() - start
+        self._log.info('%s %s %d %.3fs',
+                       self.command, self.path, status, elapsed)
 
     def _authorized(self):
         """启用鉴权时校验 HTTP Basic 凭据；未启用则放行"""
@@ -103,6 +117,7 @@ class Handler(BaseHTTPRequestHandler):
                     return True
             except (ValueError, UnicodeDecodeError):
                 pass
+        self._log.warning('鉴权失败 %s', self.address_string())
         self.send_response(401)
         self.send_header('WWW-Authenticate', 'Basic realm="football"')
         self.send_header('Content-Length', '0')
@@ -137,8 +152,9 @@ class Handler(BaseHTTPRequestHandler):
     def _matches_payload(self):
         try:
             return {'matches': football.fetch_match_list()}
-        except Exception as e:
-            return {'error': f'获取比赛列表失败: {e}'}
+        except Exception:
+            self._log.error('获取比赛列表失败', exc_info=True)
+            return {'error': '获取比赛列表失败'}
 
     def _predict_payload(self, params):
         match_id = params.get('match_id', [''])[0]
@@ -153,25 +169,25 @@ class Handler(BaseHTTPRequestHandler):
         }
         try:
             return {'result': football.analyze_match(match)}
-        except Exception as e:
-            return {'error': f'赔率分析失败: {e}'}
+        except Exception:
+            self._log.error('赔率分析失败 match_id=%s', match_id, exc_info=True)
+            return {'error': '赔率分析失败'}
 
     def _lottery_3d_payload(self):
         try:
             importlib.reload(lottery3d)
             return {'result': lottery3d.run_prediction()}
-        except Exception as e:
-            return {'error': f'3D 预测失败: {e}'}
+        except Exception:
+            self._log.error('3D 预测失败', exc_info=True)
+            return {'error': '3D 预测失败'}
 
     def _lottery_3d_ml_payload(self):
         try:
             importlib.reload(lottery3d_ml)
             data = lottery3d_ml.fetch_data()
             numbers = [x[2] for x in data] if data else []
-            # 使用自动模型选择（优先 LightGBM）
             result = lottery3d_ml.predict_current(numbers, model_type="auto")
-            
-            # 格式化结果以匹配前端期望
+
             formatted = {
                 'model_type': result.get('model_type', 'unknown'),
                 'model_info': result.get('model_info', '未知模型'),
@@ -190,9 +206,9 @@ class Handler(BaseHTTPRequestHandler):
                 'feature_importance': result.get('feature_importance', []),
             }
             return {'result': formatted}
-        except Exception as e:
-            import traceback
-            return {'error': f'ML 3D 预测失败: {e}\n{traceback.format_exc()}'}
+        except Exception:
+            self._log.error('ML 3D 预测失败', exc_info=True)
+            return {'error': 'ML 3D 预测失败'}
 
     def _send(self, status, content_type, body):
         self.send_response(status)
@@ -202,7 +218,7 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def log_message(self, fmt, *args):
-        sys.stderr.write(f"  {self.address_string()} - {fmt % args}\n")
+        self._log.debug('%s - %s', self.address_string(), fmt % args)
 
 
 def _is_private_lan(ip):
@@ -235,21 +251,16 @@ def main():
     server = ThreadingHTTPServer((HOST, PORT), Handler)
     local_url = f'http://localhost:{PORT}'
     candidates = _candidate_ips()
-    print("=" * 50)
-    print("  预测服务 - 网页服务已启动")
-    print(f"  本机访问:   {local_url}  （Tab 切换：足球 / 福彩3D）")
+    log.info('=' * 50)
+    log.info('预测服务启动 端口=%s', PORT)
     if candidates:
-        print(f"  局域网访问: http://{candidates[0]}:{PORT}  （手机/其它设备用这个）")
-        if len(candidates) > 1:
-            others = '  '.join(f'http://{ip}:{PORT}' for ip in candidates[1:])
-            print(f"  其它候选地址（若上面连不上，依次试）: {others}")
+        log.info('候选地址: %s %s', local_url,
+                 ' '.join(f'http://{ip}:{PORT}' for ip in candidates))
     if AUTH_ENABLED:
-        print(f"  鉴权: 已启用 HTTP Basic（用户: {', '.join(sorted(CREDENTIALS))}）")
+        log.info('鉴权: 已启用 (用户: %s)', ', '.join(sorted(CREDENTIALS)))
     else:
-        print("  鉴权: 未启用 ⚠ 公网暴露前请设置 FOOTBALL_USERS 或 FOOTBALL_USER/PASS")
-    print("  公网访问: 用隧道（cloudflared/ngrok）或路由器端口转发，详见 README")
-    print("  按 Ctrl+C 停止")
-    print("=" * 50)
+        log.warning('鉴权: 未启用 — 公网暴露前请设置 FOOTBALL_USERS')
+    log.info('=' * 50)
     try:
         webbrowser.open(local_url)
     except Exception:
@@ -257,7 +268,7 @@ def main():
     try:
         server.serve_forever()
     except KeyboardInterrupt:
-        print("\n  服务已停止。")
+        log.info('服务已停止')
         server.shutdown()
 
 

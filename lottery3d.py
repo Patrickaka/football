@@ -8,6 +8,9 @@ import urllib.request
 from collections import Counter, defaultdict
 from contextlib import contextmanager
 from itertools import combinations, product
+from logger import setup_logger
+
+log = setup_logger('lottery3d')
 
 if hasattr(sys.stdout, "reconfigure"):
     try:
@@ -104,6 +107,7 @@ def patch_weights(weights):
 
 
 def fetch_data(url=URL):
+    log.debug('fetch 3D data')
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
     html = urllib.request.urlopen(req, timeout=20).read().decode("utf-8", "ignore")
     compact = re.sub(r"\s+", " ", html)
@@ -1025,8 +1029,12 @@ def _transition_for_api(lag1, dynamic, pos_names=("百", "十", "个")):
 
 def run_prediction(data=None):
     """运行预测，返回 JSON 可序列化 dict；data 为 None 时自动抓取。"""
-    if data is None:
-        data = fetch_data()
+    try:
+        if data is None:
+            data = fetch_data()
+    except Exception:
+        log.error('3D 数据抓取失败', exc_info=True)
+        return {'error': '数据抓取失败'}
     if not data:
         return {"error": "未获取到数据"}
 

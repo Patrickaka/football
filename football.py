@@ -10,10 +10,14 @@
 import sys
 import math
 import re
+import time
 import gzip
 import json
 import urllib.request
 import urllib.error
+from logger import setup_logger
+
+log = setup_logger('football')
 
 sys.stdout.reconfigure(encoding='utf-8')
 
@@ -133,6 +137,7 @@ OUZHI_JSON_URL = f'{BASE}/fenxi1/json/ouzhi.php'
 
 def fetch(url, encoding='gbk', referer=None):
     """抓取网页，自动处理 gzip 压缩和编码"""
+    start = time.perf_counter()
     headers = {**HEADERS, 'Referer': referer} if referer else HEADERS
     req = urllib.request.Request(url, headers=headers)
     try:
@@ -154,9 +159,11 @@ def fetch(url, encoding='gbk', referer=None):
             result = raw.decode(enc)
             # 清理 surrogate 字符
             result = result.encode('utf-8', errors='replace').decode('utf-8')
+            log.debug('fetch %s → %d bytes (%.3fs)', url, len(raw), time.perf_counter() - start)
             return result
         except (UnicodeDecodeError, LookupError, UnicodeEncodeError):
             continue
+    log.debug('fetch %s → %d bytes (%.3fs)', url, len(raw), time.perf_counter() - start)
     return raw.decode('utf-8', errors='replace')
 
 
@@ -205,7 +212,7 @@ def parse_total_line(text):
 
 def fetch_match_list():
     """抓取今日比赛列表，返回 [{home, away, match_id, league, time}, ...]"""
-    print("  正在联网获取今日比赛列表...")
+    log.info('获取比赛列表')
     html = fetch(INDEX_URL)
 
     matches = []
@@ -267,6 +274,7 @@ def fetch_match_list():
         if i < len(times):
             match['time'] = times[i]
 
+    log.info('获取到 %d 场比赛', len(matches))
     return matches
 
 
@@ -1411,6 +1419,7 @@ def analyze_match(match):
     mid = match['match_id']
     home, away = match.get('home', ''), match.get('away', '')
     league_profile = resolve_league_profile(match.get('league', ''))
+    log.info('分析比赛 %s vs %s (id=%s)', home, away, mid)
 
     asian = analyze_asian(fetch_yazhi(mid))
     euro = analyze_euro(fetch_ouzhi(mid))

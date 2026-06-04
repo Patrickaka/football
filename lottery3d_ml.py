@@ -25,6 +25,9 @@ import sys
 import urllib.request
 from collections import Counter, defaultdict
 from itertools import combinations, product
+from logger import setup_logger
+
+log = setup_logger('lottery3d_ml')
 
 # 尝试导入 LightGBM
 try:
@@ -68,6 +71,7 @@ def _native_number(x):
 
 def fetch_data(url=URL):
     """获取历史开奖数据"""
+    log.debug('fetch 3D-ML data')
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
     html = urllib.request.urlopen(req, timeout=20).read().decode("utf-8", "ignore")
     compact = re.sub(r"\s+", " ", html)
@@ -718,27 +722,26 @@ def predict_current(numbers, top_k=TOP_K, model_type="auto"):
     """
     预测当前期（双模型版 - 自动选择 LightGBM 或纯 Python）
     返回推荐号码
-    
+
     参数：
         model_type: "auto" (自动), "lightgbm", "random_forest"
     """
     if len(numbers) < 100:
         return {"error": "历史数据不足"}
-    
-    # 使用滑动窗口减少计算量
-    window_size = 60  # 只使用最近 60 期
+
+    window_size = 60
     recent_numbers = numbers[-window_size:]
-    
-    # 构建训练数据
+
     X, y = build_training_data(recent_numbers, neg_samples=NEGATIVE_SAMPLES_PER_PERIOD)
     if X is None or len(X) < 100:
         return {"error": "训练数据不足"}
-    
-    # 训练模型（自动选择）
+
     try:
         model, used_model = train_model(X, y, model_type=model_type)
-    except Exception as e:
-        return {"error": f"训练失败：{e}"}
+        log.info('3D-ML 模型训练完成: %s', used_model)
+    except Exception:
+        log.error('3D-ML 训练失败', exc_info=True)
+        return {'error': '训练失败'}
     
     # 对所有 1000 个直选组合预测（批量处理）
     fe = FeatureEngineer(recent_numbers)
