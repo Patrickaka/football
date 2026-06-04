@@ -637,6 +637,11 @@ def train_model(X, y, model_type="auto"):
 
 def predict(model, X):
     """预测概率"""
+    # 检查是否是 LightGBM 模型（使用 predict_proba 获取概率）
+    if hasattr(model, 'predict_proba'):
+        # 返回正例的概率（第二列）
+        return model.predict_proba(X)[:, 1]
+    # 纯 Python 模型直接返回预测值
     return model.predict(X)
 
 
