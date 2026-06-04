@@ -747,7 +747,7 @@ function renderLottery3d(r) {
   // ── 组六四码 ──
   html += `<div class="section-title">【组六四码推荐】（选 4 个号打组六复式即可）</div>`;
   html += `<div class="highlight">
-    <div class="big">${esc(z6.digits_str)}</div>
+    <div class="big" style="color:#f85149">${esc(z6.digits_str)}</div>
     <div class="sub">杀码参考 ${esc(r.kill.join(', '))}（组六选号时杀码降权）</div>
     <div class="sub">覆盖 4 注组六</div>
     <div class="tags">${z6.combos.map(c => `<span class="tag">${esc(c)}</span>`).join('')}</div>
@@ -940,7 +940,7 @@ function renderPailie5(r) {
     const nums = item.numbers?.join(' ') || '-';
     html += `<div class="row" style="${i > 0 ? 'border-top:1px solid var(--line);margin-top:8px;padding-top:8px' : ''}">
       <span class="k" style="width:100px">${item.issue || '未知期'}</span>
-      <span class="v" style="font-size:18px;font-weight:700;letter-spacing:8px;color:var(--accent2)">${nums}</span>
+      <span class="v" style="font-size:18px;font-weight:700;letter-spacing:8px;color:#f85149">${nums}</span>
       <span style="color:var(--muted)">${item.date || ''}</span>
     </div>`;
   });
@@ -1109,7 +1109,7 @@ async function getPailie5Recommend() {
     html += `<div class="card">`;
     result.recommendations?.forEach((nums, i) => {
       html += `<div class="highlight" style="margin-bottom:8px">
-        <div class="big">${nums.join(' ')}</div>
+        <div class="big" style="color:#f85149">${nums.join(' ')}</div>
         <div class="sub">推荐 ${i + 1}</div>
       </div>`;
     });
@@ -1248,7 +1248,7 @@ async function getPailie5Ensemble() {
     
     // 预测号码
     html += `<div class="highlight">
-      <div class="big">${result.prediction?.join(' ') || '-'}</div>
+      <div class="big" style="color:#f85149">${result.prediction?.join(' ') || '-'}</div>
       <div class="sub">投票策略：${result.method}</div>
     </div>`;
     
@@ -1374,10 +1374,10 @@ function renderLottery(r) {
   const coldFront = stats.cold_front || [];
   const hotBack = stats.hot_back || [];
   const coldBack = stats.cold_back || [];
-  html += `<div class="row"><span class="k">🔥 前区热门</span><span class="v">${hotFront.map(x => String(x).padStart(2, '0')).join(' · ')}</span></div>`;
-  html += `<div class="row"><span class="k">❄ 前区冷门</span><span class="v">${coldFront.map(x => String(x).padStart(2, '0')).join(' · ')}</span></div>`;
-  html += `<div class="row"><span class="k">🔥 后区热门</span><span class="v">${hotBack.map(x => String(x).padStart(2, '0')).join(' · ')}</span></div>`;
-  html += `<div class="row"><span class="k">❄ 后区冷门</span><span class="v">${coldBack.map(x => String(x).padStart(2, '0')).join(' · ')}</span></div>`;
+  html += `<div class="row"><span class="k">🔥 前区热门</span><span class="v">${hotFront.map(x => String(Array.isArray(x) ? x[0] : x).padStart(2, '0')).join(' · ')}</span></div>`;
+  html += `<div class="row"><span class="k">❄ 前区冷门</span><span class="v">${coldFront.map(x => String(Array.isArray(x) ? x[0] : x).padStart(2, '0')).join(' · ')}</span></div>`;
+  html += `<div class="row"><span class="k">🔥 后区热门</span><span class="v">${hotBack.map(x => String(Array.isArray(x) ? x[0] : x).padStart(2, '0')).join(' · ')}</span></div>`;
+  html += `<div class="row"><span class="k">❄ 后区冷门</span><span class="v">${coldBack.map(x => String(Array.isArray(x) ? x[0] : x).padStart(2, '0')).join(' · ')}</span></div>`;
   html += `</div>`;
   
   // ── 和值分析 ──

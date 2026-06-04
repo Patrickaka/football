@@ -372,6 +372,11 @@ class Pailie5Analyzer:
         return {
             'distribution': dist,
             'most_common': most_common,
+            'total': {
+                0: len(road_counts[0]),
+                1: len(road_counts[1]),
+                2: len(road_counts[2])
+            },
             'road_numbers': {
                 0: [n for n in NUMBERS if n % 3 == 0],
                 1: [n for n in NUMBERS if n % 3 == 1],
