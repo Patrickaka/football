@@ -621,6 +621,21 @@ function renderLottery3d(r) {
     </div>`;
   }
 
+  if (r.transition) {
+    const tr = r.transition;
+    const dyn = tr.dynamic || {};
+    html += `<div class="section-title">上期→本期转移（动态调权）</div>`;
+    html += `<div class="card">
+      <div class="note" style="margin-bottom:8px">基于近 ${tr.pairs_analyzed} 对开奖统计 · 随机基准：同位10% · 重号27%</div>
+      <div class="row"><span class="k">同位复刻</span><span class="v">${tr.pos_repeat_rate.map(x =>
+        esc(x.name) + ' ' + pct(x.rate) + '(×' + x.vs_random + ')'
+      ).join(' · ')}</span></div>
+      <div class="row"><span class="k">同位个数</span><span class="v">${esc(Object.entries(tr.repeat_dist || {}).map(([k,v]) => k + ' ' + v + '%').join(' · '))}</span></div>
+      <div class="row"><span class="k">重号 / 全同 / 同集</span><span class="v">${pct(tr.digit_reuse_rate)} · ${pct(tr.full_repeat_rate)} · ${pct(tr.same_set_rate)}</span></div>
+      <div class="row"><span class="k">动态权重</span><span class="v">同位 ${dyn.w_pos_repeat ?? '—'} · 重号 ${dyn.w_last_appear ?? '—'} · 全同 -${dyn.w_full_repeat_penalty ?? '—'} · 同集 -${dyn.w_same_set_penalty ?? '—'}</span></div>
+    </div>`;
+  }
+
   // ── 综合评分 ──
   html += `<div class="section-title">综合评分 TOP10</div>`;
   html += `<div class="card"><div class="digit-grid" style="grid-template-columns:repeat(5,1fr)">${r.rank_top10.map(x =>

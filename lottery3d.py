@@ -34,8 +34,11 @@ W_ROAD_MATCH = 1.5
 W_DANMA_HIT = 4.0
 W_KILL_PENALTY = 6.0  # 杀码出现在组合中时每码扣分（软约束，非硬杀）
 W_CONSECUTIVE = 1.5   # 含相邻连号（如 12、67）
-W_POS_REPEAT = 1.2    # 与上期同位重复（直选复刻），每码
+W_POS_REPEAT = 1.2    # 与上期同位重复（直选复刻），每码；实际强度由 lag1 动态缩放
 W_RATIO_MATCH = 1.8   # 奇偶比 / 大小比与近期热门匹配
+# 随机基准：单位置复刻 10%；指定数字在下一期三码中出现 ≈ 27.1%
+RANDOM_POS_REPEAT = 0.10
+RANDOM_DIGIT_REUSE = 1 - (9 / 10) ** 3
 SUM_SOFT_SIGMA = 3.2
 SPAN_SOFT_SIGMA = 1.4
 
@@ -209,6 +212,125 @@ def position_repeat_count(triple, last_draw):
     return sum(1 for i in range(3) if triple[i] == last_draw[i])
 
 
+def _clamp(x, lo, hi):
+    return max(lo, min(hi, x))
+
+
+def _empty_lag1():
+    return {
+        "pairs": 0,
+        "pos_repeat_rate": [RANDOM_POS_REPEAT] * 3,
+        "avg_pos_repeat": RANDOM_POS_REPEAT,
+        "repeat_dist": {0: 1.0},
+        "full_repeat_rate": 0.0,
+        "same_set_rate": 0.0,
+        "ge2_overlap_rate": 0.0,
+        "digit_reuse_rate": RANDOM_DIGIT_REUSE,
+    }
+
+
+def analyze_lag1_dynamics(numbers, window=RECENT_WINDOW):
+    """分析近窗「上期→本期」转移：同位复刻、重号、全同号等"""
+    if len(numbers) < 2:
+        return _empty_lag1()
+
+    pairs = list(zip(numbers[:-1], numbers[1:]))
+    recent_pairs = pairs[-window:] if len(pairs) > window else pairs
+
+    pos_w = [0.0] * 3
+    repeat_dist = Counter()
+    full_w = same_set_w = ge2_w = digit_hit = digit_total = 0.0
+    total_w = 0.0
+    w = 1.0
+    for prev, cur in reversed(recent_pairs):
+        rep = position_repeat_count(cur, prev)
+        repeat_dist[rep] += w
+        for j in range(3):
+            if prev[j] == cur[j]:
+                pos_w[j] += w
+        if prev == cur:
+            full_w += w
+        if set(prev) == set(cur):
+            same_set_w += w
+        if len(set(prev) & set(cur)) >= 2:
+            ge2_w += w
+        for d in set(prev):
+            digit_total += w
+            if d in cur:
+                digit_hit += w
+        total_w += w
+        w *= EXP_DECAY
+
+    total_w = total_w or 1.0
+    return {
+        "pairs": len(recent_pairs),
+        "pos_repeat_rate": [pos_w[i] / total_w for i in range(3)],
+        "avg_pos_repeat": sum(pos_w) / (3 * total_w),
+        "repeat_dist": {k: v / total_w for k, v in sorted(repeat_dist.items())},
+        "full_repeat_rate": full_w / total_w,
+        "same_set_rate": same_set_w / total_w,
+        "ge2_overlap_rate": ge2_w / total_w,
+        "digit_reuse_rate": digit_hit / digit_total if digit_total else RANDOM_DIGIT_REUSE,
+    }
+
+
+def ensemble_lag1_dynamics(numbers, window_weights):
+    """多窗口加权集成上期→本期转移统计"""
+    acc = _empty_lag1()
+    if len(numbers) < 2:
+        return acc
+
+    pos_rate = [0.0] * 3
+    repeat_dist = Counter()
+    full = same_set = ge2 = digit_hit = digit_total = avg_rep = 0.0
+    pairs_n = 0
+
+    for w, wt in window_weights.items():
+        lag = analyze_lag1_dynamics(numbers, window=w)
+        pairs_n = max(pairs_n, lag["pairs"])
+        for i in range(3):
+            pos_rate[i] += wt * lag["pos_repeat_rate"][i]
+        for k, v in lag["repeat_dist"].items():
+            repeat_dist[k] += wt * v
+        full += wt * lag["full_repeat_rate"]
+        same_set += wt * lag["same_set_rate"]
+        ge2 += wt * lag["ge2_overlap_rate"]
+        digit_hit += wt * lag["digit_reuse_rate"]
+        digit_total += wt
+        avg_rep += wt * lag["avg_pos_repeat"]
+
+    return {
+        "pairs": pairs_n,
+        "pos_repeat_rate": pos_rate,
+        "avg_pos_repeat": avg_rep,
+        "repeat_dist": dict(repeat_dist),
+        "full_repeat_rate": full,
+        "same_set_rate": same_set,
+        "ge2_overlap_rate": ge2,
+        "digit_reuse_rate": digit_hit / digit_total if digit_total else RANDOM_DIGIT_REUSE,
+    }
+
+
+def derive_dynamic_weights(lag1, consec_rate):
+    """根据历史转移统计动态缩放评分权重与惩罚项"""
+    avg_rep = lag1["avg_pos_repeat"]
+    w_pos = W_POS_REPEAT * _clamp(avg_rep / RANDOM_POS_REPEAT, 0.2, 1.6)
+    pos_mult = [_clamp(r / RANDOM_POS_REPEAT, 0.3, 2.0) for r in lag1["pos_repeat_rate"]]
+    w_last = W_LAST_APPEAR * _clamp(lag1["digit_reuse_rate"] / RANDOM_DIGIT_REUSE, 0.3, 1.4)
+    consec_base = max(consec_rate, 0.15)
+    w_consec = W_CONSECUTIVE * _clamp(consec_rate / consec_base, 0.6, 1.2)
+    w_full_pen = _clamp(12.0 * (1.0 - lag1["full_repeat_rate"] * 80), 4.0, 15.0)
+    w_perm_pen = _clamp(6.0 * (1.0 - lag1["same_set_rate"] * 40), 1.5, 8.0)
+    return {
+        "w_pos_repeat": w_pos,
+        "pos_mult": pos_mult,
+        "w_last_appear": w_last,
+        "w_consecutive": w_consec,
+        "w_full_repeat_penalty": w_full_pen,
+        "w_same_set_penalty": w_perm_pen,
+    }
+
+
 def analyze_patterns(numbers, window=RECENT_WINDOW):
     """统计近窗连号占比、奇偶比/大小比频次"""
     recent = _recent_slice(numbers, window)
@@ -298,10 +420,12 @@ def ensemble_sum_span(sums, spans, window_weights):
     }
 
 
-def digit_scores(numbers, window=RECENT_WINDOW):
+def digit_scores(numbers, window=RECENT_WINDOW, dynamic=None):
     recent = _recent_slice(numbers, window)
     last = numbers[-1]
     score = [0.0] * 10
+    dyn = dynamic or {}
+    w_last = dyn.get("w_last_appear", W_LAST_APPEAR)
 
     freq_all = exp_weighted_counts([d for n in recent for d in n])
     for d, _ in freq_all.most_common(4):
@@ -326,7 +450,7 @@ def digit_scores(numbers, window=RECENT_WINDOW):
             score[d] += W_MISS_MID
 
     for d in set(last):
-        score[d] += W_LAST_APPEAR
+        score[d] += w_last
 
     nb = set()
     for d in last:
@@ -342,11 +466,11 @@ def digit_scores(numbers, window=RECENT_WINDOW):
     return score, freq_all
 
 
-def ensemble_digit_scores(numbers, window_weights):
+def ensemble_digit_scores(numbers, window_weights, dynamic=None):
     combined = [0.0] * 10
     freq_combined = Counter()
     for w, wt in window_weights.items():
-        sc, freq = digit_scores(numbers, window=w)
+        sc, freq = digit_scores(numbers, window=w, dynamic=dynamic)
         for d in range(10):
             combined[d] += wt * sc[d]
         for d, c in freq.items():
@@ -354,11 +478,14 @@ def ensemble_digit_scores(numbers, window_weights):
     return combined, freq_combined
 
 
-def position_digit_scores(numbers, position, window=RECENT_WINDOW):
+def position_digit_scores(numbers, position, window=RECENT_WINDOW, dynamic=None):
     """单码分位评分（百/十/个）"""
     recent = [n[position] for n in _recent_slice(numbers, window)]
     last_d = numbers[-1][position]
     sc = [0.0] * 10
+    dyn = dynamic or {}
+    w_last = dyn.get("w_last_appear", W_LAST_APPEAR)
+    pos_mult = dyn.get("pos_mult", [1.0, 1.0, 1.0])
     for d, _ in exp_weighted_counts(recent).most_common(4):
         sc[d] += W_HOT_POS + 1
     trans = build_markov(numbers, position)
@@ -372,16 +499,16 @@ def position_digit_scores(numbers, position, window=RECENT_WINDOW):
             sc[d] += W_MISS_HIGH
         elif miss_p >= 9:
             sc[d] += W_MISS_MID
-    sc[last_d] += W_LAST_APPEAR
+    sc[last_d] += w_last * pos_mult[position]
     for d in neighbor(last_d):
         sc[d] += W_NEIGHBOR
     return sc
 
 
-def ensemble_position_digit_scores(numbers, position, window_weights):
+def ensemble_position_digit_scores(numbers, position, window_weights, dynamic=None):
     sc = [0.0] * 10
     for w, wt in window_weights.items():
-        ps = position_digit_scores(numbers, position, window=w)
+        ps = position_digit_scores(numbers, position, window=w, dynamic=dynamic)
         for d in range(10):
             sc[d] += wt * ps[d]
     return sc
@@ -413,7 +540,7 @@ def compute_window_weights(numbers, trials=WINDOW_BACKTEST_TRIALS):
             sums = [sum(x) for x in train]
             spans = [calc_span(x) for x in train]
             meta = build_ranking_meta(train, {w: 1.0}, sums, spans, tail_top=4)
-            sc, _ = digit_scores(train, window=w)
+            sc, _ = digit_scores(train, window=w, dynamic=meta.get("dynamic"))
             dan, _, kill, _ = pick_dan_tuo_kill(sc)
             top = rank_triplets(sc, dan, kill, meta, top_n=ZHIXUAN_TOP3)
             top_nums = [t[1] for t in top]
@@ -562,6 +689,7 @@ def is_zu6_draw(triple):
 
 def triplet_weight(a, b, c, score, danma, kill, meta):
     kill_set = set(kill or [])
+    dyn = meta.get("dynamic") or {}
     w = score[a] + score[b] + score[c]
     for x in (a, b, c):
         if x in danma:
@@ -583,11 +711,20 @@ def triplet_weight(a, b, c, score, danma, kill, meta):
         w += 1.0
 
     if has_consecutive_digits(a, b, c):
-        w += W_CONSECUTIVE
+        w += dyn.get("w_consecutive", W_CONSECUTIVE)
 
     last_draw = meta.get("last_draw")
+    w_pos = dyn.get("w_pos_repeat", W_POS_REPEAT)
+    pos_mult = dyn.get("pos_mult", [1.0, 1.0, 1.0])
     if last_draw:
-        w += W_POS_REPEAT * position_repeat_count((a, b, c), last_draw)
+        triple = (a, b, c)
+        for i in range(3):
+            if triple[i] == last_draw[i]:
+                w += w_pos * pos_mult[i]
+        if triple == tuple(last_draw):
+            w -= dyn.get("w_full_repeat_penalty", 0.0)
+        elif set(triple) == set(last_draw):
+            w -= dyn.get("w_same_set_penalty", 0.0)
 
     oe = odd_even_key((a, b, c))
     bs = big_small_key((a, b, c))
@@ -620,13 +757,17 @@ def _meta_from_raw(meta_raw, tail_top=5):
 
 
 def build_ranking_meta(numbers, window_weights, sums=None, spans=None, tail_top=5):
-    """和值/跨度 + 连号/奇偶/大小模式，供直选排序使用"""
+    """和值/跨度 + 模式 + 上期→本期转移，供直选排序使用"""
     if sums is None:
         sums = [sum(x) for x in numbers]
     if spans is None:
         spans = [calc_span(x) for x in numbers]
     meta = _meta_from_raw(ensemble_sum_span(sums, spans, window_weights), tail_top=tail_top)
-    meta.update(ensemble_patterns(numbers, window_weights))
+    pat = ensemble_patterns(numbers, window_weights)
+    meta.update(pat)
+    lag1 = ensemble_lag1_dynamics(numbers, window_weights)
+    meta["lag1"] = lag1
+    meta["dynamic"] = derive_dynamic_weights(lag1, pat["consec_rate"])
     meta["last_draw"] = numbers[-1]
     return meta
 
@@ -646,7 +787,7 @@ def backtest(numbers, trials=BACKTEST_TRIALS, window_weights=None):
         sums = [sum(x) for x in train]
         spans = [calc_span(x) for x in train]
         meta = build_ranking_meta(train, ww, sums, spans, tail_top=4)
-        sc, _ = ensemble_digit_scores(train, ww)
+        sc, _ = ensemble_digit_scores(train, ww, dynamic=meta.get("dynamic"))
         dan, _, kill, _ = pick_dan_tuo_kill(sc)
         top = rank_triplets(sc, dan, kill, meta, top_n=RECOMMEND_GROUPS)
         top_nums = [t[1] for t in top]
@@ -855,6 +996,33 @@ def print_search_report(result):
         print(f"    {k} = {fmt}")
 
 
+def _transition_for_api(lag1, dynamic, pos_names=("百", "十", "个")):
+    """序列化上期→本期转移统计与动态权重"""
+    dyn_out = {}
+    for k, v in dynamic.items():
+        if isinstance(v, list):
+            dyn_out[k] = [round(x, 3) for x in v]
+        else:
+            dyn_out[k] = round(v, 3)
+    return {
+        "pairs_analyzed": lag1["pairs"],
+        "pos_repeat_rate": [
+            {
+                "name": pos_names[i],
+                "rate": round(lag1["pos_repeat_rate"][i], 4),
+                "vs_random": round(lag1["pos_repeat_rate"][i] / RANDOM_POS_REPEAT, 2),
+            }
+            for i in range(3)
+        ],
+        "repeat_dist": {f"{k}位同": round(v * 100, 1) for k, v in lag1["repeat_dist"].items()},
+        "digit_reuse_rate": round(lag1["digit_reuse_rate"], 4),
+        "full_repeat_rate": round(lag1["full_repeat_rate"], 4),
+        "same_set_rate": round(lag1["same_set_rate"], 4),
+        "ge2_overlap_rate": round(lag1["ge2_overlap_rate"], 4),
+        "dynamic": dyn_out,
+    }
+
+
 def run_prediction(data=None):
     """运行预测，返回 JSON 可序列化 dict；data 为 None 时自动抓取。"""
     if data is None:
@@ -872,7 +1040,7 @@ def run_prediction(data=None):
     meta = build_ranking_meta(numbers, window_weights, sums, spans, tail_top=5)
     pat = {k: meta[k] for k in ("consec_rate", "oe_freq", "bs_freq", "oe_total", "bs_total")}
 
-    score, freq_all = ensemble_digit_scores(numbers, window_weights)
+    score, freq_all = ensemble_digit_scores(numbers, window_weights, dynamic=meta.get("dynamic"))
     danma, tuoma, kill, rank = pick_dan_tuo_kill(score)
     form_prob = analyze_form_probability(numbers, window_weights=window_weights)
     zu6_four = pick_zu6_four(score, kill)
@@ -884,7 +1052,7 @@ def run_prediction(data=None):
     pos_names = ("百", "十", "个")
     position_top = []
     for pos, name in enumerate(pos_names):
-        pr = sorted(enumerate(ensemble_position_digit_scores(numbers, pos, window_weights)), key=lambda x: -x[1])[:5]
+        pr = sorted(enumerate(ensemble_position_digit_scores(numbers, pos, window_weights, dynamic=meta.get("dynamic"))), key=lambda x: -x[1])[:5]
         position_top.append({
             "name": name,
             "digits": [{"digit": d, "score": round(s, 1)} for d, s in pr],
@@ -946,6 +1114,7 @@ def run_prediction(data=None):
             "last_big_small": ratio_label(big_small_key(last_num), "bs"),
             "last_has_consecutive": has_consecutive_digits(*last_num),
         },
+        "transition": _transition_for_api(meta["lag1"], meta["dynamic"], pos_names),
         "form": {
             "last_label": FORM_LABELS[form_prob["last_form"]],
             "streak": form_prob["streak"],
@@ -1053,6 +1222,24 @@ def print_report(result):
         bs_top = ", ".join(f"{x['label']}({x['weight']})" for x in pat.get("big_small_top", [])[:3])
         print(f"  热门奇偶比: {oe_top}")
         print(f"  热门大小比: {bs_top}")
+
+    tr = result.get("transition")
+    if tr:
+        print("\n上期→本期转移（近{}对，动态调权）".format(tr["pairs_analyzed"]))
+        pos_line = "  ".join(
+            f"{x['name']}位同位复刻 {x['rate']*100:.1f}%（随机10%，×{x['vs_random']:.2f}）"
+            for x in tr["pos_repeat_rate"]
+        )
+        print(f"  {pos_line}")
+        dist = ", ".join(f"{k} {v}%" for k, v in tr.get("repeat_dist", {}).items())
+        print(f"  同位个数分布: {dist}")
+        print(f"  重号出现率 {tr['digit_reuse_rate']*100:.1f}%（随机27%）"
+              f"  |  全同号 {tr['full_repeat_rate']*100:.2f}%  |  同号不同序 {tr['same_set_rate']*100:.2f}%")
+        dyn = tr.get("dynamic", {})
+        print(f"  动态权重: 同位复刻 {dyn.get('w_pos_repeat', W_POS_REPEAT):.2f}"
+              f"  上期重号 {dyn.get('w_last_appear', W_LAST_APPEAR):.2f}"
+              f"  全同惩罚 -{dyn.get('w_full_repeat_penalty', 0):.1f}"
+              f"  同集惩罚 -{dyn.get('w_same_set_penalty', 0):.1f}")
 
     print("\n综合评分 TOP10")
     for item in result["rank_top10"]:
