@@ -1,0 +1,7 @@
+stages:
+  - sync
+
+sync:
+  script:
+    - git remote add github https://oauth2:${GITHUB_TOKEN}@github.com/Patrickaka/football.git 2>/dev/null || git remote set-url github https://oauth2:${GITHUB_TOKEN}@github.com/Patrickaka/football.git
+    - git push github master
