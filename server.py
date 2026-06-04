@@ -27,6 +27,7 @@ from src.football import fetch_match_list, analyze_match
 from src.lottery3d import run_prediction
 from src.lottery3d.ml import fetch_data, predict_current, N_TREES
 from src.pailie5 import get_pailie5_analyzer
+from src.lottery_lottery import get_lottery_analyzer
 from src.logger import setup_logger
 
 # 回测模块（延迟导入以加速启动）
@@ -141,6 +142,25 @@ class Handler(BaseHTTPRequestHandler):
             self._serve_json(self._pailie5_cycles_payload())
         elif path == '/api/pailie5/contribution':
             self._serve_json(self._pailie5_contribution_payload())
+        elif path == '/api/lottery':
+            self._serve_json(self._lottery_payload())
+        elif path == '/api/lottery/recommend':
+            params = parse_qs(route.query)
+            self._serve_json(self._lottery_recommend_payload(params))
+        elif path == '/api/lottery/rank':
+            params = parse_qs(route.query)
+            self._serve_json(self._lottery_rank_payload(params))
+        elif path == '/api/lottery/ensemble':
+            self._serve_json(self._lottery_ensemble_payload())
+        elif path == '/api/lottery/cycles':
+            self._serve_json(self._lottery_cycles_payload())
+        elif path == '/api/lottery/contribution':
+            self._serve_json(self._lottery_contribution_payload())
+        elif path == '/api/lottery/backtest':
+            params = parse_qs(route.query)
+            self._serve_json(self._lottery_backtest_payload(params))
+        elif path == '/api/lottery/fetch':
+            self._serve_json(self._lottery_fetch_payload())
         elif path == '/api/calibrate':
             params = parse_qs(route.query)
             self._serve_json(self._calibrate_payload(params))
@@ -513,6 +533,127 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:
             self._log.error('获取阈值状态失败', exc_info=True)
             return {'error': f'获取失败: {str(e)}'}
+
+    def _lottery_payload(self):
+        """获取大乐透统计分析"""
+        try:
+            analyzer = get_lottery_analyzer()
+            stats = analyzer.get_statistics()
+            recent = analyzer.get_recent_results(10)
+            
+            return {
+                'result': {
+                    'statistics': stats,
+                    'recent_results': recent,
+                }
+            }
+        except Exception:
+            self._log.error('大乐透分析失败', exc_info=True)
+            return {'error': '大乐透分析失败'}
+
+    def _lottery_recommend_payload(self, params):
+        """获取大乐透推荐号码 - 返回3组概率最高的推荐"""
+        try:
+            analyzer = get_lottery_analyzer()
+            method = params.get('method', ['balanced'])[0]
+            
+            # 生成3组推荐
+            recommendations = []
+            for _ in range(3):
+                rec = analyzer.generate_recommendation(method)
+                recommendations.append(rec)
+            
+            return {
+                'result': {
+                    'method': method,
+                    'recommendations': recommendations,
+                    'count': len(recommendations)
+                }
+            }
+        except Exception:
+            self._log.error('大乐透推荐失败', exc_info=True)
+            return {'error': '大乐透推荐失败'}
+
+    def _lottery_rank_payload(self, params):
+        """大乐透排名模型 - Top-N排序"""
+        try:
+            analyzer = get_lottery_analyzer()
+            top_n = int(params.get('top_n', [10])[0])
+            
+            front_ranked, back_ranked = analyzer.rank_model(top_n=top_n)
+            
+            return {
+                'result': {
+                    'top_n': top_n,
+                    'front_ranked': [{'number': n, 'score': s, 'features': f} for n, s, f in front_ranked],
+                    'back_ranked': [{'number': n, 'score': s, 'features': f} for n, s, f in back_ranked],
+                }
+            }
+        except Exception:
+            self._log.error('大乐透排名模型失败', exc_info=True)
+            return {'error': '大乐透排名模型失败'}
+
+    def _lottery_ensemble_payload(self):
+        """大乐透多模型集成投票"""
+        try:
+            analyzer = get_lottery_analyzer()
+            
+            result = analyzer.multi_model_voting()
+            
+            return {'result': result}
+        except Exception:
+            self._log.error('大乐透集成预测失败', exc_info=True)
+            return {'error': '大乐透集成预测失败'}
+
+    def _lottery_cycles_payload(self):
+        """大乐透周期与状态识别"""
+        try:
+            analyzer = get_lottery_analyzer()
+            
+            cycles = analyzer.identify_cycles()
+            
+            return {'result': cycles}
+        except Exception:
+            self._log.error('大乐透周期识别失败', exc_info=True)
+            return {'error': '大乐透周期识别失败'}
+
+    def _lottery_contribution_payload(self):
+        """大乐透特征贡献度分析"""
+        try:
+            analyzer = get_lottery_analyzer()
+            
+            contributions = analyzer.feature_contribution()
+            
+            return {'result': contributions}
+        except Exception:
+            self._log.error('大乐透特征贡献度分析失败', exc_info=True)
+            return {'error': '大乐透特征贡献度分析失败'}
+
+    def _lottery_backtest_payload(self, params):
+        """大乐透历史回测"""
+        try:
+            analyzer = get_lottery_analyzer()
+            method = params.get('method', ['balanced'])[0]
+            periods = int(params.get('periods', [30])[0])
+            
+            result = analyzer.backtest(method=method, test_periods=periods)
+            
+            return {'result': result}
+        except Exception:
+            self._log.error('大乐透回测失败', exc_info=True)
+            return {'error': '大乐透回测失败'}
+
+    def _lottery_fetch_payload(self):
+        """动态抓取最新开奖号码"""
+        try:
+            analyzer = get_lottery_analyzer()
+            
+            result = analyzer.fetch_latest_results()
+            
+            return {'result': result}
+        except Exception:
+            self._log.error('大乐透抓取失败', exc_info=True)
+            return {'error': '大乐透抓取失败'}
 
     def _send(self, status, content_type, body):
         self.send_response(status)

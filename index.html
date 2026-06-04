@@ -100,6 +100,14 @@
     border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite;
     vertical-align: middle; margin-right: 8px; }
   @keyframes spin { to { transform: rotate(360deg); } }
+@keyframes fadeInUp {
+  from { opacity: 0; transform: translateX(-50%) translateY(20px); }
+  to { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+@keyframes fadeOutDown {
+  from { opacity: 1; transform: translateX(-50%) translateY(0); }
+  to { opacity: 0; transform: translateX(-50%) translateY(20px); }
+}
 
   .back { display: inline-flex; align-items: center; gap: 6px; cursor: pointer;
     color: var(--accent2); font-size: 14px; margin-bottom: 16px; user-select: none; }
@@ -171,6 +179,7 @@
     <button type="button" class="tab active" data-tab="football" role="tab">⚽ 足球预测</button>
     <button type="button" class="tab" data-tab="lottery3d" role="tab">🎲 福彩3D</button>
     <button type="button" class="tab" data-tab="pailie5" role="tab">🔢 排列五</button>
+    <button type="button" class="tab" data-tab="lottery" role="tab">🎯 大乐透</button>
   </div>
   <div id="panel-football" class="tab-panel active">
     <div id="search-wrap" style="display:none"></div>
@@ -181,6 +190,9 @@
   </div>
   <div id="panel-pailie5" class="tab-panel">
     <div id="app-pailie5"></div>
+  </div>
+  <div id="panel-lottery" class="tab-panel">
+    <div id="app-lottery"></div>
   </div>
   <div class="disclaimer" id="disclaimer">
     ⚠ 以上分析仅为概率统计参考，不构成任何投注建议。请理性对待！
@@ -213,6 +225,11 @@ const TAB_META = {
     title: '🔢 排列五分析',
     desc: '数据来源：官方开奖数据 · 频率统计 + 遗漏分析 + 贝叶斯综合评分',
     disclaimer: '⚠ 排列五开奖具有随机性，以上分析仅为历史统计参考，不构成任何投注建议。请理性对待！',
+  },
+  lottery: {
+    title: '🎯 大乐透分析',
+    desc: '数据来源：官方开奖数据 · 多模型集成投票 + 周期识别 + 特征贡献度分析',
+    disclaimer: '⚠ 大乐透开奖具有随机性，以上分析仅为历史统计参考，不构成任何投注建议。请理性对待！',
   },
 };
 
@@ -550,7 +567,7 @@ function switchTab(tab) {
   pageTitle.textContent = meta.title;
   pageDesc.textContent = meta.desc;
   document.getElementById('disclaimer').innerHTML = meta.disclaimer;
-  location.hash = tab === 'lottery3d' ? '3d' : tab === 'pailie5' ? 'pailie5' : 'football';
+  location.hash = tab === 'lottery3d' ? '3d' : tab === 'pailie5' ? 'pailie5' : tab === 'lottery' ? 'lottery' : 'football';
   if (tab === 'football') {
     if (!allMatches.length) loadMatches();
     else showListView();
@@ -558,6 +575,8 @@ function switchTab(tab) {
     loadLottery3d(true);
   } else if (tab === 'pailie5') {
     loadPailie5();
+  } else if (tab === 'lottery') {
+    loadLottery();
   }
 }
 
@@ -1002,7 +1021,7 @@ function renderPailie5(r) {
   const road = stats.road_analysis || {};
   html += `<div class="row"><span class="k">奇偶分布</span><span class="v">${Object.entries(oddEven.distribution || {}).map(([k, v]) => k + ':' + v).join(' · ') || '无'}</span></div>`;
   html += `<div class="row"><span class="k">大小分布</span><span class="v">${Object.entries(size.distribution || {}).map(([k, v]) => k + ':' + v).join(' · ') || '无'}</span></div>`;
-  html += `<div class="row"><span class="k">012路</span><span class="v">0路(${road.distribution?.[0] || 0}) · 1路(${road.distribution?.[1] || 0}) · 2路(${road.distribution?.[2] || 0})</span></div>`;
+  html += `<div class="row"><span class="k">012路</span><span class="v">0路(${road.total?.[0] || 0}) · 1路(${road.total?.[1] || 0}) · 2路(${road.total?.[2] || 0})</span></div>`;
   html += `</div>`;
   
   // ── 贝叶斯评分 ──
@@ -1260,9 +1279,452 @@ async function getPailie5Ensemble() {
   }
 }
 
+// ── 大乐透相关函数 ──
+let lotteryLoaded = false;
+
+async function loadLottery() {
+  if (lotteryLoaded) return;
+  const appLottery = document.getElementById('app-lottery');
+  appLottery.innerHTML = `<div class="status"><span class="spinner"></span>正在加载大乐透数据…</div>`;
+  try {
+    const data = await fetchJson('/api/lottery?_=' + Date.now());
+    if (data.error) {
+      appLottery.innerHTML = `<div class="status error">✗ ${esc(data.error)}</div>`;
+      return;
+    }
+    lotteryLoaded = true;
+    renderLottery(data.result);
+  } catch (e) {
+    appLottery.innerHTML = `<div class="status error">加载失败：${esc(e.message)}</div>`;
+  }
+}
+
+function renderLottery(r) {
+  const appLottery = document.getElementById('app-lottery');
+  const stats = r.statistics || {};
+  const recent = r.recent_results || [];
+  
+  let html = '';
+  
+  // ── 标题 ──
+  html += `<div class="section-title">【大乐透数据分析】</div>`;
+  
+  // ── 基本统计 ──
+  html += `<div class="card">
+    <div class="row"><span class="k">数据期数</span><span class="v">${stats.total_issues || 0} 期</span></div>
+    <div class="row"><span class="k">前区号码范围</span><span class="v">01 - 35</span></div>
+    <div class="row"><span class="k">后区号码范围</span><span class="v">01 - 12</span></div>
+    <button type="button" style="width:100%;margin-top:10px;padding:10px;background:#4493f8;color:#fff;border:none;border-radius:8px;font-size:14px;cursor:pointer" onclick="fetchLotteryData()">🔄 抓取最新开奖号码</button>
+  </div>`;
+  
+  // ── 最近开奖结果 ──
+  html += `<div class="section-title">最近开奖结果</div>`;
+  html += `<div class="card">`;
+  recent.forEach((item, i) => {
+    const front = item.front?.map(n => String(n).padStart(2, '0')).join(' ') || '-';
+    const back = item.back?.map(n => String(n).padStart(2, '0')).join(' ') || '-';
+    html += `<div class="row" style="${i > 0 ? 'border-top:1px solid var(--line);margin-top:8px;padding-top:8px' : ''}">
+      <span class="k" style="width:100px">${item.issue || '未知期'}</span>
+      <span style="font-size:18px;font-weight:700;color:var(--accent2)">${front}</span>
+      <span style="color:var(--muted)">+</span>
+      <span style="font-size:18px;font-weight:700;color:#f85149">${back}</span>
+      <span style="color:var(--muted);font-size:12px">${item.date || ''}</span>
+    </div>`;
+  });
+  html += `</div>`;
+  
+  // ── 前区号码频率 ──
+  html += `<div class="section-title">前区号码频率统计（Top10）</div>`;
+  html += `<div class="card">`;
+  const frontFreq = stats.front_frequency || {};
+  const sortedFrontFreq = Object.entries(frontFreq).sort((a, b) => b[1] - a[1]).slice(0, 10);
+  const maxFrontFreq = Math.max(...Object.values(frontFreq), 1);
+  sortedFrontFreq.forEach(([num, count]) => {
+    const percent = (count / maxFrontFreq * 100).toFixed(0);
+    html += `<div class="zhixuan">
+      <span class="rank">${String(num).padStart(2, '0')}</span>
+      <span class="num">${count}次</span>
+      <span class="bar"><i style="width:${percent}%"></i></span>
+      <span class="score">${percent}%</span>
+    </div>`;
+  });
+  html += `</div>`;
+  
+  // ── 后区号码频率 ──
+  html += `<div class="section-title">后区号码频率统计</div>`;
+  html += `<div class="card">`;
+  const backFreq = stats.back_frequency || {};
+  const sortedBackFreq = Object.entries(backFreq).sort((a, b) => b[1] - a[1]);
+  const maxBackFreq = Math.max(...Object.values(backFreq), 1);
+  sortedBackFreq.forEach(([num, count]) => {
+    const percent = (count / maxBackFreq * 100).toFixed(0);
+    html += `<div class="zhixuan">
+      <span class="rank">${String(num).padStart(2, '0')}</span>
+      <span class="num">${count}次</span>
+      <span class="bar"><i style="width:${percent}%"></i></span>
+      <span class="score">${percent}%</span>
+    </div>`;
+  });
+  html += `</div>`;
+  
+  // ── 热冷号 ──
+  html += `<div class="section-title">热冷号分析</div>`;
+  html += `<div class="card">`;
+  const hotFront = stats.hot_front || [];
+  const coldFront = stats.cold_front || [];
+  const hotBack = stats.hot_back || [];
+  const coldBack = stats.cold_back || [];
+  html += `<div class="row"><span class="k">🔥 前区热门</span><span class="v">${hotFront.map(x => String(x).padStart(2, '0')).join(' · ')}</span></div>`;
+  html += `<div class="row"><span class="k">❄ 前区冷门</span><span class="v">${coldFront.map(x => String(x).padStart(2, '0')).join(' · ')}</span></div>`;
+  html += `<div class="row"><span class="k">🔥 后区热门</span><span class="v">${hotBack.map(x => String(x).padStart(2, '0')).join(' · ')}</span></div>`;
+  html += `<div class="row"><span class="k">❄ 后区冷门</span><span class="v">${coldBack.map(x => String(x).padStart(2, '0')).join(' · ')}</span></div>`;
+  html += `</div>`;
+  
+  // ── 和值分析 ──
+  html += `<div class="section-title">前区和值分析</div>`;
+  html += `<div class="card">`;
+  const sumAnal = stats.sum_analysis || {};
+  html += `<div class="row"><span class="k">和值范围</span><span class="v">${sumAnal.min || 0} ~ ${sumAnal.max || 0}</span></div>`;
+  html += `<div class="row"><span class="k">平均和值</span><span class="v">${sumAnal.avg || 0}</span></div>`;
+  html += `<div class="row"><span class="k">热门和值</span><span class="v">${(sumAnal.most_common || []).map(x => x[0] + '(' + x[1] + ')').join(' · ') || '无'}</span></div>`;
+  html += `</div>`;
+  
+  // ── 奇偶/大小/012路 ──
+  html += `<div class="section-title">形态分析</div>`;
+  html += `<div class="card">`;
+  const oddEven = stats.odd_even_analysis || {};
+  const size = stats.size_analysis || {};
+  const road = stats.road_analysis || {};
+  html += `<div class="row"><span class="k">奇偶分布</span><span class="v">${Object.entries(oddEven.distribution || {}).map(([k, v]) => k + ':' + v).join(' · ') || '无'}</span></div>`;
+  html += `<div class="row"><span class="k">大小分布</span><span class="v">${Object.entries(size.distribution || {}).map(([k, v]) => k + ':' + v).join(' · ') || '无'}</span></div>`;
+  html += `<div class="row"><span class="k">012路</span><span class="v">0路(${road.total?.[0] || 0}) · 1路(${road.total?.[1] || 0}) · 2路(${road.total?.[2] || 0})</span></div>`;
+  html += `</div>`;
+  
+  // ── 快速推荐 ──
+  html += `<div class="section-title">🎯 快速推荐</div>`;
+  html += `<div id="lottery-recommend"></div>`;
+  
+  // ── 排名模型 TOP10 ──
+  html += `<div class="section-title">🏆 排名模型（Top-10）</div>`;
+  html += `<div class="card">
+    <div class="note" style="margin-bottom:8px">基于频率、遗漏、位置、012路综合评分</div>
+    <div id="lottery-rank-result" style="display:none">
+      <div class="section-title" style="font-size:13px;margin:12px 0 8px">前区排名</div>
+      <div class="digit-grid" style="grid-template-columns:repeat(5,1fr)">
+        <div class="digit-cell"><div class="d">1</div><div class="s">-</div></div>
+        <div class="digit-cell"><div class="d">2</div><div class="s">-</div></div>
+        <div class="digit-cell"><div class="d">3</div><div class="s">-</div></div>
+        <div class="digit-cell"><div class="d">4</div><div class="s">-</div></div>
+        <div class="digit-cell"><div class="d">5</div><div class="s">-</div></div>
+        <div class="digit-cell"><div class="d">6</div><div class="s">-</div></div>
+        <div class="digit-cell"><div class="d">7</div><div class="s">-</div></div>
+        <div class="digit-cell"><div class="d">8</div><div class="s">-</div></div>
+        <div class="digit-cell"><div class="d">9</div><div class="s">-</div></div>
+        <div class="digit-cell"><div class="d">10</div><div class="s">-</div></div>
+      </div>
+      <div class="section-title" style="font-size:13px;margin:12px 0 8px">后区排名</div>
+      <div class="digit-grid" style="grid-template-columns:repeat(6,1fr)">
+        <div class="digit-cell"><div class="d">1</div><div class="s">-</div></div>
+        <div class="digit-cell"><div class="d">2</div><div class="s">-</div></div>
+        <div class="digit-cell"><div class="d">3</div><div class="s">-</div></div>
+        <div class="digit-cell"><div class="d">4</div><div class="s">-</div></div>
+        <div class="digit-cell"><div class="d">5</div><div class="s">-</div></div>
+        <div class="digit-cell"><div class="d">6</div><div class="s">-</div></div>
+      </div>
+    </div>
+    <button type="button" style="width:100%;padding:10px;background:var(--card2);color:var(--text);border:1px solid var(--line);border-radius:8px;font-size:14px;cursor:pointer" onclick="getLotteryRank()">📊 获取排名</button>
+  </div>`;
+  
+  // ── 周期状态识别 ──
+  html += `<div class="section-title">🔄 周期与状态识别</div>`;
+  html += `<div class="card">
+    <div id="lottery-cycles-result">
+      <div class="row"><span class="k">🔥 前区热门</span><span class="v">-</span></div>
+      <div class="row"><span class="k">❄ 前区冷门</span><span class="v">-</span></div>
+      <div class="row"><span class="k">🔥 后区热门</span><span class="v">-</span></div>
+      <div class="row"><span class="k">❄ 后区冷门</span><span class="v">-</span></div>
+    </div>
+    <button type="button" style="width:100%;margin-top:10px;padding:10px;background:var(--card2);color:var(--text);border:1px solid var(--line);border-radius:8px;font-size:14px;cursor:pointer" onclick="getLotteryCycles()">🔍 分析周期</button>
+  </div>`;
+  
+  // ── 特征贡献度 ──
+  html += `<div class="section-title">📊 特征贡献度分析</div>`;
+  html += `<div class="card">
+    <div id="lottery-contribution-result">
+      <div class="row"><span class="k">频率特征</span><span class="v">-</span></div>
+      <div class="row"><span class="k">遗漏特征</span><span class="v">-</span></div>
+      <div class="row"><span class="k">位置特征</span><span class="v">-</span></div>
+      <div class="row"><span class="k">012路特征</span><span class="v">-</span></div>
+    </div>
+    <button type="button" style="width:100%;margin-top:10px;padding:10px;background:var(--card2);color:var(--text);border:1px solid var(--line);border-radius:8px;font-size:14px;cursor:pointer" onclick="getLotteryContribution()">📈 分析贡献度</button>
+  </div>`;
+  
+  // ── 多模型集成投票 ──
+  html += `<div class="section-title">🤝 多模型集成投票</div>`;
+  html += `<div class="card">
+    <div id="lottery-ensemble-result" style="display:none">
+      <div class="highlight">
+        <div class="big">-</div>
+        <div class="sub">投票策略</div>
+      </div>
+    </div>
+    <button type="button" style="width:100%;padding:10px;background:var(--card2);color:var(--text);border:1px solid var(--line);border-radius:8px;font-size:14px;cursor:pointer" onclick="getLotteryEnsemble()">🗳️ 启动投票</button>
+  </div>`;
+  
+  appLottery.innerHTML = html;
+  
+  // 自动加载快速推荐
+  getLotteryRecommend();
+}
+
+async function getLotteryRecommend() {
+  const recommendDiv = document.getElementById('lottery-recommend');
+  recommendDiv.innerHTML = `<div class="status"><span class="spinner"></span>正在生成推荐…</div>`;
+  try {
+    const data = await fetchJson('/api/lottery/recommend?_=' + Date.now());
+    if (data.error) {
+      recommendDiv.innerHTML = `<div class="status error">✗ ${esc(data.error)}</div>`;
+      return;
+    }
+    const result = data.result || {};
+    const recommendations = result.recommendations || [];
+    
+    let html = `<div class="card">`;
+    html += `<div class="note" style="margin-bottom:8px">推荐策略：${result.method || 'balanced'} · 共 ${recommendations.length} 组</div>`;
+    
+    recommendations.forEach((rec, idx) => {
+      const front = (rec.front || []).map(n => String(n).padStart(2, '0')).join(' ');
+      const back = (rec.back || []).map(n => String(n).padStart(2, '0')).join(' ');
+      html += `<div class="highlight" style="margin-bottom:8px">
+        <div style="display:flex;justify-content:center;align-items:center;gap:12px">
+          <span style="font-size:12px;color:var(--muted)">${idx + 1}.</span>
+          <span class="big" style="letter-spacing:4px">${front}</span>
+          <span style="color:var(--muted);font-size:24px">+</span>
+          <span class="big" style="letter-spacing:4px;color:#f85149">${back}</span>
+        </div>
+      </div>`;
+    });
+    
+    html += `</div>`;
+    recommendDiv.innerHTML = html;
+  } catch (e) {
+    recommendDiv.innerHTML = `<div class="status error">推荐失败：${esc(e.message)}</div>`;
+  }
+}
+
+async function getLotteryRank() {
+  const rankDiv = document.getElementById('lottery-rank-result');
+  rankDiv.style.display = 'none';
+  try {
+    const data = await fetchJson('/api/lottery/rank?top_n=10');
+    if (data.error) {
+      rankDiv.innerHTML = `<div class="status error">✗ ${esc(data.error)}</div>`;
+      rankDiv.style.display = 'block';
+      return;
+    }
+    const result = data.result || {};
+    
+    let html = '';
+    
+    // 前区排名
+    html += `<div class="section-title" style="font-size:13px;margin:12px 0 8px">前区排名</div>`;
+    html += `<div class="digit-grid" style="grid-template-columns:repeat(5,1fr)">`;
+    (result.front_ranked || []).forEach((item, idx) => {
+      html += `<div class="digit-cell"><div class="d">${String(item.number).padStart(2, '0')}</div><div class="s">${item.score.toFixed(2)}</div></div>`;
+    });
+    html += `</div>`;
+    
+    // 后区排名
+    html += `<div class="section-title" style="font-size:13px;margin:12px 0 8px">后区排名</div>`;
+    html += `<div class="digit-grid" style="grid-template-columns:repeat(6,1fr)">`;
+    (result.back_ranked || []).forEach((item, idx) => {
+      html += `<div class="digit-cell"><div class="d">${String(item.number).padStart(2, '0')}</div><div class="s">${item.score.toFixed(2)}</div></div>`;
+    });
+    html += `</div>`;
+    
+    rankDiv.innerHTML = html;
+    rankDiv.style.display = 'block';
+  } catch (e) {
+    rankDiv.innerHTML = `<div class="status error">获取排名失败：${esc(e.message)}</div>`;
+    rankDiv.style.display = 'block';
+  }
+}
+
+async function getLotteryCycles() {
+  const cyclesDiv = document.getElementById('lottery-cycles-result');
+  cyclesDiv.innerHTML = `<div class="status"><span class="spinner"></span>正在分析周期…</div>`;
+  try {
+    const data = await fetchJson('/api/lottery/cycles');
+    if (data.error) {
+      cyclesDiv.innerHTML = `<div class="status error">✗ ${esc(data.error)}</div>`;
+      return;
+    }
+    const result = data.result || {};
+    
+    let html = '';
+    html += `<div class="row"><span class="k">🔥 前区热门</span><span class="v">${(result.hot_front || []).map(x => String(x).padStart(2, '0')).join(' · ') || '-'}</span></div>`;
+    html += `<div class="row"><span class="k">❄ 前区冷门</span><span class="v">${(result.cold_front || []).map(x => String(x).padStart(2, '0')).join(' · ') || '-'}</span></div>`;
+    html += `<div class="row"><span class="k">📈 前区升温</span><span class="v">${(result.rising_front || []).map(x => String(x).padStart(2, '0')).join(' · ') || '-'}</span></div>`;
+    html += `<div class="row"><span class="k">📉 前区降温</span><span class="v">${(result.falling_front || []).map(x => String(x).padStart(2, '0')).join(' · ') || '-'}</span></div>`;
+    html += `<div class="row"><span class="k">🔥 后区热门</span><span class="v">${(result.hot_back || []).map(x => String(x).padStart(2, '0')).join(' · ') || '-'}</span></div>`;
+    html += `<div class="row"><span class="k">❄ 后区冷门</span><span class="v">${(result.cold_back || []).map(x => String(x).padStart(2, '0')).join(' · ') || '-'}</span></div>`;
+    html += `<div class="row"><span class="k">📈 后区升温</span><span class="v">${(result.rising_back || []).map(x => String(x).padStart(2, '0')).join(' · ') || '-'}</span></div>`;
+    html += `<div class="row"><span class="k">📉 后区降温</span><span class="v">${(result.falling_back || []).map(x => String(x).padStart(2, '0')).join(' · ') || '-'}</span></div>`;
+    
+    cyclesDiv.innerHTML = html;
+  } catch (e) {
+    cyclesDiv.innerHTML = `<div class="status error">分析周期失败：${esc(e.message)}</div>`;
+  }
+}
+
+async function getLotteryContribution() {
+  const contribDiv = document.getElementById('lottery-contribution-result');
+  contribDiv.innerHTML = `<div class="status"><span class="spinner"></span>正在分析贡献度…</div>`;
+  try {
+    const data = await fetchJson('/api/lottery/contribution');
+    if (data.error) {
+      contribDiv.innerHTML = `<div class="status error">✗ ${esc(data.error)}</div>`;
+      return;
+    }
+    const result = data.result || {};
+    const weights = result.weights || {};
+    
+    let html = '';
+    html += `<div class="row"><span class="k">频率特征</span><span class="v">权重: ${(weights.frequency || 0).toFixed(3)}</span></div>`;
+    html += `<div class="row"><span class="k">遗漏特征</span><span class="v">权重: ${(weights.gap || 0).toFixed(3)}</span></div>`;
+    html += `<div class="row"><span class="k">位置特征</span><span class="v">权重: ${(weights.position || 0).toFixed(3)}</span></div>`;
+    html += `<div class="row"><span class="k">012路特征</span><span class="v">权重: ${(weights.road || 0).toFixed(3)}</span></div>`;
+    
+    // 特征重要性条形图
+    html += `<div class="section-title" style="font-size:13px;margin:12px 0 8px">特征重要性</div>`;
+    const maxWeight = Math.max(...Object.values(weights), 1);
+    for (const [name, weight] of Object.entries(weights)) {
+      const percent = (weight / maxWeight * 100).toFixed(0);
+      const label = { frequency: '频率', gap: '遗漏', position: '位置', road: '012路' }[name] || name;
+      html += `<div class="zhixuan">
+        <span class="rank">${label}</span>
+        <span class="num">${weight.toFixed(3)}</span>
+        <span class="bar"><i style="width:${percent}%"></i></span>
+        <span class="score">${percent}%</span>
+      </div>`;
+    }
+    
+    contribDiv.innerHTML = html;
+  } catch (e) {
+    contribDiv.innerHTML = `<div class="status error">分析贡献度失败：${esc(e.message)}</div>`;
+  }
+}
+
+async function getLotteryEnsemble() {
+  const ensembleDiv = document.getElementById('lottery-ensemble-result');
+  ensembleDiv.style.display = 'block';
+  ensembleDiv.innerHTML = `<div class="status"><span class="spinner"></span>正在进行多模型集成投票…</div>`;
+  try {
+    const data = await fetchJson('/api/lottery/ensemble?method=voting');
+    if (data.error) {
+      ensembleDiv.innerHTML = `<div class="status error">✗ ${esc(data.error)}</div>`;
+      return;
+    }
+    const result = data.result || {};
+    const front = (result.front || []).map(n => String(n).padStart(2, '0')).join(' ');
+    const back = (result.back || []).map(n => String(n).padStart(2, '0')).join(' ');
+    
+    let html = '';
+    
+    // 预测号码
+    html += `<div class="highlight">
+      <div style="display:flex;justify-content:center;align-items:center;gap:12px">
+        <span class="big" style="letter-spacing:4px">${front}</span>
+        <span style="color:var(--muted);font-size:24px">+</span>
+        <span class="big" style="letter-spacing:4px;color:#f85149">${back}</span>
+      </div>
+      <div class="sub">投票策略：${result.method || 'voting'}</div>
+    </div>`;
+    
+    // 候选号码
+    if (result.front_candidates?.length || result.back_candidates?.length) {
+      html += `<div class="section-title" style="font-size:13px;margin:12px 0 8px">候选号码</div>`;
+      html += `<div class="card">`;
+      if (result.front_candidates?.length) {
+        html += `<div class="row"><span class="k">前区候选</span><span class="v">${result.front_candidates.slice(0, 8).map(x => String(x.number).padStart(2, '0') + '(' + x.score.toFixed(2) + ')').join(' · ')}</span></div>`;
+      }
+      if (result.back_candidates?.length) {
+        html += `<div class="row"><span class="k">后区候选</span><span class="v">${result.back_candidates.slice(0, 6).map(x => String(x.number).padStart(2, '0') + '(' + x.score.toFixed(2) + ')').join(' · ')}</span></div>`;
+      }
+      html += `</div>`;
+    }
+    
+    // 周期状态
+    if (result.cycle_info) {
+      const ci = result.cycle_info;
+      html += `<div class="section-title" style="font-size:13px;margin:12px 0 8px">周期状态</div>`;
+      html += `<div class="blend-row">`;
+      if (ci.hot_front?.length) html += `<span>🔥前区热门: ${ci.hot_front.map(x => String(x).padStart(2, '0')).join(' ')}</span>`;
+      if (ci.hot_back?.length) html += `<span>🔥后区热门: ${ci.hot_back.map(x => String(x).padStart(2, '0')).join(' ')}</span>`;
+      html += `</div>`;
+    }
+    
+    ensembleDiv.innerHTML = html;
+  } catch (e) {
+    ensembleDiv.innerHTML = `<div class="status error">集成投票失败：${esc(e.message)}</div>`;
+  }
+}
+
+async function fetchLotteryData() {
+  const appLottery = document.getElementById('app-lottery');
+  const originalContent = appLottery.innerHTML;
+  
+  appLottery.innerHTML = `<div class="status"><span class="spinner"></span>正在抓取最新开奖号码…</div>`;
+  
+  try {
+    const data = await fetchJson('/api/lottery/fetch');
+    if (data.error) {
+      appLottery.innerHTML = `<div class="status error">✗ ${esc(data.error)}</div>`;
+      return;
+    }
+    
+    const result = data.result || {};
+    const success = result.success || false;
+    const message = result.message || '';
+    const latestIssue = result.latest_issue || '';
+    
+    // 重新加载页面
+    lotteryLoaded = false;
+    await loadLottery();
+    
+    // 显示抓取结果提示
+    const toast = document.createElement('div');
+    toast.style.cssText = `
+      position: fixed;
+      bottom: 30px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: ${success ? '#2ea043' : '#f85149'};
+      color: white;
+      padding: 12px 24px;
+      border-radius: 8px;
+      font-size: 14px;
+      z-index: 1000;
+      animation: fadeInUp 0.3s ease;
+    `;
+    toast.innerHTML = `${success ? '✅' : '❌'} ${message}${latestIssue ? ' · 最新期号: ' + latestIssue : ''}`;
+    document.body.appendChild(toast);
+    
+    setTimeout(() => {
+      toast.style.animation = 'fadeOutDown 0.3s ease';
+      setTimeout(() => toast.remove(), 300);
+    }, 3000);
+  } catch (e) {
+    appLottery.innerHTML = `<div class="status error">抓取失败：${esc(e.message)}</div>`;
+    setTimeout(() => {
+      appLottery.innerHTML = originalContent;
+    }, 2000);
+  }
+}
+
 function initPage() {
   const hash = location.hash.replace('#', '');
-  switchTab(hash === '3d' ? 'lottery3d' : hash === 'pailie5' ? 'pailie5' : 'football');
+  switchTab(hash === '3d' ? 'lottery3d' : hash === 'pailie5' ? 'pailie5' : hash === 'lottery' ? 'lottery' : 'football');
 }
 
 initPage();
