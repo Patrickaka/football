@@ -27,7 +27,8 @@ from typing import Dict, Optional, Tuple, Any
 logger = logging.getLogger(__name__)
 
 # ELO 配置
-ELO_FILE = 'elo_ratings.json'
+from ..common.paths import data_path
+ELO_FILE = data_path('elo_ratings.json')
 INITIAL_ELO = 1500
 HOME_ADVANTAGE = 50
 

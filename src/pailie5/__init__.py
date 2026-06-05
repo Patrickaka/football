@@ -29,10 +29,12 @@ import urllib.error
 from typing import Dict, List, Tuple, Optional
 from datetime import datetime, timedelta
 
+from ..common.paths import data_path
+
 logger = logging.getLogger(__name__)
 
 # 配置
-DATA_FILE = 'pailie5_history.json'
+DATA_FILE = data_path('pailie5_history.json')
 # 排列五历史数据接口（参考福彩3D使用的网站，游戏ID为5）
 HISTORY_URL = 'https://www.8300.cn/kjhhis/5/200.html'
 NUMBERS = list(range(0, 10))  # 0-9

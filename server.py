@@ -27,31 +27,27 @@ from src.football import fetch_match_list, analyze_match
 from src.lottery3d import run_prediction
 from src.lottery3d.ml import fetch_data, predict_current, N_TREES
 from src.pailie5 import get_pailie5_analyzer
-from src.lottery_lottery import get_lottery_analyzer
-from src.logger import setup_logger
+from src.lottery import get_lottery_analyzer
+from src.common.logger import setup_logger
 
 # 回测模块（延迟导入以加速启动）
 backtest = None
-hyperopt = None
 dynamic_threshold = None
 
 def _import_backtest_modules():
     """延迟导入回测相关模块"""
-    global backtest, hyperopt, dynamic_threshold
+    global backtest, dynamic_threshold
     if backtest is None:
-        import backtest as bt
+        from src.common import backtest as bt
         backtest = bt
-    if hyperopt is None:
-        import hyperopt as ho
-        hyperopt = ho
     if dynamic_threshold is None:
-        import dynamic_threshold as dt
+        from src.common import dynamic_threshold as dt
         dynamic_threshold = dt
 
 log = setup_logger('server')
 
 _ROOT = Path(__file__).parent
-INDEX_FILE = _ROOT / 'index.html'
+INDEX_FILE = _ROOT / 'web' / 'index.html'
 
 sys.stdout.reconfigure(encoding='utf-8')
 

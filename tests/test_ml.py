@@ -1,8 +1,9 @@
 # 测试 ML API
 import sys
-sys.path.insert(0, 'd:/devcode/pythoncode/football')
+import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import lottery3d_ml
+import src.lottery3d.ml as lottery3d_ml
 
 print("测试 ML 预测...")
 

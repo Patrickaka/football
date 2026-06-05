@@ -12,10 +12,12 @@ from collections import deque
 from typing import Dict, Any, Optional
 from datetime import datetime
 
+from src.common.paths import data_path
+
 logger = logging.getLogger(__name__)
 
 # 阈值配置存储路径
-THRESHOLD_CONFIG_PATH = 'dynamic_threshold_config.json'
+THRESHOLD_CONFIG_PATH = data_path('dynamic_threshold_config.json')
 
 
 class DynamicThresholdManager:

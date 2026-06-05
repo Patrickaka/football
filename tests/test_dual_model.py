@@ -1,8 +1,9 @@
 # 测试双模型预测
 import sys
-sys.path.insert(0, 'd:/devcode/pythoncode/football')
+import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import lottery3d_ml as ml
+import src.lottery3d.ml as ml
 
 print("=" * 70)
 print("福彩 3D ML 预测 - 双模型测试")

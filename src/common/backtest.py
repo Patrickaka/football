@@ -16,15 +16,16 @@ from typing import Dict, List, Tuple, Optional, Any
 
 import numpy as np
 
-from football import (
+from src.football import (
     analyze_match, fetch_ouzhi, resolve_league_profile,
     CONFIDENCE_LOW_THRESHOLD, CONFIDENCE_HIGH_THRESHOLD
 )
+from src.common.paths import DATA_DIR
 
 logger = logging.getLogger(__name__)
 
 # 回测数据存储目录
-BACKTEST_DATA_DIR = 'backtest_data'
+BACKTEST_DATA_DIR = str(DATA_DIR / 'backtest_data')
 os.makedirs(BACKTEST_DATA_DIR, exist_ok=True)
 
 

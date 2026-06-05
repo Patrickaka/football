@@ -2,9 +2,10 @@
 # 对比纯 Python 实现 vs LightGBM/XGBoost
 
 import sys
-sys.path.insert(0, 'd:/devcode/pythoncode/football')
+import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import lottery3d_ml as ml_pure
+import src.lottery3d.ml as ml_pure
 import random
 import math
 from collections import Counter, defaultdict

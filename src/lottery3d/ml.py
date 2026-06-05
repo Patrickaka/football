@@ -25,7 +25,7 @@ import sys
 import urllib.request
 from collections import Counter, defaultdict
 from itertools import combinations, product
-from logger import setup_logger
+from ..common.logger import setup_logger
 
 log = setup_logger('lottery3d_ml')
 

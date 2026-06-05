@@ -2,7 +2,9 @@
 # -*- coding: utf-8 -*-
 """测试排列五新功能 - 排名模型、特征贡献度、多模型集成投票、周期识别"""
 
-import pailie5
+import os, sys
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import src.pailie5 as pailie5
 
 def main():
     analyzer = pailie5.get_pailie5_analyzer()

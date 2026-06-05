@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-import football
+import src.football as football
 
 
 def _mini_asian(hcap=0.75, hp=0.56):

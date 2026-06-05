@@ -9,7 +9,7 @@ import urllib.request
 from collections import Counter, defaultdict
 from contextlib import contextmanager
 from itertools import combinations, product
-from logger import setup_logger
+from ..common.logger import setup_logger
 
 log = setup_logger('lottery3d')
 

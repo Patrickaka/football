@@ -16,7 +16,7 @@ import json
 import urllib.request
 import urllib.error
 import random
-from ..logger import setup_logger
+from ..common.logger import setup_logger
 
 # ELO 评分系统（延迟导入）
 try:

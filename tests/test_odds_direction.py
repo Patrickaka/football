@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-import football
+import src.football as football
 
 
 def test_ouzhi_json_first_is_close():

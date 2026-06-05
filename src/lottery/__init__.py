@@ -23,12 +23,8 @@ from collections import defaultdict
 from typing import Dict, List, Tuple, Any, Optional
 
 # 导入公共日志模块
-try:
-    from ..logger import setup_logger
-except ImportError:
-    import sys
-    sys.path.insert(0, '../')
-    from logger import setup_logger
+from ..common.logger import setup_logger
+from ..common.paths import data_path
 
 log = setup_logger('lottery')
 
@@ -46,8 +42,8 @@ FEATURE_WEIGHTS = {
 class LotteryAnalyzer:
     """大乐透分析器"""
     
-    def __init__(self, history_file: str = 'lottery_history.json'):
-        self.history_file = history_file
+    def __init__(self, history_file: Optional[str] = None):
+        self.history_file = history_file or data_path('lottery_history.json')
         self.history_data = self._load_history()
         self.statistics = {}
         self.update_statistics()

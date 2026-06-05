@@ -14,5 +14,12 @@ venv/
 # 日志
 logs/
 
-# ELO 评分数据
+# 运行时生成的数据（data/ 下）
 elo_ratings.json
+data/elo_ratings.json
+data/backtest_data/
+data/dynamic_threshold_config.json
+
+# 运行时动态写入的历史缓存（可从网络重抓）
+data/lottery_history.json
+data/pailie5_history.json

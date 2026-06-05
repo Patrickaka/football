@@ -8,7 +8,9 @@ from pathlib import Path
 
 LOG_LEVEL = os.environ.get('FOOTBALL_LOG_LEVEL', 'INFO').upper()
 
-LOG_DIR = Path(os.environ.get('FOOTBALL_LOG_DIR', Path(__file__).parent / 'logs'))
+# 日志统一写到项目根 logs/，不随本模块所在目录漂移
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+LOG_DIR = Path(os.environ.get('FOOTBALL_LOG_DIR', _PROJECT_ROOT / 'logs'))
 
 _FORMATTER = logging.Formatter(
     '%(asctime)s [%(levelname)-5s] %(name)s: %(message)s',
