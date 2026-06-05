@@ -185,6 +185,23 @@
   .htf-bar > i { display: block; height: 100%; background: var(--accent); }
   .htf-pct { font-size: 13px; font-weight: 600; color: var(--accent2); }
 
+  /* 进球数推荐样式 */
+  .goal-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
+  .goal-item { background: var(--card2); border-radius: 12px; padding: 14px; text-align: center; position: relative; }
+  .goal-item.top { border: 2px solid var(--accent); background: rgba(46, 160, 67, 0.08); }
+  .goal-rank { position: absolute; top: -8px; right: -8px; width: 24px; height: 24px; background: var(--accent); color: white; border-radius: 50%; font-size: 12px; font-weight: 700; display: flex; align-items: center; justify-content: center; }
+  .goal-label { font-size: 20px; font-weight: 700; color: var(--text); margin-bottom: 8px; }
+  .goal-bar { height: 8px; background: var(--card); border-radius: 4px; overflow: hidden; margin-bottom: 6px; }
+  .goal-bar > i { display: block; height: 100%; background: linear-gradient(90deg, var(--accent), var(--accent2)); }
+  .goal-pct { font-size: 14px; font-weight: 600; color: var(--accent2); }
+  
+  .goal-dist { margin-top: 8px; }
+  .goal-dist-item { display: flex; align-items: center; margin-bottom: 6px; }
+  .goal-dist-label { width: 36px; font-size: 12px; color: var(--muted); }
+  .goal-dist-bar-wrap { flex: 1; height: 6px; background: var(--card); border-radius: 3px; overflow: hidden; margin: 0 10px; }
+  .goal-dist-bar { height: 100%; background: var(--accent); border-radius: 3px; }
+  .goal-dist-pct { width: 40px; font-size: 12px; color: var(--text); text-align: right; }
+
   .kelly-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px;
     margin: 10px 0 8px; font-size: 13px; text-align: center; }
   .kelly-cell { background: var(--card2); border-radius: 8px; padding: 8px 4px; }
@@ -634,6 +651,47 @@ function renderResult(r) {
     html += `<div style="font-size:12px;color:var(--muted);margin-top:12px;padding-top:8px;border-top:1px solid var(--line)">
       注：H=主胜, D=平, A=客胜。如 HH 表示半场主队领先且全场主队获胜
     </div>`;
+    html += `</div>`;
+  }
+
+  // 进球数推荐
+  const goalCount = md && md.goal_count ? md.goal_count : null;
+  if (goalCount && goalCount.recommendations && goalCount.recommendations.length > 0) {
+    html += `<h3 style="color:var(--accent2);font-size:15px;margin:18px 0 10px">⚽ 进球数推荐</h3>`;
+    html += `<div class="card">`;
+    html += `<div class="goal-grid">`;
+    goalCount.recommendations.forEach((item, index) => {
+      const prob = (item.probability * 100).toFixed(1);
+      const isTop = index === 0;
+      html += `<div class="goal-item ${isTop ? 'top' : ''}">
+        <div class="goal-rank">${index + 1}</div>
+        <div class="goal-label">${esc(item.label)}</div>
+        <div class="goal-bar">
+          <i style="width:${Math.min(item.probability * 100, 100)}%"></i>
+        </div>
+        <div class="goal-pct">${prob}%</div>
+      </div>`;
+    });
+    html += `</div>`;
+    
+    // 完整分布
+    if (goalCount.distribution && goalCount.distribution.length > 0) {
+      html += `<div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--line)">`;
+      html += `<div style="font-size:13px;color:var(--muted);margin-bottom:8px">进球数分布</div>`;
+      html += `<div class="goal-dist">`;
+      goalCount.distribution.forEach(item => {
+        html += `<div class="goal-dist-item">
+          <span class="goal-dist-label">${esc(item.label)}</span>
+          <div class="goal-dist-bar-wrap">
+            <div class="goal-dist-bar" style="width:${(item.probability * 100).toFixed(1)}%"></div>
+          </div>
+          <span class="goal-dist-pct">${item.percentage}</span>
+        </div>`;
+      });
+      html += `</div>`;
+      html += `</div>`;
+    }
+    
     html += `</div>`;
   }
 

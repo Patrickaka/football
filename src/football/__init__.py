@@ -5,6 +5,13 @@
 
 使用方法：
   运行脚本 → 输入主队和客队名称关键词 → 自动匹配比赛 → 抓取赔率 → 分析输出
+
+包含模块：
+  - 泊松分布模型
+  - Dixon-Coles 模型（改进泊松，考虑低比分相关性）
+  - 进球数推荐
+  - 半全场概率计算
+  - ELO 评分系统
 """
 
 import sys
@@ -3169,6 +3176,56 @@ def analyze_match(match):
 
     confidence = compute_prediction_confidence(asian, euro, total, team)
 
+    # 新增：Dixon-Coles 模型预测
+    dixon_coles_result = None
+    try:
+        from .ml import dixon_coles_score_matrix, dixon_coles_1x2_prob
+        dc_matrix = dixon_coles_score_matrix(lam_home, lam_away, max_goals=MAX_GOALS, rho=0.1)
+        dc_1x2 = dixon_coles_1x2_prob(lam_home, lam_away, max_goals=MAX_GOALS, rho=0.1)
+        dixon_coles_result = {
+            'matrix': dc_matrix,
+            '1x2': dc_1x2,
+            'rho': 0.1
+        }
+        log.info(f"Dixon-Coles 模型预测完成: 主胜{dc_1x2['home']:.3f}, 平局{dc_1x2['draw']:.3f}, 客胜{dc_1x2['away']:.3f}")
+    except Exception as e:
+        log.warning(f"Dixon-Coles 模型预测失败: {e}")
+
+    # 新增：机器学习模型预测
+    ml_result = None
+    try:
+        from .ml import MLFootballPredictor
+        ml_predictor = MLFootballPredictor(model_type='auto')
+        # 准备特征
+        ml_features = {
+            'elo_home': team.get('elo_home', 1500) if team else 1500,
+            'elo_away': team.get('elo_away', 1500) if team else 1500,
+            'euro_home': euro['raw_odds']['close']['home'],
+            'euro_draw': euro['raw_odds']['close']['draw'],
+            'euro_away': euro['raw_odds']['close']['away'],
+            'asian_handicap': asian['handicap'],
+            'asian_home_water': asian['close_water']['home'],
+            'asian_away_water': asian['close_water']['away'],
+            'total_line': total['close_line'],
+            'total_over_water': total['close_prob']['over'],
+            'total_under_water': total['close_prob']['under'],
+            'home_attack': team.get('attack_home', 1.3) if team else 1.3,
+            'home_defense': team.get('defense_home', 1.2) if team else 1.2,
+            'away_attack': team.get('attack_away', 1.2) if team else 1.2,
+            'away_defense': team.get('defense_away', 1.3) if team else 1.3,
+            'home_form': team.get('form_home', 0.5) if team else 0.5,
+            'away_form': team.get('form_away', 0.5) if team else 0.5
+        }
+        ml_probs = ml_predictor.predict(ml_features)
+        ml_result = {
+            'probabilities': ml_probs,
+            'model_type': ml_predictor.model_type,
+            'is_trained': ml_predictor.is_trained
+        }
+        log.info(f"机器学习模型预测完成: 主胜{ml_probs['home']:.3f}, 平局{ml_probs['draw']:.3f}, 客胜{ml_probs['away']:.3f}")
+    except Exception as e:
+        log.warning(f"机器学习模型预测失败: {e}")
+
     candidates, lam_home, lam_away, meta = predict_scores(
         asian, euro, total, team_strength=team, league_profile=league_profile,
         model_type='negative_binomial',
@@ -3203,7 +3260,16 @@ def analyze_match(match):
 
     # 计算半全场概率
     half_full_time = calculate_half_full_time_probs(candidates, team)
-    
+
+    # 新增：进球数推荐
+    goal_count_result = None
+    try:
+        from .ml import predict_goal_counts_from_candidates
+        goal_count_result = predict_goal_counts_from_candidates(candidates, max_goals=MAX_GOALS)
+        log.info(f"进球数推荐完成: {goal_count_result['recommendations']}")
+    except Exception as e:
+        log.warning(f"进球数推荐失败: {e}")
+
     return {
         'match': {k: match.get(k) for k in ('home', 'away', 'league', 'time', 'match_id', 'num')},
         'league_profile': league_profile,
@@ -3220,6 +3286,9 @@ def analyze_match(match):
             'lam_home': lam_home, 'lam_away': lam_away,
             'top_scores': top_scores, 'recommend': recommend,
             'half_full_time': half_full_time,
+            'goal_count': goal_count_result,
+            'dixon_coles': dixon_coles_result,
+            'ml': ml_result,
             **meta,
         },
     }
