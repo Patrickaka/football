@@ -274,18 +274,82 @@ def fetch_match_list():
                     'match_id': match_id
                 })
 
-    # 提取联赛和时间
-    league_pat = re.compile(r'<a[^>]*href="//liansai\.500\.com/zuqiu-\d+/"[^>]*>([^<]+)</a>')
-    time_pat = re.compile(r'(\d{2}-\d{2}\s+\d{2}:\d{2})')
+    # 提取联赛和时间（通过match_id关联）
+    # 创建 match_id -> time 的映射（基于表格行结构）
+    match_time_map = {}
+    
+    # 基于表格行结构的匹配：<td>时间</td>...<a href="...shuju-ID.shtml">
+    # 时间格式：<td rowspan="2">06-06 13:00</td>
+    time_row_pat = re.compile(
+        r'<td[^>]*?rowspan="2"[^>]*?>(\d{2}-\d{2}\s+\d{2}:\d{2})</td>.*?'
+        r'shuju-(\d+)\.shtml',
+        re.DOTALL
+    )
+    for m in time_row_pat.finditer(html):
+        time_val = m.group(1)
+        match_id = m.group(2)
+        if match_id not in match_time_map:
+            match_time_map[match_id] = time_val
+    
+    # 如果上面的模式没找到，尝试其他模式
+    if not match_time_map:
+        time_patterns = [
+            r'shuju-(\d+)\.shtml.*?(\d{2}-\d{2}\s+\d{2}:\d{2})',
+            r'(\d{2}-\d{2}\s+\d{2}:\d{2}).*?shuju-(\d+)\.shtml',
+        ]
+        for pattern in time_patterns:
+            time_row_pat = re.compile(pattern, re.DOTALL)
+            for m in time_row_pat.finditer(html):
+                if m.group(1).isdigit():
+                    match_id = m.group(1)
+                    time_val = m.group(2)
+                else:
+                    match_id = m.group(2)
+                    time_val = m.group(1)
+                
+                if match_id not in match_time_map:
+                    match_time_map[match_id] = time_val
+    
+    # 创建 match_id -> league 的映射（基于联赛区块结构）
+    match_league_map = {}
+    
+    # 查找所有联赛区块（联赛名称后面跟着该联赛的比赛）
+    # 模式：联赛链接...比赛列表...下一个联赛链接
+    league_blocks = re.split(r'<a[^>]*href="//liansai\.500\.com/zuqiu-\d+/"[^>]*>([^<]+)</a>', html)
+    
+    current_league = ''
+    for i, block in enumerate(league_blocks):
+        if i % 2 == 1:
+            # 这是联赛名称
+            current_league = block.strip()
+        else:
+            # 这是联赛区块内容，提取其中的比赛ID
+            match_ids_in_block = re.findall(r'shuju-(\d+)\.shtml', block)
+            for match_id in match_ids_in_block:
+                if match_id not in match_league_map:
+                    match_league_map[match_id] = current_league
 
-    leagues = league_pat.findall(html)
-    times = time_pat.findall(html)
+    # 将时间和联赛添加到比赛信息中
+    for match in matches:
+        match_id = match['match_id']
+        if match_id in match_time_map:
+            match['time'] = match_time_map[match_id]
+        if match_id in match_league_map:
+            match['league'] = match_league_map[match_id].strip()
 
-    for i, match in enumerate(matches):
-        if i < len(leagues):
-            match['league'] = leagues[i].strip()
-        if i < len(times):
-            match['time'] = times[i]
+    # 如果通过行匹配没有找到时间，则回退到原来的方法
+    if not match_time_map:
+        league_pat = re.compile(r'<a[^>]*href="//liansai\.500\.com/zuqiu-\d+/"[^>]*>([^<]+)</a>')
+        time_pat = re.compile(r'(\d{2}-\d{2}\s+\d{2}:\d{2})')
+
+        leagues = league_pat.findall(html)
+        times = time_pat.findall(html)
+
+        for i, match in enumerate(matches):
+            if 'league' not in match and i < len(leagues):
+                match['league'] = leagues[i].strip()
+            if 'time' not in match and i < len(times):
+                match['time'] = times[i]
 
     log.info('获取到 %d 场比赛', len(matches))
     return matches
@@ -2619,6 +2683,143 @@ def _heat_filter_weight(heat):
     return 1.0
 
 
+def calculate_half_full_time_probs(candidates, team_strength=None):
+    """
+    计算半全场概率。
+    
+    半全场结果共9种：
+    HH - 半胜全胜, HD - 半胜全平, HA - 半胜全负
+    DH - 半平全胜, DD - 半平全平, DA - 半平全负
+    AH - 半负全胜, AD - 半负全平, AA - 半负全负
+    
+    参数:
+        candidates: 比分候选列表，格式为 [((h, a), prob), ...]
+        team_strength: 球队实力数据（可选）
+    
+    返回:
+        dict: 半全场概率字典
+    """
+    # 处理 candidates 格式：支持 ((h, a), prob) 和 (h, a, prob) 两种格式
+    formatted_candidates = []
+    for item in candidates:
+        if len(item) == 2 and isinstance(item[0], tuple):
+            # 格式: ((h, a), prob)
+            (h, a), prob = item
+            formatted_candidates.append((h, a, prob))
+        elif len(item) == 3:
+            # 格式: (h, a, prob)
+            formatted_candidates.append(item)
+    
+    candidates = formatted_candidates
+    
+    # 半场进球期望值（通常是全场的40-45%）
+    half_time_ratio = 0.42
+    
+    # 从比分候选计算全场进球期望
+    total_goals_exp = sum((h + a) * prob for h, a, prob in candidates)
+    half_goals_exp = total_goals_exp * half_time_ratio
+    
+    # 计算主客进球比例
+    home_goals_exp = sum(h * prob for h, a, prob in candidates)
+    away_goals_exp = sum(a * prob for h, a, prob in candidates)
+    
+    if home_goals_exp + away_goals_exp > 0:
+        home_ratio = home_goals_exp / (home_goals_exp + away_goals_exp)
+    else:
+        home_ratio = 0.5
+    
+    # 半场进球期望
+    half_home_exp = half_goals_exp * home_ratio
+    half_away_exp = half_goals_exp * (1 - home_ratio)
+    
+    # 使用泊松分布计算半场各种比分的概率
+    def poisson_prob(lam, k):
+        return (lam ** k) * math.exp(-lam) / math.factorial(k)
+    
+    # 计算半场各种结果的概率
+    half_probs = {}
+    max_half_goals = 3  # 考虑最多3个进球
+    
+    for h in range(max_half_goals + 1):
+        for a in range(max_half_goals + 1):
+            if h + a <= max_half_goals:
+                prob = poisson_prob(half_home_exp, h) * poisson_prob(half_away_exp, a)
+                half_probs[(h, a)] = prob
+    
+    # 归一化半场概率
+    half_total = sum(half_probs.values())
+    if half_total > 0:
+        half_probs = {k: v / half_total for k, v in half_probs.items()}
+    
+    # 计算半全场组合概率
+    htf_probs = {}
+    
+    # 定义半场结果映射
+    def get_half_result(h, a):
+        if h > a:
+            return 'H'
+        elif h < a:
+            return 'A'
+        else:
+            return 'D'
+    
+    # 定义全场结果映射
+    def get_full_result(h, a):
+        if h > a:
+            return 'H'
+        elif h < a:
+            return 'A'
+        else:
+            return 'D'
+    
+    # 计算每种半全场组合的概率
+    for (half_h, half_a), half_prob in half_probs.items():
+        half_res = get_half_result(half_h, half_a)
+        
+        for full_h, full_a, full_prob in candidates:
+            full_res = get_full_result(full_h, full_a)
+            key = f"{half_res}{full_res}"
+            
+            # 考虑逻辑约束：半场比分应该合理地导致全场比分
+            if (full_h >= half_h) and (full_a >= half_a):
+                if key not in htf_probs:
+                    htf_probs[key] = 0
+                htf_probs[key] += half_prob * full_prob
+    
+    # 归一化半全场概率
+    htf_total = sum(htf_probs.values())
+    if htf_total > 0:
+        htf_probs = {k: v / htf_total for k, v in htf_probs.items()}
+    
+    # 添加友好名称
+    htf_names = {
+        'HH': '半胜全胜',
+        'HD': '半胜全平',
+        'HA': '半胜全负',
+        'DH': '半平全胜',
+        'DD': '半平全平',
+        'DA': '半平全负',
+        'AH': '半负全胜',
+        'AD': '半负全平',
+        'AA': '半负全负',
+    }
+    
+    result = []
+    for key in ['HH', 'HD', 'HA', 'DH', 'DD', 'DA', 'AH', 'AD', 'AA']:
+        prob = htf_probs.get(key, 0)
+        result.append({
+            'code': key,
+            'name': htf_names[key],
+            'probability': round(prob * 100, 1),
+            'raw_prob': prob,
+        })
+    
+    # 按概率排序
+    result.sort(key=lambda x: -x['probability'])
+    
+    return result
+
+
 def predict_scores(asian, euro, total, team_strength=None, league_profile=None, 
                    model_type='poisson', enable_draw_calibration=True,
                    enable_calibration=False, calibration_method='platt',
@@ -2992,6 +3193,9 @@ def analyze_match(match):
             'reasons': _recommend_reasons(h, a, asian, euro, total, team, heat=heat),
         })
 
+    # 计算半全场概率
+    half_full_time = calculate_half_full_time_probs(candidates, team)
+    
     return {
         'match': {k: match.get(k) for k in ('home', 'away', 'league', 'time', 'match_id')},
         'league_profile': league_profile,
@@ -3007,6 +3211,7 @@ def analyze_match(match):
         'model': {
             'lam_home': lam_home, 'lam_away': lam_away,
             'top_scores': top_scores, 'recommend': recommend,
+            'half_full_time': half_full_time,
             **meta,
         },
     }

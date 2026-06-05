@@ -19,13 +19,31 @@ _FORMATTER = logging.Formatter(
 _FILE_HANDLER = None
 
 
+class _SafeTimedRotatingFileHandler(logging.handlers.TimedRotatingFileHandler):
+    """安全的TimedRotatingFileHandler，在Windows文件占用时忽略轮转错误"""
+    
+    def doRollover(self):
+        try:
+            super().doRollover()
+        except PermissionError:
+            # 文件被其他进程占用，跳过本轮轮转
+            pass
+
+    def rotate(self, source, dest):
+        try:
+            super().rotate(source, dest)
+        except PermissionError:
+            # 文件被占用，跳过轮转
+            pass
+
+
 def _ensure_file_handler():
     global _FILE_HANDLER
     if _FILE_HANDLER is not None:
         return _FILE_HANDLER
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     log_file = str(LOG_DIR / 'football.log')
-    _FILE_HANDLER = logging.handlers.TimedRotatingFileHandler(
+    _FILE_HANDLER = _SafeTimedRotatingFileHandler(
         log_file, when='H', interval=1, backupCount=24, encoding='utf-8',
     )
     _FILE_HANDLER.setFormatter(_FORMATTER)

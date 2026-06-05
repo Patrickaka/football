@@ -157,6 +157,17 @@
   .rec .reasons span { display: inline-block; background: var(--card2);
     border-radius: 20px; padding: 2px 10px; margin: 3px 4px 0 0; }
 
+  /* 半全场分析样式 */
+  .htf-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+  .htf-item { background: var(--card2); border-radius: 10px; padding: 10px; text-align: center; }
+  .htf-item.high { border: 1px solid var(--accent); background: rgba(46, 160, 67, 0.1); }
+  .htf-item.medium { border: 1px solid var(--warn); background: rgba(210, 153, 34, 0.1); }
+  .htf-code { font-size: 18px; font-weight: 700; color: var(--text); margin-bottom: 4px; }
+  .htf-name { font-size: 12px; color: var(--muted); margin-bottom: 8px; }
+  .htf-bar { height: 6px; background: var(--card); border-radius: 3px; overflow: hidden; margin-bottom: 4px; }
+  .htf-bar > i { display: block; height: 100%; background: var(--accent); }
+  .htf-pct { font-size: 13px; font-weight: 600; color: var(--accent2); }
+
   .kelly-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px;
     margin: 10px 0 8px; font-size: 13px; text-align: center; }
   .kelly-cell { background: var(--card2); border-radius: 8px; padding: 8px 4px; }
@@ -550,6 +561,32 @@ function renderResult(r) {
       <div class="sub">第${i + 1}推荐 · 结果：${s.result} · 比分概率 ${pct(recProb)}</div>
       <div class="reasons">${reasons.map(x => `<span>${esc(x)}</span>`).join('')}</div></div>`;
   });
+
+  // 半全场分析
+  const halfFullTime = md && md.half_full_time ? md.half_full_time : [];
+  if (halfFullTime.length > 0) {
+    html += `<h3 style="color:var(--accent2);font-size:15px;margin:18px 0 10px">⚡ 半全场概率分析</h3>`;
+    html += `<div class="card">`;
+    html += `<div class="htf-grid">`;
+    halfFullTime.forEach(item => {
+      const prob = item.probability || 0;
+      const isHigh = prob >= 15;
+      const isMedium = prob >= 8 && prob < 15;
+      html += `<div class="htf-item ${isHigh ? 'high' : isMedium ? 'medium' : ''}">
+        <div class="htf-code">${esc(item.code)}</div>
+        <div class="htf-name">${esc(item.name)}</div>
+        <div class="htf-bar">
+          <i style="width:${Math.min(prob * 3, 100)}%"></i>
+        </div>
+        <div class="htf-pct">${prob}%</div>
+      </div>`;
+    });
+    html += `</div>`;
+    html += `<div style="font-size:12px;color:var(--muted);margin-top:12px;padding-top:8px;border-top:1px solid var(--line)">
+      注：H=主胜, D=平, A=客胜。如 HH 表示半场主队领先且全场主队获胜
+    </div>`;
+    html += `</div>`;
+  }
 
   app.innerHTML = html;
   bindBack();
