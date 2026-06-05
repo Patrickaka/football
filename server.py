@@ -51,17 +51,17 @@ _CACHE = {
     '3d_ml': {
         'data': None,
         'timestamp': 0,
-        'expire_seconds': 300  # 5分钟缓存
+        'expire_seconds': 86400  # 24小时缓存（当天有效）
     },
     '3d_data': {
         'data': None,
         'timestamp': 0,
-        'expire_seconds': 600  # 10分钟缓存
+        'expire_seconds': 600  # 10分钟缓存（数据抓取）
     },
     '3d': {
         'data': None,
         'timestamp': 0,
-        'expire_seconds': 300  # 5分钟缓存
+        'expire_seconds': 86400  # 24小时缓存（当天有效）
     }
 }
 

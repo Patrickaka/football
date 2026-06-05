@@ -30,7 +30,7 @@ BACKTEST_TRIALS = 80
 PERMUTATION_SHUFFLES = 20  # 置换检验打乱次数，评估命中率是否显著优于随机
 
 # 缓存配置
-CACHE_EXPIRE_SECONDS = 300  # 5分钟缓存过期时间
+CACHE_EXPIRE_SECONDS = 86400  # 24小时缓存过期时间（当天有效）
 _prediction_cache = None
 _cache_time = 0
 
