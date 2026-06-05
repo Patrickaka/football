@@ -103,8 +103,8 @@ class Pailie5Analyzer:
                 if match:
                     issues.append(match.group(1))
             
-            # 提取日期列表
-            dates = re.findall(r'<td>(\d{4}-\d{2}-\d{2})</td>', html)
+            # 提取日期列表（允许日期前后有空白字符）
+            dates = re.findall(r'<td>\s*(\d{4}-\d{2}-\d{2})\s*</td>', html)
             
             # 提取数字球列表
             balls = re.findall(r'<span class="ball">(\d)</span>', html)
@@ -187,7 +187,8 @@ class Pailie5Analyzer:
         # 检查是否已存在
         for r in self.history:
             if r['issue'] == issue:
-                return False
+                # 期号已存在，跳过但返回 True（表示处理成功）
+                return True
         
         result = {
             'issue': issue,
