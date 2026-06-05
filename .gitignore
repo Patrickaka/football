@@ -13,3 +13,6 @@ venv/
 
 # 日志
 logs/
+
+# ELO 评分数据
+elo_ratings.json
