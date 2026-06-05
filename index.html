@@ -347,10 +347,10 @@ function groupMatchesByTime(list) {
     ms.sort((a, b) => (a.num || '').localeCompare(b.num || '')
       || (a.time || '').localeCompare(b.time || ''));
   }
-  return Object.entries(groups).sort((a, b) => {
-    const ka = (a[1][0].num || a[0]), kb = (b[1][0].num || b[0]);
-    return ka.localeCompare(kb);
-  });
+  const earliest = ms => ms.reduce((min, m) =>
+    (m.time || '') < min ? (m.time || '') : min, ms[0].time || '');
+  return Object.entries(groups).sort((a, b) =>
+    earliest(a[1]).localeCompare(earliest(b[1])));
 }
 
 function renderMatchList() {
@@ -850,6 +850,8 @@ function renderLottery3d(r) {
     <div class="row"><span class="k">回测期数</span><span class="v">${bt.trials}</span></div>
     <div class="row"><span class="k">直选Top3命中</span><span class="v">${pct(bt.top3_rate)} (${bt.top3_hit}/${bt.trials})</span></div>
     <div class="row"><span class="k">直选${n}注命中</span><span class="v">${pct(bt.top_rate)} (${bt.top_hit}/${bt.trials})</span></div>
+    <div class="row"><span class="k">随机基线（${n}注）</span><span class="v">${pct(bt.top_rate_baseline)}</span></div>
+    ${bt.significance ? `<div class="row"><span class="k">置换检验 p 值</span><span class="v" style="color:${bt.significance.significant ? 'var(--accent2)' : 'var(--muted)'}">${bt.significance.pvalue.toFixed(3)} · ${bt.significance.significant ? '显著优于随机' : '未显著优于随机（打乱均值 ' + pct(bt.significance.shuffled_mean_rate) + '）'}</span></div>` : ''}
     <div class="row"><span class="k">推荐池至少中2个数字</span><span class="v">${pct(bt.ge2_digit_rate)}</span></div>
     <div class="row"><span class="k">和值落在预测带±4</span><span class="v">${pct(bt.sum_band_rate)}</span></div>
     <div class="row"><span class="k">组六四码命中</span><span class="v">${bt.zu6_draws ? pct(bt.zu6_four_rate) + ' (' + bt.zu6_four_hit + '/' + bt.zu6_draws + '，开奖为组六时)' : '—'}</span></div>
@@ -1487,12 +1489,12 @@ function renderLottery(r) {
   recent.forEach((item, i) => {
     const front = item.front?.map(n => String(n).padStart(2, '0')).join(' ') || '-';
     const back = item.back?.map(n => String(n).padStart(2, '0')).join(' ') || '-';
-    html += `<div class="row" style="${i > 0 ? 'border-top:1px solid var(--line);margin-top:8px;padding-top:8px' : ''}">
-      <span class="k" style="width:100px">${item.issue || '未知期'}</span>
-      <span style="font-size:18px;font-weight:700;color:#f85149">${front}</span>
-      <span style="color:var(--muted)">+</span>
-      <span style="font-size:18px;font-weight:700;color:#4493f8">${back}</span>
-      <span style="color:var(--muted);font-size:12px">${item.date || ''}</span>
+    html += `<div class="row" style="justify-content:flex-start;font-variant-numeric:tabular-nums;${i > 0 ? 'border-top:1px solid var(--line);margin-top:8px;padding-top:8px' : ''}">
+      <span class="k" style="width:90px;flex:none">${item.issue || '未知期'}</span>
+      <span style="width:180px;flex:none;text-align:left;letter-spacing:2px;font-size:18px;font-weight:700;color:#f85149">${front}</span>
+      <span style="width:24px;flex:none;text-align:center;color:var(--muted)">+</span>
+      <span style="width:80px;flex:none;text-align:left;letter-spacing:2px;font-size:18px;font-weight:700;color:#4493f8">${back}</span>
+      <span style="flex:1;text-align:right;color:var(--muted);font-size:12px">${item.date || ''}</span>
     </div>`;
   });
   html += `</div>`;

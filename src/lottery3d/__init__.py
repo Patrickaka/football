@@ -26,6 +26,7 @@ RECENT_WINDOW = 90  # 展示用最大窗口
 WINDOW_BACKTEST_TRIALS = 40
 EXP_DECAY = 0.96
 BACKTEST_TRIALS = 80
+PERMUTATION_SHUFFLES = 20  # 置换检验打乱次数，评估命中率是否显著优于随机
 
 # 缓存配置
 CACHE_EXPIRE_SECONDS = 300  # 5分钟缓存过期时间
@@ -827,8 +828,10 @@ def backtest(numbers, trials=BACKTEST_TRIALS, window_weights=None):
         "trials": n,
         "top_hit": hit_top,
         "top_rate": hit_top / n,
+        "top_rate_baseline": RECOMMEND_GROUPS / 1000.0,
         "top3_hit": hit_top3,
         "top3_rate": hit_top3 / n,
+        "top3_rate_baseline": ZHIXUAN_TOP3 / 1000.0,
         "recommend_groups": RECOMMEND_GROUPS,
         "ge2_digit_rate": hit_ge2 / n,
         "sum_band_rate": hit_sum_band / n,
@@ -837,6 +840,33 @@ def backtest(numbers, trials=BACKTEST_TRIALS, window_weights=None):
         "zu6_pool_rate": hit_zu6_pool / zu6_draws if zu6_draws else 0.0,
         "zu6_four_hit": hit_zu6_four,
         "zu6_four_rate": hit_zu6_four / zu6_draws if zu6_draws else 0.0,
+    }
+
+
+def permutation_test(numbers, observed_rate, trials=BACKTEST_TRIALS,
+                     window_weights=None, shuffles=PERMUTATION_SHUFFLES, seed=20):
+    """打乱历史顺序重跑回测，估计直选命中率优于随机的显著性。
+
+    福彩3D 为独立均匀摇奖，期间无时序可学。若打乱顺序后命中率不降，
+    说明模型未抓到真实信号；p 值为打乱样本命中率 >= 实际命中率的比例。
+    """
+    seq = [list(n) for n in numbers]
+    rng = random.Random(seed)
+    perm_rates = []
+    for _ in range(shuffles):
+        rng.shuffle(seq)
+        perm_rates.append(backtest(seq, trials=trials, window_weights=window_weights)["top_rate"])
+    ge = sum(1 for r in perm_rates if r >= observed_rate)
+    mean = sum(perm_rates) / len(perm_rates) if perm_rates else 0.0
+    pvalue = (ge + 1) / (shuffles + 1)
+    return {
+        "shuffles": shuffles,
+        "observed_rate": observed_rate,
+        "shuffled_mean_rate": mean,
+        "shuffled_max_rate": max(perm_rates) if perm_rates else 0.0,
+        "baseline_rate": RECOMMEND_GROUPS / 1000.0,
+        "pvalue": pvalue,
+        "significant": pvalue < 0.05,
     }
 
 
@@ -1075,6 +1105,9 @@ def run_prediction(data=None, force_refresh=False):
     _, z6_straight = zu6_notes_from_digits(zu6_four)
     zhixuan_top = rank_triplets(score, danma, kill, meta, top_n=RECOMMEND_GROUPS)
     bt = backtest(numbers, window_weights=window_weights)
+    bt["significance"] = permutation_test(
+        numbers, bt["top_rate"], window_weights=window_weights
+    )
 
     last_num = numbers[-1]
     pos_names = ("百", "十", "个")
