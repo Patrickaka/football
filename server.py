@@ -25,7 +25,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
 
 from src.football import fetch_match_list, analyze_match
 from src.lottery3d import run_prediction
-from src.lottery3d.ml import fetch_data, predict_current, N_TREES
+from src.lottery3d.ml import fetch_data, predict_current
 from src.pailie5 import get_pailie5_analyzer
 from src.lottery import get_lottery_analyzer
 from src.common.logger import setup_logger
@@ -261,12 +261,14 @@ class Handler(BaseHTTPRequestHandler):
         try:
             data = fetch_data()
             numbers = [x[2] for x in data] if data else []
-            result = predict_current(numbers, model_type="auto")
+            # 使用多模型集成
+            result = predict_current(numbers, model_type="ensemble")
 
             formatted = {
                 'model_type': result.get('model_type', 'unknown'),
                 'model_info': result.get('model_info', '未知模型'),
-                'n_trees': N_TREES if result.get('model_type') == 'random_forest' else 50,
+                'num_models': int(result.get('num_models', 1)),
+                'model_weights': result.get('model_weights', []),
                 'total_samples': int(result.get('total_samples', 0)),
                 'pos_samples': int(result.get('pos_samples', 0)),
                 'neg_samples': int(result.get('neg_samples', 0)),
