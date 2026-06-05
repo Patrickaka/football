@@ -25,6 +25,7 @@ from typing import Dict, List, Tuple, Any, Optional
 # 导入公共日志模块
 from ..common.logger import setup_logger
 from ..common.paths import data_path
+from ..common.data_cache import cached_fetch, is_cache_valid, save_cached_data
 
 log = setup_logger('lottery')
 
@@ -742,24 +743,40 @@ class LotteryAnalyzer:
 
     # ==================== 动态抓取开奖号码 ====================
     
-    def fetch_latest_results(self, count: int = 10) -> Dict:
-        """动态抓取最新开奖号码
+    def fetch_latest_results(self, count: int = 10, force_refresh: bool = False) -> Dict:
+        """动态抓取最新开奖号码（带缓存，每天只抓取一次）
         
         尝试从多个数据源抓取最新的大乐透开奖结果，如果网络不可用则返回模拟数据。
         
         Args:
             count: 要抓取的期数（默认10期）
-        
+            force_refresh: 是否强制刷新缓存
+            
         Returns:
             包含抓取结果和状态信息的字典
         """
         try:
+            # 如果不是强制刷新，先检查缓存
+            if not force_refresh and is_cache_valid('lottery'):
+                log.info("大乐透使用缓存数据")
+                return {
+                    'success': True,
+                    'source': 'cache',
+                    'count': min(count, len(self.history_data)),
+                    'message': '使用缓存数据',
+                    'latest_issue': self.history_data[0]['issue'] if self.history_data else None,
+                    'results': self.get_recent_results(count)
+                }
+            
             # 尝试从网络抓取
             results = self._fetch_from_web(count)
             
             if results:
                 # 更新本地数据
                 self._update_with_fetched(results)
+                
+                # 保存到缓存
+                save_cached_data('lottery', self.history_data)
                 
                 return {
                     'success': True,

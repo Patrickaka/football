@@ -10,6 +10,7 @@ from collections import Counter, defaultdict
 from contextlib import contextmanager
 from itertools import combinations, product
 from ..common.logger import setup_logger
+from ..common.data_cache import cached_fetch
 
 log = setup_logger('lottery3d')
 
@@ -112,7 +113,8 @@ def patch_weights(weights):
             globals()[k] = v
 
 
-def fetch_data(url=URL):
+def _fetch_data_internal(url=URL):
+    """内部数据抓取函数"""
     log.debug('fetch 3D data')
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
     html = urllib.request.urlopen(req, timeout=20).read().decode("utf-8", "ignore")
@@ -127,6 +129,11 @@ def fetch_data(url=URL):
     data = [(pid, dt, (int(a), int(b), int(c))) for pid, dt, a, b, c in rows]
     data.reverse()
     return data
+
+
+def fetch_data(url=URL, force_refresh=False):
+    """获取历史开奖数据（带缓存，每天只抓取一次）"""
+    return cached_fetch('lottery3d', lambda: _fetch_data_internal(url), force_refresh)
 
 
 def calc_span(n):

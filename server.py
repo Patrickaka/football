@@ -46,6 +46,20 @@ def _import_backtest_modules():
 
 log = setup_logger('server')
 
+# 缓存机制
+_CACHE = {
+    '3d_ml': {
+        'data': None,
+        'timestamp': 0,
+        'expire_seconds': 300  # 5分钟缓存
+    },
+    '3d_data': {
+        'data': None,
+        'timestamp': 0,
+        'expire_seconds': 600  # 10分钟缓存
+    }
+}
+
 _ROOT = Path(__file__).parent
 INDEX_FILE = _ROOT / 'web' / 'index.html'
 
@@ -259,7 +273,27 @@ class Handler(BaseHTTPRequestHandler):
 
     def _lottery_3d_ml_payload(self):
         try:
-            data = fetch_data()
+            now = time.time()
+            ml_cache = _CACHE['3d_ml']
+            data_cache = _CACHE['3d_data']
+            
+            # 检查 ML 缓存是否有效
+            if ml_cache['data'] is not None and (now - ml_cache['timestamp']) < ml_cache['expire_seconds']:
+                self._log.info('3D ML 预测使用缓存')
+                return {'result': ml_cache['data']}
+            
+            # 检查数据缓存
+            if data_cache['data'] is not None and (now - data_cache['timestamp']) < data_cache['expire_seconds']:
+                self._log.info('3D ML 使用缓存数据')
+                data = data_cache['data']
+            else:
+                self._log.info('3D ML 获取新数据')
+                data = fetch_data()
+                data_cache['data'] = data
+                data_cache['timestamp'] = now
+            
+            # 缓存失效，重新计算
+            self._log.info('3D ML 预测重新计算')
             numbers = [x[2] for x in data] if data else []
             # 使用多模型集成
             result = predict_current(numbers, model_type="ensemble")
@@ -282,6 +316,11 @@ class Handler(BaseHTTPRequestHandler):
                 ],
                 'feature_importance': result.get('feature_importance', []),
             }
+            
+            # 更新缓存
+            ml_cache['data'] = formatted
+            ml_cache['timestamp'] = now
+            
             return {'result': formatted}
         except Exception:
             self._log.error('ML 3D 预测失败', exc_info=True)

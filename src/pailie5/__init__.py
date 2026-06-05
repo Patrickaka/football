@@ -30,6 +30,7 @@ from typing import Dict, List, Tuple, Optional
 from datetime import datetime, timedelta
 
 from ..common.paths import data_path
+from ..common.data_cache import cached_fetch
 
 logger = logging.getLogger(__name__)
 
@@ -78,15 +79,9 @@ class Pailie5Analyzer:
         except Exception as e:
             logger.error(f"保存排列五历史数据失败: {e}")
     
-    def fetch_history_data(self, days: int = 30):
+    def _fetch_history_data_internal(self, days: int = 30):
         """
-        从网站抓取排列五历史数据（参考福彩3D的抓取方式）
-        
-        参数:
-            days: 抓取页数（每页约200期）
-        
-        返回:
-            成功抓取的期数
+        内部数据抓取函数（不使用缓存）
         """
         try:
             url = HISTORY_URL
@@ -139,6 +134,38 @@ class Pailie5Analyzer:
         except Exception as e:
             logger.error(f"抓取排列五历史数据失败：{e}")
             return 0
+
+
+    def fetch_history_data(self, days: int = 30, force_refresh: bool = False):
+        """
+        从网站抓取排列五历史数据（带缓存，每天只抓取一次）
+        
+        参数:
+            days: 抓取页数（每页约200期）
+            force_refresh: 是否强制刷新缓存
+            
+        返回:
+            成功抓取的期数
+        """
+        # 如果不是强制刷新，先检查缓存
+        if not force_refresh:
+            # 检查文件缓存（每天一个文件）
+            from ..common.data_cache import is_cache_valid
+            if is_cache_valid('pailie5'):
+                logger.info("使用缓存的排列五数据")
+                # 重新加载缓存的数据
+                self._load_history()
+                return len(self.history)
+        
+        # 需要重新抓取
+        count = self._fetch_history_data_internal(days)
+        if count > 0:
+            # 保存到文件缓存
+            self._save_history()
+            # 同时保存到数据缓存
+            from ..common.data_cache import save_cached_data
+            save_cached_data('pailie5', self.history)
+        return count
     
     def _calculate_date_from_issue(self, issue: str) -> str:
         """

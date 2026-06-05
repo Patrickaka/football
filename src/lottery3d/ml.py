@@ -36,6 +36,7 @@ import urllib.request
 from collections import Counter, defaultdict
 from itertools import combinations, product
 from ..common.logger import setup_logger
+from ..common.data_cache import cached_fetch
 
 log = setup_logger('lottery3d_ml')
 
@@ -78,10 +79,11 @@ URL = "https://www.8300.cn/kjhhis/3/200.html"
 # 模型参数
 BACKTEST_TRIALS = 80
 TRAIN_RATIO = 0.8  # 时序划分比例
-NEGATIVE_SAMPLES_PER_PERIOD = 30  # 每期负例采样数
+NEGATIVE_SAMPLES_PER_PERIOD = 20  # 每期负例采样数（减少以加速）
 TOP_K = 15  # 推荐注数
 FEATURE_SUBSET_RATIO = 0.8  # 特征选择保留比例
 MIN_VARIANCE = 0.001  # 方差过滤阈值
+TRAINING_WINDOW = 50  # 训练窗口大小（减少以加速）
 
 
 def _native_number(x):
@@ -97,8 +99,8 @@ def _native_number(x):
     return x
 
 
-def fetch_data(url=URL):
-    """获取历史开奖数据"""
+def _fetch_data_internal(url=URL):
+    """内部数据抓取函数"""
     log.debug('fetch 3D-ML data')
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
     html = urllib.request.urlopen(req, timeout=20).read().decode("utf-8", "ignore")
@@ -113,6 +115,11 @@ def fetch_data(url=URL):
     data = [(pid, dt, (int(a), int(b), int(c))) for pid, dt, a, b, c in rows]
     data.reverse()
     return data
+
+
+def fetch_data(url=URL, force_refresh=False):
+    """获取历史开奖数据（带缓存，每天只抓取一次）"""
+    return cached_fetch('lottery3d_ml', lambda: _fetch_data_internal(url), force_refresh)
 
 
 def miss_value(numbers, digit, position=None):
@@ -662,22 +669,23 @@ def train_single_model(X, y, model_name):
     try:
         if model_name == "catboost" and HAS_CATBOOST:
             model = CatBoostClassifier(
-                iterations=100,
-                depth=4,
-                learning_rate=0.1,
+                iterations=50,  # 减少迭代次数
+                depth=3,        # 减少树深度
+                learning_rate=0.2,  # 增大学习率
                 scale_pos_weight=scale_pos_weight,
                 random_state=42,
                 verbose=False,
-                task_type="CPU"
+                task_type="CPU",
+                early_stopping_rounds=5  # 提前停止
             )
             model.fit(X, y)
             return model, "catboost"
         
         elif model_name == "xgboost" and HAS_XGBOOST:
             model = XGBClassifier(
-                n_estimators=100,
-                max_depth=4,
-                learning_rate=0.1,
+                n_estimators=50,  # 减少迭代次数
+                max_depth=3,      # 减少树深度
+                learning_rate=0.2,  # 增大学习率
                 scale_pos_weight=scale_pos_weight,
                 random_state=42,
                 use_label_encoder=False,
@@ -689,9 +697,9 @@ def train_single_model(X, y, model_name):
         
         elif model_name == "lightgbm" and HAS_LIGHTGBM:
             model = lgb.LGBMClassifier(
-                n_estimators=100,
-                max_depth=4,
-                learning_rate=0.1,
+                n_estimators=50,  # 减少迭代次数
+                max_depth=3,      # 减少树深度
+                learning_rate=0.2,  # 增大学习率
                 scale_pos_weight=scale_pos_weight,
                 random_state=42,
                 verbose=-1,
