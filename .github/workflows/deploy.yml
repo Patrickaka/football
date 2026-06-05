@@ -17,5 +17,6 @@ jobs:
           script: |
             cd /root/football
             git pull origin master
+            /root/miniconda3/envs/football/bin/pip install -r requirements.txt
             systemctl restart football
             systemctl is-active football

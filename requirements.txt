@@ -1,0 +1,4 @@
+# 运行时第三方依赖（其余均为 Python 标准库或 src 自有模块）
+numpy>=2.1.0
+scikit-learn>=1.5.2
+lightgbm>=4.5.0
