@@ -35,7 +35,8 @@ _cache_time = 0
 
 W_HOT_GLOBAL = 4.0
 W_HOT_POS = 5.0
-W_MISS_HIGH = 9.0
+# 冷号/高遗漏加分项：基于"冷号回补"假设，而独立摇奖无记忆（置换检验证伪），已关闭
+W_MISS_HIGH = 0.0
 W_MISS_MID = 4.5
 W_MARKOV = 6.0
 W_LAST_APPEAR = 2.5
@@ -65,7 +66,6 @@ MARKOV_LAPLACE_ALPHA = 1.0
 TUNABLE_WEIGHTS = (
     "W_HOT_GLOBAL",
     "W_HOT_POS",
-    "W_MISS_HIGH",
     "W_MISS_MID",
     "W_MARKOV",
     "W_LAST_APPEAR",
@@ -81,7 +81,6 @@ TUNABLE_WEIGHTS = (
 WEIGHT_SEARCH_RANGES = {
     "W_HOT_GLOBAL": (0.5, 2.0),
     "W_HOT_POS": (0.5, 2.0),
-    "W_MISS_HIGH": (0.4, 2.5),
     "W_MISS_MID": (0.4, 2.5),
     "W_MARKOV": (0.5, 2.0),
     "W_LAST_APPEAR": (0.3, 2.5),

@@ -68,6 +68,15 @@
   }
   .section-title:first-child { margin-top: 0; }
   .note { font-size: 12px; color: var(--muted); margin: 6px 0 0; line-height: 1.6; }
+  .edu { background: var(--card); border: 1px solid var(--line); border-left: 3px solid var(--warn);
+    border-radius: 10px; padding: 10px 14px; margin: 0 0 14px; }
+  .edu > summary { cursor: pointer; font-size: 13px; font-weight: 600; color: var(--warn); list-style: none; }
+  .edu > summary::-webkit-details-marker { display: none; }
+  .edu > summary::before { content: '▸ '; }
+  .edu[open] > summary::before { content: '▾ '; }
+  .edu .body { font-size: 12.5px; color: var(--muted); line-height: 1.7; margin-top: 8px; }
+  .edu .body b { color: var(--text); }
+  .edu .body .hl { color: var(--accent2); }
   .miss-row { font-size: 13px; padding: 3px 0; color: var(--text); }
   .miss-row .miss-n { color: var(--warn); font-weight: 600; }
   .blend-row { display: flex; gap: 10px; flex-wrap: wrap; margin: 8px 0; font-size: 14px; }
@@ -682,6 +691,21 @@ function renderLottery3d(r) {
   const top3 = r.zhixuan_top3 || r.zhixuan.slice(0, 3);
 
   let html = '';
+
+  // ── 科普卡片：诚实说明本工具的局限 ──
+  const sig = bt && bt.significance;
+  const pTxt = sig ? sig.pvalue.toFixed(3) : '≈0.1';
+  html += `<details class="edu">
+    <summary>为什么本工具不能提高中奖率？（点开看原理）</summary>
+    <div class="body">
+      福彩3D 每个号码 <b>000–999 概率严格相等</b>（各 1/1000），开奖<b>没有记忆</b>——这一期的结果和往期<span class="hl">完全独立</span>。<br><br>
+      • <b>"热号/冷号/遗漏"是赌徒谬误</b>：把真实历史顺序打乱后重新回测，命中率和原顺序<span class="hl">统计上分不出区别</span>（置换检验 p=${pTxt}，未显著优于随机）。<br>
+      • <b>冷号不会"回补"</b>：长期均匀靠的是后续无数次开奖把早期不平衡<span class="hl">稀释</span>掉，不是彩票去补偿谁——遗漏久的号码下一期出现率与基础率无显著差异。<br>
+      • 本工具<b>已关闭基于"冷号回补"的遗漏加分项</b>（W_MISS_HIGH=0）。<br><br>
+      唯一真实存在的结构是<b>和值分布</b>（三角形，峰在 13–14），但它只在你<span class="hl">押"和值"</span>时有用，对选具体号码没有帮助。<br>
+      预算有限时，<b>组选六</b>同样的钱命中频率是直选的 <span class="hl">6 倍</span>。下方推荐仅供参考，<b>请把它当娱乐、理性投注</b>。
+    </div>
+  </details>`;
 
   // ── 本期摘要 ──
   html += `<div class="section-title">【本期摘要】</div>`;
