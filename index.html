@@ -996,7 +996,7 @@ async function fetchPailie5Data() {
       });
     }
     
-    html += `<button type="button" style="width:100%;margin-top:12px;padding:10px;background:var(--card2);color:var(--text);border:1px solid var(--line);border-radius:8px;font-size:14px;cursor:pointer" onclick="loadPailie5()">← 返回统计分析</button>`;
+    html += `<button type="button" style="width:100%;margin-top:12px;padding:10px;background:var(--card2);color:var(--text);border:1px solid var(--line);border-radius:8px;font-size:14px;cursor:pointer" onclick="event.stopPropagation(); pailie5Loaded=false; loadPailie5();">← 返回统计分析</button>`;
     html += `</div>`;
     
     appPailie5.innerHTML = html;
