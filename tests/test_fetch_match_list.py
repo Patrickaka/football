@@ -14,16 +14,16 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-import football
+import src.football as football
 
 FIXTURE = Path(__file__).parent / 'fixtures' / 'index_jczq.html'
 
-# 夹具中的真实比赛与正确的 id 配对
+# 夹具中的真实比赛与正确的 id、竞彩编号配对
 EXPECTED = [
-    ('1411019', '丹麦', '刚果(金)'),
-    ('1393310', '荷兰', '阿尔及利亚'),
-    ('1404861', '波兰', '尼日利亚'),
-    ('1411009', '卢森堡', '意大利'),
+    ('1411019', '丹麦', '刚果(金)', '周三201'),
+    ('1393310', '荷兰', '阿尔及利亚', '周三202'),
+    ('1404861', '波兰', '尼日利亚', '周三203'),
+    ('1411009', '卢森堡', '意大利', '周三204'),
 ]
 
 
@@ -39,12 +39,12 @@ def test_all_matches_parsed_with_correct_ids():
     assert len(matches) == len(EXPECTED), \
         f"应解析 {len(EXPECTED)} 场，实际 {len(matches)} 场"
 
-    got = {(m['match_id'], m['home'], m['away']) for m in matches}
-    for mid, home, away in EXPECTED:
-        assert (mid, home, away) in got, \
-            f"缺失或错配: id={mid} {home} vs {away}；实得 {sorted(got)}"
+    got = {(m['match_id'], m['home'], m['away'], m.get('num')) for m in matches}
+    for mid, home, away, num in EXPECTED:
+        assert (mid, home, away, num) in got, \
+            f"缺失或错配: id={mid} {home} vs {away} {num}；实得 {sorted(got)}"
 
 
 if __name__ == '__main__':
     test_all_matches_parsed_with_correct_ids()
-    print("✓ 测试通过：4 场比赛全部解析且 id 配对正确")
+    print("✓ 测试通过：4 场比赛全部解析且 id、竞彩编号配对正确")

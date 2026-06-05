@@ -310,6 +310,12 @@ def fetch_match_list():
                 if match_id not in match_time_map:
                     match_time_map[match_id] = time_val
     
+    # 创建 match_id -> 竞彩编号 的映射（如 周三201），编号星期前缀可用于按时间分组
+    # 布局: <input ... value="<match_id>" />周三201
+    match_num_map = dict(
+        re.findall(r'value="(\d+)"\s*/>\s*(周[一二三四五六日]\d{3})', html)
+    )
+
     # 创建 match_id -> league 的映射（基于联赛区块结构）
     match_league_map = {}
     
@@ -336,6 +342,8 @@ def fetch_match_list():
             match['time'] = match_time_map[match_id]
         if match_id in match_league_map:
             match['league'] = match_league_map[match_id].strip()
+        if match_id in match_num_map:
+            match['num'] = match_num_map[match_id]
 
     # 如果通过行匹配没有找到时间，则回退到原来的方法
     if not match_time_map:
@@ -3197,7 +3205,7 @@ def analyze_match(match):
     half_full_time = calculate_half_full_time_probs(candidates, team)
     
     return {
-        'match': {k: match.get(k) for k in ('home', 'away', 'league', 'time', 'match_id')},
+        'match': {k: match.get(k) for k in ('home', 'away', 'league', 'time', 'match_id', 'num')},
         'league_profile': league_profile,
         'asian': asian,
         'euro': euro,

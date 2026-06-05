@@ -80,6 +80,12 @@
     color: var(--text); margin-bottom: 16px; outline: none; }
   .search:focus { border-color: var(--accent); }
 
+  .group-bar { display: flex; gap: 8px; margin: 0 4px 14px; }
+  .group-bar button {
+    background: var(--card); border: 1px solid var(--line); border-radius: 8px;
+    color: var(--muted); font-size: 13px; padding: 6px 14px; cursor: pointer; transition: .15s;
+  }
+  .group-bar button.on { color: var(--text); border-color: var(--accent); background: var(--card2); }
   .league-group { margin-bottom: 18px; }
   .league-title { font-size: 13px; color: var(--accent2); font-weight: 600;
     margin: 0 4px 8px; letter-spacing: .5px; }
@@ -89,6 +95,8 @@
     padding: 12px 16px; margin-bottom: 8px; cursor: pointer; transition: .15s;
   }
   .match:hover { border-color: var(--accent); background: var(--card2); transform: translateX(2px); }
+  .match .num { color: var(--accent2); font-size: 12px; font-weight: 600;
+    min-width: 52px; letter-spacing: .5px; }
   .match .time { color: var(--muted); font-size: 12px; min-width: 78px; }
   .match .teams { flex: 1; font-size: 15px; }
   .match .teams .vs { color: var(--muted); margin: 0 8px; font-size: 13px; }
@@ -218,6 +226,7 @@ const pageTitle = document.getElementById('page-title');
 const pageDesc = document.getElementById('page-desc');
 let allMatches = [];
 let listFilter = '';
+let groupMode = 'league';
 let activeTab = 'football';
 let lottery3dLoaded = false;
 
@@ -322,23 +331,51 @@ function ensureSearchBox() {
   return search;
 }
 
+function groupMatchesByLeague(list) {
+  const groups = {};
+  list.forEach(m => { (groups[m.league || '其它'] ||= []).push(m); });
+  return Object.entries(groups);
+}
+
+function groupMatchesByTime(list) {
+  const groups = {};
+  list.forEach(m => {
+    const day = (m.num || '').slice(0, 2) || (m.time || '').slice(0, 5) || '其它';
+    (groups[day] ||= []).push(m);
+  });
+  for (const ms of Object.values(groups)) {
+    ms.sort((a, b) => (a.num || '').localeCompare(b.num || '')
+      || (a.time || '').localeCompare(b.time || ''));
+  }
+  return Object.entries(groups).sort((a, b) => {
+    const ka = (a[1][0].num || a[0]), kb = (b[1][0].num || b[0]);
+    return ka.localeCompare(kb);
+  });
+}
+
 function renderMatchList() {
   const kw = listFilter.trim();
   const list = kw
-    ? allMatches.filter(m => (m.home + m.away + (m.league || '')).includes(kw))
+    ? allMatches.filter(m => (m.home + m.away + (m.league || '') + (m.num || '')).includes(kw))
     : allMatches;
 
-  const groups = {};
-  list.forEach(m => { (groups[m.league || '其它'] ||= []).push(m); });
+  const entries = groupMode === 'time'
+    ? groupMatchesByTime(list)
+    : groupMatchesByLeague(list);
 
-  let html = `<div class="status" style="padding:4px 0 12px;font-size:13px">共 ${list.length} 场比赛</div>`;
+  let html = `<div class="group-bar">
+    <button data-mode="league" class="${groupMode === 'league' ? 'on' : ''}">按联赛</button>
+    <button data-mode="time" class="${groupMode === 'time' ? 'on' : ''}">按时间</button>
+  </div>`;
+  html += `<div class="status" style="padding:4px 0 12px;font-size:13px">共 ${list.length} 场比赛</div>`;
   if (!list.length) {
     html += `<div class="status">没有匹配的比赛</div>`;
   }
-  for (const [league, ms] of Object.entries(groups)) {
-    html += `<div class="league-group"><div class="league-title">${esc(league)}</div>`;
+  for (const [title, ms] of entries) {
+    html += `<div class="league-group"><div class="league-title">${esc(title)}</div>`;
     ms.forEach(m => {
       html += `<div class="match" data-id="${esc(m.match_id)}">
+        <span class="num">${esc(m.num || '')}</span>
         <span class="time">${esc(m.time || '')}</span>
         <span class="teams">${esc(m.home)}<span class="vs">vs</span>${esc(m.away)}</span>
         <span class="arrow">›</span></div>`;
@@ -347,6 +384,9 @@ function renderMatchList() {
   }
   app.innerHTML = html;
 
+  app.querySelectorAll('.group-bar button').forEach(btn => {
+    btn.onclick = () => { groupMode = btn.dataset.mode; renderMatchList(); };
+  });
   app.querySelectorAll('.match').forEach(el => {
     el.onclick = () => {
       const m = allMatches.find(x => String(x.match_id) === el.dataset.id);
@@ -371,7 +411,7 @@ async function predict(m) {
   loading(`正在抓取 ${m.home} vs ${m.away} 的赔率数据…`);
   const q = new URLSearchParams({
     match_id: m.match_id, home: m.home, away: m.away,
-    league: m.league || '', time: m.time || ''
+    league: m.league || '', time: m.time || '', num: m.num || ''
   });
   try {
     const data = await fetchJson('/api/predict?' + q);
@@ -451,7 +491,7 @@ function renderResult(r) {
   let html = backBtn();
   html += `<div class="match-head">
     <div class="names"><b>${esc(m.home)}</b> <span style="color:var(--muted)">vs</span> <b>${esc(m.away)}</b></div>
-    <div class="meta">${esc(m.league || '')} ${esc(m.time || '')}</div>
+    <div class="meta">${m.num ? esc(m.num) + ' · ' : ''}${esc(m.league || '')} ${esc(m.time || '')}</div>
     ${lp && lp.name && lp.name !== 'default' && lp.avg_goal != null ? `<div class="meta">联赛模型 ${esc(lp.name)} · 场均 ${lp.avg_goal.toFixed(2)} 球</div>` : ''}
     ${modelInfo.length ? `<div class="meta" style="color:${'var(--warn)'}">${modelInfo.join(' · ')}</div>` : ''}
     ${cf && cf.score != null ? `<div class="meta" style="color:${cf.level === 'low' ? 'var(--away)' : 'var(--accent2)'}">置信度 ${esc(cf.label)} (${(cf.score * 100).toFixed(0)}%)</div>` : ''}</div>`;

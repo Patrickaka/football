@@ -246,6 +246,7 @@ class Handler(BaseHTTPRequestHandler):
             'away': params.get('away', [''])[0],
             'league': params.get('league', [''])[0],
             'time': params.get('time', [''])[0],
+            'num': params.get('num', [''])[0],
         }
         try:
             return {'result': analyze_match(match)}
