@@ -57,6 +57,11 @@ _CACHE = {
         'data': None,
         'timestamp': 0,
         'expire_seconds': 600  # 10分钟缓存
+    },
+    '3d': {
+        'data': None,
+        'timestamp': 0,
+        'expire_seconds': 300  # 5分钟缓存
     }
 }
 
@@ -266,7 +271,23 @@ class Handler(BaseHTTPRequestHandler):
 
     def _lottery_3d_payload(self):
         try:
-            return {'result': run_prediction()}
+            now = time.time()
+            cache = _CACHE['3d']
+            
+            # 检查缓存是否有效
+            if cache['data'] is not None and (now - cache['timestamp']) < cache['expire_seconds']:
+                self._log.info('3D 预测使用缓存')
+                return {'result': cache['data']}
+            
+            # 缓存失效，重新计算
+            self._log.info('3D 预测重新计算')
+            result = run_prediction()
+            
+            # 更新缓存
+            cache['data'] = result
+            cache['timestamp'] = now
+            
+            return {'result': result}
         except Exception:
             self._log.error('3D 预测失败', exc_info=True)
             return {'error': '3D 预测失败'}
