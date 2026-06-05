@@ -125,6 +125,8 @@ class Handler(BaseHTTPRequestHandler):
         elif path == '/api/pailie5/backtest':
             params = parse_qs(route.query)
             self._serve_json(self._pailie5_backtest_payload(params))
+        elif path == '/api/pailie5/fetch':
+            self._serve_json(self._pailie5_fetch_payload())
         elif path == '/api/pailie5/optimize':
             self._serve_json(self._pailie5_optimize_payload())
         elif path == '/api/pailie5/markov':
@@ -293,10 +295,14 @@ class Handler(BaseHTTPRequestHandler):
             stats = analyzer.get_statistics()
             recent = analyzer.get_recent_results(10)
             
+            # 延迟加载回测数据（不在首次请求时计算，改为前端按需加载）
+            # backtest = analyzer.rolling_backtest(trials=30)
+            
             return {
                 'result': {
                     'statistics': stats,
                     'recent_results': recent,
+                    # 'backtest': backtest,  # 改为按需加载
                 }
             }
         except Exception:
@@ -325,6 +331,18 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:
             self._log.error('排列五推荐失败', exc_info=True)
             return {'error': '排列五推荐失败'}
+
+    def _pailie5_fetch_payload(self):
+        """动态抓取排列五最新开奖号码"""
+        try:
+            analyzer = get_pailie5_analyzer()
+            
+            result = analyzer.fetch_latest_results()
+            
+            return {'result': result}
+        except Exception:
+            self._log.error('排列五抓取失败', exc_info=True)
+            return {'error': '排列五抓取失败'}
 
     def _pailie5_backtest_payload(self, params):
         """排列五历史回测"""
@@ -541,10 +559,14 @@ class Handler(BaseHTTPRequestHandler):
             stats = analyzer.get_statistics()
             recent = analyzer.get_recent_results(10)
             
+            # 执行滚动回测
+            backtest = analyzer.rolling_backtest(trials=50)
+            
             return {
                 'result': {
                     'statistics': stats,
                     'recent_results': recent,
+                    'backtest': backtest,
                 }
             }
         except Exception:

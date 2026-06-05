@@ -228,6 +228,102 @@ class LotteryAnalyzer:
         """获取最近开奖结果"""
         return self.history_data[:count]
     
+    def get_ensemble_ranking(self, is_front: bool = True, top_n: int = 10) -> List[Dict]:
+        """
+        获取综合排名
+        is_front: True=前区, False=后区
+        top_n: 返回前N个号码
+        """
+        numbers = FRONT_NUMBERS if is_front else BACK_NUMBERS
+        scores = []
+        
+        for num in numbers:
+            feature_scores = self._calculate_feature_score(num, is_front)
+            if not feature_scores:
+                continue
+            
+            # 综合评分（可以根据需要调整权重）
+            total_score = (
+                0.3 * feature_scores.get('frequency', 0) +
+                0.4 * feature_scores.get('gap', 0) +
+                0.2 * feature_scores.get('position', 0) +
+                0.1 * feature_scores.get('road', 0)
+            )
+            
+            scores.append({
+                'number': num,
+                'score': round(total_score, 4),
+                'features': feature_scores
+            })
+        
+        # 按综合评分排序
+        scores.sort(key=lambda x: -x['score'])
+        return scores[:top_n]
+    
+    def rolling_backtest(self, trials: int = 50) -> Dict:
+        """
+        滚动回测 - 逐步添加训练数据，每期用之前的数据预测前区和后区
+        返回与3D类似的回测统计
+        """
+        if len(self.history_data) < trials + 10:
+            trials = max(20, len(self.history_data) - 10)
+        
+        start = len(self.history_data) - trials
+        
+        # 前区命中统计
+        front_hit_ge2 = front_hit_ge3 = front_hit_ge4 = 0
+        # 后区命中统计
+        back_hit_ge1 = back_hit_ge2 = 0
+        
+        for i in range(start, len(self.history_data)):
+            # 重建分析器用于回测
+            bt_analyzer = LotteryAnalyzer(self.history_file)
+            bt_analyzer.history_data = []
+            bt_analyzer.statistics = {}
+            
+            # 使用之前的数据进行训练
+            for j in range(i):
+                bt_analyzer.history_data.append(self.history_data[j])
+            
+            bt_analyzer.update_statistics()
+            
+            actual = self.history_data[i]
+            actual_front = actual['front']
+            actual_back = actual['back']
+            
+            # 获取排名和推荐
+            front_ranking = bt_analyzer.get_ensemble_ranking(is_front=True)
+            back_ranking = bt_analyzer.get_ensemble_ranking(is_front=False)
+            
+            front_top5 = [r['number'] for r in front_ranking[:5]]
+            back_top3 = [r['number'] for r in back_ranking[:3]]
+            
+            # 前区命中检查
+            front_common = set(actual_front) & set(front_top5)
+            if len(front_common) >= 2:
+                front_hit_ge2 += 1
+            if len(front_common) >= 3:
+                front_hit_ge3 += 1
+            if len(front_common) >= 4:
+                front_hit_ge4 += 1
+            
+            # 后区命中检查
+            back_common = set(actual_back) & set(back_top3)
+            if len(back_common) >= 1:
+                back_hit_ge1 += 1
+            if len(back_common) >= 2:
+                back_hit_ge2 += 1
+        
+        n = trials
+        return {
+            'trials': n,
+            'front_ge2_rate': front_hit_ge2 / n,
+            'front_ge3_rate': front_hit_ge3 / n,
+            'front_ge4_rate': front_hit_ge4 / n,
+            'back_ge1_rate': back_hit_ge1 / n,
+            'back_ge2_rate': back_hit_ge2 / n,
+        }
+    
     # ==================== 排名模型 ====================
     
     def _calculate_feature_score(self, num: int, is_front: bool = True) -> Dict[str, float]:
@@ -379,10 +475,11 @@ class LotteryAnalyzer:
             elif freq < front_avg_freq * 0.8:
                 status = '冷门'
             
-            # 判断趋势
-            if gap < avg_gap * 0.7:
+            # 判断趋势（基于遗漏偏离度）
+            # 前区号码遗漏范围 97-109，平均遗漏 104.69，需要更宽松的阈值
+            if avg_gap > 0 and gap < avg_gap * 0.94:  # 当前遗漏小于平均遗漏的 94%
                 trend = '升温'
-            elif gap > avg_gap * 1.3:
+            elif avg_gap > 0 and gap > avg_gap * 1.05:  # 当前遗漏大于平均遗漏的 105%
                 trend = '降温'
             
             front_status[num] = {
@@ -402,14 +499,16 @@ class LotteryAnalyzer:
             status = '稳定'
             trend = '平稳'
             
-            if freq > back_avg_freq * 1.2:
+            if freq > back_avg_freq * 1.15:  # 放宽到 15%
                 status = '热门'
-            elif freq < back_avg_freq * 0.8:
+            elif freq < back_avg_freq * 0.85:  # 放宽到 85%
                 status = '冷门'
             
-            if gap < avg_gap * 0.7:
+            # 判断趋势（基于遗漏偏离度）
+            # 后区号码遗漏范围 101-109，平均遗漏 105.42，需要更宽松的阈值
+            if avg_gap > 0 and gap < avg_gap * 0.96:  # 当前遗漏小于平均遗漏的 96%
                 trend = '升温'
-            elif gap > avg_gap * 1.3:
+            elif avg_gap > 0 and gap > avg_gap * 1.03:  # 当前遗漏大于平均遗漏的 103%
                 trend = '降温'
             
             back_status[num] = {

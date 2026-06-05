@@ -4,6 +4,7 @@ import math
 import random
 import re
 import sys
+import time
 import urllib.request
 from collections import Counter, defaultdict
 from contextlib import contextmanager
@@ -25,6 +26,11 @@ RECENT_WINDOW = 90  # 展示用最大窗口
 WINDOW_BACKTEST_TRIALS = 40
 EXP_DECAY = 0.96
 BACKTEST_TRIALS = 80
+
+# 缓存配置
+CACHE_EXPIRE_SECONDS = 300  # 5分钟缓存过期时间
+_prediction_cache = None
+_cache_time = 0
 
 W_HOT_GLOBAL = 4.0
 W_HOT_POS = 5.0
@@ -1027,8 +1033,22 @@ def _transition_for_api(lag1, dynamic, pos_names=("百", "十", "个")):
     }
 
 
-def run_prediction(data=None):
-    """运行预测，返回 JSON 可序列化 dict；data 为 None 时自动抓取。"""
+def run_prediction(data=None, force_refresh=False):
+    """运行预测，返回 JSON 可序列化 dict；data 为 None 时自动抓取。
+    
+    Args:
+        data: 可选的数据列表，如果为 None 则自动抓取
+        force_refresh: 是否强制刷新缓存（默认 False，使用缓存）
+    """
+    global _prediction_cache, _cache_time
+    
+    # 检查缓存
+    if not force_refresh and _prediction_cache is not None:
+        elapsed = time.time() - _cache_time
+        if elapsed < CACHE_EXPIRE_SECONDS:
+            log.info(f"使用缓存数据（缓存时间：{elapsed:.1f}秒前）")
+            return _prediction_cache
+    
     try:
         if data is None:
             data = fetch_data()
@@ -1143,6 +1163,13 @@ def run_prediction(data=None):
         "zhixuan": [{"num": num, "score": round(w, 1)} for w, num in zhixuan_top],
         "backtest": bt,
     }
+    
+    # 保存到缓存
+    _prediction_cache = result
+    _cache_time = time.time()
+    log.info("预测结果已缓存")
+    
+    return result
 
 
 def print_report(result):

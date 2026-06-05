@@ -95,8 +95,16 @@ class Pailie5Analyzer:
             req = urllib.request.Request(url, headers=headers)
             html = urllib.request.urlopen(req, timeout=30).read().decode("utf-8", "ignore")
             
-            # 提取期号列表
-            issues = re.findall(r'(\d{7})期', html)
+            # 提取期号列表（从<td>标签中提取）
+            issue_tags = re.findall(r'<td>[^<]*期[^<]*</td>', html)
+            issues = []
+            for tag in issue_tags:
+                match = re.search(r'(\d{7})', tag)
+                if match:
+                    issues.append(match.group(1))
+            
+            # 提取日期列表
+            dates = re.findall(r'<td>(\d{4}-\d{2}-\d{2})</td>', html)
             
             # 提取数字球列表
             balls = re.findall(r'<span class="ball">(\d)</span>', html)
@@ -105,30 +113,54 @@ class Pailie5Analyzer:
                 logger.error("无法解析排列五数据，未找到期号或数字球")
                 return 0
             
-            # 确保期数和球数匹配（每期5个球）
+            # 确保期数和球数匹配（每期 5 个球）
             expected_ball_count = len(issues) * 5
             if len(balls) != expected_ball_count:
-                logger.warning(f"球数({len(balls)})与期数({len(issues)})不匹配，尝试使用可用数据")
+                logger.warning(f"球数 ({len(balls)}) 与期数 ({len(issues)}) 不匹配，尝试使用可用数据")
             
             count = 0
-            for i, issue in enumerate(issues):
+            # 按期号从旧到新遍历，确保最新数据在前面
+            for i in range(min(len(issues), len(dates)) - 1, -1, -1):
                 ball_start = i * 5
                 ball_end = ball_start + 5
                 if ball_end <= len(balls):
                     numbers = [int(b) for b in balls[ball_start:ball_end]]
-                    # 尝试提取日期（如果找不到日期则不设置）
-                    date_match = re.search(r'%s期.*?(\d{4}-\d{2}-\d{2})' % issue, html)
-                    date = date_match.group(1) if date_match else None
+                    # 直接使用提取的日期
+                    date = dates[i] if i < len(dates) else None
                     
-                    if self.add_result(issue, numbers, date):
+                    if self.add_result(issues[i], numbers, date):
                         count += 1
             
             logger.info(f"成功抓取 {count} 期排列五数据")
             return count
         
         except Exception as e:
-            logger.error(f"抓取排列五历史数据失败: {e}")
+            logger.error(f"抓取排列五历史数据失败：{e}")
             return 0
+    
+    def _calculate_date_from_issue(self, issue: str) -> str:
+        """
+        从期号推算日期（排列五期号格式：YYYYNNN，NNN 是年内序号）
+        
+        参数:
+            issue: 期号（如 2025316）
+        
+        返回:
+            日期字符串（YYYY-MM-DD）
+        """
+        try:
+            if len(issue) != 7:
+                return datetime.now().strftime('%Y-%m-%d')
+            
+            year = int(issue[:4])
+            day_of_year = int(issue[4:])
+            
+            # 计算日期
+            date = datetime(year, 1, 1) + timedelta(days=day_of_year - 1)
+            return date.strftime('%Y-%m-%d')
+        except Exception:
+            logger.warning(f"无法从期号 {issue} 推算日期")
+            return datetime.now().strftime('%Y-%m-%d')
     
     def add_result(self, issue: str, numbers: List[int], date: str = None):
         """
@@ -136,11 +168,11 @@ class Pailie5Analyzer:
         
         参数:
             issue: 期号
-            numbers: 5个号码的列表
+            numbers: 5 个号码的列表
             date: 日期（可选）
         """
         if len(numbers) != 5:
-            logger.error("排列五必须包含5个号码")
+            logger.error("排列五必须包含 5 个号码")
             return False
         
         for n in numbers:
@@ -149,7 +181,8 @@ class Pailie5Analyzer:
                 return False
         
         if not date:
-            date = datetime.now().strftime('%Y-%m-%d')
+            # 从期号推算日期
+            date = self._calculate_date_from_issue(issue)
         
         # 检查是否已存在
         for r in self.history:
@@ -166,6 +199,57 @@ class Pailie5Analyzer:
         self.history.insert(0, result)
         self._save_history()
         return True
+    
+    def fetch_latest_results(self, count: int = 10) -> Dict:
+        """动态抓取最新开奖号码
+        
+        尝试从网站抓取最新的排列五开奖结果，如果网络不可用则返回本地数据。
+        
+        Args:
+            count: 要抓取的期数（默认 10 期）
+        
+        Returns:
+            包含抓取结果和状态信息的字典
+        """
+        try:
+            # 重新抓取数据
+            fetched_count = self.fetch_history_data(days=1)
+            
+            if fetched_count > 0:
+                # 获取最新的结果
+                recent = self.get_recent_results(count)
+                
+                return {
+                    'success': True,
+                    'source': 'web',
+                    'count': fetched_count,
+                    'message': f'成功抓取 {fetched_count} 期数据',
+                    'latest_issue': recent[0]['issue'] if recent else None,
+                    'results': recent
+                }
+            else:
+                # 抓取失败，返回本地数据
+                recent = self.get_recent_results(count)
+                return {
+                    'success': False,
+                    'source': 'local',
+                    'count': len(recent),
+                    'message': '网络抓取失败，使用本地数据',
+                    'latest_issue': recent[0]['issue'] if recent else None,
+                    'results': recent
+                }
+        except Exception:
+            logger.error("排列五抓取失败", exc_info=True)
+            # 返回本地数据
+            recent = self.get_recent_results(count)
+            return {
+                'success': False,
+                'source': 'local',
+                'count': len(recent),
+                'message': '抓取异常，使用本地数据',
+                'latest_issue': recent[0]['issue'] if recent else None,
+                'results': recent
+            }
     
     def get_recent_results(self, count: int = 10) -> List[Dict]:
         """
@@ -687,6 +771,67 @@ class Pailie5Analyzer:
             'predictions': predictions
         }
     
+    def rolling_backtest(self, trials: int = 50) -> Dict:
+        """
+        滚动回测 - 逐步添加训练数据，每期用之前的数据预测并与实际比较
+        返回与3D类似的回测统计
+        """
+        # 准备数据
+        numbers = [r['numbers'] for r in self.history]
+        if len(numbers) < trials + 10:
+            trials = max(20, len(numbers) - 10)
+        
+        start = len(numbers) - trials
+        
+        hit_top3 = hit_top5 = hit_ge2_digit = hit_ge3_digit = 0
+        
+        for i in range(start, len(numbers)):
+            train = numbers[:i]
+            actual = numbers[i]
+            
+            # 重建分析器用于回测
+            bt_analyzer = Pailie5Analyzer()
+            bt_analyzer.history = []
+            for result in self.history[:i]:
+                bt_analyzer.add_result(result['issue'], result['numbers'], result['date'])
+            
+            # 获取统计数据并预测
+            stats = bt_analyzer.get_statistics()
+            
+            # 使用贝叶斯评分选择top5
+            scores = stats['bayesian_scores']
+            top5 = [n for n, _ in sorted(scores.items(), key=lambda x: -x[1])[:5]]
+            
+            # 检查命中
+            # 直选Top3命中
+            actual_str = ''.join(map(str, actual))
+            top3 = top5[:3]
+            
+            if actual_str in [''.join(map(str, top5[:3]))]:
+                # 检查顺序命中
+                pass
+            
+            # Top5直选命中
+            if actual_str in [''.join(map(str, top5))]:
+                hit_top5 += 1
+            
+            # 至少中2个数字
+            if len(set(actual) & set(top5)) >= 2:
+                hit_ge2_digit += 1
+            
+            # 至少中3个数字
+            if len(set(actual) & set(top5)) >= 3:
+                hit_ge3_digit += 1
+        
+        n = trials
+        return {
+            'trials': n,
+            'top5_hit': hit_top5,
+            'top5_rate': hit_top5 / n,
+            'ge2_digit_rate': hit_ge2_digit / n,
+            'ge3_digit_rate': hit_ge3_digit / n,
+        }
+    
     def feature_contribution(self) -> Dict[str, Dict[int, float]]:
         """
         计算各特征对每个号码的贡献度
@@ -812,18 +957,19 @@ class Pailie5Analyzer:
         }
         
         for n in NUMBERS:
-            # 判断冷热状态
-            if freq[n] > avg_freq * 1.2:
+            # 判断冷热状态（基于频率偏离度）
+            freq_deviation = freq[n] / avg_freq if avg_freq > 0 else 1
+            if freq_deviation > 1.10:  # 频率高于平均值 10% 以上
                 cycles['hot'].append(n)
-            elif freq[n] < avg_freq * 0.8:
+            elif freq_deviation < 0.90:  # 频率低于平均值 10% 以上
                 cycles['cold'].append(n)
             else:
                 cycles['stable'].append(n)
             
-            # 判断升降温趋势
-            if gaps[n] < avg_gaps[n] * 0.7:
+            # 判断升降温趋势（基于遗漏偏离度）
+            if avg_gaps[n] > 0 and gaps[n] < avg_gaps[n] * 0.7:  # 当前遗漏小于平均遗漏的 70%
                 cycles['warming'].append(n)
-            elif gaps[n] > avg_gaps[n] * 1.3:
+            elif avg_gaps[n] > 0 and gaps[n] > avg_gaps[n] * 1.5:  # 当前遗漏大于平均遗漏的 150%
                 cycles['cooling'].append(n)
         
         return cycles

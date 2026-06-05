@@ -918,6 +918,56 @@ async function loadPailie5() {
   }
 }
 
+async function fetchPailie5Data() {
+  const appPailie5 = document.getElementById('app-pailie5');
+  appPailie5.innerHTML = `<div class="status"><span class="spinner"></span>正在抓取最新开奖号码…</div>`;
+  
+  try {
+    const data = await fetchJson('/api/pailie5/fetch');
+    if (data.error) {
+      appPailie5.innerHTML = `<div class="status error">✗ ${esc(data.error)}</div>`;
+      return;
+    }
+    
+    const result = data.result || {};
+    const success = result.success || false;
+    const message = result.message || '';
+    const latestIssue = result.latest_issue || '';
+    
+    let html = `<div class="card">`;
+    html += `<div class="highlight">`;
+    if (success) {
+      html += `<div class="big">✓ ${esc(message)}</div>`;
+      html += `<div class="sub">最新期号：${esc(latestIssue)}</div>`;
+    } else {
+      html += `<div class="big">⚠ ${esc(message)}</div>`;
+      html += `<div class="sub">最新期号：${esc(latestIssue)}</div>`;
+    }
+    html += `</div>`;
+    
+    // 显示最新结果
+    const results = result.results || [];
+    if (results.length > 0) {
+      html += `<div class="section-title" style="font-size:13px;margin:12px 0 8px">最新开奖结果</div>`;
+      results.forEach((item, idx) => {
+        const nums = (item.numbers || []).join(' ');
+        html += `<div class="row" style="${idx > 0 ? 'border-top:1px solid var(--line);margin-top:8px;padding-top:8px' : ''}">
+          <span class="k" style="width:100px">${esc(item.issue || '')}</span>
+          <span class="v" style="font-size:18px;font-weight:700;letter-spacing:8px;color:#f85149">${nums}</span>
+          <span style="color:var(--muted)">${esc(item.date || '')}</span>
+        </div>`;
+      });
+    }
+    
+    html += `<button type="button" style="width:100%;margin-top:12px;padding:10px;background:var(--card2);color:var(--text);border:1px solid var(--line);border-radius:8px;font-size:14px;cursor:pointer" onclick="loadPailie5()">← 返回统计分析</button>`;
+    html += `</div>`;
+    
+    appPailie5.innerHTML = html;
+  } catch (e) {
+    appPailie5.innerHTML = `<div class="status error">抓取失败：${esc(e.message)}</div>`;
+  }
+}
+
 function renderPailie5(r) {
   const appPailie5 = document.getElementById('app-pailie5');
   const stats = r.statistics || {};
@@ -928,12 +978,24 @@ function renderPailie5(r) {
   // ── 标题 ──
   html += `<div class="section-title">【排列五数据分析】</div>`;
   
+  // ── 数据提示 ──
+  const latestDate = recent.length > 0 ? recent[0].date : '未知';
+  const latestIssue = recent.length > 0 ? recent[0].issue : '未知';
+  html += `<div class="highlight">
+    <div style="font-size:14px;color:var(--muted);margin-bottom:4px">最新一期</div>
+    <div class="big" style="font-size:24px;color:#f85149">${recent[0]?.numbers?.join(' ')}</div>
+    <div class="sub">${latestIssue} 期 · ${latestDate}</div>
+  </div>`;
+  
   // ── 基本统计 ──
   html += `<div class="card">
     <div class="row"><span class="k">数据期数</span><span class="v">${stats.total_issues || 0} 期</span></div>
   </div>`;
   
-  // ── 最近开奖结果 ──
+  // ── 抓取按钮 ──
+  html += `<button type="button" style="width:100%;margin:10px 0;padding:10px;background:#4493f8;color:#fff;border:none;border-radius:8px;font-size:14px;cursor:pointer" onclick="fetchPailie5Data()">🔄 抓取最新开奖号码</button>`;
+  
+  // ── 最近开奖结果 ───
   html += `<div class="section-title">最近开奖结果</div>`;
   html += `<div class="card">`;
   recent.forEach((item, i) => {
@@ -994,6 +1056,18 @@ function renderPailie5(r) {
   html += `<div class="row"><span class="k">当前遗漏（期）</span><span class="v">${Object.entries(currentGaps).filter(([k, v]) => v > 0).map(([k, v]) => k + ':' + v).join(' · ') || '无'}</span></div>`;
   html += `<div class="row"><span class="k">平均遗漏（期）</span><span class="v">${Object.entries(avgGaps).map(([k, v]) => k + ':' + v).join(' · ') || '无'}</span></div>`;
   html += `</div>`;
+  
+  // ── 滚动回测 ──
+  const bt = r.backtest || {};
+  if (bt && bt.trials) {
+    html += `<div class="section-title">滚动回测（仅供参考）</div>`;
+    html += `<div class="card">
+      <div class="row"><span class="k">回测期数</span><span class="v">${bt.trials}</span></div>
+      <div class="row"><span class="k">Top5直选命中</span><span class="v">${bt.top5_rate ? (bt.top5_rate * 100).toFixed(1) : '0'}% (${bt.top5_hit || 0}/${bt.trials})</span></div>
+      <div class="row"><span class="k">推荐池至少中2个数字</span><span class="v">${bt.ge2_digit_rate ? (bt.ge2_digit_rate * 100).toFixed(1) : '0'}%</span></div>
+      <div class="row"><span class="k">推荐池至少中3个数字</span><span class="v">${bt.ge3_digit_rate ? (bt.ge3_digit_rate * 100).toFixed(1) : '0'}%</span></div>
+    </div>`;
+  }
   
   // ── 和值分析 ──
   html += `<div class="section-title">和值分析</div>`;
@@ -1309,6 +1383,19 @@ function renderLottery(r) {
   // ── 标题 ──
   html += `<div class="section-title">【大乐透数据分析】</div>`;
   
+  // ─ 数据提示 ──
+  const latestDate = recent.length > 0 ? recent[0].date : '未知';
+  const latestIssue = recent.length > 0 ? recent[0].issue : '未知';
+  // 大乐透号码格式：front 和 back 字段
+  const latestFront = recent[0]?.front?.join(' · ') || '-';
+  const latestBack = recent[0]?.back?.join(' · ') || '-';
+  html += `<div class="highlight">
+    <div style="font-size:14px;color:var(--muted);margin-bottom:4px">最新一期</div>
+    <div class="big" style="font-size:24px;color:#f85149">前区 ${latestFront}</div>
+    <div class="big" style="font-size:20px;color:var(--home)">后区 ${latestBack}</div>
+    <div class="sub">${latestIssue} 期 · ${latestDate}</div>
+  </div>`;
+  
   // ── 基本统计 ──
   html += `<div class="card">
     <div class="row"><span class="k">数据期数</span><span class="v">${stats.total_issues || 0} 期</span></div>
@@ -1379,6 +1466,20 @@ function renderLottery(r) {
   html += `<div class="row"><span class="k">🔥 后区热门</span><span class="v">${hotBack.map(x => String(Array.isArray(x) ? x[0] : x).padStart(2, '0')).join(' · ')}</span></div>`;
   html += `<div class="row"><span class="k">❄ 后区冷门</span><span class="v">${coldBack.map(x => String(Array.isArray(x) ? x[0] : x).padStart(2, '0')).join(' · ')}</span></div>`;
   html += `</div>`;
+  
+  // ─ 滚动回测 ──
+  const bt = r.backtest || {};
+  if (bt && bt.trials) {
+    html += `<div class="section-title">滚动回测（仅供参考）</div>`;
+    html += `<div class="card">
+      <div class="row"><span class="k">回测期数</span><span class="v">${bt.trials}</span></div>
+      <div class="row"><span class="k">前区 Top5 至少中 2 个</span><span class="v">${bt.front_ge2_rate ? (bt.front_ge2_rate * 100).toFixed(1) : '0'}%</span></div>
+      <div class="row"><span class="k">前区 Top5 至少中 3 个</span><span class="v">${bt.front_ge3_rate ? (bt.front_ge3_rate * 100).toFixed(1) : '0'}%</span></div>
+      <div class="row"><span class="k">前区 Top5 至少中 4 个</span><span class="v">${bt.front_ge4_rate ? (bt.front_ge4_rate * 100).toFixed(1) : '0'}%</span></div>
+      <div class="row"><span class="k">后区 Top3 至少中 1 个</span><span class="v">${bt.back_ge1_rate ? (bt.back_ge1_rate * 100).toFixed(1) : '0'}%</span></div>
+      <div class="row"><span class="k">后区 Top3 至少中 2 个</span><span class="v">${bt.back_ge2_rate ? (bt.back_ge2_rate * 100).toFixed(1) : '0'}%</span></div>
+    </div>`;
+  }
   
   // ── 和值分析 ──
   html += `<div class="section-title">前区和值分析</div>`;
