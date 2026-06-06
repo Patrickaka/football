@@ -46,6 +46,18 @@ def _import_backtest_modules():
 
 log = setup_logger('server')
 
+def _is_same_day(timestamp):
+    """检查时间戳是否属于今天"""
+    from datetime import date
+    return date.fromtimestamp(timestamp) == date.today()
+
+
+def _is_cache_valid(cache_entry, now):
+    """缓存有效条件：未超过 TTL 且未跨天"""
+    elapsed = now - cache_entry['timestamp']
+    return elapsed < cache_entry['expire_seconds'] and _is_same_day(cache_entry['timestamp'])
+
+
 # 缓存机制
 _CACHE = {
     '3d_ml': {
@@ -274,8 +286,8 @@ class Handler(BaseHTTPRequestHandler):
             now = time.time()
             cache = _CACHE['3d']
             
-            # 检查缓存是否有效
-            if cache['data'] is not None and (now - cache['timestamp']) < cache['expire_seconds']:
+            # 检查缓存是否有效（TTL + 跨天双重校验）
+            if cache['data'] is not None and _is_cache_valid(cache, now):
                 self._log.info('3D 预测使用缓存')
                 return {'result': cache['data']}
             
@@ -298,13 +310,13 @@ class Handler(BaseHTTPRequestHandler):
             ml_cache = _CACHE['3d_ml']
             data_cache = _CACHE['3d_data']
             
-            # 检查 ML 缓存是否有效
-            if ml_cache['data'] is not None and (now - ml_cache['timestamp']) < ml_cache['expire_seconds']:
+            # 检查 ML 缓存是否有效（TTL + 跨天双重校验）
+            if ml_cache['data'] is not None and _is_cache_valid(ml_cache, now):
                 self._log.info('3D ML 预测使用缓存')
                 return {'result': ml_cache['data']}
-            
-            # 检查数据缓存
-            if data_cache['data'] is not None and (now - data_cache['timestamp']) < data_cache['expire_seconds']:
+
+            # 检查数据缓存（TTL + 跨天双重校验）
+            if data_cache['data'] is not None and _is_cache_valid(data_cache, now):
                 self._log.info('3D ML 使用缓存数据')
                 data = data_cache['data']
             else:
