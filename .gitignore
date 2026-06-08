@@ -29,4 +29,3 @@ data/cache/
 
 # 其他缓存文件
 data/*_cache.json
-data/backtest_config.json
