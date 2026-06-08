@@ -1714,6 +1714,10 @@ async function loadLottery3d(force) {
   if (lottery3dLoaded && !force) return;
   app3d.innerHTML = `<div class="status"><span class="spinner"></span>正在抓取开奖数据并计算…</div>`;
   try {
+    // 如果是强制刷新，先清除服务器端缓存
+    if (force) {
+      await fetchJson('/api/clear-cache');
+    }
     const data = await fetchJson('/api/3d?_=' + Date.now());
     if (data.error) {
       app3d.innerHTML = `<div class="status error">✗ ${esc(data.error)}</div>`;
@@ -1733,11 +1737,15 @@ async function loadLottery3d(force) {
 // ── 排列五相关函数 ──
 let pailie5Loaded = false;
 
-async function loadPailie5() {
-  if (pailie5Loaded) return;
+async function loadPailie5(force) {
+  if (pailie5Loaded && !force) return;
   const appPailie5 = document.getElementById('app-pailie5');
-  appPailie5.innerHTML = `<div class="status"><span class="spinner"></span>正在加载排列五数据…</div>`;
+  appPailie5.innerHTML = `<div class="status"><span class="spinner"></span>正在抓取开奖数据并计算…</div>`;
   try {
+    // 如果是强制刷新，先清除服务器端缓存
+    if (force) {
+      await fetchJson('/api/clear-cache');
+    }
     const data = await fetchJson('/api/pailie5?_=' + Date.now());
     if (data.error) {
       appPailie5.innerHTML = `<div class="status error">✗ ${esc(data.error)}</div>`;
@@ -1825,7 +1833,7 @@ function renderPailie5(r) {
   </div>`;
   
   // ── 抓取按钮 ──
-  html += `<button type="button" style="width:100%;margin:10px 0;padding:10px;background:#4493f8;color:#fff;border:none;border-radius:8px;font-size:14px;cursor:pointer" onclick="fetchPailie5Data()">🔄 抓取最新开奖号码</button>`;
+  html += `<button type="button" style="width:100%;margin:10px 0;padding:10px;background:#4493f8;color:#fff;border:none;border-radius:8px;font-size:14px;cursor:pointer" onclick="pailie5Loaded=false;loadPailie5(true)">↻ 重新抓取数据并计算</button>`;
   
   // ── 最近开奖结果 ───
   html += `<div class="section-title">最近开奖结果</div>`;
@@ -2188,11 +2196,15 @@ async function getPailie5Ensemble() {
 // ── 大乐透相关函数 ──
 let lotteryLoaded = false;
 
-async function loadLottery() {
-  if (lotteryLoaded) return;
+async function loadLottery(force) {
+  if (lotteryLoaded && !force) return;
   const appLottery = document.getElementById('app-lottery');
-  appLottery.innerHTML = `<div class="status"><span class="spinner"></span>正在加载大乐透数据…</div>`;
+  appLottery.innerHTML = `<div class="status"><span class="spinner"></span>正在抓取开奖数据并计算…</div>`;
   try {
+    // 如果是强制刷新，先清除服务器端缓存
+    if (force) {
+      await fetchJson('/api/clear-cache');
+    }
     const data = await fetchJson('/api/lottery?_=' + Date.now());
     if (data.error) {
       appLottery.innerHTML = `<div class="status error">✗ ${esc(data.error)}</div>`;
@@ -2233,7 +2245,7 @@ function renderLottery(r) {
     <div class="row"><span class="k">数据期数</span><span class="v">${stats.total_issues || 0} 期</span></div>
     <div class="row"><span class="k">前区号码范围</span><span class="v">01 - 35</span></div>
     <div class="row"><span class="k">后区号码范围</span><span class="v">01 - 12</span></div>
-    <button type="button" style="width:100%;margin-top:10px;padding:10px;background:#4493f8;color:#fff;border:none;border-radius:8px;font-size:14px;cursor:pointer" onclick="fetchLotteryData()">🔄 抓取最新开奖号码</button>
+    <button type="button" style="width:100%;margin-top:10px;padding:10px;background:#4493f8;color:#fff;border:none;border-radius:8px;font-size:14px;cursor:pointer" onclick="lotteryLoaded=false;loadLottery(true)">↻ 重新抓取数据并计算</button>
   </div>`;
   
   // ── 最近开奖结果 ──

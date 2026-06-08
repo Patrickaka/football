@@ -242,8 +242,22 @@ class Pailie5Analyzer:
             包含抓取结果和状态信息的字典
         """
         try:
+            # 检查是否需要更新（每天只抓取一次）
+            from ..common.data_cache import is_cache_valid
+            if is_cache_valid('pailie5'):
+                # 使用缓存数据
+                recent = self.get_recent_results(count)
+                return {
+                    'success': True,
+                    'source': 'cache',
+                    'count': len(recent),
+                    'message': '使用缓存数据',
+                    'latest_issue': recent[0]['issue'] if recent else None,
+                    'results': recent
+                }
+            
             # 重新抓取数据
-            fetched_count = self.fetch_history_data(days=1)
+            fetched_count = self.fetch_history_data(days=1, force_refresh=True)
             
             if fetched_count > 0:
                 # 获取最新的结果
