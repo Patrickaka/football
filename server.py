@@ -46,6 +46,7 @@ def _import_backtest_modules():
 
 log = setup_logger('server')
 
+
 def _is_same_day(timestamp):
     """检查时间戳是否属于今天"""
     from datetime import date
