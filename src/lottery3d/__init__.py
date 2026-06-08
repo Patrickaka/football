@@ -70,15 +70,31 @@ DIVERSITY_NOISE = 0.15  # 随机噪声幅度（0-1之间，0表示无噪声）
 DIVERSITY_COOL_BONUS = 1.5  # 冷门号码额外加分系数
 USE_DIVERSITY = True  # 是否启用多样性增强
 
+# 推荐池去重与探索
+POOL_DEDUP_ENABLED = True
+POOL_MIN_HAMMING = 2          # 与已选号码至少相差位数
+POOL_MAX_SAME_MULTISORT = 2   # 同号集（组选等价）最多保留注数
+POOL_POS_DIGIT_CAP = 6        # 每位同一数字在推荐池中最多出现次数
+EXPLORE_RATIO = 0.27          # 探索槽位占比（约 4/15 注）
+EXPLORE_NOVELTY_BONUS = 3.0   # 探索阶段新颖度加分
+
 # 推荐注数（直选为带顺序的三位数）
 RECOMMEND_GROUPS = 15
 ZHIXUAN_TOP3 = 3
 ZU6_POOL_SIZE = 5
 ZU6_FOUR_SIZE = 4
 
-# 分位独立模型：百/十/个各取 Top-N，再笛卡尔积组合
-POSITION_TOP_N = 5
-POSITION_COMBO_POOL = POSITION_TOP_N ** 3
+# 分位独立 + Monte Carlo 采样（不再枚举固定笛卡尔积）
+POSITION_CANDIDATE_N = 10       # 候选扩容：各位 Top10 按权重抽样
+POSITION_SAMPLE_N = 5           # 分位独立采样：各位 Top5 概率抽样
+MONTE_CARLO_TRIALS = 5000       # MC 随机生成组数
+MONTE_CARLO_KEEP = 100          # MC 评分后保留 Top
+POSITION_SAMPLE_TRIALS = 1000   # 分位 Top5 概率抽样次数
+BLEND_MAIN_WEIGHT = 0.8         # 主模型权重
+BLEND_CONTRARIAN_WEIGHT = 0.2   # 反相关冷门模型权重
+# 兼容旧字段名
+POSITION_TOP_N = POSITION_SAMPLE_N
+POSITION_COMBO_POOL = MONTE_CARLO_KEEP + POSITION_SAMPLE_TRIALS
 
 # 马尔可夫转移：拉普拉斯平滑系数 α（加法平滑，α=1 即标准 Laplace）
 MARKOV_LAPLACE_ALPHA = 1.0
@@ -710,13 +726,107 @@ def ensemble_all_position_scores(numbers, window_weights, dynamic=None):
     ]
 
 
-def position_top_pools(pos_scores, top_n=POSITION_TOP_N):
-    """各位置 Top-N 号码池"""
+def position_top_pools(pos_scores, top_n=POSITION_SAMPLE_N):
+    """各位置 Top-N 号码池（仅取前 N，供展示/兼容）"""
     pools = []
     for sc in pos_scores:
         ranked = sorted(enumerate(sc), key=lambda x: -x[1])[:top_n]
         pools.append([d for d, _ in ranked])
     return pools
+
+
+def position_weighted_pools(pos_scores, top_n=POSITION_CANDIDATE_N):
+    """各位置 Top-N 候选 + 归一化抽样权重"""
+    pools, weights = [], []
+    for sc in pos_scores:
+        ranked = sorted(enumerate(sc), key=lambda x: -x[1])[:top_n]
+        digits = [d for d, _ in ranked]
+        wts = [max(s, 0.01) for _, s in ranked]
+        total = sum(wts)
+        pools.append(digits)
+        weights.append([w / total for w in wts])
+    return pools, weights
+
+
+def contrarian_position_digit_scores(numbers, position, window=RECENT_WINDOW, dynamic=None):
+    """反相关冷门模型：偏高遗漏、低热度、低转移概率（寻找易被忽略的号）"""
+    recent = _recent_slice(numbers, window)
+    pos_freq = exp_weighted_counts([n[position] for n in recent])
+    probs = second_order_markov_probs(numbers, position)
+    mx = max(pos_freq.values()) if pos_freq else 1.0
+    raw = [0.0] * 10
+    for d in range(10):
+        miss_part = min(miss_value(numbers, d, position=position) / 12.0, 1.0) * 10.0
+        cold_part = (1.0 - pos_freq.get(d, 0) / mx) * 10.0 if mx else 5.0
+        low_te = (1.0 - probs.get(d, 0.1)) * 10.0
+        raw[d] = 0.45 * miss_part + 0.35 * cold_part + 0.20 * low_te
+    return _norm_scale_10(raw)
+
+
+def ensemble_contrarian_position_scores(numbers, window_weights, dynamic=None):
+    out = []
+    for pos in range(3):
+        sc = [0.0] * 10
+        for w, wt in window_weights.items():
+            ps = contrarian_position_digit_scores(numbers, pos, window=w, dynamic=dynamic)
+            for d in range(10):
+                sc[d] += wt * ps[d]
+        out.append(sc)
+    return out
+
+
+def blend_position_scores(main_scores, contra_scores, w_main=BLEND_MAIN_WEIGHT, w_contra=BLEND_CONTRARIAN_WEIGHT):
+    return [
+        [w_main * main_scores[pos][d] + w_contra * contra_scores[pos][d] for d in range(10)]
+        for pos in range(3)
+    ]
+
+
+def _sample_triplet_from_pools(pools, weights, rng):
+    a = rng.choices(pools[0], weights=weights[0], k=1)[0]
+    b = rng.choices(pools[1], weights=weights[1], k=1)[0]
+    c = rng.choices(pools[2], weights=weights[2], k=1)[0]
+    return a, b, c, f"{a}{b}{c}"
+
+
+def _triplet_score_with_noise(a, b, c, pos_scores, danma, kill, meta, rng, noise_range):
+    w = triplet_weight(a, b, c, None, danma, kill, meta, pos_scores=pos_scores)
+    if USE_DIVERSITY and noise_range > 0:
+        w += rng.uniform(-noise_range, noise_range)
+    return w
+
+
+def monte_carlo_triplet_pool(
+    pos_scores, danma, kill, meta, pools, weights, rng,
+    trials=MONTE_CARLO_TRIALS, keep=MONTE_CARLO_KEEP,
+):
+    """Top10 按权重随机抽样 → 评分 → 保留 Top-N"""
+    max_score = max(max(sc) for sc in pos_scores) * 3 if pos_scores else 1.0
+    noise_range = max_score * DIVERSITY_NOISE if USE_DIVERSITY else 0.0
+    best = {}
+    for _ in range(trials):
+        a, b, c, num = _sample_triplet_from_pools(pools, weights, rng)
+        w = _triplet_score_with_noise(a, b, c, pos_scores, danma, kill, meta, rng, noise_range)
+        if num not in best or best[num] < w:
+            best[num] = w
+    ranked = sorted(((w, n) for n, w in best.items()), key=lambda x: -x[0])
+    return ranked[:keep], len(best)
+
+
+def position_sample_triplet_pool(
+    pos_scores, danma, kill, meta, pools, weights, rng,
+    trials=POSITION_SAMPLE_TRIALS,
+):
+    """分位 Top5 概率独立抽样 → 评分 → 去重保留"""
+    max_score = max(max(sc) for sc in pos_scores) * 3 if pos_scores else 1.0
+    noise_range = max_score * DIVERSITY_NOISE if USE_DIVERSITY else 0.0
+    best = {}
+    for _ in range(trials):
+        a, b, c, num = _sample_triplet_from_pools(pools, weights, rng)
+        w = _triplet_score_with_noise(a, b, c, pos_scores, danma, kill, meta, rng, noise_range)
+        if num not in best or best[num] < w:
+            best[num] = w
+    return sorted(((w, n) for n, w in best.items()), key=lambda x: -x[0]), len(best)
 
 
 def default_window_weights():
@@ -749,10 +859,10 @@ def compute_window_weights(numbers, trials=WINDOW_BACKTEST_TRIALS, top_k=DYNAMIC
             meta = build_ranking_meta(train, {w: 1.0}, sums, spans, tail_top=4)
             sc, _ = digit_scores(train, window=w, dynamic=meta.get("dynamic"))
             dan, _, kill, _ = pick_dan_tuo_kill(sc)
-            top, _, _ = rank_position_triplets(
+            top, _, _, _ = rank_position_triplets(
                 train, {w: 1.0}, dan, kill, meta, top_n=ZHIXUAN_TOP3
             )
-            top_nums = [t[1] for t in top]
+            top_nums = [t[1] if len(t) == 2 else t[1] for t in top]
             if act_s in top_nums:
                 raw[w] += 1.0
             elif len({int(c) for s in top_nums for c in s} & set(actual)) >= 2:
@@ -992,6 +1102,164 @@ def triplet_weight(a, b, c, score, danma, kill, meta, pos_scores=None):
     return w
 
 
+def _pos_hamming(num_a, num_b):
+    return sum(1 for x, y in zip(num_a, num_b) if x != y)
+
+
+def _multisort_key(num_str):
+    return tuple(sorted(int(c) for c in num_str))
+
+
+def _pool_pos_digit_counts(selected):
+    counts = [Counter() for _ in range(3)]
+    for _, num in selected:
+        for pos, ch in enumerate(num):
+            counts[pos][int(ch)] += 1
+    return counts
+
+
+def _pool_can_add(num, selected, pos_counts):
+    if any(num == n for _, n in selected):
+        return False, "exact_dup"
+    ms = _multisort_key(num)
+    if sum(1 for _, n in selected if _multisort_key(n) == ms) >= POOL_MAX_SAME_MULTISORT:
+        return False, "multisort_cap"
+    if selected:
+        min_dist = min(_pos_hamming(num, n) for _, n in selected)
+        if min_dist < POOL_MIN_HAMMING:
+            return False, "too_similar"
+    for pos, ch in enumerate(num):
+        if pos_counts[pos][int(ch)] >= POOL_POS_DIGIT_CAP:
+            return False, "pos_digit_cap"
+    return True, ""
+
+
+def _zhixuan_api_item(entry):
+    if len(entry) >= 3:
+        w, num, slot = entry[0], entry[1], entry[2]
+    else:
+        w, num = entry[0], entry[1]
+        slot = "exploit"
+    labels = {"exploit": "利用", "explore": "探索", "fill": "补足"}
+    return {
+        "num": num,
+        "score": round(w, 1),
+        "slot": slot,
+        "slot_label": labels.get(slot, slot),
+    }
+
+
+def _pool_novelty_score(num, selected):
+    if not selected:
+        return 10.0
+    min_h = min(_pos_hamming(num, n) for _, n in selected)
+    ms_pen = sum(1 for _, n in selected if _multisort_key(n) == _multisort_key(num))
+    used_digits = Counter(int(n[pos]) for _, n in selected for pos in range(3))
+    fresh = sum(1 for pos in range(3) if used_digits[int(num[pos])] <= 1)
+    return min_h * 2.5 - ms_pen * 1.5 + fresh * 0.5
+
+
+def select_diverse_recommendations(ranked_pool, top_n=RECOMMEND_GROUPS, explore_ratio=EXPLORE_RATIO):
+    """
+    推荐池去重 + 探索选取：
+    - 去重：同号集上限、最小海明距、分位数字频次上限
+    - 探索：预留槽位从高分候选外挑选新颖组合
+    """
+    if not POOL_DEDUP_ENABLED or not ranked_pool:
+        items = [(w, n, "exploit") for w, n in ranked_pool[:top_n]]
+        return items, {"enabled": False}
+
+    explore_n = max(1, int(round(top_n * explore_ratio))) if top_n >= 5 else 0
+    exploit_n = top_n - explore_n
+    selected = []
+    rejected = Counter()
+    used = set()
+    exploit_count = 0
+
+    def try_add(candidates, limit, slot, prefer_novelty=False):
+        nonlocal exploit_count
+        if prefer_novelty:
+            candidates = sorted(
+                candidates,
+                key=lambda x: x[0] + EXPLORE_NOVELTY_BONUS * _pool_novelty_score(x[1], [(a, b) for a, b, _ in selected]),
+                reverse=True,
+            )
+        for w, num in candidates:
+            if len(selected) >= limit or num in used:
+                continue
+            ok, reason = _pool_can_add(num, [(a, b) for a, b, _ in selected], _pool_pos_digit_counts([(a, b) for a, b, _ in selected]))
+            if ok:
+                selected.append((w, num, slot))
+                used.add(num)
+                if slot == "exploit":
+                    exploit_count += 1
+            else:
+                rejected[reason] += 1
+
+    try_add(ranked_pool, exploit_n, "exploit", prefer_novelty=False)
+    exploit_done = len(selected)
+
+    if explore_n > 0:
+        remainder = [(w, n) for w, n in ranked_pool if n not in used]
+        try_add(remainder, exploit_n + explore_n, "explore", prefer_novelty=True)
+
+    for w, num in ranked_pool:
+        if len(selected) >= top_n or num in used:
+            continue
+        if any(num == n for _, n, _ in selected):
+            continue
+        if selected and min(_pos_hamming(num, n) for _, n, _ in selected) < 1:
+            continue
+        selected.append((w, num, "fill"))
+        used.add(num)
+
+    for w, num in ranked_pool:
+        if len(selected) >= top_n or num in used:
+            continue
+        selected.append((w, num, "fill"))
+        used.add(num)
+
+    explore_nums = [n for _, n, s in selected if s == "explore"]
+    meta = {
+        "enabled": True,
+        "exploit_slots": exploit_n,
+        "explore_slots": explore_n,
+        "exploit_picked": exploit_done,
+        "explore_picked": len(explore_nums),
+        "explore_nums": explore_nums,
+        "selected": len(selected),
+        "rejected": dict(rejected),
+        "rejected_labels": {
+            "too_similar": "位差过近",
+            "multisort_cap": "同号集已满",
+            "pos_digit_cap": "分位频次上限",
+            "exact_dup": "完全重复",
+        },
+        "rules": {
+            "min_hamming": POOL_MIN_HAMMING,
+            "max_same_multisort": POOL_MAX_SAME_MULTISORT,
+            "pos_digit_cap": POOL_POS_DIGIT_CAP,
+            "explore_ratio": explore_ratio,
+        },
+        "avg_hamming": 0.0,
+        "unique_multisort": 0,
+    }
+    nums_only = [n for _, n, _ in selected]
+    if len(nums_only) >= 2:
+        dists = [
+            _pos_hamming(nums_only[i], nums_only[j])
+            for i in range(len(nums_only))
+            for j in range(i + 1, len(nums_only))
+        ]
+        meta["avg_hamming"] = round(sum(dists) / len(dists), 2)
+    meta["unique_multisort"] = len({_multisort_key(n) for n in nums_only})
+    meta["position_spread"] = {
+        name: dict(Counter(nums_only[i][pos] for i in range(len(nums_only))))
+        for pos, name in enumerate(("百", "十", "个"))
+    }
+    return selected[:top_n], meta
+
+
 def rank_triplets(score, danma, kill, meta, top_n=20):
     """全空间 10×10×10 直选排序（组六复式等仍使用）"""
     pool = []
@@ -1016,31 +1284,66 @@ def rank_position_triplets(
     kill,
     meta,
     top_n=RECOMMEND_GROUPS,
-    pos_top_n=POSITION_TOP_N,
+    pos_top_n=POSITION_SAMPLE_N,
     pos_scores=None,
 ):
-    """分位独立模型：百/十/个各 Top-N → N³ 组合再排序"""
+    """
+    分位独立 + 反相关融合 + Monte Carlo：
+    - 0.8×主模型 + 0.2×冷门模型
+    - Top10 按权重 MC 5000 组 → 保留 Top100
+    - Top5 概率抽样 1000 次 → 合并排序
+    """
+    main_pos = ensemble_all_position_scores(
+        numbers, window_weights, dynamic=meta.get("dynamic")
+    )
+    contra_pos = ensemble_contrarian_position_scores(
+        numbers, window_weights, dynamic=meta.get("dynamic")
+    )
     if pos_scores is None:
-        pos_scores = ensemble_all_position_scores(
-            numbers, window_weights, dynamic=meta.get("dynamic")
-        )
-    pools = position_top_pools(pos_scores, top_n=pos_top_n)
+        pos_scores = blend_position_scores(main_pos, contra_pos)
 
-    max_score = max(max(sc) for sc in pos_scores) * 3 if pos_scores else 1.0
-    noise_range = max_score * DIVERSITY_NOISE if USE_DIVERSITY else 0.0
     seed = int(time.time() // 86400)
     rng = random.Random(seed)
 
-    pool = []
-    for a in pools[0]:
-        for b in pools[1]:
-            for c in pools[2]:
-                w = triplet_weight(a, b, c, None, danma, kill, meta, pos_scores=pos_scores)
-                if USE_DIVERSITY and noise_range > 0:
-                    w += rng.uniform(-noise_range, noise_range)
-                pool.append((w, f"{a}{b}{c}"))
-    pool.sort(key=lambda x: -x[0])
-    return pool[:top_n], pos_scores, pools
+    cand_pools, cand_weights = position_weighted_pools(pos_scores, top_n=POSITION_CANDIDATE_N)
+    samp_pools, samp_weights = position_weighted_pools(pos_scores, top_n=pos_top_n)
+
+    mc_pool, mc_unique = monte_carlo_triplet_pool(
+        pos_scores, danma, kill, meta, cand_pools, cand_weights, rng,
+    )
+    pos_pool, pos_unique = position_sample_triplet_pool(
+        pos_scores, danma, kill, meta, samp_pools, samp_weights, rng,
+    )
+
+    merged = {}
+    for w, num in mc_pool + pos_pool:
+        if num not in merged or merged[num] < w:
+            merged[num] = w
+    pool = sorted(((w, n) for n, w in merged.items()), key=lambda x: -x[0])
+
+    candidate_n = min(len(pool), max(top_n * 4, top_n + 20))
+    selected, pool_meta = select_diverse_recommendations(pool[:candidate_n], top_n=top_n)
+    pool_meta["sampling"] = {
+        "method": "monte_carlo_blend",
+        "blend_main": BLEND_MAIN_WEIGHT,
+        "blend_contrarian": BLEND_CONTRARIAN_WEIGHT,
+        "candidate_top_n": POSITION_CANDIDATE_N,
+        "position_sample_top_n": pos_top_n,
+        "monte_carlo_trials": MONTE_CARLO_TRIALS,
+        "monte_carlo_keep": MONTE_CARLO_KEEP,
+        "position_sample_trials": POSITION_SAMPLE_TRIALS,
+        "mc_unique": mc_unique,
+        "pos_sample_unique": pos_unique,
+        "merged_unique": len(pool),
+    }
+    pools_info = {
+        "candidate": cand_pools,
+        "sample": samp_pools,
+        "weights": cand_weights,
+        "main": main_pos,
+        "contrarian": contra_pos,
+    }
+    return selected, pos_scores, pools_info, pool_meta
 
 
 def _meta_from_raw(meta_raw, tail_top=5):
@@ -1087,10 +1390,10 @@ def backtest(numbers, trials=BACKTEST_TRIALS, window_weights=None):
         meta = build_ranking_meta(train, ww, sums, spans, tail_top=4)
         sc, _ = ensemble_digit_scores(train, ww, dynamic=meta.get("dynamic"))
         dan, _, kill, _ = pick_dan_tuo_kill(sc)
-        top, _, _ = rank_position_triplets(
+        top, _, _, _ = rank_position_triplets(
             train, ww, dan, kill, meta, top_n=RECOMMEND_GROUPS
         )
-        top_nums = [t[1] for t in top]
+        top_nums = [t[1] if len(t) == 2 else t[1] for t in top]
         act_s = f"{actual[0]}{actual[1]}{actual[2]}"
 
         if act_s in top_nums:
@@ -1117,11 +1420,11 @@ def backtest(numbers, trials=BACKTEST_TRIALS, window_weights=None):
         "trials": n,
         "top_hit": hit_top,
         "top_rate": hit_top / n,
-        "top_rate_baseline": RECOMMEND_GROUPS / POSITION_COMBO_POOL,
+        "top_rate_baseline": RECOMMEND_GROUPS / 1000,
         "top3_hit": hit_top3,
         "top3_rate": hit_top3 / n,
-        "top3_rate_baseline": ZHIXUAN_TOP3 / POSITION_COMBO_POOL,
-        "combo_pool": POSITION_COMBO_POOL,
+        "top3_rate_baseline": ZHIXUAN_TOP3 / 1000,
+        "combo_pool": MONTE_CARLO_KEEP + POSITION_SAMPLE_TRIALS,
         "recommend_groups": RECOMMEND_GROUPS,
         "ge2_digit_rate": hit_ge2 / n,
         "sum_band_rate": hit_sum_band / n,
@@ -1495,7 +1798,7 @@ def run_prediction(data=None, force_refresh=False):
     form_prob = analyze_form_probability(numbers, window_weights=window_weights)
     zu6_four = pick_zu6_four(score, kill)
     _, z6_straight = zu6_notes_from_digits(zu6_four)
-    zhixuan_top, pos_scores, pos_pools = rank_position_triplets(
+    zhixuan_top, pos_scores, pools_info, pool_meta = rank_position_triplets(
         numbers, window_weights, danma, kill, meta, top_n=RECOMMEND_GROUPS
     )
     bt = backtest(numbers, window_weights=window_weights)
@@ -1505,12 +1808,29 @@ def run_prediction(data=None, force_refresh=False):
 
     last_num = numbers[-1]
     pos_names = ("百", "十", "个")
+    cand_pools = pools_info.get("candidate", [[]] * 3)
+    cand_weights = pools_info.get("weights", [[]] * 3)
+    contra_pos = pools_info.get("contrarian", [[]] * 3)
     position_top = [
         {
             "name": name,
             "digits": [
-                {"digit": d, "score": round(pos_scores[pos][d], 1)}
-                for d in pos_pools[pos]
+                {
+                    "digit": d,
+                    "score": round(pos_scores[pos][d], 1),
+                    "weight_pct": round(cand_weights[pos][i] * 100, 1) if i < len(cand_weights[pos]) else 0,
+                }
+                for i, d in enumerate(cand_pools[pos])
+            ],
+        }
+        for pos, name in enumerate(pos_names)
+    ]
+    contrarian_top = [
+        {
+            "name": name,
+            "digits": [
+                {"digit": d, "score": round(contra_pos[pos][d], 1)}
+                for d in sorted(range(10), key=lambda x: -contra_pos[pos][x])[:POSITION_CANDIDATE_N]
             ],
         }
         for pos, name in enumerate(pos_names)
@@ -1545,14 +1865,30 @@ def run_prediction(data=None, force_refresh=False):
         "kill": kill,
         "rank_top10": [{"digit": d, "score": round(s, 1)} for d, s in rank[:10]],
         "position_top": position_top,
+        "contrarian_top": contrarian_top,
         "zhixuan_model": {
-            "method": "position_independent",
-            "position_top_n": POSITION_TOP_N,
-            "combo_pool": POSITION_COMBO_POOL,
+            "method": "monte_carlo_blend",
+            "position_top_n": POSITION_SAMPLE_N,
+            "candidate_top_n": POSITION_CANDIDATE_N,
+            "combo_pool": pool_meta.get("sampling", {}).get("merged_unique", POSITION_COMBO_POOL),
             "pools": {
-                name: pos_pools[i]
+                name: pools_info.get("sample", [[]] * 3)[i]
                 for i, name in enumerate(pos_names)
             },
+            "candidate_pools": {
+                name: cand_pools[i]
+                for i, name in enumerate(pos_names)
+            },
+            "candidate_weights": {
+                name: [round(w * 100, 1) for w in cand_weights[i]]
+                for i, name in enumerate(pos_names)
+            },
+            "sampling": pool_meta.get("sampling", {}),
+            "blend": {
+                "main": BLEND_MAIN_WEIGHT,
+                "contrarian": BLEND_CONTRARIAN_WEIGHT,
+            },
+            "pool_dedup": pool_meta,
         },
         "miss_global": miss_global,
         "miss_position": miss_position,
@@ -1581,12 +1917,16 @@ def run_prediction(data=None, force_refresh=False):
         },
         "transfer_model": "transfer_entropy",
         "score_formula": {
-            "method": "balance",
+            "method": "balance_blend",
             "weights": {
                 "hot": BALANCE_W_HOT,
                 "markov": BALANCE_W_MARKOV,
                 "miss": BALANCE_W_MISS,
                 "cycle": BALANCE_W_CYCLE,
+            },
+            "blend": {
+                "main": BLEND_MAIN_WEIGHT,
+                "contrarian": BLEND_CONTRARIAN_WEIGHT,
             },
             "scales": {
                 "W_HOT_POS": W_HOT_POS,
@@ -1645,8 +1985,8 @@ def run_prediction(data=None, force_refresh=False):
             "digits_str": "".join(map(str, zu6_four)),
             "combos": z6_straight,
         },
-        "zhixuan_top3": [{"num": num, "score": round(w, 1)} for w, num in zhixuan_top[:ZHIXUAN_TOP3]],
-        "zhixuan": [{"num": num, "score": round(w, 1)} for w, num in zhixuan_top],
+        "zhixuan_top3": [_zhixuan_api_item(t) for t in zhixuan_top[:ZHIXUAN_TOP3]],
+        "zhixuan": [_zhixuan_api_item(t) for t in zhixuan_top],
         "backtest": bt,
     }
     
@@ -1808,19 +2148,32 @@ def print_report(result):
     zm = result.get("zhixuan_model", {})
     if zm:
         pools = zm.get("pools", {})
-        print(f"  分位独立: 百{''.join(map(str, pools.get('百', [])))}"
-              f" × 十{''.join(map(str, pools.get('十', [])))}"
-              f" × 个{''.join(map(str, pools.get('个', [])))}"
-              f" = {zm.get('combo_pool', POSITION_COMBO_POOL)} 注候选池")
+        samp = zm.get("sampling", {})
+        cand = zm.get("candidate_pools", {})
+        print(f"  MC采样: Top10权重×{samp.get('monte_carlo_trials', MONTE_CARLO_TRIALS)}"
+              f" → Top{samp.get('monte_carlo_keep', MONTE_CARLO_KEEP)}"
+              f" + 分位Top5×{samp.get('position_sample_trials', POSITION_SAMPLE_TRIALS)}"
+              f" = {samp.get('merged_unique', '—')} 注合并池")
+        print(f"  候选Top10: 百{''.join(map(str, cand.get('百', [])))}"
+              f" 十{''.join(map(str, cand.get('十', [])))}"
+              f" 个{''.join(map(str, cand.get('个', [])))}")
+        blend = zm.get("blend", {})
+        print(f"  融合评分: {blend.get('main', BLEND_MAIN_WEIGHT)}×主模型"
+              f" + {blend.get('contrarian', BLEND_CONTRARIAN_WEIGHT)}×冷门模型")
+        pd = zm.get("pool_dedup", {})
+        if pd.get("enabled"):
+            print(f"  推荐池去重+探索: 利用{pd.get('exploit_slots')} + 探索{pd.get('explore_slots')} "
+                  f"| 平均位差{pd.get('avg_hamming')} | 号集{pd.get('unique_multisort')}种 "
+                  f"| 拦截{pd.get('rejected')}")
 
     print("\n" + "=" * 70)
-    print("【直选Top3推荐】（分位独立 Top5×Top5×Top5）")
+    print("【直选Top3推荐】（MC采样 + 0.8主+0.2冷门）")
     print("=" * 70)
     for idx, item in enumerate(result.get("zhixuan_top3", []), start=1):
         print(f"  {idx}. {item['num']}  评分={item['score']:.1f}")
 
     print("\n" + "=" * 70)
-    print(f"【直选推荐 {RECOMMEND_GROUPS} 注】（分位独立 Top5×Top5×Top5）")
+    print(f"【直选推荐 {RECOMMEND_GROUPS} 注】（MC采样 + 分位概率抽样）")
     print("=" * 70)
     print("  杀码参考:", result["kill"], f"（含杀码组合每码 -{W_KILL_PENALTY} 分降权）")
     print("-" * 70)

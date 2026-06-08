@@ -105,6 +105,58 @@
   }
   .balance-scales b { color: var(--text); }
 
+  .pool-dedup-card, .sampling-card {
+    background: linear-gradient(135deg, #1a2230, #221e2a);
+    border: 1px solid var(--warn); border-radius: 12px;
+    padding: 14px 16px; margin-bottom: 14px;
+  }
+  .sampling-card {
+    background: linear-gradient(135deg, #1a2230, #1a2a35);
+    border-color: var(--home);
+  }
+  .sampling-card .dedup-head { color: var(--home); }
+  .weight-tag { font-size: 10px; color: var(--muted); margin-left: 2px; }
+  .pool-dedup-card .dedup-head {
+    font-size: 13px; font-weight: 600; color: var(--warn);
+    text-align: center; margin-bottom: 10px;
+  }
+  .pool-dedup-stats {
+    display: flex; flex-wrap: wrap; gap: 8px; justify-content: center;
+    margin-bottom: 10px;
+  }
+  .pool-dedup-stats span {
+    background: var(--card2); border-radius: 6px; padding: 5px 10px;
+    font-size: 12px; color: var(--muted);
+  }
+  .pool-dedup-stats b { color: var(--text); }
+  .pool-dedup-rules {
+    display: flex; flex-wrap: wrap; gap: 6px; justify-content: center;
+    margin: 8px 0; font-size: 11px;
+  }
+  .pool-dedup-rules span {
+    background: var(--card); border: 1px solid var(--line);
+    border-radius: 5px; padding: 3px 8px; color: var(--muted);
+  }
+  .pos-spread { margin-top: 10px; }
+  .pos-spread-row {
+    display: flex; align-items: center; gap: 8px; margin: 4px 0; font-size: 12px;
+  }
+  .pos-spread-row .pos-label { color: var(--muted); min-width: 28px; }
+  .pos-spread-row .spread-digits { display: flex; gap: 4px; flex-wrap: wrap; }
+  .pos-spread-row .spread-digits i {
+    font-style: normal; background: var(--card2); border-radius: 4px;
+    padding: 2px 6px; color: var(--text); font-size: 11px;
+  }
+  .pos-spread-row .spread-digits i.hot { background: var(--warn); color: #1a1a1a; font-weight: 700; }
+  .slot-badge {
+    font-size: 10px; font-weight: 600; padding: 2px 6px; border-radius: 4px;
+    min-width: 32px; text-align: center; flex-shrink: 0;
+  }
+  .slot-exploit { background: rgba(46,160,67,.25); color: var(--accent2); border: 1px solid var(--accent); }
+  .slot-explore { background: rgba(210,153,34,.25); color: var(--warn); border: 1px solid var(--warn); }
+  .slot-fill { background: var(--card2); color: var(--muted); border: 1px solid var(--line); }
+  .zhixuan.explore-row { background: rgba(210,153,34,.06); border-radius: 6px; margin: 0 -4px; padding: 8px 4px; }
+
   .search { width: 100%; padding: 12px 16px; font-size: 15px;
     background: var(--card); border: 1px solid var(--line); border-radius: 10px;
     color: var(--text); margin-bottom: 16px; outline: none; }
@@ -1494,6 +1546,7 @@ function renderLottery3d(r) {
   html += `<div class="section-title">【冷热平衡评分】</div>`;
   html += `<div class="balance-card">
     <div class="formula">最终得分 = ${sw.hot}×热度 + ${sw.markov}×马尔可夫 + ${sw.miss}×遗漏 + ${sw.cycle}×周期</div>
+    ${sf.blend ? `<div class="formula" style="margin-top:6px;font-size:12px;color:var(--home)">直选融合 = ${sf.blend.main}×主模型 + ${sf.blend.contrarian}×反相关冷门模型</div>` : ''}
     ${balanceFormulaBar(sf)}
     <div class="balance-scales">
       <span><b>W_HOT_POS</b> ${sc.W_HOT_POS ?? 3.0}</span>
@@ -1508,11 +1561,13 @@ function renderLottery3d(r) {
   </div>`;
 
   // ── 直选 Top3（独立醒目块）──
-  html += `<div class="section-title">【直选Top3推荐】（分位独立 Top5×Top5×Top5）</div>`;
+  html += `<div class="section-title">【直选Top3推荐】（MC采样 · 0.8主+0.2冷门）</div>`;
   html += `<div class="highlight" style="border-color:var(--warn)">`;
   top3.forEach((item, i) => {
+    const slotTag = item.slot && item.slot !== 'exploit'
+      ? ` <span class="slot-badge slot-${esc(item.slot)}">${esc(item.slot_label || item.slot)}</span>` : '';
     html += `<div class="row"><span class="k">第${i + 1}推荐</span>
-      <span class="v"><b style="font-size:22px;letter-spacing:4px;color:var(--accent2)">${esc(item.num)}</b> · 评分 ${item.score.toFixed(1)}</span></div>`;
+      <span class="v"><b style="font-size:22px;letter-spacing:4px;color:var(--accent2)">${esc(item.num)}</b> · 评分 ${item.score.toFixed(1)}${slotTag}</span></div>`;
   });
   html += `<div class="sub" style="margin-top:8px">Top3 号码：${esc(top3.map(x => x.num).join(', '))}</div>`;
   html += `</div>`;
@@ -1655,15 +1710,32 @@ function renderLottery3d(r) {
     `<div class="digit-cell"><div class="d">${x.digit}</div><div class="s">${x.score}分</div></div>`
   ).join('')}</div></div>`;
 
-  // ── 分位推荐 ──
-  html += `<div class="section-title">分位独立评分（各位 Top5 · 同平衡公式）</div>`;
+  // ── 分位推荐 Top10 候选池 ──
+  const zmPre = r.zhixuan_model || {};
+  const candN = zmPre.candidate_top_n || 10;
+  html += `<div class="section-title">分位候选池（各位 Top${candN} · 按权重抽样，非固定取前6）</div>`;
   html += `<div class="card">`;
   r.position_top.forEach(block => {
     html += `<div class="pos-block"><div class="pos-name">${esc(block.name)}位</div><div class="pos-tags">`;
-    block.digits.forEach(x => { html += `<span>${x.digit}(${x.score})</span>`; });
+    block.digits.forEach(x => {
+      const wp = x.weight_pct != null ? `<span class="weight-tag">${x.weight_pct}%</span>` : '';
+      html += `<span>${x.digit}(${x.score})${wp}</span>`;
+    });
     html += `</div></div>`;
   });
+  html += `<div class="note" style="margin-top:8px">MC 从 Top${candN} 按得分权重随机抽号，可产出以往进不了 Top3 交叉的组合（如 927、581）</div>`;
   html += `</div>`;
+
+  if (r.contrarian_top && r.contrarian_top.length) {
+    html += `<div class="section-title">反相关冷门模型（${(zmPre.blend && zmPre.blend.contrarian) ? pct(zmPre.blend.contrarian) : '20%'} 权重 · 寻找易被忽略的号）</div>`;
+    html += `<div class="card">`;
+    r.contrarian_top.forEach(block => {
+      html += `<div class="pos-block"><div class="pos-name">${esc(block.name)}位</div><div class="pos-tags">`;
+      block.digits.forEach(x => { html += `<span>${x.digit}(${x.score})</span>`; });
+      html += `</div></div>`;
+    });
+    html += `</div>`;
+  }
 
   // ── 组六四码 ──
   html += `<div class="section-title">【组六四码推荐】（选 4 个号打组六复式即可）</div>`;
@@ -1675,18 +1747,81 @@ function renderLottery3d(r) {
     <div class="note">对应直选形态：${esc(z6.combos.join(', '))}</div>
   </div>`;
 
-  // ── 直选 ──
   const zm = r.zhixuan_model || {};
-  const poolNote = zm.pools
-    ? `分位独立 Top${zm.position_top_n || 5}：百${esc((zm.pools['百'] || []).join(''))} × 十${esc((zm.pools['十'] || []).join(''))} × 个${esc((zm.pools['个'] || []).join(''))} = ${zm.combo_pool || 125} 注候选池`
+  const samp = zm.sampling || {};
+  if (samp.method) {
+    html += `<div class="section-title">【Monte Carlo 候选池】</div>`;
+    html += `<div class="sampling-card">
+      <div class="dedup-head">不再枚举 125 注 · Top10 权重 MC ${samp.monte_carlo_trials || 5000} 组 → Top${samp.monte_carlo_keep || 100} + 分位 Top5 概率抽 ${samp.position_sample_trials || 1000} 次</div>
+      <div class="pool-dedup-stats">
+        <span>MC 去重 <b>${samp.mc_unique ?? '—'}</b> 注</span>
+        <span>分位抽样 <b>${samp.pos_sample_unique ?? '—'}</b> 注</span>
+        <span>合并池 <b>${samp.merged_unique ?? zm.combo_pool ?? '—'}</b> 注</span>
+        <span>融合 <b>${zm.blend ? zm.blend.main + '主+' + zm.blend.contrarian + '冷' : '0.8+0.2'}</b></span>
+      </div>
+      <div class="note" style="text-align:center">评分后排序 → 去重探索 → 输出 ${n} 注推荐</div>
+    </div>`;
+  }
+
+  // ── 推荐池去重与探索 ──
+  const pd = zm.pool_dedup || {};
+  if (pd.enabled) {
+    const rules = pd.rules || {};
+    const rejLabels = pd.rejected_labels || {};
+    const rejectedTxt = pd.rejected && Object.keys(pd.rejected).length
+      ? Object.entries(pd.rejected).map(([k, v]) => `${rejLabels[k] || k} ${v}次`).join(' · ')
+      : '无';
+    html += `<div class="section-title">【推荐池去重与探索】</div>`;
+    html += `<div class="pool-dedup-card">
+      <div class="dedup-head">${samp.merged_unique || zm.combo_pool || '—'} 注合并池 → 去重筛选 → ${pd.exploit_picked ?? pd.exploit_slots} 利用 + ${pd.explore_picked ?? pd.explore_slots} 探索 = ${pd.selected || n} 注推荐</div>
+      <div class="pool-dedup-stats">
+        <span>利用槽 <b>${pd.exploit_slots ?? '—'}</b> 注</span>
+        <span>探索槽 <b>${pd.explore_slots ?? '—'}</b> 注（≈${pct(rules.explore_ratio || 0.27)}）</span>
+        <span>平均位差 <b>${pd.avg_hamming ?? '—'}</b></span>
+        <span>号集种类 <b>${pd.unique_multisort ?? '—'}</b></span>
+      </div>
+      <div class="pool-dedup-rules">
+        <span>最小位差 ≥${rules.min_hamming ?? 2}</span>
+        <span>同号集上限 ${rules.max_same_multisort ?? 2}</span>
+        <span>分位频次 ≤${rules.pos_digit_cap ?? 6}</span>
+      </div>
+      <div class="note" style="text-align:center;margin-bottom:6px">拦截：${esc(rejectedTxt)}</div>`;
+    const spread = pd.position_spread || {};
+    if (Object.keys(spread).length) {
+      html += `<div class="pos-spread">`;
+      Object.entries(spread).forEach(([posName, counts]) => {
+        const maxC = Math.max(...Object.values(counts), 1);
+        const digits = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+        html += `<div class="pos-spread-row"><span class="pos-label">${esc(posName)}</span><span class="spread-digits">`;
+        digits.forEach(([d, c]) => {
+          html += `<i class="${c >= maxC * 0.7 ? 'hot' : ''}">${d}×${c}</i>`;
+        });
+        html += `</span></div>`;
+      });
+      html += `</div>`;
+    }
+    html += `<div class="note" style="margin-top:8px;text-align:center">
+      <span class="slot-badge slot-exploit">利用</span> 高分去重优选 ·
+      <span class="slot-badge slot-explore">探索</span> 新颖组合补位，防推荐塌缩
+    </div></div>`;
+  }
+
+  // ── 直选 ──
+  const candPools = zm.candidate_pools || {};
+  const poolNote = candPools['百']
+    ? `候选 Top10：百${esc((candPools['百'] || []).join(''))} · 十${esc((candPools['十'] || []).join(''))} · 个${esc((candPools['个'] || []).join(''))} → MC+抽样合并 ${samp.merged_unique || zm.combo_pool || '—'} 注`
     : '';
-  html += `<div class="section-title">【直选推荐 ${n} 注】（分位独立 Top5×Top5×Top5）</div>`;
+  html += `<div class="section-title">【直选推荐 ${n} 注】（MC采样 + 概率抽样）</div>`;
   html += `<div class="card">
     ${poolNote ? `<div class="note" style="margin-bottom:8px">${poolNote}</div>` : ''}
     <div class="note" style="margin-bottom:10px">杀码参考 ${esc(r.kill.join(', '))}（含杀码组合降权，非硬杀）</div>`;
   r.zhixuan.forEach((item, i) => {
-    html += `<div class="zhixuan">
+    const slot = item.slot || 'exploit';
+    const slotLabel = item.slot_label || (slot === 'explore' ? '探索' : slot === 'fill' ? '补足' : '利用');
+    const rowCls = slot === 'explore' ? ' zhixuan explore-row' : ' zhixuan';
+    html += `<div class="${rowCls.trim()}">
       <span class="rank">${String(i + 1).padStart(2, '0')}</span>
+      <span class="slot-badge slot-${esc(slot)}">${esc(slotLabel)}</span>
       <span class="num">${esc(item.num)}</span>
       <span class="bar"><i style="width:${(item.score / maxScore * 100).toFixed(0)}%"></i></span>
       <span class="score">${item.score.toFixed(1)}</span></div>`;
@@ -1699,7 +1834,7 @@ function renderLottery3d(r) {
     <div class="row"><span class="k">回测期数</span><span class="v">${bt.trials}</span></div>
     <div class="row"><span class="k">直选Top3命中</span><span class="v">${pct(bt.top3_rate)} (${bt.top3_hit}/${bt.trials})</span></div>
     <div class="row"><span class="k">直选${n}注命中</span><span class="v">${pct(bt.top_rate)} (${bt.top_hit}/${bt.trials})</span></div>
-    <div class="row"><span class="k">候选池 / 基线</span><span class="v">${bt.combo_pool || 125} 注池 · 随机基线 ${pct(bt.top_rate_baseline)}（${n}/${bt.combo_pool || 125}）</span></div>
+    <div class="row"><span class="k">采样池 / 基线</span><span class="v">合并约 ${bt.combo_pool || 1100} 注 · 随机基线 ${pct(bt.top_rate_baseline)}（${n}/1000）</span></div>
     ${bt.significance ? `<div class="row"><span class="k">置换检验 p 值</span><span class="v" style="color:${bt.significance.significant ? 'var(--accent2)' : 'var(--muted)'}">${bt.significance.pvalue.toFixed(3)} · ${bt.significance.significant ? '显著优于随机' : '未显著优于随机（打乱均值 ' + pct(bt.significance.shuffled_mean_rate) + '）'}</span></div>` : ''}
     <div class="row"><span class="k">推荐池至少中2个数字</span><span class="v">${pct(bt.ge2_digit_rate)}</span></div>
     <div class="row"><span class="k">和值落在预测带±4</span><span class="v">${pct(bt.sum_band_rate)}</span></div>
