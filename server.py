@@ -74,6 +74,16 @@ _CACHE = {
         'data': None,
         'timestamp': 0,
         'expire_seconds': 86400  # 24小时缓存（当天有效）
+    },
+    'pailie5': {
+        'data': None,
+        'timestamp': 0,
+        'expire_seconds': 86400  # 24小时缓存（当天有效）
+    },
+    'lottery': {
+        'data': None,
+        'timestamp': 0,
+        'expire_seconds': 86400  # 24小时缓存（当天有效）
     }
 }
 
@@ -362,6 +372,16 @@ class Handler(BaseHTTPRequestHandler):
     def _pailie5_payload(self):
         """获取排列五统计分析"""
         try:
+            now = time.time()
+            cache = _CACHE['pailie5']
+            
+            # 检查缓存是否有效（TTL + 跨天双重校验）
+            if cache['data'] is not None and _is_cache_valid(cache, now):
+                self._log.info('排列五分析使用缓存')
+                return {'result': cache['data']}
+            
+            # 缓存失效，重新计算
+            self._log.info('排列五分析重新计算')
             analyzer = get_pailie5_analyzer()
             stats = analyzer.get_statistics()
             recent = analyzer.get_recent_results(10)
@@ -369,13 +389,17 @@ class Handler(BaseHTTPRequestHandler):
             # 延迟加载回测数据（不在首次请求时计算，改为前端按需加载）
             # backtest = analyzer.rolling_backtest(trials=30)
             
-            return {
-                'result': {
-                    'statistics': stats,
-                    'recent_results': recent,
-                    # 'backtest': backtest,  # 改为按需加载
-                }
+            result = {
+                'statistics': stats,
+                'recent_results': recent,
+                # 'backtest': backtest,  # 改为按需加载
             }
+            
+            # 更新缓存
+            cache['data'] = result
+            cache['timestamp'] = now
+            
+            return {'result': result}
         except Exception:
             self._log.error('排列五分析失败', exc_info=True)
             return {'error': '排列五分析失败'}
@@ -626,6 +650,16 @@ class Handler(BaseHTTPRequestHandler):
     def _lottery_payload(self):
         """获取大乐透统计分析"""
         try:
+            now = time.time()
+            cache = _CACHE['lottery']
+            
+            # 检查缓存是否有效（TTL + 跨天双重校验）
+            if cache['data'] is not None and _is_cache_valid(cache, now):
+                self._log.info('大乐透分析使用缓存')
+                return {'result': cache['data']}
+            
+            # 缓存失效，重新计算
+            self._log.info('大乐透分析重新计算')
             analyzer = get_lottery_analyzer()
             stats = analyzer.get_statistics()
             recent = analyzer.get_recent_results(10)
@@ -633,13 +667,17 @@ class Handler(BaseHTTPRequestHandler):
             # 执行滚动回测
             backtest = analyzer.rolling_backtest(trials=50)
             
-            return {
-                'result': {
-                    'statistics': stats,
-                    'recent_results': recent,
-                    'backtest': backtest,
-                }
+            result = {
+                'statistics': stats,
+                'recent_results': recent,
+                'backtest': backtest,
             }
+            
+            # 更新缓存
+            cache['data'] = result
+            cache['timestamp'] = now
+            
+            return {'result': result}
         except Exception:
             self._log.error('大乐透分析失败', exc_info=True)
             return {'error': '大乐透分析失败'}
