@@ -212,6 +212,677 @@
 
   .disclaimer { color: var(--muted); font-size: 12px; text-align: center;
     margin-top: 20px; line-height: 1.7; }
+
+  /* ==================== 响应式布局（移动端优化）==================== */
+  @media (max-width: 480px) {
+    html {
+      -webkit-text-size-adjust: 100%;
+      -webkit-font-smoothing: antialiased;
+    }
+    
+    body {
+      padding: 8px 6px;
+      font-size: 14px;
+      line-height: 1.5;
+      min-width: 320px;
+    }
+    
+    .wrap {
+      width: 100%;
+      max-width: none;
+      margin: 0;
+      padding: 0;
+    }
+    
+    header {
+      margin-bottom: 16px;
+    }
+    
+    header h1 {
+      font-size: 17px;
+      font-weight: 600;
+    }
+    
+    header p {
+      font-size: 11px;
+      margin-top: 4px;
+    }
+    
+    .tabs {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      border-radius: 8px;
+      overflow: hidden;
+      margin-bottom: 14px;
+    }
+    
+    .tab {
+      padding: 12px 6px;
+      font-size: 12.5px;
+      font-weight: 500;
+      min-height: 48px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    
+    .highlight {
+      padding: 12px;
+      border-radius: 10px;
+      margin-bottom: 12px;
+    }
+    
+    .highlight .big {
+      font-size: 18px;
+      letter-spacing: 2px;
+      font-weight: 700;
+    }
+    
+    .highlight .sub {
+      font-size: 11px;
+      margin-top: 6px;
+    }
+    
+    .card {
+      padding: 12px;
+      border-radius: 10px;
+      margin-bottom: 10px;
+    }
+    
+    .card h3 {
+      font-size: 13px;
+      margin-bottom: 8px;
+    }
+    
+    .row {
+      font-size: 12px;
+      padding: 4px 0;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    
+    .row .k {
+      color: var(--muted);
+      min-width: 80px;
+    }
+    
+    .row .v {
+      flex: 1;
+      text-align: right;
+      word-break: break-all;
+    }
+    
+    .digit-grid {
+      grid-template-columns: repeat(5, 1fr);
+      gap: 4px;
+    }
+    
+    .digit-cell {
+      padding: 6px 4px;
+      border-radius: 6px;
+      min-height: 44px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+    }
+    
+    .digit-cell .d {
+      font-size: 15px;
+      font-weight: 700;
+      color: var(--accent2);
+    }
+    
+    .digit-cell .s {
+      font-size: 10px;
+      color: var(--muted);
+      margin-top: 2px;
+    }
+    
+    .zhixuan {
+      font-size: 12px;
+      gap: 6px;
+      padding: 6px 0;
+    }
+    
+    .zhixuan .rank {
+      min-width: 28px;
+      font-size: 11px;
+      color: var(--muted);
+    }
+    
+    .zhixuan .num {
+      font-size: 14px;
+      font-weight: 700;
+      min-width: 48px;
+      letter-spacing: 2px;
+    }
+    
+    .zhixuan .bar {
+      flex: 1;
+      height: 6px;
+    }
+    
+    .zhixuan .score {
+      min-width: 44px;
+      font-size: 12px;
+      color: var(--accent2);
+    }
+    
+    .section-title {
+      font-size: 13px;
+      margin: 14px 0 8px;
+      padding-bottom: 6px;
+    }
+    
+    .note {
+      font-size: 11px;
+      line-height: 1.6;
+    }
+    
+    .pos-block {
+      margin-bottom: 8px;
+    }
+    
+    .pos-tags span {
+      padding: 3px 8px;
+      margin: 2px 4px 0 0;
+      font-size: 11px;
+      border-radius: 6px;
+    }
+    
+    .blend-row {
+      gap: 6px;
+      font-size: 12px;
+      flex-wrap: wrap;
+    }
+    
+    .blend-row span {
+      padding: 4px 10px;
+      border-radius: 6px;
+    }
+    
+    .blend-row .star {
+      font-weight: 700;
+    }
+    
+    /* 比赛列表优化 */
+    .match {
+      padding: 10px 12px;
+      gap: 8px;
+      margin-bottom: 6px;
+      border-radius: 8px;
+    }
+    
+    .match .num {
+      font-size: 11px;
+      font-weight: 600;
+      min-width: 44px;
+    }
+    
+    .match .time {
+      font-size: 11px;
+      min-width: 56px;
+    }
+    
+    .match .teams {
+      font-size: 12.5px;
+      flex: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    
+    .match .teams .vs {
+      margin: 0 4px;
+      font-size: 11px;
+    }
+    
+    .match .arrow {
+      font-size: 16px;
+    }
+    
+    /* 搜索框 */
+    .search {
+      padding: 10px 12px;
+      font-size: 13px;
+      margin-bottom: 10px;
+      border-radius: 8px;
+      min-height: 44px;
+    }
+    
+    /* 概率条 */
+    .probbar {
+      height: 18px;
+      font-size: 10px;
+    }
+    
+    .probbar-3d {
+      height: 20px;
+      font-size: 10px;
+    }
+    
+    /* 按钮样式 */
+    button {
+      font-size: 13px;
+      padding: 10px 16px;
+      min-height: 44px;
+      border-radius: 8px;
+    }
+    
+    /* 标题样式 */
+    .match-head {
+      margin-bottom: 16px;
+    }
+    
+    .match-head .names {
+      font-size: 15px;
+      font-weight: 600;
+    }
+    
+    .match-head .meta {
+      font-size: 11px;
+      margin-top: 4px;
+    }
+    
+    /* 凯利指数 */
+    .kelly-grid {
+      grid-template-columns: repeat(3, 1fr);
+      gap: 4px;
+      font-size: 11px;
+    }
+    
+    .kelly-cell {
+      padding: 6px 4px;
+      border-radius: 6px;
+      text-align: center;
+    }
+    
+    .kelly-cell .lbl {
+      font-size: 10px;
+    }
+    
+    .kelly-cell .val {
+      font-weight: 600;
+      margin-top: 2px;
+    }
+    
+    /* 半全场分析 */
+    .htf-grid {
+      grid-template-columns: repeat(3, 1fr);
+      gap: 6px;
+    }
+    
+    .htf-item {
+      padding: 8px 4px;
+      border-radius: 8px;
+      text-align: center;
+    }
+    
+    .htf-code {
+      font-size: 14px;
+      font-weight: 700;
+    }
+    
+    .htf-name {
+      font-size: 10px;
+      margin-bottom: 6px;
+    }
+    
+    .htf-bar {
+      height: 5px;
+      margin-bottom: 4px;
+    }
+    
+    .htf-pct {
+      font-size: 12px;
+    }
+    
+    /* 进球数推荐 */
+    .goal-grid {
+      grid-template-columns: repeat(2, 1fr);
+      gap: 8px;
+    }
+    
+    .goal-item {
+      padding: 12px;
+      border-radius: 10px;
+    }
+    
+    .goal-label {
+      font-size: 16px;
+      font-weight: 700;
+    }
+    
+    .goal-rank {
+      width: 22px;
+      height: 22px;
+      font-size: 11px;
+    }
+    
+    .goal-bar {
+      height: 6px;
+      margin-bottom: 4px;
+    }
+    
+    .goal-pct {
+      font-size: 13px;
+    }
+    
+    /* 进球数分布 */
+    .goal-dist-item {
+      font-size: 11px;
+    }
+    
+    .goal-dist-label {
+      width: 32px;
+    }
+    
+    .goal-dist-bar-wrap {
+      margin: 0 8px;
+    }
+    
+    .goal-dist-pct {
+      width: 36px;
+    }
+    
+    /* 推荐卡片 */
+    .rec {
+      padding: 12px;
+      border-radius: 10px;
+      margin-bottom: 10px;
+    }
+    
+    .rec .title {
+      font-size: 15px;
+      font-weight: 700;
+    }
+    
+    .rec .sub {
+      font-size: 11px;
+      margin: 4px 0 8px;
+    }
+    
+    .rec .reasons span {
+      padding: 3px 8px;
+      margin: 2px 4px 0 0;
+      font-size: 11px;
+      border-radius: 20px;
+    }
+    
+    /* 遗漏分析 */
+    .miss-row {
+      font-size: 11px;
+      padding: 3px 0;
+    }
+    
+    /* 分组按钮 */
+    .group-bar {
+      gap: 4px;
+      margin: 0 4px 10px;
+    }
+    
+    .group-bar button {
+      padding: 6px 12px;
+      font-size: 12px;
+      border-radius: 6px;
+      min-height: 36px;
+    }
+    
+    /* 排名样式 */
+    .score {
+      gap: 8px;
+      padding: 6px 0;
+    }
+    
+    .score .rank {
+      font-size: 11px;
+      min-width: 24px;
+    }
+    
+    .score .sc {
+      font-size: 13px;
+      font-weight: 600;
+      min-width: 64px;
+    }
+    
+    .score .res {
+      font-size: 11px;
+      padding: 1px 6px;
+    }
+    
+    .score .bar {
+      height: 6px;
+    }
+    
+    .score .pct {
+      font-size: 11px;
+      min-width: 40px;
+    }
+    
+    /* 尾部声明 */
+    .disclaimer {
+      font-size: 10.5px;
+      margin-top: 16px;
+      padding: 0 8px;
+      line-height: 1.6;
+    }
+    
+    /* 标签样式 */
+    .tag {
+      padding: 4px 10px;
+      font-size: 12px;
+      border-radius: 6px;
+    }
+    
+    /* 科普卡片 */
+    .edu {
+      padding: 10px 12px;
+      border-radius: 8px;
+    }
+    
+    .edu > summary {
+      font-size: 12px;
+    }
+    
+    .edu .body {
+      font-size: 11.5px;
+      line-height: 1.7;
+    }
+    
+    /* 状态提示 */
+    .status {
+      padding: 24px 12px;
+      font-size: 13px;
+    }
+    
+    .spinner {
+      width: 18px;
+      height: 18px;
+      border-width: 2px;
+    }
+    
+    /* 返回按钮 */
+    .back {
+      font-size: 13px;
+      margin-bottom: 12px;
+    }
+    
+    /* 滚动条美化 */
+    ::-webkit-scrollbar {
+      width: 4px;
+      height: 4px;
+    }
+    
+    ::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    
+    ::-webkit-scrollbar-thumb {
+      background: var(--line);
+      border-radius: 2px;
+    }
+    
+    ::-webkit-scrollbar-thumb:hover {
+      background: var(--muted);
+    }
+    
+    /* 形态概率条 */
+    .probbar-3d {
+      height: 18px;
+    }
+    
+    /* 组选六四码显示 */
+    .tags {
+      gap: 6px;
+    }
+    
+    /* 大乐透专用样式 */
+    .lottery-row {
+      flex-wrap: wrap;
+      align-items: center;
+    }
+    
+    /* 按钮最小点击区域 */
+    [role="tab"], button, .tab, .match, .back {
+      min-height: 44px;
+      touch-action: manipulation;
+    }
+    
+    /* 防止文本缩放 */
+    input, textarea, select {
+      font-size: 16px;
+    }
+  }
+
+  /* ==================== 平板端优化（481px - 768px）==================== */
+  @media (min-width: 481px) and (max-width: 768px) {
+    body {
+      padding: 16px 16px;
+      font-size: 14px;
+    }
+    
+    .wrap {
+      max-width: 680px;
+      margin: 0 auto;
+    }
+    
+    header h1 {
+      font-size: 20px;
+    }
+    
+    header p {
+      font-size: 12px;
+    }
+    
+    .tabs {
+      flex-wrap: wrap;
+    }
+    
+    .tab {
+      flex: 1;
+      min-width: 120px;
+      padding: 12px 10px;
+      font-size: 14px;
+    }
+    
+    .highlight {
+      padding: 14px 16px;
+    }
+    
+    .highlight .big {
+      font-size: 24px;
+      letter-spacing: 4px;
+    }
+    
+    .card {
+      padding: 14px 16px;
+    }
+    
+    .card h3 {
+      font-size: 14px;
+    }
+    
+    .digit-grid {
+      grid-template-columns: repeat(5, 1fr);
+      gap: 6px;
+    }
+    
+    .digit-cell {
+      padding: 8px 6px;
+    }
+    
+    .digit-cell .d {
+      font-size: 16px;
+    }
+    
+    .zhixuan {
+      font-size: 13px;
+      gap: 10px;
+    }
+    
+    .zhixuan .num {
+      font-size: 16px;
+    }
+    
+    .match {
+      padding: 12px 14px;
+      gap: 10px;
+    }
+    
+    .match .teams {
+      font-size: 14px;
+    }
+    
+    .search {
+      padding: 12px 14px;
+      font-size: 14px;
+    }
+    
+    button {
+      font-size: 13px;
+      padding: 10px 16px;
+    }
+    
+    .section-title {
+      font-size: 14px;
+    }
+    
+    .disclaimer {
+      font-size: 11px;
+    }
+    
+    /* 半全场分析 */
+    .htf-grid {
+      grid-template-columns: repeat(3, 1fr);
+      gap: 8px;
+    }
+    
+    .htf-item {
+      padding: 10px 8px;
+    }
+    
+    /* 进球数推荐 */
+    .goal-grid {
+      grid-template-columns: repeat(2, 1fr);
+      gap: 10px;
+    }
+    
+    .goal-item {
+      padding: 14px;
+    }
+    
+    /* 凯利指数 */
+    .kelly-grid {
+      gap: 6px;
+    }
+    
+    /* 按钮最小点击区域 */
+    [role="tab"], button, .tab, .match, .back {
+      min-height: 44px;
+      touch-action: manipulation;
+    }
+  }
 </style>
 </head>
 <body>
