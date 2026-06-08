@@ -758,6 +758,8 @@ def analyze_asian(data):
         'handicap_trend': handicap_trend, 'water_trend': water_trend,
         'open_prob': {'home_recv': hp_o, 'away_give': ap_o},
         'close_prob': {'home_recv': hp_c, 'away_give': ap_c},
+        'open_water': {'home': op['home_odds'], 'away': op['away_odds']},
+        'close_water': {'home': cl['home_odds'], 'away': cl['away_odds']},
     }
 
 
@@ -1125,6 +1127,8 @@ def analyze_total(data):
         'lean': lean, 'lean_desc': lean_desc,
         'open_prob': {'over': po_o, 'under': pu_o},
         'close_prob': {'over': po_c, 'under': pu_c},
+        'open_water': {'over': op['over_odds'], 'under': op['under_odds']},
+        'close_water': {'over': cl['over_odds'], 'under': cl['under_odds']},
         'expected_goals': expected_goals,
     }
 
@@ -3176,21 +3180,6 @@ def analyze_match(match):
 
     confidence = compute_prediction_confidence(asian, euro, total, team)
 
-    # 新增：Dixon-Coles 模型预测
-    dixon_coles_result = None
-    try:
-        from .ml import dixon_coles_score_matrix, dixon_coles_1x2_prob
-        dc_matrix = dixon_coles_score_matrix(lam_home, lam_away, max_goals=MAX_GOALS, rho=0.1)
-        dc_1x2 = dixon_coles_1x2_prob(lam_home, lam_away, max_goals=MAX_GOALS, rho=0.1)
-        dixon_coles_result = {
-            'matrix': dc_matrix,
-            '1x2': dc_1x2,
-            'rho': 0.1
-        }
-        log.info(f"Dixon-Coles 模型预测完成: 主胜{dc_1x2['home']:.3f}, 平局{dc_1x2['draw']:.3f}, 客胜{dc_1x2['away']:.3f}")
-    except Exception as e:
-        log.warning(f"Dixon-Coles 模型预测失败: {e}")
-
     # 新增：机器学习模型预测
     ml_result = None
     try:
@@ -3207,14 +3196,14 @@ def analyze_match(match):
             'asian_home_water': asian['close_water']['home'],
             'asian_away_water': asian['close_water']['away'],
             'total_line': total['close_line'],
-            'total_over_water': total['close_prob']['over'],
-            'total_under_water': total['close_prob']['under'],
+            'total_over_water': total['close_water']['over'],
+            'total_under_water': total['close_water']['under'],
             'home_attack': team.get('attack_home', 1.3) if team else 1.3,
             'home_defense': team.get('defense_home', 1.2) if team else 1.2,
             'away_attack': team.get('attack_away', 1.2) if team else 1.2,
             'away_defense': team.get('defense_away', 1.3) if team else 1.3,
-            'home_form': team.get('form_home', 0.5) if team else 0.5,
-            'away_form': team.get('form_away', 0.5) if team else 0.5
+            'home_form': team['home_recent']['form_pts'] / 3.0 if team else 0.5,
+            'away_form': team['away_recent']['form_pts'] / 3.0 if team else 0.5
         }
         ml_probs = ml_predictor.predict(ml_features)
         ml_result = {
@@ -3235,6 +3224,21 @@ def analyze_match(match):
         enable_ensemble=True,
         ensemble_size=5,
     )
+
+    # 新增：Dixon-Coles 模型预测（依赖 predict_scores 产出的 lam_home/lam_away）
+    dixon_coles_result = None
+    try:
+        from .ml import dixon_coles_score_matrix, dixon_coles_1x2_prob
+        dc_matrix = dixon_coles_score_matrix(lam_home, lam_away, max_goals=MAX_GOALS, rho=0.1)
+        dc_1x2 = dixon_coles_1x2_prob(lam_home, lam_away, max_goals=MAX_GOALS, rho=0.1)
+        dixon_coles_result = {
+            'matrix': dc_matrix,
+            '1x2': dc_1x2,
+            'rho': 0.1
+        }
+        log.info(f"Dixon-Coles 模型预测完成: 主胜{dc_1x2['home']:.3f}, 平局{dc_1x2['draw']:.3f}, 客胜{dc_1x2['away']:.3f}")
+    except Exception as e:
+        log.warning(f"Dixon-Coles 模型预测失败: {e}")
 
     # 准备欧赔赔率用于冷热计算（基于赔率隐含概率）
     euro_odds_for_heat = {
