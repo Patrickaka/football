@@ -11,11 +11,6 @@ from contextlib import contextmanager
 from itertools import combinations, product
 from ..common.logger import setup_logger
 from ..common.data_cache import cached_fetch
-from .advanced import (
-    WINDOW_CANDIDATES,
-    detect_position_cycles,
-    transfer_entropy_probs_simple,
-)
 
 log = setup_logger('lottery3d')
 
@@ -27,9 +22,8 @@ if hasattr(sys.stdout, "reconfigure"):
 
 URL = "https://www.8300.cn/kjhhis/3/200.html"
 
-RECENT_WINDOWS = (30, 45, 60, 90)  # 兼容旧逻辑；运行时由回测动态选择
-RECENT_WINDOW = 90
-DYNAMIC_WINDOW_TOP_K = 3  # 回测选最强的 K 个窗口集成
+RECENT_WINDOWS = (30, 45, 60, 90)
+RECENT_WINDOW = 90  # 展示用最大窗口
 WINDOW_BACKTEST_TRIALS = 40
 EXP_DECAY = 0.96
 BACKTEST_TRIALS = 80
@@ -41,16 +35,11 @@ _prediction_cache = None
 _cache_time = 0
 
 W_HOT_GLOBAL = 4.0
-W_HOT_POS = 3.0
-W_MISS_HIGH = 8.0
+W_HOT_POS = 5.0
+# 冷号/高遗漏加分项：适当加分，让冷号有机会被推荐
+W_MISS_HIGH = 2.0   # 遗漏 >= 16 期加分（已开启）
 W_MISS_MID = 4.5
-W_MARKOV = 3.5
-
-# 冷热平衡评分：最终得分 = 0.35热度 + 0.25马尔可夫 + 0.25遗漏 + 0.15周期
-BALANCE_W_HOT = 0.35
-BALANCE_W_MARKOV = 0.25
-BALANCE_W_MISS = 0.25
-BALANCE_W_CYCLE = 0.15
+W_MARKOV = 6.0
 W_LAST_APPEAR = 2.5
 W_NEIGHBOR = 2.0
 W_ROAD_MATCH = 1.5
@@ -76,21 +65,8 @@ ZHIXUAN_TOP3 = 3
 ZU6_POOL_SIZE = 5
 ZU6_FOUR_SIZE = 4
 
-# 分位独立模型：百/十/个各取 Top-N，再笛卡尔积组合
-POSITION_TOP_N = 5
-POSITION_COMBO_POOL = POSITION_TOP_N ** 3
-
 # 马尔可夫转移：拉普拉斯平滑系数 α（加法平滑，α=1 即标准 Laplace）
 MARKOV_LAPLACE_ALPHA = 1.0
-
-# 贝叶斯冷热周期：近窗样本 + Beta(2,2) 先验
-CYCLE_WINDOW = 20
-CYCLE_FREQ_WINDOW = 30
-CYCLE_HOT_TOP = 4
-CYCLE_COLD_MISS = 12
-CYCLE_BETA_PRIOR = 2.0
-CYCLE_P_HOT_CAP = 0.85  # 热周期置信上限，防止单边碾压
-CYCLE_P_HOT_FLOOR = 0.35
 
 # 可调评分权重（供 search_weights 搜索）
 TUNABLE_WEIGHTS = (
@@ -203,21 +179,6 @@ def build_markov(numbers, position):
         a, b = numbers[i][position], numbers[i + 1][position]
         trans[a][b] += 1
     return trans
-
-
-def build_second_order_markov(numbers, position):
-    """二阶马尔可夫：(前两期, 前一期) → 下一期，如 (3,7) → 6"""
-    trans = defaultdict(Counter)
-    for i in range(len(numbers) - 2):
-        state = (numbers[i][position], numbers[i + 1][position])
-        nxt = numbers[i + 2][position]
-        trans[state][nxt] += 1
-    return trans
-
-
-def second_order_markov_probs(numbers, position, states=None):
-    """P(next | prev2, prev1)，由转移熵过滤替代纯马尔可夫"""
-    return transfer_entropy_probs_simple(numbers, position, states=states)
 
 
 def markov_prob_smoothed(row, states, alpha=MARKOV_LAPLACE_ALPHA):
@@ -372,60 +333,8 @@ def ensemble_lag1_dynamics(numbers, window_weights):
     }
 
 
-def bayesian_hot_cold_cycle(numbers, window=CYCLE_WINDOW):
-    """贝叶斯推断当前处于热周期还是冷周期，用于动态缩放热号/冷号权重"""
-    if len(numbers) < window + 3:
-        return {
-            "phase": "neutral",
-            "p_hot": 0.5,
-            "hot_hits": 0,
-            "cold_hits": 0,
-            "w_hot_scale": 1.0,
-            "w_miss_scale": 1.0,
-        }
-
-    hot_hits = cold_hits = 0
-    start = len(numbers) - window
-    for i in range(start, len(numbers)):
-        train = numbers[:i]
-        actual = numbers[i]
-        recent = train[-CYCLE_FREQ_WINDOW:] if len(train) >= CYCLE_FREQ_WINDOW else train
-        freq = exp_weighted_counts([d for n in recent for d in n])
-        hot_set = {d for d, _ in freq.most_common(CYCLE_HOT_TOP)}
-        for d in actual:
-            if d in hot_set:
-                hot_hits += 1
-            if miss_value(train, d) >= CYCLE_COLD_MISS:
-                cold_hits += 1
-
-    alpha = CYCLE_BETA_PRIOR
-    denom = 2 * alpha + hot_hits + cold_hits
-    p_hot_raw = (alpha + hot_hits) / denom if denom else 0.5
-    p_hot = _clamp(p_hot_raw, CYCLE_P_HOT_FLOOR, CYCLE_P_HOT_CAP)
-
-    if p_hot >= 0.58:
-        phase = "hot"
-    elif p_hot <= 0.42:
-        phase = "cold"
-    else:
-        phase = "neutral"
-
-    w_hot_scale = _clamp(0.75 + 0.5 * p_hot, 0.75, 1.25)
-    w_miss_scale = _clamp(0.75 + 0.5 * (1.0 - p_hot), 0.75, 1.25)
-
-    return {
-        "phase": phase,
-        "p_hot": p_hot,
-        "p_hot_raw": p_hot_raw,
-        "hot_hits": hot_hits,
-        "cold_hits": cold_hits,
-        "w_hot_scale": w_hot_scale,
-        "w_miss_scale": w_miss_scale,
-    }
-
-
-def derive_dynamic_weights(lag1, consec_rate, cycle=None):
-    """根据历史转移统计 + 贝叶斯冷热周期动态缩放评分权重"""
+def derive_dynamic_weights(lag1, consec_rate):
+    """根据历史转移统计动态缩放评分权重与惩罚项"""
     avg_rep = lag1["avg_pos_repeat"]
     w_pos = W_POS_REPEAT * _clamp(avg_rep / RANDOM_POS_REPEAT, 0.2, 1.6)
     pos_mult = [_clamp(r / RANDOM_POS_REPEAT, 0.3, 2.0) for r in lag1["pos_repeat_rate"]]
@@ -434,11 +343,6 @@ def derive_dynamic_weights(lag1, consec_rate, cycle=None):
     w_consec = W_CONSECUTIVE * _clamp(consec_rate / consec_base, 0.6, 1.2)
     w_full_pen = _clamp(12.0 * (1.0 - lag1["full_repeat_rate"] * 80), 4.0, 15.0)
     w_perm_pen = _clamp(6.0 * (1.0 - lag1["same_set_rate"] * 40), 1.5, 8.0)
-
-    cycle = cycle or {}
-    w_hot_scale = cycle.get("w_hot_scale", 1.0)
-    w_miss_scale = cycle.get("w_miss_scale", 1.0)
-
     return {
         "w_pos_repeat": w_pos,
         "pos_mult": pos_mult,
@@ -446,15 +350,6 @@ def derive_dynamic_weights(lag1, consec_rate, cycle=None):
         "w_consecutive": w_consec,
         "w_full_repeat_penalty": w_full_pen,
         "w_same_set_penalty": w_perm_pen,
-        "w_hot_global": W_HOT_GLOBAL * w_hot_scale,
-        "w_hot_pos": W_HOT_POS * w_hot_scale,
-        "w_miss_high": W_MISS_HIGH * w_miss_scale,
-        "w_miss_mid": W_MISS_MID * w_miss_scale,
-        "cycle_phase": cycle.get("phase", "neutral"),
-        "p_hot_cycle": round(cycle.get("p_hot", 0.5), 4),
-        "p_hot_cycle_raw": round(cycle.get("p_hot_raw", cycle.get("p_hot", 0.5)), 4),
-        "w_hot_scale": round(w_hot_scale, 3),
-        "w_miss_scale": round(w_miss_scale, 3),
     }
 
 
@@ -547,109 +442,39 @@ def ensemble_sum_span(sums, spans, window_weights):
     }
 
 
-def _norm_scale_10(raw):
-    """将分量原始值线性映射到 0–10，消除量纲失衡"""
-    if not raw:
-        return [5.0] * 10
-    mn, mx = min(raw), max(raw)
-    if mx - mn < 1e-9:
-        return [5.0] * 10
-    return [10.0 * (v - mn) / (mx - mn) for v in raw]
-
-
-def _heat_raw(freq, digit, scale):
-    mx = max(freq.values()) if freq else 1.0
-    return (freq.get(digit, 0) / mx) * scale
-
-
-def _markov_raw(probs, digit):
-    """概率×10，不做 max 归一（避免塌缩为同分）"""
-    return probs.get(digit, 0.1) * 10.0
-
-
-def _miss_raw(miss_val, w_high):
-    """遗漏连续梯度 0–10"""
-    return min(miss_val / 15.0, 1.5) * (w_high / max(W_MISS_HIGH, 0.1)) * 6.0
-
-
-def _cycle_raw(digit, dynamic, freq, miss_val):
-    """周期连续梯度：热度亲和 + 遗漏亲和 按周期态混合"""
-    phase = dynamic.get("cycle_phase", "neutral")
-    p_hot = dynamic.get("p_hot_cycle", 0.5)
-    mx = max(freq.values()) if freq else 1.0
-    hot_aff = (freq.get(digit, 0) / mx) * 10.0
-    cold_aff = min(miss_val / 18.0, 1.0) * 10.0
-    if phase == "hot":
-        blend = 0.5 + 0.35 * p_hot
-        return blend * hot_aff + (1.0 - blend) * cold_aff
-    if phase == "cold":
-        blend = 0.5 + 0.35 * (1.0 - p_hot)
-        return (1.0 - blend) * hot_aff + blend * cold_aff
-    return 0.5 * hot_aff + 0.5 * cold_aff
-
-
-def balance_digit_score(hot, markov, miss, cycle):
-    """冷热平衡：各分量已归一化到 0–10 再加权"""
-    return (
-        BALANCE_W_HOT * hot
-        + BALANCE_W_MARKOV * markov
-        + BALANCE_W_MISS * miss
-        + BALANCE_W_CYCLE * cycle
-    )
-
-
-def _balance_scores_normalized(numbers, window, dynamic, position=None):
-    """计算 10 个号码的归一化平衡分"""
-    dyn = dynamic or {}
-    recent = _recent_slice(numbers, window)
-    w_hot_global = dyn.get("w_hot_global", W_HOT_GLOBAL)
-    w_hot_pos = dyn.get("w_hot_pos", W_HOT_POS)
-    w_miss_high = dyn.get("w_miss_high", W_MISS_HIGH)
-
-    hot_raw = [0.0] * 10
-    markov_raw = [0.0] * 10
-    miss_raw = [0.0] * 10
-    cycle_raw = [0.0] * 10
-
-    if position is not None:
-        pos_freq = exp_weighted_counts([n[position] for n in recent])
-        probs = second_order_markov_probs(numbers, position)
-        for d in range(10):
-            hot_raw[d] = _heat_raw(pos_freq, d, w_hot_pos)
-            markov_raw[d] = _markov_raw(probs, d)
-            mv = miss_value(numbers, d, position=position)
-            miss_raw[d] = _miss_raw(mv, w_miss_high)
-            cycle_raw[d] = _cycle_raw(d, dyn, pos_freq, mv)
-    else:
-        freq_all = exp_weighted_counts([d for n in recent for d in n])
-        pos_freqs = [exp_weighted_counts([n[p] for n in recent]) for p in range(3)]
-        markov_by_pos = [second_order_markov_probs(numbers, p) for p in range(3)]
-        for d in range(10):
-            hot_parts = [_heat_raw(freq_all, d, w_hot_global)]
-            hot_parts += [_heat_raw(pf, d, w_hot_pos) for pf in pos_freqs]
-            hot_raw[d] = sum(hot_parts) / len(hot_parts)
-            markov_raw[d] = sum(_markov_raw(mp, d) for mp in markov_by_pos) / 3
-            mv = miss_value(numbers, d)
-            miss_raw[d] = _miss_raw(mv, w_miss_high)
-            cycle_raw[d] = _cycle_raw(d, dyn, freq_all, mv)
-
-    hot_n = _norm_scale_10(hot_raw)
-    markov_n = _norm_scale_10(markov_raw)
-    miss_n = _norm_scale_10(miss_raw)
-    cycle_n = _norm_scale_10(cycle_raw)
-    return [
-        balance_digit_score(hot_n[d], markov_n[d], miss_n[d], cycle_n[d])
-        for d in range(10)
-    ]
-
-
 def digit_scores(numbers, window=RECENT_WINDOW, dynamic=None):
     recent = _recent_slice(numbers, window)
     last = numbers[-1]
+    score = [0.0] * 10
     dyn = dynamic or {}
     w_last = dyn.get("w_last_appear", W_LAST_APPEAR)
-    score = _balance_scores_normalized(numbers, window, dyn, position=None)
+
     freq_all = exp_weighted_counts([d for n in recent for d in n])
+    for d, _ in freq_all.most_common(4):
+        score[d] += W_HOT_GLOBAL
+
+    for pos in range(3):
+        pos_freq = exp_weighted_counts([n[pos] for n in recent])
+        for d, _ in pos_freq.most_common(3):
+            score[d] += W_HOT_POS
+
+        trans = build_markov(numbers, pos)
+        prev_d = last[pos]
+        row = trans.get(prev_d, Counter())
+        for d, p in markov_prob_smoothed(row, range(10)).items():
+            score[d] += W_MARKOV * p
+
+    # 冷号加分：让遗漏较久的号码有机会被推荐
+    for d in range(10):
+        mv = miss_value(numbers, d)
+        if mv >= 20:
+            # 超冷号加分：遗漏越久加分越高（上限3倍基础分）
+            bonus = W_MISS_HIGH * min(3.0, mv / 15.0)
+            score[d] += bonus
+        elif mv >= 16:
+            score[d] += W_MISS_HIGH
+        elif mv >= 12:
+            score[d] += W_MISS_MID
 
     for d in set(last):
         score[d] += w_last
@@ -681,12 +506,26 @@ def ensemble_digit_scores(numbers, window_weights, dynamic=None):
 
 
 def position_digit_scores(numbers, position, window=RECENT_WINDOW, dynamic=None):
-    """单码分位评分（百/十/个）— 冷热平衡（归一化四分量）"""
+    """单码分位评分（百/十/个）"""
+    recent = [n[position] for n in _recent_slice(numbers, window)]
     last_d = numbers[-1][position]
+    sc = [0.0] * 10
     dyn = dynamic or {}
     w_last = dyn.get("w_last_appear", W_LAST_APPEAR)
     pos_mult = dyn.get("pos_mult", [1.0, 1.0, 1.0])
-    sc = _balance_scores_normalized(numbers, window, dyn, position=position)
+    for d, _ in exp_weighted_counts(recent).most_common(4):
+        sc[d] += W_HOT_POS + 1
+    trans = build_markov(numbers, position)
+    row = trans.get(last_d, Counter())
+    for d, p in markov_prob_smoothed(row, range(10)).items():
+        sc[d] += W_MARKOV * p
+    mv = miss_value(numbers, None, position=position)
+    for d in range(10):
+        miss_p = miss_value(numbers, d, position=position)
+        if miss_p >= 16:
+            sc[d] += W_MISS_HIGH
+        elif miss_p >= 9:
+            sc[d] += W_MISS_MID
     sc[last_d] += w_last * pos_mult[position]
     for d in neighbor(last_d):
         sc[d] += W_NEIGHBOR
@@ -702,46 +541,27 @@ def ensemble_position_digit_scores(numbers, position, window_weights, dynamic=No
     return sc
 
 
-def ensemble_all_position_scores(numbers, window_weights, dynamic=None):
-    """百/十/个分位独立评分（各 10 维）"""
-    return [
-        ensemble_position_digit_scores(numbers, pos, window_weights, dynamic=dynamic)
-        for pos in range(3)
-    ]
-
-
-def position_top_pools(pos_scores, top_n=POSITION_TOP_N):
-    """各位置 Top-N 号码池"""
-    pools = []
-    for sc in pos_scores:
-        ranked = sorted(enumerate(sc), key=lambda x: -x[1])[:top_n]
-        pools.append([d for d, _ in ranked])
-    return pools
-
-
 def default_window_weights():
-    """数据不足时的默认窗口（取得分靠前的候选）"""
-    fallback = tuple(sorted(WINDOW_CANDIDATES, reverse=True)[:DYNAMIC_WINDOW_TOP_K])
-    return {w: 1.0 / len(fallback) for w in fallback}
+    n = len(RECENT_WINDOWS)
+    return {w: 1.0 / n for w in RECENT_WINDOWS}
 
 
-def compute_window_weights(numbers, trials=WINDOW_BACKTEST_TRIALS, top_k=DYNAMIC_WINDOW_TOP_K):
-    """回测 WINDOW_CANDIDATES 全部候选，自动选最强 top_k 窗口集成"""
-    candidates = [w for w in WINDOW_CANDIDATES if len(numbers) >= w + 10]
-    if not candidates:
+def compute_window_weights(numbers, trials=WINDOW_BACKTEST_TRIALS):
+    """回测各窗口 Top3 命中表现，拉普拉斯先验后归一化为集成权重"""
+    max_w = max(RECENT_WINDOWS)
+    if len(numbers) < max_w + 10:
         return default_window_weights(), {}
 
-    max_w = max(candidates)
     trials = min(trials, len(numbers) - max_w - 5)
     trials = max(10, trials)
-    raw = {w: 0.0 for w in candidates}
+    raw = {w: 0.0 for w in RECENT_WINDOWS}
     start = len(numbers) - trials
 
     for i in range(start, len(numbers)):
         train = numbers[:i]
         actual = numbers[i]
         act_s = f"{actual[0]}{actual[1]}{actual[2]}"
-        for w in candidates:
+        for w in RECENT_WINDOWS:
             if len(train) < w:
                 continue
             sums = [sum(x) for x in train]
@@ -749,21 +569,17 @@ def compute_window_weights(numbers, trials=WINDOW_BACKTEST_TRIALS, top_k=DYNAMIC
             meta = build_ranking_meta(train, {w: 1.0}, sums, spans, tail_top=4)
             sc, _ = digit_scores(train, window=w, dynamic=meta.get("dynamic"))
             dan, _, kill, _ = pick_dan_tuo_kill(sc)
-            top, _, _ = rank_position_triplets(
-                train, {w: 1.0}, dan, kill, meta, top_n=ZHIXUAN_TOP3
-            )
+            top = rank_triplets(sc, dan, kill, meta, top_n=ZHIXUAN_TOP3)
             top_nums = [t[1] for t in top]
             if act_s in top_nums:
                 raw[w] += 1.0
             elif len({int(c) for s in top_nums for c in s} & set(actual)) >= 2:
                 raw[w] += 0.25
 
-    ranked = sorted(candidates, key=lambda w: raw[w], reverse=True)
-    selected = ranked[:top_k]
     prior = 1.0
-    total = sum(raw[w] + prior for w in selected)
-    weights = {w: (raw[w] + prior) / total for w in selected}
-    return weights, {w: round(raw[w], 1) for w in candidates}
+    total = sum(raw[w] + prior for w in RECENT_WINDOWS)
+    weights = {w: (raw[w] + prior) / total for w in RECENT_WINDOWS}
+    return weights, {w: round(raw[w], 1) for w in RECENT_WINDOWS}
 
 
 def classify_form(triple):
@@ -799,7 +615,6 @@ def analyze_form_probability(numbers, window_weights=None):
     """估算本期开出组六/组三/豹子的概率（多源融合）"""
     forms = [classify_form(n) for n in numbers]
     last_form = forms[-1]
-    prev2_form = forms[-2] if len(forms) >= 2 else None
 
     if window_weights:
         recent_p = {k: 0.0 for k in THEORY_FORM_P}
@@ -815,15 +630,9 @@ def analyze_form_probability(numbers, window_weights=None):
     hist_p = {k: hist_cnt.get(k, 0) / hist_total for k in THEORY_FORM_P}
 
     trans = defaultdict(Counter)
-    for i in range(len(forms) - 2):
-        state = (forms[i], forms[i + 1])
-        trans[state][forms[i + 2]] += 1
-    if len(forms) >= 2:
-        markov_state = (forms[-2], forms[-1])
-        row = trans.get(markov_state, Counter())
-    else:
-        markov_state = (last_form,)
-        row = Counter()
+    for i in range(len(forms) - 1):
+        trans[forms[i]][forms[i + 1]] += 1
+    row = trans.get(last_form, Counter())
     row_total = sum(row.values())
     markov_p = markov_prob_smoothed(row, THEORY_FORM_P)
 
@@ -847,8 +656,6 @@ def analyze_form_probability(numbers, window_weights=None):
 
     return {
         "last_form": last_form,
-        "prev2_form": prev2_form,
-        "markov_state": markov_state,
         "streak": streak,
         "miss_zu6": form_miss(forms, "zu6"),
         "miss_zu3": form_miss(forms, "zu3"),
@@ -938,13 +745,10 @@ def is_zu6_draw(triple):
     return len(set(triple)) == 3
 
 
-def triplet_weight(a, b, c, score, danma, kill, meta, pos_scores=None):
+def triplet_weight(a, b, c, score, danma, kill, meta):
     kill_set = set(kill or [])
     dyn = meta.get("dynamic") or {}
-    if pos_scores is not None:
-        w = pos_scores[0][a] + pos_scores[1][b] + pos_scores[2][c]
-    else:
-        w = score[a] + score[b] + score[c]
+    w = score[a] + score[b] + score[c]
     for x in (a, b, c):
         if x in danma:
             w += W_DANMA_HIT
@@ -993,54 +797,24 @@ def triplet_weight(a, b, c, score, danma, kill, meta, pos_scores=None):
 
 
 def rank_triplets(score, danma, kill, meta, top_n=20):
-    """全空间 10×10×10 直选排序（组六复式等仍使用）"""
     pool = []
+    # 计算评分范围，用于归一化噪声
     max_score = max(score) if score else 1.0
     noise_range = max_score * DIVERSITY_NOISE if USE_DIVERSITY else 0.0
-    seed = int(time.time() // 86400)
+    
+    # 使用时间戳作为随机种子的一部分，增加每天的随机性
+    seed = int(time.time() // 86400)  # 每天一个种子
     rng = random.Random(seed)
-
+    
     for a, b, c in product(range(10), repeat=3):
         w = triplet_weight(a, b, c, score, danma, kill, meta)
+        # 添加随机噪声来增加多样性
         if USE_DIVERSITY and noise_range > 0:
-            w += rng.uniform(-noise_range, noise_range)
+            noise = rng.uniform(-noise_range, noise_range)
+            w += noise
         pool.append((w, f"{a}{b}{c}"))
     pool.sort(key=lambda x: -x[0])
     return pool[:top_n]
-
-
-def rank_position_triplets(
-    numbers,
-    window_weights,
-    danma,
-    kill,
-    meta,
-    top_n=RECOMMEND_GROUPS,
-    pos_top_n=POSITION_TOP_N,
-    pos_scores=None,
-):
-    """分位独立模型：百/十/个各 Top-N → N³ 组合再排序"""
-    if pos_scores is None:
-        pos_scores = ensemble_all_position_scores(
-            numbers, window_weights, dynamic=meta.get("dynamic")
-        )
-    pools = position_top_pools(pos_scores, top_n=pos_top_n)
-
-    max_score = max(max(sc) for sc in pos_scores) * 3 if pos_scores else 1.0
-    noise_range = max_score * DIVERSITY_NOISE if USE_DIVERSITY else 0.0
-    seed = int(time.time() // 86400)
-    rng = random.Random(seed)
-
-    pool = []
-    for a in pools[0]:
-        for b in pools[1]:
-            for c in pools[2]:
-                w = triplet_weight(a, b, c, None, danma, kill, meta, pos_scores=pos_scores)
-                if USE_DIVERSITY and noise_range > 0:
-                    w += rng.uniform(-noise_range, noise_range)
-                pool.append((w, f"{a}{b}{c}"))
-    pool.sort(key=lambda x: -x[0])
-    return pool[:top_n], pos_scores, pools
 
 
 def _meta_from_raw(meta_raw, tail_top=5):
@@ -1063,9 +837,7 @@ def build_ranking_meta(numbers, window_weights, sums=None, spans=None, tail_top=
     meta.update(pat)
     lag1 = ensemble_lag1_dynamics(numbers, window_weights)
     meta["lag1"] = lag1
-    cycle = bayesian_hot_cold_cycle(numbers)
-    meta["cycle"] = cycle
-    meta["dynamic"] = derive_dynamic_weights(lag1, pat["consec_rate"], cycle)
+    meta["dynamic"] = derive_dynamic_weights(lag1, pat["consec_rate"])
     meta["last_draw"] = numbers[-1]
     return meta
 
@@ -1087,9 +859,7 @@ def backtest(numbers, trials=BACKTEST_TRIALS, window_weights=None):
         meta = build_ranking_meta(train, ww, sums, spans, tail_top=4)
         sc, _ = ensemble_digit_scores(train, ww, dynamic=meta.get("dynamic"))
         dan, _, kill, _ = pick_dan_tuo_kill(sc)
-        top, _, _ = rank_position_triplets(
-            train, ww, dan, kill, meta, top_n=RECOMMEND_GROUPS
-        )
+        top = rank_triplets(sc, dan, kill, meta, top_n=RECOMMEND_GROUPS)
         top_nums = [t[1] for t in top]
         act_s = f"{actual[0]}{actual[1]}{actual[2]}"
 
@@ -1117,11 +887,10 @@ def backtest(numbers, trials=BACKTEST_TRIALS, window_weights=None):
         "trials": n,
         "top_hit": hit_top,
         "top_rate": hit_top / n,
-        "top_rate_baseline": RECOMMEND_GROUPS / POSITION_COMBO_POOL,
+        "top_rate_baseline": RECOMMEND_GROUPS / 1000.0,
         "top3_hit": hit_top3,
         "top3_rate": hit_top3 / n,
-        "top3_rate_baseline": ZHIXUAN_TOP3 / POSITION_COMBO_POOL,
-        "combo_pool": POSITION_COMBO_POOL,
+        "top3_rate_baseline": ZHIXUAN_TOP3 / 1000.0,
         "recommend_groups": RECOMMEND_GROUPS,
         "ge2_digit_rate": hit_ge2 / n,
         "sum_band_rate": hit_sum_band / n,
@@ -1154,7 +923,7 @@ def permutation_test(numbers, observed_rate, trials=BACKTEST_TRIALS,
         "observed_rate": observed_rate,
         "shuffled_mean_rate": mean,
         "shuffled_max_rate": max(perm_rates) if perm_rates else 0.0,
-        "baseline_rate": RECOMMEND_GROUPS / POSITION_COMBO_POOL,
+        "baseline_rate": RECOMMEND_GROUPS / 1000.0,
         "pvalue": pvalue,
         "significant": pvalue < 0.05,
     }
@@ -1287,105 +1056,6 @@ def search_weights(
     }
 
 
-GA_TUNABLE = ("W_HOT_GLOBAL", "W_MARKOV", "W_MISS_HIGH")
-
-
-def _ga_random_individual(base, rng):
-    ind = dict(base)
-    for k in GA_TUNABLE:
-        lo, hi = WEIGHT_SEARCH_RANGES.get(k, (0.5, 2.0))
-        ind[k] = base[k] * rng.uniform(lo, hi)
-    return ind
-
-
-def _ga_crossover(p1, p2, base, rng):
-    child = dict(base)
-    for k in GA_TUNABLE:
-        child[k] = p1[k] if rng.random() < 0.5 else p2[k]
-    return child
-
-
-def _ga_mutate(ind, rng, rate=0.25):
-    child = dict(ind)
-    for k in GA_TUNABLE:
-        if rng.random() < rate:
-            child[k] = max(0.1, child[k] * rng.uniform(0.8, 1.25))
-    return child
-
-
-def genetic_search_weights(
-    numbers=None,
-    population_size=24,
-    generations=12,
-    backtest_trials=60,
-    metric="top3_rate",
-    seed=42,
-    elite=4,
-    verbose=True,
-):
-    """遗传算法优化 W_HOT_GLOBAL / W_MARKOV / W_MISS_HIGH 等核心权重"""
-    if numbers is None:
-        numbers = [x[2] for x in fetch_data()]
-    if not numbers:
-        return {"error": "未获取到数据"}
-
-    rng = random.Random(seed)
-    base = default_weights()
-    fixed_ww, _ = compute_window_weights(numbers)
-
-    if verbose:
-        print(f"遗传算法: 种群={population_size}, 代数={generations}, 基因={GA_TUNABLE}")
-
-    _, baseline_bt = evaluate_weights(
-        numbers, base, trials=backtest_trials, window_weights=fixed_ww, metric=metric
-    )
-    baseline_score = backtest_objective(baseline_bt, metric)
-
-    population = [_ga_random_individual(base, rng) for _ in range(population_size)]
-    best_weights = dict(base)
-    best_score = baseline_score
-    best_bt = baseline_bt
-
-    for gen in range(generations):
-        scored = []
-        for ind in population:
-            score, bt = evaluate_weights(
-                numbers, ind, trials=backtest_trials, window_weights=fixed_ww, metric=metric
-            )
-            scored.append((score, ind, bt))
-        scored.sort(key=lambda x: -x[0])
-
-        if scored[0][0] > best_score:
-            best_score, best_weights, best_bt = scored[0]
-            if verbose:
-                print(
-                    f"  [gen {gen + 1:2d}] 新最优 {best_score * 100:.2f}%  "
-                    f"hot={best_weights['W_HOT_GLOBAL']:.2f} "
-                    f"te={best_weights['W_MARKOV']:.2f} "
-                    f"miss={best_weights['W_MISS_HIGH']:.2f}"
-                )
-
-        elites = [x[1] for x in scored[:elite]]
-        next_pop = list(elites)
-        while len(next_pop) < population_size:
-            p1, p2 = rng.sample(elites, 2) if len(elites) >= 2 else (elites[0], elites[0])
-            child = _ga_crossover(p1, p2, base, rng)
-            child = _ga_mutate(child, rng)
-            next_pop.append(child)
-        population = next_pop
-
-    return {
-        "method": "genetic",
-        "metric": metric,
-        "genes": GA_TUNABLE,
-        "generations": generations,
-        "population_size": population_size,
-        "baseline": {"weights": base, "score": baseline_score, "backtest": baseline_bt},
-        "best": {"weights": best_weights, "score": best_score, "backtest": best_bt},
-        "improvement": best_score - baseline_score,
-    }
-
-
 def print_search_report(result):
     """打印权重搜索结果"""
     if result.get("error"):
@@ -1431,8 +1101,6 @@ def _transition_for_api(lag1, dynamic, pos_names=("百", "十", "个")):
     for k, v in dynamic.items():
         if isinstance(v, list):
             dyn_out[k] = [round(x, 3) for x in v]
-        elif isinstance(v, str):
-            dyn_out[k] = v
         else:
             dyn_out[k] = round(v, 3)
     return {
@@ -1485,7 +1153,6 @@ def run_prediction(data=None, force_refresh=False):
     spans = [calc_span(x) for x in numbers]
 
     window_weights, window_scores = compute_window_weights(numbers)
-    cycle_fft = detect_position_cycles(numbers)
     meta_raw = ensemble_sum_span(sums, spans, window_weights)
     meta = build_ranking_meta(numbers, window_weights, sums, spans, tail_top=5)
     pat = {k: meta[k] for k in ("consec_rate", "oe_freq", "bs_freq", "oe_total", "bs_total")}
@@ -1495,9 +1162,7 @@ def run_prediction(data=None, force_refresh=False):
     form_prob = analyze_form_probability(numbers, window_weights=window_weights)
     zu6_four = pick_zu6_four(score, kill)
     _, z6_straight = zu6_notes_from_digits(zu6_four)
-    zhixuan_top, pos_scores, pos_pools = rank_position_triplets(
-        numbers, window_weights, danma, kill, meta, top_n=RECOMMEND_GROUPS
-    )
+    zhixuan_top = rank_triplets(score, danma, kill, meta, top_n=RECOMMEND_GROUPS)
     bt = backtest(numbers, window_weights=window_weights)
     bt["significance"] = permutation_test(
         numbers, bt["top_rate"], window_weights=window_weights
@@ -1505,16 +1170,13 @@ def run_prediction(data=None, force_refresh=False):
 
     last_num = numbers[-1]
     pos_names = ("百", "十", "个")
-    position_top = [
-        {
+    position_top = []
+    for pos, name in enumerate(pos_names):
+        pr = sorted(enumerate(ensemble_position_digit_scores(numbers, pos, window_weights, dynamic=meta.get("dynamic"))), key=lambda x: -x[1])[:5]
+        position_top.append({
             "name": name,
-            "digits": [
-                {"digit": d, "score": round(pos_scores[pos][d], 1)}
-                for d in pos_pools[pos]
-            ],
-        }
-        for pos, name in enumerate(pos_names)
-    ]
+            "digits": [{"digit": d, "score": round(s, 1)} for d, s in pr],
+        })
 
     miss_global = []
     for d in range(10):
@@ -1545,55 +1207,13 @@ def run_prediction(data=None, force_refresh=False):
         "kill": kill,
         "rank_top10": [{"digit": d, "score": round(s, 1)} for d, s in rank[:10]],
         "position_top": position_top,
-        "zhixuan_model": {
-            "method": "position_independent",
-            "position_top_n": POSITION_TOP_N,
-            "combo_pool": POSITION_COMBO_POOL,
-            "pools": {
-                name: pos_pools[i]
-                for i, name in enumerate(pos_names)
-            },
-        },
         "miss_global": miss_global,
         "miss_position": miss_position,
         "sum_tails": sum_tails,
         "recommend_groups": RECOMMEND_GROUPS,
-        "recent_windows": list(window_weights.keys()),
+        "recent_windows": list(RECENT_WINDOWS),
         "window_weights": {str(k): round(v, 4) for k, v in window_weights.items()},
         "window_scores": window_scores,
-        "dynamic_windows": {
-            "method": "backtest_top_k",
-            "top_k": DYNAMIC_WINDOW_TOP_K,
-            "selected": list(window_weights.keys()),
-            "candidates": list(WINDOW_CANDIDATES),
-            "best_single": max(window_scores, key=window_scores.get) if window_scores else None,
-        },
-        "cycle_detection": {
-            "global_dominant": cycle_fft.get("global_dominant"),
-            "targets": cycle_fft.get("targets"),
-            "positions": {
-                name: {
-                    "dominant": info.get("dominant"),
-                    "periods": info.get("periods"),
-                }
-                for name, info in cycle_fft.get("positions", {}).items()
-            },
-        },
-        "transfer_model": "transfer_entropy",
-        "score_formula": {
-            "method": "balance",
-            "weights": {
-                "hot": BALANCE_W_HOT,
-                "markov": BALANCE_W_MARKOV,
-                "miss": BALANCE_W_MISS,
-                "cycle": BALANCE_W_CYCLE,
-            },
-            "scales": {
-                "W_HOT_POS": W_HOT_POS,
-                "W_MARKOV": W_MARKOV,
-                "W_MISS_HIGH": W_MISS_HIGH,
-            },
-        },
         "sum_span": {
             "sum_center": round(meta["sum_center"], 1),
             "hot_sums": meta["hot_sums"],
@@ -1614,23 +1234,9 @@ def run_prediction(data=None, force_refresh=False):
             "last_big_small": ratio_label(big_small_key(last_num), "bs"),
             "last_has_consecutive": has_consecutive_digits(*last_num),
         },
-        "cycle": {
-            "phase": meta["cycle"]["phase"],
-            "phase_label": {"hot": "热周期", "cold": "冷周期", "neutral": "均衡"}[meta["cycle"]["phase"]],
-            "p_hot": round(meta["cycle"]["p_hot"], 4),
-            "p_hot_raw": round(meta["cycle"].get("p_hot_raw", meta["cycle"]["p_hot"]), 4),
-            "hot_hits": meta["cycle"]["hot_hits"],
-            "cold_hits": meta["cycle"]["cold_hits"],
-            "w_hot_scale": meta["dynamic"]["w_hot_scale"],
-            "w_miss_scale": meta["dynamic"]["w_miss_scale"],
-            "w_hot_global": round(meta["dynamic"]["w_hot_global"], 2),
-            "w_miss_mid": round(meta["dynamic"]["w_miss_mid"], 2),
-        },
         "transition": _transition_for_api(meta["lag1"], meta["dynamic"], pos_names),
         "form": {
             "last_label": FORM_LABELS[form_prob["last_form"]],
-            "prev2_label": FORM_LABELS[form_prob["prev2_form"]] if form_prob.get("prev2_form") else None,
-            "markov_state_label": tuple(FORM_LABELS[f] for f in form_prob["markov_state"]),
             "streak": form_prob["streak"],
             "miss_zu6": form_prob["miss_zu6"],
             "miss_zu3": form_prob["miss_zu3"],
@@ -1678,37 +1284,17 @@ def print_report(result):
         top3 = ", ".join(x["num"] for x in result["zhixuan_top3"])
         print(f"  直选Top3 → {top3}")
 
-    dw = result.get("dynamic_windows", {})
     ww = result.get("window_weights", {})
     ws = result.get("window_scores", {})
-    if dw.get("selected"):
-        print(f"  动态窗口(回测Top{dw.get('top_k', 3)}): {dw['selected']}"
-              f"  最强单窗={dw.get('best_single')}")
     if ww:
         parts = [
             f"{k}期权重{float(ww[k])*100:.0f}%"
             + (f"(得分{ws.get(int(k), ws.get(k))})" if ws.get(int(k), ws.get(k)) is not None else "")
             for k in ww
         ]
-        print(f"  窗口权重: {', '.join(parts)}")
-
-    cd = result.get("cycle_detection", {})
-    if cd.get("global_dominant"):
-        print(f"  周期检测(FFT+自相关): 全局主导 {cd['global_dominant']} 期")
-        for name, info in cd.get("positions", {}).items():
-            dom = info.get("dominant")
-            if dom and dom in (info.get("periods") or {}):
-                st = info["periods"][dom].get("strength", 0)
-                print(f"    {name}位: {dom}期周期 强度={st:.3f}")
-    if result.get("transfer_model"):
-        print(f"  转移模型: {result['transfer_model']}（替代马尔可夫）")
+        print(f"  动态窗口集成: {', '.join(parts)}")
 
     print("\n" + "=" * 70)
-    cycle = result.get("cycle")
-    if cycle:
-        print(f"  冷热周期: {cycle['phase_label']}（P(热)={cycle['p_hot']*100:.1f}%）"
-              f"  热号权重×{cycle['w_hot_scale']}  冷号权重×{cycle['w_miss_scale']}")
-
     print(f"热号分析（多窗口集成 {list(result.get('recent_windows', RECENT_WINDOWS))}）")
     print("=" * 70)
     for item in result["hot_digits"]:
@@ -1732,10 +1318,8 @@ def print_report(result):
     print(f"  近态(多窗口集成): 组六 {form['recent']['zu6']*100:.1f}%  "
           f"组三 {form['recent']['zu3']*100:.1f}%  "
           f"豹子 {form['recent']['baozi']*100:.1f}%")
-    ms = form.get("markov_state_label") or (lf,)
-    ms_str = ",".join(ms) if len(ms) >= 2 else lf
     print(
-        f"  前两期({ms_str})→下期(样本{form['markov_samples']}): "
+        f"  上期{lf}→下期(样本{form['markov_samples']}): "
         f"组六 {form['markov']['zu6']*100:.1f}%  "
         f"组三 {form['markov']['zu3']*100:.1f}%  "
         f"豹子 {form['markov']['baozi']*100:.1f}%"
@@ -1779,13 +1363,7 @@ def print_report(result):
         print(f"  重号出现率 {tr['digit_reuse_rate']*100:.1f}%（随机27%）"
               f"  |  全同号 {tr['full_repeat_rate']*100:.2f}%  |  同号不同序 {tr['same_set_rate']*100:.2f}%")
         dyn = tr.get("dynamic", {})
-        phase = dyn.get("cycle_phase", "neutral")
-        phase_cn = {"hot": "热周期", "cold": "冷周期", "neutral": "均衡"}.get(phase, phase)
-        print(f"  冷热周期: {phase_cn}（P(热)={dyn.get('p_hot_cycle', 0.5)*100:.1f}%）"
-              f"  热号×{dyn.get('w_hot_scale', 1):.2f}  冷号×{dyn.get('w_miss_scale', 1):.2f}")
-        print(f"  动态权重: 热号 {dyn.get('w_hot_global', W_HOT_GLOBAL):.2f}"
-              f"  冷号 {dyn.get('w_miss_mid', W_MISS_MID):.2f}"
-              f"  同位复刻 {dyn.get('w_pos_repeat', W_POS_REPEAT):.2f}"
+        print(f"  动态权重: 同位复刻 {dyn.get('w_pos_repeat', W_POS_REPEAT):.2f}"
               f"  上期重号 {dyn.get('w_last_appear', W_LAST_APPEAR):.2f}"
               f"  全同惩罚 -{dyn.get('w_full_repeat_penalty', 0):.1f}"
               f"  同集惩罚 -{dyn.get('w_same_set_penalty', 0):.1f}")
@@ -1805,22 +1383,14 @@ def print_report(result):
     print("  杀码参考:", result["kill"], "（四码中已尽量避开）")
     print("  覆盖 4 注组六:", ", ".join(z6["combos"]))
 
-    zm = result.get("zhixuan_model", {})
-    if zm:
-        pools = zm.get("pools", {})
-        print(f"  分位独立: 百{''.join(map(str, pools.get('百', [])))}"
-              f" × 十{''.join(map(str, pools.get('十', [])))}"
-              f" × 个{''.join(map(str, pools.get('个', [])))}"
-              f" = {zm.get('combo_pool', POSITION_COMBO_POOL)} 注候选池")
-
     print("\n" + "=" * 70)
-    print("【直选Top3推荐】（分位独立 Top5×Top5×Top5）")
+    print("【直选Top3推荐】（百十个位顺序一致）")
     print("=" * 70)
     for idx, item in enumerate(result.get("zhixuan_top3", []), start=1):
         print(f"  {idx}. {item['num']}  评分={item['score']:.1f}")
 
     print("\n" + "=" * 70)
-    print(f"【直选推荐 {RECOMMEND_GROUPS} 注】（分位独立 Top5×Top5×Top5）")
+    print(f"【直选推荐 {RECOMMEND_GROUPS} 注】（百十个位顺序一致）")
     print("=" * 70)
     print("  杀码参考:", result["kill"], f"（含杀码组合每码 -{W_KILL_PENALTY} 分降权）")
     print("-" * 70)
@@ -1872,33 +1442,11 @@ def main(argv=None):
         help="优化目标",
     )
     parser.add_argument("--search-seed", type=int, default=42, help="随机种子")
-    parser.add_argument(
-        "--genetic-search",
-        action="store_true",
-        help="遗传算法优化 W_HOT_GLOBAL / W_MARKOV / W_MISS_HIGH",
-    )
-    parser.add_argument("--ga-pop", type=int, default=24, help="遗传算法种群大小")
-    parser.add_argument("--ga-gen", type=int, default=12, help="遗传算法代数")
     args = parser.parse_args(argv)
 
     print("抓取数据中...")
     data = fetch_data()
     numbers = [x[2] for x in data] if data else []
-
-    if args.genetic_search:
-        if not numbers:
-            print("未获取到数据")
-            return
-        result = genetic_search_weights(
-            numbers=numbers,
-            population_size=args.ga_pop,
-            generations=args.ga_gen,
-            backtest_trials=args.search_trials,
-            metric=args.search_metric,
-            seed=args.search_seed,
-        )
-        print_search_report(result)
-        return
 
     if args.search_weights:
         if not numbers:

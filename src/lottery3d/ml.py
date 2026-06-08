@@ -37,7 +37,6 @@ from collections import Counter, defaultdict
 from itertools import combinations, product
 from ..common.logger import setup_logger
 from ..common.data_cache import cached_fetch
-from .advanced import transfer_entropy_probs_simple
 
 log = setup_logger('lottery3d_ml')
 
@@ -64,15 +63,10 @@ except ImportError:
 try:
     from sklearn.feature_selection import mutual_info_classif, VarianceThreshold
     from sklearn.calibration import CalibratedClassifierCV
-    from sklearn.model_selection import cross_val_score, cross_val_predict
-    from sklearn.ensemble import RandomForestClassifier
-    from sklearn.linear_model import LogisticRegression
+    from sklearn.model_selection import cross_val_score
     HAS_SKLEARN = True
 except ImportError:
     HAS_SKLEARN = False
-    cross_val_predict = None
-    RandomForestClassifier = None
-    LogisticRegression = None
 
 if hasattr(sys.stdout, "reconfigure"):
     try:
@@ -161,21 +155,11 @@ def exp_weighted_counts(series, decay=0.96):
 
 
 def build_markov(numbers, position):
-    """构建一阶马尔可夫转移矩阵"""
+    """构建马尔可夫转移矩阵"""
     trans = defaultdict(Counter)
     for i in range(len(numbers) - 1):
         a, b = numbers[i][position], numbers[i + 1][position]
         trans[a][b] += 1
-    return trans
-
-
-def build_second_order_markov(numbers, position):
-    """构建二阶马尔可夫转移矩阵：(前两期, 前一期) → 下一期"""
-    trans = defaultdict(Counter)
-    for i in range(len(numbers) - 2):
-        state = (numbers[i][position], numbers[i + 1][position])
-        nxt = numbers[i + 2][position]
-        trans[state][nxt] += 1
     return trans
 
 
@@ -247,7 +231,11 @@ class FeatureEngineer:
             self.freq_pos.append(freq)
             self.total_pos.append(sum(freq.values()) or 1.0)
         
-        self.prev2_draw = self.numbers[-2] if len(self.numbers) >= 2 else None
+        # 马尔可夫转移
+        self.markov_trans = []
+        for pos in range(3):
+            trans = build_markov(self.numbers, pos)
+            self.markov_trans.append(trans)
         
         # 遗漏值
         self.miss_global = {d: miss_value(self.numbers, d) for d in range(10)}
@@ -282,9 +270,11 @@ class FeatureEngineer:
         for pos, d in enumerate(triple):
             features.append(self.freq_pos[pos].get(d, 0) / self.total_pos[pos])
         
-        # 3. 每个位置的转移熵概率（3 个特征，替代马尔可夫）
+        # 3. 每个位置的马尔可夫转移概率（3 个特征）
         for pos, d in enumerate(triple):
-            prob = transfer_entropy_probs_simple(self.numbers, pos).get(d, 0.1)
+            prev_d = self.last_draw[pos] if self.last_draw else 0
+            trans = self.markov_trans[pos].get(prev_d, Counter())
+            prob = markov_prob_smoothed(trans, range(10)).get(d, 0.1)
             features.append(prob)
         
         # 4. 每个数字的遗漏值（3 个特征）
@@ -360,22 +350,6 @@ class FeatureEngineer:
                 features.append(3)
         
         return features
-
-    def rule_score(self, a, b, c):
-        """规则模型分：分位热度 + 转移熵 + 遗漏（供 Stacking 元模型使用）"""
-        triple = (a, b, c)
-        score = 0.0
-        for pos, d in enumerate(triple):
-            score += 2.0 * self.freq_pos[pos].get(d, 0) / self.total_pos[pos]
-            score += 3.0 * transfer_entropy_probs_simple(self.numbers, pos).get(d, 0.1)
-            miss = self.miss_pos[pos].get(d, 0)
-            if miss >= 12:
-                score += 1.5
-            elif miss >= 8:
-                score += 0.8
-        if self.last_draw:
-            score += position_repeat_count(triple, self.last_draw) * 0.5
-        return score
     
     def get_feature_names(self):
         """返回特征名称列表"""
@@ -389,9 +363,9 @@ class FeatureEngineer:
         for i in range(3):
             names.append(f"pos_{i}_freq")
         
-        # 7-9. 转移熵概率
+        # 7-9. 马尔可夫概率
         for i in range(3):
-            names.append(f"pos_{i}_transfer_entropy")
+            names.append(f"pos_{i}_markov")
         
         # 10-12. 全局遗漏
         for i in range(3):
@@ -606,12 +580,11 @@ def build_training_data(numbers, neg_samples=NEGATIVE_SAMPLES_PER_PERIOD, rng=No
     
     X = []
     y = []
-    rule_scores = []
     
     # 需要足够的历史数据来构建特征
     min_history = 30  # 减少最小历史期数
     if len(numbers) <= min_history:
-        return None, None, None
+        return None, None
     
     # 使用滑动窗口，只使用最近的数据构建特征（加速）
     window_size = 60  # 只使用最近 60 期数据构建特征
@@ -628,7 +601,6 @@ def build_training_data(numbers, neg_samples=NEGATIVE_SAMPLES_PER_PERIOD, rng=No
         features = fe.build_features(*actual)
         X.append(features)
         y.append(1)
-        rule_scores.append(fe.rule_score(*actual))
         
         # 负例：neg_samples 个（排除已开出的号码）
         neg_count = 0
@@ -644,10 +616,9 @@ def build_training_data(numbers, neg_samples=NEGATIVE_SAMPLES_PER_PERIOD, rng=No
             features = fe.build_features(*combo)
             X.append(features)
             y.append(0)
-            rule_scores.append(fe.rule_score(*combo))
             neg_count += 1
     
-    return X, y, rule_scores
+    return X, y
 
 
 def select_features(X, y, feature_names, keep_ratio=FEATURE_SUBSET_RATIO):
@@ -736,17 +707,6 @@ def train_single_model(X, y, model_name):
             )
             model.fit(X, y)
             return model, "lightgbm"
-
-        elif model_name == "random_forest":
-            if HAS_SKLEARN and RandomForestClassifier is not None:
-                model = RandomForestClassifier(
-                    n_estimators=50, max_depth=4, random_state=42, n_jobs=1,
-                )
-                model.fit(X, y)
-                return model, "random_forest"
-            model = SimpleRandomForest(n_trees=25, max_depth=4, min_samples_split=15)
-            model.fit(X, y)
-            return model, "random_forest"
     except Exception as e:
         log.warning(f"训练 {model_name} 失败: {e}")
     
@@ -802,91 +762,6 @@ def train_ensemble(X, y, models_to_try=None):
         trained_models.append((model, "random_forest", 0.5))
     
     return trained_models, selected_indices
-
-
-def _normalize_rule_scores(rule_scores):
-    if not rule_scores:
-        return []
-    mn, mx = min(rule_scores), max(rule_scores)
-    span = mx - mn
-    if span <= 1e-9:
-        return [0.5] * len(rule_scores)
-    return [(s - mn) / span for s in rule_scores]
-
-
-def train_stacking(X, y, rule_scores, models_to_try=None):
-    """
-    Stacking：规则模型 + RF + XGB + LGB → LogisticRegression 元模型
-    """
-    import numpy as np
-
-    if models_to_try is None:
-        models_to_try = ["random_forest", "xgboost", "lightgbm"]
-
-    fe = FeatureEngineer([])
-    feature_names = fe.get_feature_names()
-    selected_indices, _ = select_features(X, y, feature_names)
-    X_sel = [[row[i] for i in selected_indices] for row in X]
-    y_list = list(y)
-    rule_norm = _normalize_rule_scores(rule_scores)
-
-    base_models = []
-    meta_cols = [np.array(rule_norm).reshape(-1, 1)]
-    model_names = ["rule"]
-
-    for model_name in models_to_try:
-        model, used_name = train_single_model(X_sel, y_list, model_name)
-        if not model:
-            continue
-        if HAS_SKLEARN and cross_val_predict is not None and len(y_list) >= 60:
-            try:
-                oof = cross_val_predict(
-                    model, np.array(X_sel), np.array(y_list),
-                    cv=3, method="predict_proba", n_jobs=1,
-                )[:, 1]
-            except Exception:
-                model.fit(X_sel, y_list)
-                oof = predict_single(model, X_sel)
-        else:
-            model.fit(X_sel, y_list)
-            oof = predict_single(model, X_sel)
-        meta_cols.append(np.array(oof).reshape(-1, 1))
-        base_models.append((model, used_name))
-        model_names.append(used_name)
-
-    X_meta = np.hstack(meta_cols)
-    meta_model = None
-    if HAS_SKLEARN and LogisticRegression is not None:
-        meta_model = LogisticRegression(max_iter=400, random_state=42)
-        meta_model.fit(X_meta, y_list)
-    else:
-        meta_model = SimpleRandomForest(n_trees=15, max_depth=3, min_samples_split=20)
-        meta_model.fit(X_meta.tolist(), y_list)
-
-    return {
-        "base_models": base_models,
-        "meta_model": meta_model,
-        "selected_indices": selected_indices,
-        "model_names": model_names,
-    }
-
-
-def stacking_predict(stack, combos_features, rule_scores):
-    """元模型融合预测（combos_features 已为筛选后的特征行）"""
-    import numpy as np
-
-    X_sel = combos_features
-    rule_norm = _normalize_rule_scores(rule_scores)
-    cols = [np.array(rule_norm).reshape(-1, 1)]
-
-    for model, _ in stack["base_models"]:
-        cols.append(np.array(predict_single(model, X_sel)).reshape(-1, 1))
-
-    X_meta = np.hstack(cols)
-    meta = stack["meta_model"]
-    if hasattr(meta, "predict_proba"):
-        return meta.predict_proba(X_meta)[:, 1].tolist()
-    return meta.predict(X_meta.tolist())
 
 
 def ensemble_predict(models, X):
@@ -963,7 +838,7 @@ def backtest_ml(numbers, trials=BACKTEST_TRIALS, train_ratio=TRAIN_RATIO):
             continue
         
         # 构建训练数据
-        X, y, _ = build_training_data(train_nums, neg_samples=NEGATIVE_SAMPLES_PER_PERIOD)
+        X, y = build_training_data(train_nums, neg_samples=NEGATIVE_SAMPLES_PER_PERIOD)
         if X is None or len(X) < 100:
             continue
         
@@ -1031,19 +906,12 @@ def predict_current(numbers, top_k=TOP_K, model_type="ensemble"):
     window_size = 60
     recent_numbers = numbers[-window_size:]
 
-    X, y, rule_scores = build_training_data(recent_numbers, neg_samples=NEGATIVE_SAMPLES_PER_PERIOD)
+    X, y = build_training_data(recent_numbers, neg_samples=NEGATIVE_SAMPLES_PER_PERIOD)
     if X is None or len(X) < 100:
         return {"error": "训练数据不足"}
 
     try:
-        if model_type == "stacking":
-            stack = train_stacking(X, y, rule_scores)
-            model_names = stack["model_names"] + ["meta_lr"]
-            model_weights = [1.0] * len(model_names)
-            models = None
-            selected_indices = stack["selected_indices"]
-            log.info(f'3D-ML Stacking 完成: {"+".join(model_names)}')
-        elif model_type == "ensemble":
+        if model_type == "ensemble":
             # 多模型集成
             models, selected_indices = train_ensemble(X, y)
             model_names = [name for _, name, _ in models]
@@ -1066,23 +934,22 @@ def predict_current(numbers, top_k=TOP_K, model_type="ensemble"):
         log.error(f'3D-ML 训练失败: {e}', exc_info=True)
         return {'error': '训练失败'}
     
+    # 对所有 1000 个直选组合预测（批量处理）
     fe = FeatureEngineer(recent_numbers)
-
+    
+    # 批量构建特征
     all_probs = []
-    combo_rule_scores = []
     for a in range(10):
         for b in range(10):
             for c in range(10):
                 features = fe.build_features(a, b, c)
+                # 筛选特征
                 features_selected = [features[i] for i in selected_indices]
                 all_probs.append((a, b, c, features_selected))
-                combo_rule_scores.append(fe.rule_score(a, b, c))
-
+    
+    # 批量预测（使用集成）
     X_all = [x[3] for x in all_probs]
-    if model_type == "stacking":
-        probs = stacking_predict(stack, X_all, combo_rule_scores)
-    else:
-        probs = ensemble_predict(models, X_all)
+    probs = ensemble_predict(models, X_all)
     
     # 排序
     ranked = sorted(
@@ -1104,11 +971,7 @@ def predict_current(numbers, top_k=TOP_K, model_type="ensemble"):
     selected_feature_names = [feature_names[i] for i in selected_indices]
     top_features = []
     
-    if model_type == "stacking":
-        top_features = [("stacking_meta", 1.0)] + [
-            (name, 1.0) for name in stack["model_names"]
-        ]
-    elif models:
+    if models:
         model, model_name, _ = models[0]
         if hasattr(model, 'feature_importances_'):
             importances = model.feature_importances_
@@ -1139,13 +1002,8 @@ def predict_current(numbers, top_k=TOP_K, model_type="ensemble"):
         "neg_samples": int(len(y) - pos_n),
         "model_type": "+".join(model_names),
         "model_weights": [round(w, 4) for w in normalized_weights],
-        "model_info": (
-            f"Stacking 元模型 ({', '.join(model_names)})"
-            if model_type == "stacking"
-            else f"多模型集成 ({', '.join(model_names)})"
-        ),
-        "stacking": model_type == "stacking",
-        "num_models": len(stack["base_models"]) + 1 if model_type == "stacking" else len(models),
+        "model_info": f"多模型集成 ({', '.join(model_names)})",
+        "num_models": len(models),
     }
 
 
@@ -1229,7 +1087,7 @@ def main():
         "--model",
         type=str,
         default="ensemble",
-        choices=["ensemble", "stacking", "catboost", "xgboost", "lightgbm", "random_forest"],
+        choices=["ensemble", "catboost", "xgboost", "lightgbm", "random_forest"],
         help="模型类型"
     )
     
