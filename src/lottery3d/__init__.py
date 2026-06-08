@@ -36,8 +36,8 @@ _cache_time = 0
 
 W_HOT_GLOBAL = 4.0
 W_HOT_POS = 5.0
-# 冷号/高遗漏加分项：适当加分，让冷号有机会被推荐
-W_MISS_HIGH = 2.0   # 遗漏 >= 16 期加分（已开启）
+# 冷号/高遗漏加分项：基于"冷号回补"假设，而独立摇奖无记忆（置换检验证伪），已关闭
+W_MISS_HIGH = 0.0
 W_MISS_MID = 4.5
 W_MARKOV = 6.0
 W_LAST_APPEAR = 2.5
@@ -53,11 +53,6 @@ RANDOM_POS_REPEAT = 0.10
 RANDOM_DIGIT_REUSE = 1 - (9 / 10) ** 3
 SUM_SOFT_SIGMA = 3.2
 SPAN_SOFT_SIGMA = 1.4
-
-# 多样性增强配置
-DIVERSITY_NOISE = 0.15  # 随机噪声幅度（0-1之间，0表示无噪声）
-DIVERSITY_COOL_BONUS = 1.5  # 冷门号码额外加分系数
-USE_DIVERSITY = True  # 是否启用多样性增强
 
 # 推荐注数（直选为带顺序的三位数）
 RECOMMEND_GROUPS = 15
@@ -464,14 +459,9 @@ def digit_scores(numbers, window=RECENT_WINDOW, dynamic=None):
         for d, p in markov_prob_smoothed(row, range(10)).items():
             score[d] += W_MARKOV * p
 
-    # 冷号加分：让遗漏较久的号码有机会被推荐
     for d in range(10):
         mv = miss_value(numbers, d)
         if mv >= 20:
-            # 超冷号加分：遗漏越久加分越高（上限3倍基础分）
-            bonus = W_MISS_HIGH * min(3.0, mv / 15.0)
-            score[d] += bonus
-        elif mv >= 16:
             score[d] += W_MISS_HIGH
         elif mv >= 12:
             score[d] += W_MISS_MID
@@ -676,39 +666,8 @@ def pick_dan_tuo_kill(score):
 
 
 def pick_zu6_four(score, kill=None):
-    """组六四码：按有效分选 4 个号（杀码降权）+ 多样性增强"""
-    digits = pick_zu6_pool(score, kill, pool_size=ZU6_FOUR_SIZE)
-    
-    # 多样性增强：如果有更多有效候选，随机替换1-2个位置
-    if USE_DIVERSITY and len(score) >= 10:
-        seed = int(time.time() // 86400) + 1  # 与rank_triplets不同的种子
-        rng = random.Random(seed)
-        
-        # 获取所有候选数字及其分数
-        kill_set = set(kill or [])
-        candidates = []
-        for d in range(10):
-            eff_score = score[d] - (W_KILL_PENALTY if d in kill_set else 0.0)
-            candidates.append((eff_score, d))
-        
-        # 按分数排序，选取Top 6作为候选池
-        candidates.sort(key=lambda x: -x[0])
-        top_pool = [d for _, d in candidates[:6]]
-        
-        # 随机替换1个位置（保持核心热号的前提下增加变化）
-        if len(top_pool) > ZU6_FOUR_SIZE and rng.random() < 0.5:
-            # 随机选择一个要替换的位置
-            replace_pos = rng.randint(0, ZU6_FOUR_SIZE - 1)
-            # 从剩余候选中选择一个不在当前四码中的
-            current_set = set(digits)
-            replacements = [d for d in top_pool if d not in current_set]
-            if replacements:
-                new_digit = rng.choice(replacements)
-                digits = list(digits)
-                digits[replace_pos] = new_digit
-                digits = sorted(digits)
-    
-    return digits
+    """组六四码：按有效分选 4 个号（杀码降权）"""
+    return pick_zu6_pool(score, kill, pool_size=ZU6_FOUR_SIZE)
 
 
 def zu6_notes_from_digits(digits):
@@ -798,20 +757,8 @@ def triplet_weight(a, b, c, score, danma, kill, meta):
 
 def rank_triplets(score, danma, kill, meta, top_n=20):
     pool = []
-    # 计算评分范围，用于归一化噪声
-    max_score = max(score) if score else 1.0
-    noise_range = max_score * DIVERSITY_NOISE if USE_DIVERSITY else 0.0
-    
-    # 使用时间戳作为随机种子的一部分，增加每天的随机性
-    seed = int(time.time() // 86400)  # 每天一个种子
-    rng = random.Random(seed)
-    
     for a, b, c in product(range(10), repeat=3):
         w = triplet_weight(a, b, c, score, danma, kill, meta)
-        # 添加随机噪声来增加多样性
-        if USE_DIVERSITY and noise_range > 0:
-            noise = rng.uniform(-noise_range, noise_range)
-            w += noise
         pool.append((w, f"{a}{b}{c}"))
     pool.sort(key=lambda x: -x[0])
     return pool[:top_n]

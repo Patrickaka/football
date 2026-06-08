@@ -212,8 +212,6 @@ class Handler(BaseHTTPRequestHandler):
             self._serve_json(self._backtest_payload(params))
         elif path == '/api/backtest/threshold':
             self._serve_json(self._threshold_payload())
-        elif path == '/api/clear-cache':
-            self._serve_json(self._clear_cache_payload())
         else:
             self._send_json_error(404, f'Not Found: {route.path}')
         self._log_request(200, start)
@@ -385,15 +383,6 @@ class Handler(BaseHTTPRequestHandler):
             # 缓存失效，重新计算
             self._log.info('排列五分析重新计算')
             analyzer = get_pailie5_analyzer()
-            
-            # 自动检查并更新最新开奖号码
-            try:
-                fetch_result = analyzer.fetch_latest_results(count=5)
-                if fetch_result.get('success') and fetch_result.get('source') == 'web':
-                    self._log.info(f'排列五自动更新成功: {fetch_result.get("message")}')
-            except Exception as e:
-                self._log.warning(f'排列五自动更新失败: {e}')
-            
             stats = analyzer.get_statistics()
             recent = analyzer.get_recent_results(10)
             
@@ -658,27 +647,6 @@ class Handler(BaseHTTPRequestHandler):
             self._log.error('获取阈值状态失败', exc_info=True)
             return {'error': f'获取失败: {str(e)}'}
 
-    def _clear_cache_payload(self):
-        """清除所有缓存（内存缓存 + 文件缓存）"""
-        try:
-            # 清除内存缓存
-            for key in _CACHE:
-                _CACHE[key]['data'] = None
-                _CACHE[key]['timestamp'] = 0
-            
-            # 清除文件缓存
-            cache_dir = _ROOT / 'data' / 'cache'
-            if cache_dir.exists():
-                import shutil
-                shutil.rmtree(cache_dir)
-                cache_dir.mkdir(parents=True)
-            
-            self._log.info('所有缓存已清除')
-            return {'result': {'success': True, 'message': '缓存清除成功'}}
-        except Exception as e:
-            self._log.error('清除缓存失败', exc_info=True)
-            return {'error': f'清除缓存失败: {str(e)}'}
-
     def _lottery_payload(self):
         """获取大乐透统计分析"""
         try:
@@ -693,15 +661,6 @@ class Handler(BaseHTTPRequestHandler):
             # 缓存失效，重新计算
             self._log.info('大乐透分析重新计算')
             analyzer = get_lottery_analyzer()
-            
-            # 自动检查并更新最新开奖号码
-            try:
-                fetch_result = analyzer.fetch_latest_results(count=5)
-                if fetch_result.get('success') and fetch_result.get('source') == 'web':
-                    self._log.info(f'大乐透自动更新成功: {fetch_result.get("message")}')
-            except Exception as e:
-                self._log.warning(f'大乐透自动更新失败: {e}')
-            
             stats = analyzer.get_statistics()
             recent = analyzer.get_recent_results(10)
             

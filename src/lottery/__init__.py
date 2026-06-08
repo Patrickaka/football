@@ -778,9 +778,6 @@ class LotteryAnalyzer:
                 # 保存到缓存
                 save_cached_data('lottery', self.history_data)
                 
-                # 同时保存到历史文件
-                self.save_history()
-                
                 return {
                     'success': True,
                     'source': 'web',
