@@ -48,7 +48,7 @@ for i in range(len(numbers) - TRIALS, len(numbers)):
         continue
     
     # 构建训练数据
-    X, y = ml_pure.build_training_data(train_nums, neg_samples=30)
+    X, y, _ = ml_pure.build_training_data(train_nums, neg_samples=30)
     if X is None or len(X) < 100:
         continue
     

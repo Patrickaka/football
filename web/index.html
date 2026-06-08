@@ -83,6 +83,27 @@
   .blend-row span { background: var(--card2); border-radius: 8px; padding: 6px 12px; }
   .blend-row .star { color: var(--accent2); font-weight: 700; }
   .probbar-3d { height: 28px; font-size: 12px; font-weight: 600; }
+  .seg-hot { background: #d29922; }
+  .seg-markov { background: #4493f8; }
+  .seg-miss { background: #f85149; }
+  .seg-cycle { background: #3fb950; }
+  .balance-card {
+    background: linear-gradient(135deg, #1a2230, #1a2a35);
+    border: 1px solid var(--home); border-radius: 12px;
+    padding: 14px 16px; margin-bottom: 14px;
+  }
+  .balance-card .formula {
+    font-size: 13px; font-weight: 600; color: var(--accent2);
+    text-align: center; margin-bottom: 10px; letter-spacing: 0.3px;
+  }
+  .balance-scales {
+    display: flex; flex-wrap: wrap; gap: 8px; justify-content: center;
+    margin-top: 10px; font-size: 12px;
+  }
+  .balance-scales span {
+    background: var(--card2); border-radius: 6px; padding: 4px 10px; color: var(--muted);
+  }
+  .balance-scales b { color: var(--text); }
 
   .search { width: 100%; padding: 12px 16px; font-size: 15px;
     background: var(--card); border: 1px solid var(--line); border-radius: 10px;
@@ -935,7 +956,7 @@ const TAB_META = {
   },
   lottery3d: {
     title: '🎲 福彩3D预测',
-    desc: '数据来源：8300.cn 近200期 · 形态概率 + 组六四码 + 直选Top3/Top15',
+    desc: '冷热平衡评分 · 分位独立 Top5³ · 动态窗口 · 转移熵 · 组六四码 + 直选推荐',
     disclaimer: '⚠ 3D 开奖具有随机性，以上分析仅为历史统计参考，回测用于观察候选池收缩效果，不构成任何投注建议。',
   },
   pailie5: {
@@ -1410,6 +1431,19 @@ function formProbBar(blend) {
   ).join('') + '</div>';
 }
 
+function balanceFormulaBar(sf) {
+  const w = (sf && sf.weights) || { hot: 0.35, markov: 0.25, miss: 0.25, cycle: 0.15 };
+  const segs = [
+    { cls: 'hot', p: w.hot, label: '热度 ' + pct(w.hot) },
+    { cls: 'markov', p: w.markov, label: '马尔可夫 ' + pct(w.markov) },
+    { cls: 'miss', p: w.miss, label: '遗漏 ' + pct(w.miss) },
+    { cls: 'cycle', p: w.cycle, label: '周期 ' + pct(w.cycle) },
+  ];
+  return '<div class="probbar probbar-3d">' + segs.map(s =>
+    `<div class="seg-${s.cls}" style="width:${Math.max(s.p * 100, 10).toFixed(1)}%">${s.label}</div>`
+  ).join('') + '</div>';
+}
+
 function renderLottery3d(r) {
   const f = r.form;
   const ss = r.sum_span;
@@ -1429,8 +1463,7 @@ function renderLottery3d(r) {
     <div class="body">
       福彩3D 每个号码 <b>000–999 概率严格相等</b>（各 1/1000），开奖<b>没有记忆</b>——这一期的结果和往期<span class="hl">完全独立</span>。<br><br>
       • <b>"热号/冷号/遗漏"是赌徒谬误</b>：把真实历史顺序打乱后重新回测，命中率和原顺序<span class="hl">统计上分不出区别</span>（置换检验 p=${pTxt}，未显著优于随机）。<br>
-      • <b>冷号不会"回补"</b>：长期均匀靠的是后续无数次开奖把早期不平衡<span class="hl">稀释</span>掉，不是彩票去补偿谁——遗漏久的号码下一期出现率与基础率无显著差异。<br>
-      • 本工具<b>已关闭基于"冷号回补"的遗漏加分项</b>（W_MISS_HIGH=0）。<br><br>
+      • 当前评分采用<b>冷热平衡</b>：0.35 热度 + 0.25 马尔可夫 + 0.25 遗漏 + 0.15 周期，热/冷周期动态调节，<span class="hl">不等于预测下一期必出冷号</span>。<br><br>
       唯一真实存在的结构是<b>和值分布</b>（三角形，峰在 13–14），但它只在你<span class="hl">押"和值"</span>时有用，对选具体号码没有帮助。<br>
       预算有限时，<b>组选六</b>同样的钱命中频率是直选的 <span class="hl">6 倍</span>。下方推荐仅供参考，<b>请把它当娱乐、理性投注</b>。
     </div>
@@ -1453,8 +1486,29 @@ function renderLottery3d(r) {
     }</span></div>` : ''}
   </div>`;
 
+  // ── 冷热平衡评分（核心机制）──
+  const sf = r.score_formula || {};
+  const sw = sf.weights || { hot: 0.35, markov: 0.25, miss: 0.25, cycle: 0.15 };
+  const sc = sf.scales || {};
+  const cyc = r.cycle || {};
+  html += `<div class="section-title">【冷热平衡评分】</div>`;
+  html += `<div class="balance-card">
+    <div class="formula">最终得分 = ${sw.hot}×热度 + ${sw.markov}×马尔可夫 + ${sw.miss}×遗漏 + ${sw.cycle}×周期</div>
+    ${balanceFormulaBar(sf)}
+    <div class="balance-scales">
+      <span><b>W_HOT_POS</b> ${sc.W_HOT_POS ?? 3.0}</span>
+      <span><b>W_MARKOV</b> ${sc.W_MARKOV ?? 3.5}</span>
+      <span><b>W_MISS_HIGH</b> ${sc.W_MISS_HIGH ?? 8.0}</span>
+      ${r.transfer_model ? `<span>转移 <b>${esc(r.transfer_model)}</b></span>` : ''}
+      ${cyc.phase_label ? `<span>周期态 <b>${esc(cyc.phase_label)}</b> P(热) ${pct(cyc.p_hot || 0)}${cyc.p_hot_raw && cyc.p_hot_raw !== cyc.p_hot ? ` (原始${pct(cyc.p_hot_raw)}已封顶)` : ''}</span>` : ''}
+    </div>
+    <div class="note" style="margin-top:10px;text-align:center">
+      四分量先归一化到 0–10 再加权 · P(热) 封顶 85% 防单边碾压 · 转移熵不足时回退马尔可夫
+    </div>
+  </div>`;
+
   // ── 直选 Top3（独立醒目块）──
-  html += `<div class="section-title">【直选Top3推荐】（百十个位顺序一致）</div>`;
+  html += `<div class="section-title">【直选Top3推荐】（分位独立 Top5×Top5×Top5）</div>`;
   html += `<div class="highlight" style="border-color:var(--warn)">`;
   top3.forEach((item, i) => {
     html += `<div class="row"><span class="k">第${i + 1}推荐</span>
@@ -1463,9 +1517,42 @@ function renderLottery3d(r) {
   html += `<div class="sub" style="margin-top:8px">Top3 号码：${esc(top3.map(x => x.num).join(', '))}</div>`;
   html += `</div>`;
 
-  // ── 热号分析 ──
-  html += `<div class="card"><h3>🔥 热号分析（多窗口集成）</h3>
-    <div class="note" style="margin-bottom:8px">窗口 ${esc((r.recent_windows || [30,45,60,90]).join(' / '))} 期 · 权重 ${
+  if (r.cycle_detection) {
+    const cd = r.cycle_detection;
+    const dom = cd.global_dominant;
+    html += `<div class="card" style="margin-bottom:8px">
+      <div class="row"><span class="k">周期检测</span><span class="v">FFT+自相关+滑动窗 · 全局主导 ${dom || '—'} 期（目标 7/14/28）</span></div>`;
+    Object.entries(cd.positions || {}).forEach(([name, info]) => {
+      const p = info.dominant;
+      const st = p && info.periods && info.periods[p] ? info.periods[p].strength : null;
+      if (p) html += `<div class="row"><span class="k">${esc(name)}</span><span class="v">${p} 期周期 · 强度 ${st != null ? st.toFixed(3) : '—'}</span></div>`;
+    });
+    html += `</div>`;
+  }
+
+  if (r.dynamic_windows && r.dynamic_windows.selected) {
+    const dw = r.dynamic_windows;
+    html += `<div class="card" style="margin-bottom:8px">
+      <div class="row"><span class="k">动态窗口</span><span class="v">回测优选 Top${dw.top_k || 3}：${esc(dw.selected.join(' / '))} 期 · 最强单窗 ${dw.best_single || '—'}</span></div>
+      <div class="note">候选池 ${(dw.candidates || []).length} 个窗口，替代固定 30/45/60/90</div>
+    </div>`;
+  }
+
+  if (r.transfer_model) {
+    html += `<div class="note" style="margin-bottom:8px">转移模型：${esc(r.transfer_model)}（过滤随机噪声，替代马尔可夫）</div>`;
+  }
+
+  if (r.cycle) {
+    const c = r.cycle;
+    html += `<div class="card" style="margin-bottom:8px">
+      <div class="row"><span class="k">冷热周期</span><span class="v">${esc(c.phase_label)} · P(热) ${pct(c.p_hot)} · 热号×${c.w_hot_scale} · 冷号×${c.w_miss_scale}</span></div>
+      <div class="note">贝叶斯推断：热周期优先热号，冷周期优先冷号（近窗热命中 ${c.hot_hits} · 冷命中 ${c.cold_hits}）</div>
+    </div>`;
+  }
+
+  // ── 热度分量（平衡评分 35%）──
+  html += `<div class="card"><h3>🔥 热度分量（平衡评分 ${pct(sw.hot)}）</h3>
+    <div class="note" style="margin-bottom:8px">动态窗口 ${esc((r.recent_windows || []).join(' / ') || '—')} 期 · 权重 ${
       r.window_weights
         ? Object.entries(r.window_weights).map(([k,v]) => k + '期 ' + pct(parseFloat(v))).join(' · ')
         : '均等'
@@ -1478,8 +1565,8 @@ function renderLottery3d(r) {
     <div class="row"><span class="k">杀码</span><span class="v">${esc(r.kill.join(', '))}</span></div>
   </div>`;
 
-  // ── 遗漏分析 ──
-  html += `<div class="section-title">遗漏分析（分位 + 全局）</div>`;
+  // ── 遗漏分量（平衡评分 25%）──
+  html += `<div class="section-title">遗漏分量（平衡评分 ${pct(sw.miss)} · 分位 + 全局）</div>`;
   html += `<div class="card">`;
   if (r.miss_global && r.miss_global.length) {
     r.miss_global.forEach(item => {
@@ -1506,7 +1593,7 @@ function renderLottery3d(r) {
     <div class="row"><span class="k">形态遗漏</span><span class="v">组六 ${f.miss_zu6} 期 · 组三 ${f.miss_zu3} 期</span></div>
     <div class="row"><span class="k">近态(多窗口)</span><span class="v">组六 ${pct(f.recent.zu6)} · 组三 ${pct(f.recent.zu3)} · 豹子 ${pct(f.recent.baozi)}</span></div>
     <div class="row"><span class="k">全历史</span><span class="v">组六 ${pct(f.hist?.zu6 || 0)} · 组三 ${pct(f.hist?.zu3 || 0)} · 豹子 ${pct(f.hist?.baozi || 0)}</span></div>
-    <div class="row"><span class="k">上期${esc(f.last_label)}→下期</span><span class="v">组六 ${pct(f.markov.zu6)} · 组三 ${pct(f.markov.zu3)} · 豹子 ${pct(f.markov.baozi)}（样本 ${f.markov_samples}）</span></div>
+    <div class="row"><span class="k">前两期(${esc((f.markov_state_label || [f.last_label]).join(','))})→下期</span><span class="v">组六 ${pct(f.markov.zu6)} · 组三 ${pct(f.markov.zu3)} · 豹子 ${pct(f.markov.baozi)}（样本 ${f.markov_samples}）</span></div>
     <div style="font-size:12px;color:var(--muted);margin:10px 0 4px">综合预估（近态+转移+历史+理论）</div>
     ${formProbBar(f.blend)}
     <div class="blend-row">
@@ -1554,18 +1641,22 @@ function renderLottery3d(r) {
       ).join(' · ')}</span></div>
       <div class="row"><span class="k">同位个数</span><span class="v">${esc(Object.entries(tr.repeat_dist || {}).map(([k,v]) => k + ' ' + v + '%').join(' · '))}</span></div>
       <div class="row"><span class="k">重号 / 全同 / 同集</span><span class="v">${pct(tr.digit_reuse_rate)} · ${pct(tr.full_repeat_rate)} · ${pct(tr.same_set_rate)}</span></div>
-      <div class="row"><span class="k">动态权重</span><span class="v">同位 ${dyn.w_pos_repeat ?? '—'} · 重号 ${dyn.w_last_appear ?? '—'} · 全同 -${dyn.w_full_repeat_penalty ?? '—'} · 同集 -${dyn.w_same_set_penalty ?? '—'}</span></div>
+      <div class="row"><span class="k">冷热周期</span><span class="v">${esc({'hot':'热周期','cold':'冷周期','neutral':'均衡'}[dyn.cycle_phase] || dyn.cycle_phase || '—')} · P(热) ${dyn.p_hot_cycle != null ? pct(dyn.p_hot_cycle) : '—'} · 热号×${dyn.w_hot_scale ?? '—'} · 冷号×${dyn.w_miss_scale ?? '—'}</span></div>
+      <div class="row"><span class="k">平衡缩放</span><span class="v">热度 ${dyn.w_hot_global ?? sc.W_HOT_POS ?? '—'} · 遗漏高 ${dyn.w_miss_high ?? sc.W_MISS_HIGH ?? '—'} · 马尔可夫 ${sc.W_MARKOV ?? '—'}</span></div>
+      <div class="row"><span class="k">直选调权</span><span class="v">同位 ${dyn.w_pos_repeat ?? '—'} · 重号 ${dyn.w_last_appear ?? '—'} · 全同 -${dyn.w_full_repeat_penalty ?? '—'} · 同集 -${dyn.w_same_set_penalty ?? '—'}</span></div>
     </div>`;
   }
 
   // ── 综合评分 ──
-  html += `<div class="section-title">综合评分 TOP10</div>`;
-  html += `<div class="card"><div class="digit-grid" style="grid-template-columns:repeat(5,1fr)">${r.rank_top10.map(x =>
+  html += `<div class="section-title">冷热平衡综合分 TOP10</div>`;
+  html += `<div class="card">
+    <div class="note" style="margin-bottom:8px">${sw.hot}热度 + ${sw.markov}马尔可夫 + ${sw.miss}遗漏 + ${sw.cycle}周期 · 邻号/重号等小幅附加</div>
+    <div class="digit-grid" style="grid-template-columns:repeat(5,1fr)">${r.rank_top10.map(x =>
     `<div class="digit-cell"><div class="d">${x.digit}</div><div class="s">${x.score}分</div></div>`
   ).join('')}</div></div>`;
 
   // ── 分位推荐 ──
-  html += `<div class="section-title">分位推荐（各位 Top5）</div>`;
+  html += `<div class="section-title">分位独立评分（各位 Top5 · 同平衡公式）</div>`;
   html += `<div class="card">`;
   r.position_top.forEach(block => {
     html += `<div class="pos-block"><div class="pos-name">${esc(block.name)}位</div><div class="pos-tags">`;
@@ -1585,8 +1676,13 @@ function renderLottery3d(r) {
   </div>`;
 
   // ── 直选 ──
-  html += `<div class="section-title">【直选推荐 ${n} 注】（百十个位顺序一致）</div>`;
+  const zm = r.zhixuan_model || {};
+  const poolNote = zm.pools
+    ? `分位独立 Top${zm.position_top_n || 5}：百${esc((zm.pools['百'] || []).join(''))} × 十${esc((zm.pools['十'] || []).join(''))} × 个${esc((zm.pools['个'] || []).join(''))} = ${zm.combo_pool || 125} 注候选池`
+    : '';
+  html += `<div class="section-title">【直选推荐 ${n} 注】（分位独立 Top5×Top5×Top5）</div>`;
   html += `<div class="card">
+    ${poolNote ? `<div class="note" style="margin-bottom:8px">${poolNote}</div>` : ''}
     <div class="note" style="margin-bottom:10px">杀码参考 ${esc(r.kill.join(', '))}（含杀码组合降权，非硬杀）</div>`;
   r.zhixuan.forEach((item, i) => {
     html += `<div class="zhixuan">
@@ -1603,7 +1699,7 @@ function renderLottery3d(r) {
     <div class="row"><span class="k">回测期数</span><span class="v">${bt.trials}</span></div>
     <div class="row"><span class="k">直选Top3命中</span><span class="v">${pct(bt.top3_rate)} (${bt.top3_hit}/${bt.trials})</span></div>
     <div class="row"><span class="k">直选${n}注命中</span><span class="v">${pct(bt.top_rate)} (${bt.top_hit}/${bt.trials})</span></div>
-    <div class="row"><span class="k">随机基线（${n}注）</span><span class="v">${pct(bt.top_rate_baseline)}</span></div>
+    <div class="row"><span class="k">候选池 / 基线</span><span class="v">${bt.combo_pool || 125} 注池 · 随机基线 ${pct(bt.top_rate_baseline)}（${n}/${bt.combo_pool || 125}）</span></div>
     ${bt.significance ? `<div class="row"><span class="k">置换检验 p 值</span><span class="v" style="color:${bt.significance.significant ? 'var(--accent2)' : 'var(--muted)'}">${bt.significance.pvalue.toFixed(3)} · ${bt.significance.significant ? '显著优于随机' : '未显著优于随机（打乱均值 ' + pct(bt.significance.shuffled_mean_rate) + '）'}</span></div>` : ''}
     <div class="row"><span class="k">推荐池至少中2个数字</span><span class="v">${pct(bt.ge2_digit_rate)}</span></div>
     <div class="row"><span class="k">和值落在预测带±4</span><span class="v">${pct(bt.sum_band_rate)}</span></div>
@@ -1652,8 +1748,8 @@ function renderMLResult(r) {
   let html = '';
 
   // 模型信息显示
-  const modelInfo = r.model_info || (r.model_type === 'lightgbm' ? 'LightGBM (快)' : '纯 Python 随机森林 (慢)');
-  const speedInfo = r.model_type === 'lightgbm' ? '⚡ 3-8 秒 | 准确率 15-22%' : '🐢 15-30 秒 | 准确率 12-18%';
+  const modelInfo = r.model_info || (r.stacking ? 'Stacking 元模型' : (r.model_type === 'lightgbm' ? 'LightGBM (快)' : '纯 Python 随机森林 (慢)'));
+  const speedInfo = r.stacking ? '⚡ 规则+RF+XGB+LGB → Meta' : (r.model_type === 'lightgbm' ? '⚡ 3-8 秒 | 准确率 15-22%' : '🐢 15-30 秒 | 准确率 12-18%');
 
   // ── ML 预测标题 ──
   html += `<div class="section-title">【福彩 3D ML 预测结果】</div>`;

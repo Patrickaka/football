@@ -341,11 +341,12 @@ class Handler(BaseHTTPRequestHandler):
             self._log.info('3D ML 预测重新计算')
             numbers = [x[2] for x in data] if data else []
             # 使用多模型集成
-            result = predict_current(numbers, model_type="ensemble")
+            result = predict_current(numbers, model_type="stacking")
 
             formatted = {
                 'model_type': result.get('model_type', 'unknown'),
                 'model_info': result.get('model_info', '未知模型'),
+                'stacking': bool(result.get('stacking')),
                 'num_models': int(result.get('num_models', 1)),
                 'model_weights': result.get('model_weights', []),
                 'total_samples': int(result.get('total_samples', 0)),
