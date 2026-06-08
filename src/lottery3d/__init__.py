@@ -34,12 +34,13 @@ CACHE_EXPIRE_SECONDS = 86400  # 24小时缓存过期时间（当天有效）
 _prediction_cache = None
 _cache_time = 0
 
-W_HOT_GLOBAL = 4.0
-W_HOT_POS = 5.0
-# 冷号/高遗漏加分项：基于"冷号回补"假设，而独立摇奖无记忆（置换检验证伪），已关闭
-W_MISS_HIGH = 0.0
+W_HOT_GLOBAL = 2.5   # 原 4.0；降低热号全局权重，减少同一号码长期霸榜
+W_HOT_POS = 3.0     # 原 5.0；降低分位热号权重，让转移概率有更多发言权
+# 冷号遗漏加分：W_MISS_HIGH 对待极高遗漏值（≥20期），W_MISS_MID 对待中等遗漏值（≥12期）
+W_MISS_HIGH = 3.0   # 原 0.0；激活高遗漏值加分，提升冷号命中率
 W_MISS_MID = 4.5
-W_MARKOV = 6.0
+W_MARKOV = 8.0       # 原 6.0；提高马尔可夫转移权重，使推荐更贴近最近一期开奖号
+W_MARKOV2 = 4.0      # 二阶马尔可夫转移权重（基于最近两期号码的转移）
 W_LAST_APPEAR = 2.5
 W_NEIGHBOR = 2.0
 W_ROAD_MATCH = 1.5
@@ -69,6 +70,7 @@ TUNABLE_WEIGHTS = (
     "W_HOT_POS",
     "W_MISS_MID",
     "W_MARKOV",
+    "W_MARKOV2",
     "W_LAST_APPEAR",
     "W_NEIGHBOR",
     "W_ROAD_MATCH",
@@ -84,6 +86,7 @@ WEIGHT_SEARCH_RANGES = {
     "W_HOT_POS": (0.5, 2.0),
     "W_MISS_MID": (0.4, 2.5),
     "W_MARKOV": (0.5, 2.0),
+    "W_MARKOV2": (0.3, 1.5),
     "W_LAST_APPEAR": (0.3, 2.5),
     "W_NEIGHBOR": (0.3, 2.5),
     "W_ROAD_MATCH": (0.0, 3.0),
@@ -174,6 +177,16 @@ def build_markov(numbers, position):
         a, b = numbers[i][position], numbers[i + 1][position]
         trans[a][b] += 1
     return trans
+
+
+def build_markov2(numbers, position):
+    """二阶马尔可夫转移矩阵：P(next | prev2, prev1) → Counter[(prev2, prev1)][next]"""
+    trans2 = defaultdict(Counter)
+    for i in range(len(numbers) - 2):
+        p2, p1 = numbers[i][position], numbers[i + 1][position]
+        nx = numbers[i + 2][position]
+        trans2[(p2, p1)][nx] += 1
+    return trans2
 
 
 def markov_prob_smoothed(row, states, alpha=MARKOV_LAPLACE_ALPHA):
@@ -403,6 +416,16 @@ def analyze_sum_span(sums, spans, window=RECENT_WINDOW):
     sum_center = sum(k * v for k, v in w_s.items()) / max(sum(w_s.values()), 1e-9)
     span_center = sum(k * v for k, v in w_p.items()) / max(sum(w_p.values()), 1e-9)
 
+    # 加入近期趋势感知：最近5期的移动均值偏移
+    if len(recent_s) >= 5:
+        recent5_s = recent_s[-5:]
+        recent5_p = recent_p[-5:]
+        avg5_s = sum(recent5_s) / 5
+        avg5_p = sum(recent5_p) / 5
+        # 趋势偏向近期：center 以 0.35 的权重向最近5期移动
+        sum_center = sum_center * 0.65 + avg5_s * 0.35
+        span_center = span_center * 0.65 + avg5_p * 0.35
+
     return {
         "sum_center": sum_center,
         "span_center": span_center,
@@ -431,7 +454,7 @@ def ensemble_sum_span(sums, spans, window_weights):
     return {
         "sum_center": sum_center,
         "span_center": span_center,
-        "hot_sums": [x for x, _ in hot_spans_vote.most_common(6)],
+        "hot_sums": [x for x, _ in hot_sums_vote.most_common(6)],
         "hot_spans": [x for x, _ in hot_spans_vote.most_common(4)],
         "sum_tail_freq": tail_acc,
     }
@@ -459,12 +482,21 @@ def digit_scores(numbers, window=RECENT_WINDOW, dynamic=None):
         for d, p in markov_prob_smoothed(row, range(10)).items():
             score[d] += W_MARKOV * p
 
+        # 二阶马尔可夫：基于最近两期的转移概率
+        if len(numbers) >= 2:
+            trans2 = build_markov2(numbers, pos)
+            prev2 = numbers[-2][pos]
+            prev1 = last[pos]
+            row2 = trans2.get((prev2, prev1), Counter())
+            for d, p in markov_prob_smoothed(row2, range(10)).items():
+                score[d] += W_MARKOV2 * p
+
     for d in range(10):
         mv = miss_value(numbers, d)
         if mv >= 20:
-            score[d] += W_MISS_HIGH
+            score[d] += W_MISS_HIGH * (1.0 + (mv - 20) * 0.05)  # 遗漏值越高加分越多（累进）
         elif mv >= 12:
-            score[d] += W_MISS_MID
+            score[d] += W_MISS_MID * (1.0 + (mv - 12) * 0.03)   # 中等遗漏累进
 
     for d in set(last):
         score[d] += w_last
@@ -509,13 +541,20 @@ def position_digit_scores(numbers, position, window=RECENT_WINDOW, dynamic=None)
     row = trans.get(last_d, Counter())
     for d, p in markov_prob_smoothed(row, range(10)).items():
         sc[d] += W_MARKOV * p
+    # 二阶马尔可夫
+    if len(numbers) >= 2:
+        trans2 = build_markov2(numbers, position)
+        prev2_d = numbers[-2][position]
+        row2 = trans2.get((prev2_d, last_d), Counter())
+        for d, p in markov_prob_smoothed(row2, range(10)).items():
+            sc[d] += W_MARKOV2 * p
     mv = miss_value(numbers, None, position=position)
     for d in range(10):
         miss_p = miss_value(numbers, d, position=position)
         if miss_p >= 16:
-            sc[d] += W_MISS_HIGH
+            sc[d] += W_MISS_HIGH * (1.0 + (miss_p - 16) * 0.05)  # 分位遗漏值累进
         elif miss_p >= 9:
-            sc[d] += W_MISS_MID
+            sc[d] += W_MISS_MID * (1.0 + (miss_p - 9) * 0.03)
     sc[last_d] += w_last * pos_mult[position]
     for d in neighbor(last_d):
         sc[d] += W_NEIGHBOR

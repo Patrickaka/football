@@ -1683,9 +1683,17 @@ def implied_total_goals(line, p_over, tol=1e-4):
 
 
 def _dc_tau(h, a, lam_home, lam_away, rho):
-    """Dixon-Coles 低比分相关修正因子（修正独立泊松对 0-0/1-1 的偏差）"""
-    if h > 1 or a > 1:
+    """Dixon-Coles 相关修正因子（扩展到所有比分，带指数衰减）
+
+    τ 捕捉主客队进球数之间的相关性：
+    - ρ < 0（负相关）：不对称比分（如 2-0、3-1）比独立泊松预测的更多
+    - ρ > 0（正相关）：对称比分（如 1-1、2-2）比独立泊松预测的更多
+
+    低比分保持原始 D-C 公式，高比分用指数衰减平滑过渡。
+    """
+    if rho == 0:
         return 1.0
+    # 原始 Dixon-Coles 低比分公式（保持兼容）
     if h == 0 and a == 0:
         return 1.0 - lam_home * lam_away * rho
     if h == 0 and a == 1:
@@ -1694,7 +1702,18 @@ def _dc_tau(h, a, lam_home, lam_away, rho):
         return 1.0 + lam_away * rho
     if h == 1 and a == 1:
         return 1.0 - rho
-    return 1.0
+    # 高比分：负相关效应随总进球数指数衰减
+    decay = math.exp(-(h + a) * 0.30)
+    if h == a:
+        # 对称高分（2-2, 3-3）：负相关是此类比分比预期更少
+        return 1.0 + rho * decay
+    elif min(h, a) == 0:
+        # 零封比分（2-0, 3-0）：负相关 → 不对称比分比预期更多
+        return 1.0 - rho * decay
+    else:
+        # 接近比分（2-1, 3-2）：分差越小效果越弱
+        gap_factor = abs(h - a) / (h + a)
+        return 1.0 - rho * decay * gap_factor
 
 
 def _matrix_margins(matrix):
@@ -1871,6 +1890,30 @@ def team_poisson_lambdas(strength, total_target, league_profile=None):
     # 计算基础 lambda
     lam_home = max(0.08, atk_h * def_a * avg * boost)
     lam_away = max(0.08, atk_a * def_h * avg)
+    
+    # 近期状态衰减加权（最近3场进球/失球 → 指数衰减到 λ）
+    # 如果 strength 包含近期数据则应用，否则仅依赖长期均值
+    home_recent = strength.get('home_recent', {})
+    away_recent = strength.get('away_recent', {})
+    if home_recent and away_recent:
+        home_games = max(1, home_recent.get('games', 10))
+        away_games = max(1, away_recent.get('games', 10))
+        # form_pts 范围 0~3 每场，均值≈1.5；>1.5 近期好，<1.5 近期差
+        home_form = home_recent.get('form_pts', 0) / (3.0 * home_games)
+        away_form = away_recent.get('form_pts', 0) / (3.0 * away_games)
+        # 将 form_factor 映射到 ±15% 的 λ 修正（高于均值加分，低于均值减分）
+        lam_home *= (1.0 + (home_form - 0.5) * 0.30)
+        lam_away *= (1.0 + (away_form - 0.5) * 0.30)
+        # 近期进球/失球效率：如果近期场均进球明显偏离长期均值，额外修正
+        h_gf_per_game = home_recent.get('gf', 0) / home_games
+        h_ga_per_game = home_recent.get('ga', 0) / home_games
+        a_gf_per_game = away_recent.get('gf', 0) / away_games
+        a_ga_per_game = away_recent.get('ga', 0) / away_games
+        # 近期进球比长期预期多/少 → ±10% 微调
+        lam_home *= (1.0 + (h_gf_per_game - attack_home) / max(attack_home, 0.01) * 0.10)
+        lam_away *= (1.0 + (a_gf_per_game - attack_away) / max(attack_away, 0.01) * 0.10)
+        lam_home = max(0.06, lam_home)
+        lam_away = max(0.06, lam_away)
     
     # 如果有 ELO xG，进行融合
     if 'elo_xg_home' in strength and 'elo_xg_away' in strength:
@@ -3090,12 +3133,22 @@ def _pick_recommendations(candidates, asian, euro, total, n=2, pool=12, confiden
         n = confidence.get('recommend_count', n)
     pool = min(16, len(candidates))  # 原12，扩大候选池让高比分有更多入选机会
     conf_w = confidence['score'] if confidence else 1.0
+
+    # xG 一致性校验：ELO xG 与市场总进球线偏差 >0.5 则降低置信度
+    xg_penalty = 1.0
+    xg_total = total.get('xg_total')
+    total_line = total.get('close_line') or total.get('line')
+    if xg_total is not None and total_line is not None:
+        xg_deviation = abs(xg_total - total_line)
+        if xg_deviation > 0.5:
+            xg_penalty = max(0.75, 1.0 - (xg_deviation - 0.5) * 0.20)  # 偏差>0.5开始渐进扣分
+
     scored = []
     for (h, a), prob in candidates[:pool]:
         align = _alignment_score(h, a, asian, euro, total)
         heat, _ = score_heat_label(h, a, prob, league_profile)
         w = _heat_filter_weight(heat)
-        scored.append(((h, a), prob, align, heat, prob * (1.0 + 0.45 * align) * w * (0.65 + 0.35 * conf_w)))
+        scored.append(((h, a), prob, align, heat, prob * (1.0 + 0.45 * align) * w * (0.65 + 0.35 * conf_w) * xg_penalty))
     scored.sort(key=lambda x: -x[4])
     seen = set()
     picked = []
@@ -3159,6 +3212,12 @@ def analyze_match(match):
     team = fetch_team_strength(mid, home, away, league_profile)
     if team:
         team['league_profile'] = league_profile
+
+    # 注入 ELO xG 数据到 total 字典，供后续 xG 一致性校验使用
+    if team and 'elo_xg_home' in team and 'elo_xg_away' in team:
+        total['xg_home'] = team['elo_xg_home']
+        total['xg_away'] = team['elo_xg_away']
+        total['xg_total'] = team['elo_xg_home'] + team['elo_xg_away']
 
     target_total = total['implied_total']
     lp_avg = league_profile.get('avg_goal', AVG_LEAGUE_GOAL)
