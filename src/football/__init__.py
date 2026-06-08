@@ -107,41 +107,41 @@ CONFIDENCE_HIGH_THRESHOLD = 0.72
 
 # 联赛画像：场均进球、主场加成、低比分倾向（乘在 0-2 球基准频率上）
 LEAGUE_PROFILES = {
-    'default': {'avg_goal': 1.35, 'home_boost': 1.06, 'low_score': 1.0, 'draw_mult': 1.0},
-    '英超': {'avg_goal': 1.48, 'home_boost': 1.08, 'low_score': 0.92, 'draw_mult': 0.95},
-    '英冠': {'avg_goal': 1.42, 'home_boost': 1.07, 'low_score': 0.94, 'draw_mult': 0.96},
-    '西甲': {'avg_goal': 1.38, 'home_boost': 1.07, 'low_score': 1.02, 'draw_mult': 1.05},
-    '意甲': {'avg_goal': 1.28, 'home_boost': 1.05, 'low_score': 1.12, 'draw_mult': 1.08},
-    '德甲': {'avg_goal': 1.52, 'home_boost': 1.06, 'low_score': 0.90, 'draw_mult': 0.94},
-    '法甲': {'avg_goal': 1.32, 'home_boost': 1.06, 'low_score': 1.05, 'draw_mult': 1.02},
-    '荷甲': {'avg_goal': 1.55, 'home_boost': 1.05, 'low_score': 0.88, 'draw_mult': 0.93},
-    '葡超': {'avg_goal': 1.30, 'home_boost': 1.06, 'low_score': 1.04, 'draw_mult': 1.03},
-    '欧冠': {'avg_goal': 1.45, 'home_boost': 1.04, 'low_score': 0.96, 'draw_mult': 0.98},
-    '欧联': {'avg_goal': 1.40, 'home_boost': 1.05, 'low_score': 0.98, 'draw_mult': 1.0},
-    '世界杯': {'avg_goal': 1.38, 'home_boost': 1.03, 'low_score': 1.0, 'draw_mult': 1.0},
-    '欧洲杯': {'avg_goal': 1.36, 'home_boost': 1.04, 'low_score': 1.02, 'draw_mult': 1.02},
-    '友谊': {'avg_goal': 1.42, 'home_boost': 1.02, 'low_score': 0.98, 'draw_mult': 0.97},
-    '国际': {'avg_goal': 1.40, 'home_boost': 1.03, 'low_score': 1.0, 'draw_mult': 1.0},
-    '巴甲': {'avg_goal': 1.38, 'home_boost': 1.08, 'low_score': 0.95, 'draw_mult': 0.96},
-    '阿甲': {'avg_goal': 1.32, 'home_boost': 1.07, 'low_score': 1.0, 'draw_mult': 0.98},
-    '中超': {'avg_goal': 1.28, 'home_boost': 1.07, 'low_score': 1.06, 'draw_mult': 1.04},
-    '日职': {'avg_goal': 1.30, 'home_boost': 1.06, 'low_score': 1.04, 'draw_mult': 1.03},
-    '韩K': {'avg_goal': 1.26, 'home_boost': 1.06, 'low_score': 1.06, 'draw_mult': 1.04},
+    'default': {'avg_goal': 1.42, 'home_boost': 1.06, 'low_score': 0.92, 'draw_mult': 1.0},
+    '英超': {'avg_goal': 1.52, 'home_boost': 1.08, 'low_score': 0.88, 'draw_mult': 0.95},
+    '英冠': {'avg_goal': 1.46, 'home_boost': 1.07, 'low_score': 0.90, 'draw_mult': 0.96},
+    '西甲': {'avg_goal': 1.42, 'home_boost': 1.07, 'low_score': 0.95, 'draw_mult': 1.05},
+    '意甲': {'avg_goal': 1.32, 'home_boost': 1.05, 'low_score': 1.05, 'draw_mult': 1.08},
+    '德甲': {'avg_goal': 1.56, 'home_boost': 1.06, 'low_score': 0.86, 'draw_mult': 0.94},
+    '法甲': {'avg_goal': 1.36, 'home_boost': 1.06, 'low_score': 1.00, 'draw_mult': 1.02},
+    '荷甲': {'avg_goal': 1.58, 'home_boost': 1.05, 'low_score': 0.85, 'draw_mult': 0.93},
+    '葡超': {'avg_goal': 1.34, 'home_boost': 1.06, 'low_score': 1.00, 'draw_mult': 1.03},
+    '欧冠': {'avg_goal': 1.50, 'home_boost': 1.04, 'low_score': 0.92, 'draw_mult': 0.98},
+    '欧联': {'avg_goal': 1.44, 'home_boost': 1.05, 'low_score': 0.94, 'draw_mult': 1.0},
+    '世界杯': {'avg_goal': 1.42, 'home_boost': 1.03, 'low_score': 0.96, 'draw_mult': 1.0},
+    '欧洲杯': {'avg_goal': 1.40, 'home_boost': 1.04, 'low_score': 0.98, 'draw_mult': 1.02},
+    '友谊': {'avg_goal': 1.44, 'home_boost': 1.02, 'low_score': 0.95, 'draw_mult': 0.97},
+    '国际': {'avg_goal': 1.42, 'home_boost': 1.03, 'low_score': 0.96, 'draw_mult': 1.0},
+    '巴甲': {'avg_goal': 1.42, 'home_boost': 1.08, 'low_score': 0.92, 'draw_mult': 0.96},
+    '阿甲': {'avg_goal': 1.36, 'home_boost': 1.07, 'low_score': 0.96, 'draw_mult': 0.98},
+    '中超': {'avg_goal': 1.32, 'home_boost': 1.07, 'low_score': 1.00, 'draw_mult': 1.04},
+    '日职': {'avg_goal': 1.34, 'home_boost': 1.06, 'low_score': 1.00, 'draw_mult': 1.03},
+    '韩K': {'avg_goal': 1.30, 'home_boost': 1.06, 'low_score': 1.02, 'draw_mult': 1.04},
 }
 
 # 比分冷热：相对历史基准频率的比值阈值
 HEAT_RATIO_HOT = 0.70
 HEAT_RATIO_COLD = 1.32
-HEAT_FILTER_PENALTY = 0.62
-COLD_FILTER_BONUS = 1.18
+HEAT_FILTER_PENALTY = 0.75   # 原0.62，缩小热分惩罚，避免高比分被过度压制
+COLD_FILTER_BONUS = 1.08     # 原1.18，缩小冷门奖励，防止低比分通过"冷门"机制反复被加权
 
-# 常见比分历史基准频率（用于冷热，非市场赔率）
+# 常见比分历史基准频率（用于冷热，非市场赔率）——参考欧洲主流联赛真实分布上调
 SCORE_BASELINE_FREQ = {
-    (0, 0): 0.082, (1, 0): 0.095, (0, 1): 0.072, (1, 1): 0.118,
-    (2, 0): 0.071, (0, 2): 0.048, (2, 1): 0.092, (1, 2): 0.058,
-    (2, 2): 0.042, (3, 0): 0.038, (0, 3): 0.022, (3, 1): 0.048,
-    (1, 3): 0.028, (3, 2): 0.032, (2, 3): 0.022, (4, 0): 0.018,
-    (0, 4): 0.010, (4, 1): 0.022, (1, 4): 0.012, (3, 3): 0.014,
+    (0, 0): 0.075, (1, 0): 0.085, (0, 1): 0.065, (1, 1): 0.110,
+    (2, 0): 0.078, (0, 2): 0.055, (2, 1): 0.105, (1, 2): 0.068,
+    (2, 2): 0.045, (3, 0): 0.042, (0, 3): 0.025, (3, 1): 0.052,
+    (1, 3): 0.032, (3, 2): 0.035, (2, 3): 0.025, (4, 0): 0.020,
+    (0, 4): 0.012, (4, 1): 0.025, (1, 4): 0.014, (3, 3): 0.015,
 }
 
 # 仅亚盘/大小球走 HTML 抓取（无平均值 JSON 接口）；欧赔走 JSON
@@ -1187,14 +1187,14 @@ def _estimate_nb_overdispersion(league_profile=None):
     if league_profile:
         # 不同联赛有不同的过离散程度
         league_overdispersion = {
-            '英超': 1.55, '英冠': 1.48, '西甲': 1.42, '意甲': 1.52,
-            '德甲': 1.60, '法甲': 1.45, '荷甲': 1.65, '葡超': 1.48,
-            '欧冠': 1.40, '欧联': 1.45, '世界杯': 1.35, '欧洲杯': 1.38,
-            '中超': 1.55, '日职': 1.48, '韩K': 1.52,
+            '英超': 1.35, '英冠': 1.28, '西甲': 1.25, '意甲': 1.32,
+            '德甲': 1.38, '法甲': 1.25, '荷甲': 1.42, '葡超': 1.28,
+            '欧冠': 1.22, '欧联': 1.25, '世界杯': 1.18, '欧洲杯': 1.20,
+            '中超': 1.30, '日职': 1.25, '韩K': 1.28,
         }
         league_name = league_profile.get('name', '')
-        return league_overdispersion.get(league_name, 1.45)
-    return 1.45  # 默认过离散系数
+        return league_overdispersion.get(league_name, 1.22)
+    return 1.22  # 原1.45，降低过离散使分布更紧凑，减少0球堆积概率
 
 
 # ===================== 机器学习残差学习（混合模型） =====================
@@ -2023,7 +2023,7 @@ def build_score_matrix(lam_home, lam_away, max_goals=MAX_GOALS, rho=0.0, distrib
     
     if distribution == 'negative_binomial':
         # 估计负二项分布参数
-        overdispersion = 1.45  # 默认过离散系数
+        overdispersion = 1.22  # 原1.45，降低过离散系数减少0球堆积
         var_home = lam_home * overdispersion
         var_away = lam_away * overdispersion
         r_h, p_h = _nb_params_from_mean_var(lam_home, var_home)
@@ -3088,7 +3088,7 @@ def _pick_recommendations(candidates, asian, euro, total, n=2, pool=12, confiden
     """Top 池内按 概率×一致性×冷热×置信度 选取"""
     if confidence:
         n = confidence.get('recommend_count', n)
-    pool = min(pool, len(candidates))
+    pool = min(16, len(candidates))  # 原12，扩大候选池让高比分有更多入选机会
     conf_w = confidence['score'] if confidence else 1.0
     scored = []
     for (h, a), prob in candidates[:pool]:
@@ -3106,6 +3106,14 @@ def _pick_recommendations(candidates, asian, euro, total, n=2, pool=12, confiden
         picked.append((h, a, prob))
         if len(picked) >= n:
             break
+
+    # 多样性兜底：若所有推荐总进球≤1，强制从候选中补一个总进球≥2的比分
+    if n >= 2 and len(picked) >= 2 and all(h + a <= 1 for h, a, _ in picked):
+        for (h, a), prob in candidates:
+            if (h, a) not in seen and h + a >= 2:
+                picked[-1] = (h, a, prob)  # 替换排名最低那个低比分
+                break
+
     if len(picked) < n:
         for (h, a), prob in candidates:
             if (h, a) not in seen:
@@ -3154,7 +3162,7 @@ def analyze_match(match):
 
     target_total = total['implied_total']
     lp_avg = league_profile.get('avg_goal', AVG_LEAGUE_GOAL)
-    target_total = max(lp_avg * 1.4, min(lp_avg * 3.2, target_total))
+    target_total = max(lp_avg * 1.6, min(lp_avg * 3.5, target_total))  # 原1.4/3.2，上调下限使λ更真实
     total['implied_total'] = target_total
 
     p_home, p_draw, p_away = euro['close']['home'], euro['close']['draw'], euro['close']['away']
