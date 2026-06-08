@@ -23,3 +23,9 @@ data/dynamic_threshold_config.json
 # 运行时动态写入的历史缓存（可从网络重抓）
 data/lottery_history.json
 data/pailie5_history.json
+
+# 预测缓存（运行时生成，重启自动重建）
+data/*_cache.json
+
+# CatBoost 训练产物
+catboost_info/
