@@ -259,7 +259,7 @@ let lottery3dLoaded = false;
 const TAB_META = {
   football: {
     title: '⚽ 足球比分预测',
-    desc: '数据来源：odds.500.com（多家博彩公司平均值） · 泊松概率模型',
+    desc: '数据来源：odds.500.com（Bet365/Pinnacle 独赔） · 泊松概率模型',
     disclaimer: '⚠ 以上分析仅为概率统计参考，体育赛事结果受多种不确定因素影响，不构成任何投注建议。请理性对待！',
   },
   lottery3d: {
@@ -537,9 +537,9 @@ function renderResult(r) {
 
   // 独赔分析
   const singleOdds = r.single_odds;
+  html += `<div class="card"><h3>⭐ 独赔分析</h3>`;
+  
   if (singleOdds && (singleOdds.bet365 || singleOdds.pinnacle)) {
-    html += `<div class="card"><h3>⭐ 独赔分析</h3>`;
-    
     if (singleOdds.bet365) {
       const b = singleOdds.bet365;
       html += `<div style="margin-bottom:8px;padding-bottom:8px;border-bottom:1px solid var(--line)">
@@ -559,9 +559,13 @@ function renderResult(r) {
         <div class="row"><span class="k">大小球</span><span class="v">${p.total.close.line != null ? p.total.close.line.toFixed(1) : '-'} @ ${p.total.close.over_odds != null ? p.total.close.over_odds.toFixed(2) + '-' + p.total.close.under_odds.toFixed(2) : '-'}</span></div>
       </div>`;
     }
-    
-    html += `</div>`;
+  } else {
+    html += `<div class="status" style="color:var(--muted);padding:8px 0">
+      <span class="spinner"></span> 独赔数据暂未收录，请稍后刷新重试
+    </div>`;
   }
+  
+  html += `</div>`;
 
   html += `<div class="card"><h3>💶 欧赔分析</h3>
     ${probBar([

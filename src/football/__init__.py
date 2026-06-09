@@ -418,22 +418,188 @@ def _extract_avg(html, keyword='平均值'):
     return [float(n) for n in numbers]
 
 
-def _extract_company_odds(html, company_name):
-    """从HTML中提取指定博彩公司的赔率数据"""
+def _handicap_text_to_num(handicap_text):
+    """将让球文字转换为数字"""
+    if not handicap_text:
+        return 0
+    
+    # 定义让球类型映射
+    handicap_map = {
+        '平手': 0,
+        '平半': 0.25,
+        '平手/半球': 0.25,
+        '半球': 0.5,
+        '半一': 0.75,
+        '半球/一球': 0.75,
+        '一球': 1.0,
+        '一球/球半': 1.25,
+        '球半': 1.5,
+        '球半/两球': 1.75,
+        '两球': 2.0,
+        '两球/两球半': 2.25,
+        '两球半': 2.5,
+    }
+    
+    # 尝试精确匹配
+    for key, value in handicap_map.items():
+        if key in handicap_text:
+            return value
+    
+    return 0
+
+
+def _extract_company_odds(html, company_name, is_total=False):
+    """从HTML中提取指定博彩公司的赔率数据
+    
+    Args:
+        html: HTML页面内容
+        company_name: 公司名称
+        is_total: 是否为大小球页面（True表示大小球，False表示亚盘）
+    
+    Returns:
+        列表：亚盘格式为 [初主队水位, 初让球, 初客队水位, 终主队水位, 终让球, 终客队水位]
+             大小球格式为 [初大球水位, 初大小球盘, 初小球水位, 终大球水位, 终大小球盘, 终小球水位]
+    """
     text = _html_to_text(html)
     
-    # 找到公司名的位置
+    # 找到公司名的位置（支持原始名称和被*替换的名称）
     idx = text.find(company_name)
+    
+    # 如果找不到原始名称，尝试查找被替换的名称
+    if idx < 0:
+        # 定义常见的被替换模式
+        aliases = {
+            'Bet365': ['**t3*5', 'B*t365', 'B**365'],
+            'Pinnacle': ['Pi****le', 'Pin***le', 'Pinnacle平*'],
+        }
+        if company_name in aliases:
+            for alias in aliases[company_name]:
+                idx = text.find(alias)
+                if idx >= 0:
+                    log.debug(f"找到 {company_name} 的别名: {alias}")
+                    break
+    
     if idx < 0:
         return None
     
-    # 提取该公司行的数字
-    segment = text[idx:idx + 150]
-    numbers = re.findall(r'-?\d+\.\d+|-?\d+', segment)
+    # 提取该公司行的数据（截取更长的片段）
+    segment = text[idx:idx + 500]
     
-    # 返回最多6个数字（初水位、初让球、初水位、终水位、终让球、终水位）
-    if len(numbers) >= 6:
-        return [float(n) for n in numbers[:6]]
+    # 找到第二个公司名出现的位置（因为格式是公司名重复两次）
+    second_idx = segment.find('**', 10)
+    if second_idx > 0:
+        # 从第二个公司名之后开始提取数据，跳过第二个公司名
+        data_part = segment[second_idx:]
+        # 跳过公司名部分（找到第一个空格后的内容）
+        first_space = data_part.find(' ')
+        if first_space > 0:
+            data_part = data_part[first_space+1:].strip()
+    else:
+        data_part = segment[len(company_name):]
+    
+    # 提取所有数字（水位和盘口）
+    numbers = re.findall(r'-?\d+\.\d+|-?\d+', data_part)
+    
+    # 过滤：只保留水位范围(0.3-2.5)和盘口范围(-5到+5或1.5-5.0)的数字
+    filtered = []
+    for n in numbers[:25]:
+        num = float(n)
+        # 水位通常在 0.3-2.5 之间
+        if 0.3 <= num <= 2.5:
+            filtered.append(num)
+        # 让球通常在 -5 到 +5 之间（亚盘）
+        elif -5 <= num <= 5 and abs(num) != 0:
+            filtered.append(num)
+    
+    log.debug(f"{company_name} 原始数字: {numbers[:15]}, 过滤后: {filtered}")
+    
+    if is_total:
+        # 大小球页面格式：公司名 公司名 终大球水位 大小球盘 终小球水位 时间 初大球水位 大小球盘 初小球水位 时间
+        # 例如：**t3*5 **t3*5 0.950 2.5 0.900 06-09 16:17 0.900 2.5 0.900 06-08 09:36
+        # 返回：[初大球水位, 初大小球盘, 初小球水位, 终大球水位, 终大小球盘, 终小球水位]
+        
+        # 提取大小球盘口关键词
+        total_pattern = r'(\d+\.?\d*球)'
+        total_matches = re.findall(total_pattern, data_part)
+        
+        # 解析盘口值
+        final_line = 0
+        initial_line = 0
+        for match in total_matches[:2]:
+            # 解析 "2.5球" -> 2.5
+            line_str = match.replace('球', '')
+            try:
+                line_val = float(line_str)
+                if 1.5 <= line_val <= 5.0:
+                    if final_line == 0:
+                        final_line = line_val
+                    elif initial_line == 0:
+                        initial_line = line_val
+            except ValueError:
+                pass
+        
+        # 如果文本中找不到，从数字中找
+        if final_line == 0:
+            for n in numbers[:20]:
+                num = float(n)
+                if 1.5 <= num <= 5.0:
+                    final_line = num
+                    break
+        
+        # 确保有足够的水位数据
+        if len(filtered) >= 4:
+            # 终盘在前，开盘在后
+            final_over = filtered[0]
+            final_under = filtered[1]
+            initial_over = filtered[2] if len(filtered) > 2 else filtered[0]
+            initial_under = filtered[3] if len(filtered) > 3 else filtered[1]
+            
+            # 如果还有更多数据，说明有初盘数据
+            if len(filtered) >= 6:
+                initial_over = filtered[3]
+                initial_under = filtered[4]
+                
+            result = [
+                initial_over,
+                initial_line if initial_line != 0 else final_line,
+                initial_under,
+                final_over,
+                final_line,
+                final_under,
+            ]
+            log.debug(f"{company_name} 大小球提取结果: {result}")
+            return result
+        return None
+    else:
+        # 亚盘格式：公司名 公司名 终主队水位 让球类型 终客队水位 时间 初主队水位 让球类型 初客队水位 时间
+        # 提取让球类型文本
+        handicap_pattern = r'(平手|平半|半球|半一|一球|球半|两球|两球半|平手/半球|半球/一球|一球/球半|球半/两球|两球/两球半)'
+        handicap_matches = re.findall(handicap_pattern, data_part)
+        
+        # 解析让球值
+        final_handicap = 0
+        initial_handicap = 0
+        if len(handicap_matches) >= 1:
+            final_handicap = _handicap_text_to_num(handicap_matches[0])
+        if len(handicap_matches) >= 2:
+            initial_handicap = _handicap_text_to_num(handicap_matches[1])
+        
+        # 返回6个数字（初主队水位、初让球、初客队水位、终主队水位、终让球、终客队水位）
+        # 需要确保数据足够且合理
+        if len(filtered) >= 4:
+            # 过滤后的数字应该是：终主队水位, 终客队水位, 初主队水位, 初客队水位
+            # 检查前两个是否是合理的水位（0.3-2.5）
+            if 0.3 <= filtered[0] <= 2.5 and 0.3 <= filtered[1] <= 2.5:
+                result = [
+                    filtered[2] if len(filtered) > 2 and 0.3 <= filtered[2] <= 2.5 else filtered[0],
+                    initial_handicap if initial_handicap != 0 else final_handicap,
+                    filtered[3] if len(filtered) > 3 and 0.3 <= filtered[3] <= 2.5 else filtered[1],
+                    filtered[0],
+                    final_handicap,
+                    filtered[1],
+                ]
+                log.debug(f"{company_name} 亚盘提取结果: {result}")
+                return result
     return None
 
 
@@ -455,6 +621,7 @@ def fetch_single_company_odds(match_id):
     返回：
         dict: 包含各公司的亚盘和大小球数据
     """
+    log.info(f"========== 开始抓取独赔数据 match_id={match_id} ==========")
     result = {
         'bet365': None,
         'pinnacle': None,
@@ -468,28 +635,28 @@ def fetch_single_company_odds(match_id):
         daxiao_html = fetch(f'{BASE}/fenxi/daxiao-{match_id}.shtml')
         
         # 提取 Bet365 数据
-        bet365_yazhi = _extract_company_odds(yazhi_html, 'Bet365')
-        bet365_daxiao = _extract_company_odds(daxiao_html, 'Bet365')
+        bet365_yazhi = _extract_company_odds(yazhi_html, 'Bet365', is_total=False)
+        bet365_daxiao = _extract_company_odds(daxiao_html, 'Bet365', is_total=True)
         
-        if bet365_yazhi and bet365_daxiao:
-            result['bet365'] = {
+        # 只要有亚盘数据就返回（大小球可选）
+        if bet365_yazhi:
+            bet365_data = {
                 'asian': {
                     'open': {
-                        'handicap': -_extract_handicap_from_segment(
-                            _html_to_text(yazhi_html), bet365_yazhi[0], bet365_yazhi[2]
-                        ),
-                        'home_odds': bet365_yazhi[0],
-                        'away_odds': bet365_yazhi[2],
+                        'handicap': bet365_yazhi[1],  # 初让球
+                        'home_odds': bet365_yazhi[0],  # 初主队水位
+                        'away_odds': bet365_yazhi[2],  # 初客队水位
                     },
                     'close': {
-                        'handicap': -_extract_handicap_from_segment(
-                            _html_to_text(yazhi_html), bet365_yazhi[3], bet365_yazhi[5]
-                        ),
-                        'home_odds': bet365_yazhi[3],
-                        'away_odds': bet365_yazhi[5],
+                        'handicap': bet365_yazhi[4],  # 终让球
+                        'home_odds': bet365_yazhi[3],  # 终主队水位
+                        'away_odds': bet365_yazhi[5],  # 终客队水位
                     }
-                },
-                'total': {
+                }
+            }
+            # 如果有大小球数据也加上
+            if bet365_daxiao:
+                bet365_data['total'] = {
                     'open': {
                         'line': bet365_daxiao[1],
                         'over_odds': bet365_daxiao[0],
@@ -501,31 +668,31 @@ def fetch_single_company_odds(match_id):
                         'under_odds': bet365_daxiao[5],
                     }
                 }
-            }
+            result['bet365'] = bet365_data
         
         # 提取 Pinnacle 数据
-        pinnacle_yazhi = _extract_company_odds(yazhi_html, 'Pinnacle')
-        pinnacle_daxiao = _extract_company_odds(daxiao_html, 'Pinnacle')
+        pinnacle_yazhi = _extract_company_odds(yazhi_html, 'Pinnacle', is_total=False)
+        pinnacle_daxiao = _extract_company_odds(daxiao_html, 'Pinnacle', is_total=True)
         
-        if pinnacle_yazhi and pinnacle_daxiao:
-            result['pinnacle'] = {
+        # 只要有亚盘数据就返回（大小球可选）
+        if pinnacle_yazhi:
+            pinnacle_data = {
                 'asian': {
                     'open': {
-                        'handicap': -_extract_handicap_from_segment(
-                            _html_to_text(yazhi_html), pinnacle_yazhi[0], pinnacle_yazhi[2]
-                        ),
-                        'home_odds': pinnacle_yazhi[0],
-                        'away_odds': pinnacle_yazhi[2],
+                        'handicap': pinnacle_yazhi[1],  # 初让球
+                        'home_odds': pinnacle_yazhi[0],  # 初主队水位
+                        'away_odds': pinnacle_yazhi[2],  # 初客队水位
                     },
                     'close': {
-                        'handicap': -_extract_handicap_from_segment(
-                            _html_to_text(yazhi_html), pinnacle_yazhi[3], pinnacle_yazhi[5]
-                        ),
-                        'home_odds': pinnacle_yazhi[3],
-                        'away_odds': pinnacle_yazhi[5],
+                        'handicap': pinnacle_yazhi[4],  # 终让球
+                        'home_odds': pinnacle_yazhi[3],  # 终主队水位
+                        'away_odds': pinnacle_yazhi[5],  # 终客队水位
                     }
-                },
-                'total': {
+                }
+            }
+            # 如果有大小球数据也加上
+            if pinnacle_daxiao:
+                pinnacle_data['total'] = {
                     'open': {
                         'line': pinnacle_daxiao[1],
                         'over_odds': pinnacle_daxiao[0],
@@ -537,7 +704,7 @@ def fetch_single_company_odds(match_id):
                         'under_odds': pinnacle_daxiao[5],
                     }
                 }
-            }
+            result['pinnacle'] = pinnacle_data
         
         log.info(f"独赔数据抓取完成: Bet365={'有' if result['bet365'] else '无'}, Pinnacle={'有' if result['pinnacle'] else '无'}")
         
@@ -3813,6 +3980,7 @@ def analyze_match(match):
     single_odds = None
     try:
         single_odds = fetch_single_company_odds(mid)
+        log.info(f"独赔数据抓取结果: Bet365={'有' if single_odds.get('bet365') else '无'}, Pinnacle={'有' if single_odds.get('pinnacle') else '无'}")
     except Exception as e:
         log.warning(f"抓取独赔数据失败: {e}")
     

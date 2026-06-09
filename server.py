@@ -251,7 +251,14 @@ class Handler(BaseHTTPRequestHandler):
         except OSError:
             self._send(500, 'text/plain; charset=utf-8', 'index.html 缺失'.encode('utf-8'))
             return
-        self._send(200, 'text/html; charset=utf-8', body)
+        self.send_response(200)
+        self.send_header('Content-Type', 'text/html; charset=utf-8')
+        self.send_header('Content-Length', str(len(body)))
+        self.send_header('Cache-Control', 'no-cache, no-store, must-revalidate')
+        self.send_header('Pragma', 'no-cache')
+        self.send_header('Expires', '0')
+        self.end_headers()
+        self.wfile.write(body)
 
     def _serve_json(self, payload):
         try:
