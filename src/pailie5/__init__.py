@@ -28,6 +28,7 @@ import urllib.request
 import urllib.error
 from typing import Dict, List, Tuple, Optional
 from datetime import datetime, timedelta
+import time
 
 from ..common.paths import data_path
 from ..common.data_cache import cached_fetch
@@ -39,6 +40,11 @@ DATA_FILE = data_path('pailie5_history.json')
 # 排列五历史数据接口（参考福彩3D使用的网站，游戏ID为5）
 HISTORY_URL = 'https://www.8300.cn/kjhhis/5/200.html'
 NUMBERS = list(range(0, 10))  # 0-9
+
+# 预测结果缓存配置（与3D模块一致）
+CACHE_EXPIRE_SECONDS = 86400  # 24小时缓存过期时间（当天有效）
+_prediction_cache = None
+_cache_time = 0
 
 
 class Pailie5Analyzer:
@@ -1110,6 +1116,62 @@ def get_pailie5_analyzer() -> Pailie5Analyzer:
     if _pailie5_analyzer is None:
         _pailie5_analyzer = Pailie5Analyzer()
     return _pailie5_analyzer
+
+
+def run_prediction(force_refresh=False):
+    """运行排列五预测，返回 JSON 可序列化 dict。
+
+    Args:
+        force_refresh: 是否强制刷新缓存（默认 False，使用缓存）
+    """
+    global _prediction_cache, _cache_time
+
+    # 检查模块级内存缓存
+    if not force_refresh and _prediction_cache is not None:
+        elapsed = time.time() - _cache_time
+        if elapsed < CACHE_EXPIRE_SECONDS:
+            logger.info(f"使用缓存数据（缓存时间：{elapsed:.1f}秒前）")
+            return _prediction_cache
+
+    try:
+        analyzer = get_pailie5_analyzer()
+
+        # 获取统计数据
+        stats = analyzer.get_statistics()
+        recent = analyzer.get_recent_results(10)
+
+        # 集成预测
+        ensemble = analyzer.ensemble_predict()
+
+        # 多种方法推荐（各取3组）
+        recommendations = {}
+        for method in ['balanced', 'hot', 'cold']:
+            recs = []
+            for _ in range(3):
+                nums = analyzer.generate_recommendation(method)
+                recs.append(nums)
+            recommendations[method] = recs
+
+        # 滚动回测
+        backtest = analyzer.rolling_backtest(trials=30)
+
+        result = {
+            'statistics': stats,
+            'recent_results': recent,
+            'ensemble': ensemble,
+            'recommendations': recommendations,
+            'backtest': backtest,
+        }
+
+        # 保存到模块级内存缓存
+        _prediction_cache = result
+        _cache_time = time.time()
+        logger.info("排列五预测结果已缓存")
+
+        return result
+    except Exception:
+        logger.error('排列五预测失败', exc_info=True)
+        return {'error': '排列五预测失败'}
 
 
 # ==================== 测试函数 ====================

@@ -26,8 +26,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
 from src.football import fetch_match_list, analyze_match
 from src.lottery3d import run_prediction
 from src.lottery3d.ml import fetch_data, predict_current
-from src.pailie5 import get_pailie5_analyzer
-from src.lottery import get_lottery_analyzer
+from src.pailie5 import get_pailie5_analyzer, run_prediction as pailie5_run_prediction
+from src.lottery import get_lottery_analyzer, run_prediction as lottery_run_prediction
 from src.common.logger import setup_logger
 
 # 回测模块（延迟导入以加速启动）
@@ -74,7 +74,17 @@ _CACHE = {
         'data': None,
         'timestamp': 0,
         'expire_seconds': 86400  # 24小时缓存（当天有效）
-    }
+    },
+    'lottery': {
+        'data': None,
+        'timestamp': 0,
+        'expire_seconds': 86400  # 24小时缓存（当天有效）
+    },
+    'pailie5': {
+        'data': None,
+        'timestamp': 0,
+        'expire_seconds': 86400  # 24小时缓存（当天有效）
+    },
 }
 
 _ROOT = Path(__file__).parent
@@ -364,22 +374,29 @@ class Handler(BaseHTTPRequestHandler):
             return {'error': 'ML 3D 预测失败'}
 
     def _pailie5_payload(self):
-        """获取排列五统计分析"""
+        """获取排列五统计分析（含双层缓存）"""
         try:
-            analyzer = get_pailie5_analyzer()
-            stats = analyzer.get_statistics()
-            recent = analyzer.get_recent_results(10)
-            
-            # 延迟加载回测数据（不在首次请求时计算，改为前端按需加载）
-            # backtest = analyzer.rolling_backtest(trials=30)
-            
-            return {
-                'result': {
-                    'statistics': stats,
-                    'recent_results': recent,
-                    # 'backtest': backtest,  # 改为按需加载
-                }
-            }
+            now = time.time()
+            cache = _CACHE['pailie5']
+
+            # 检查 server 级缓存（TTL + 跨天双重校验）
+            if cache['data'] is not None and _is_cache_valid(cache, now):
+                self._log.info('排列五分析使用 server 级缓存')
+                return {'result': cache['data']}
+
+            # server 缓存失效，调用模块级预测函数（含模块级内存缓存）
+            self._log.info('排列五分析重新计算')
+            result = pailie5_run_prediction()
+
+            # 处理模块返回的错误
+            if 'error' in result:
+                return {'error': result['error']}
+
+            # 更新 server 级缓存
+            cache['data'] = result
+            cache['timestamp'] = now
+
+            return {'result': result}
         except Exception:
             self._log.error('排列五分析失败', exc_info=True)
             return {'error': '排列五分析失败'}
@@ -628,22 +645,29 @@ class Handler(BaseHTTPRequestHandler):
             return {'error': f'获取失败: {str(e)}'}
 
     def _lottery_payload(self):
-        """获取大乐透统计分析"""
+        """获取大乐透统计分析（含缓存，调用模块级预测函数）"""
         try:
-            analyzer = get_lottery_analyzer()
-            stats = analyzer.get_statistics()
-            recent = analyzer.get_recent_results(10)
-            
-            # 执行滚动回测
-            backtest = analyzer.rolling_backtest(trials=50)
-            
-            return {
-                'result': {
-                    'statistics': stats,
-                    'recent_results': recent,
-                    'backtest': backtest,
-                }
-            }
+            now = time.time()
+            cache = _CACHE['lottery']
+
+            # 检查 server 级缓存（TTL + 跨天双重校验）
+            if cache['data'] is not None and _is_cache_valid(cache, now):
+                self._log.info('大乐透分析使用缓存（server 级）')
+                return {'result': cache['data']}
+
+            # server 缓存失效，调用模块级预测函数（含模块级内存缓存）
+            self._log.info('大乐透分析重新计算')
+            result = lottery_run_prediction()
+
+            # 处理模块返回的错误
+            if 'error' in result:
+                return {'error': result['error']}
+
+            # 更新 server 级缓存
+            cache['data'] = result
+            cache['timestamp'] = now
+
+            return {'result': result}
         except Exception:
             self._log.error('大乐透分析失败', exc_info=True)
             return {'error': '大乐透分析失败'}
