@@ -1134,11 +1134,20 @@ def analyze_asian(data):
         diff_desc = f"预期{abs(hcap):.1f}球差以上"
 
     if hcap > 0:
+        # 主队让球：主队是让球方，客队是受让方
         favor, favor_desc = 'home', f"主队让 {hcap} 球（主强客弱）"
+        open_prob_label = {'home_give': hp_o, 'away_recv': ap_o}
+        close_prob_label = {'home_give': hp_c, 'away_recv': ap_c}
     elif hcap < 0:
+        # 客队让球：客队是让球方，主队是受让方
         favor, favor_desc = 'away', f"客队让 {abs(hcap)} 球（客强主弱）"
+        open_prob_label = {'home_recv': hp_o, 'away_give': ap_o}
+        close_prob_label = {'home_recv': hp_c, 'away_give': ap_c}
     else:
+        # 平手盘
         favor, favor_desc = 'even', "平手盘（势均力敌）"
+        open_prob_label = {'home': hp_o, 'away': ap_o}
+        close_prob_label = {'home': hp_c, 'away': ap_c}
 
     # 综合信号强度
     signal_strength = 'weak'
@@ -1157,8 +1166,8 @@ def analyze_asian(data):
         'trend_direction': trend_direction,
         'trend_strength': trend_strength,
         'signal_strength': signal_strength,
-        'open_prob': {'home_recv': hp_o, 'away_give': ap_o},
-        'close_prob': {'home_recv': hp_c, 'away_give': ap_c},
+        'open_prob': open_prob_label,
+        'close_prob': close_prob_label,
         'prob_change': {'home': prob_change_home, 'away': prob_change_away},
         'open_water': {'home': op['home_odds'], 'away': op['away_odds']},
         'close_water': {'home': cl['home_odds'], 'away': cl['away_odds']},
@@ -1656,7 +1665,17 @@ def _build_residual_features(asian, euro, total, team, league_profile):
     
     # 亚盘特征
     features.append(asian['handicap'])  # 让球盘
-    features.append(asian['close_prob']['home_recv'] - asian['open_prob']['home_recv'])  # 主受让概率变化
+    # 根据让球方向获取正确的概率值计算变化
+    if asian['handicap'] > 0:
+        close_hp = asian['close_prob'].get('home_give', asian['close_prob'].get('home', 0.5))
+        open_hp = asian['open_prob'].get('home_give', asian['open_prob'].get('home', 0.5))
+    elif asian['handicap'] < 0:
+        close_hp = asian['close_prob'].get('home_recv', asian['close_prob'].get('home', 0.5))
+        open_hp = asian['open_prob'].get('home_recv', asian['open_prob'].get('home', 0.5))
+    else:
+        close_hp = asian['close_prob'].get('home', 0.5)
+        open_hp = asian['open_prob'].get('home', 0.5)
+    features.append(close_hp - open_hp)  # 主队方概率变化
     
     # 大小球特征
     features.append(total['close_line'])  # 大小球盘口
@@ -3702,12 +3721,30 @@ def predict_scores(asian, euro, total, team_strength=None, league_profile=None,
     target_total_pre = total.get('implied_total') or implied_total_goals(line, p_over)
     sup_asian = asian.get('implied_supremacy')
     if sup_asian is None:
+        # 根据让球方向获取正确的概率值
+        if asian['handicap'] > 0:
+            # 主队让球：home_give是让球方概率，away_recv是受让方概率
+            close_hp = asian['close_prob'].get('home_give', asian['close_prob'].get('home', 0.5))
+            close_ap = asian['close_prob'].get('away_recv', asian['close_prob'].get('away', 0.5))
+            open_hp = asian['open_prob'].get('home_give', asian['open_prob'].get('home', 0.5))
+            open_ap = asian['open_prob'].get('away_recv', asian['open_prob'].get('away', 0.5))
+        elif asian['handicap'] < 0:
+            # 客队让球：home_recv是受让方概率，away_give是让球方概率
+            close_hp = asian['close_prob'].get('home_recv', asian['close_prob'].get('home', 0.5))
+            close_ap = asian['close_prob'].get('away_give', asian['close_prob'].get('away', 0.5))
+            open_hp = asian['open_prob'].get('home_recv', asian['open_prob'].get('home', 0.5))
+            open_ap = asian['open_prob'].get('away_give', asian['open_prob'].get('away', 0.5))
+        else:
+            # 平手盘
+            close_hp = asian['close_prob'].get('home', 0.5)
+            close_ap = asian['close_prob'].get('away', 0.5)
+            open_hp = asian['open_prob'].get('home', 0.5)
+            open_ap = asian['open_prob'].get('away', 0.5)
+        
         sup_asian = asian_implied_supremacy(
-            asian['handicap'], asian['close_prob']['home_recv'],
-            asian['close_prob']['away_give'], target_total_pre,
+            asian['handicap'], close_hp, close_ap, target_total_pre,
             open_handicap=asian.get('open_handicap'),
-            open_hp=asian['open_prob']['home_recv'],
-            open_ap=asian['open_prob']['away_give'],
+            open_hp=open_hp, open_ap=open_ap,
         )
     sup_euro = euro.get('implied_supremacy')
     if sup_euro is None:
@@ -4172,10 +4209,27 @@ def analyze_match(match):
 
     p_home, p_draw, p_away = euro['close']['home'], euro['close']['draw'], euro['close']['away']
 
+    # 根据让球方向获取正确的概率值
+    if asian['handicap'] > 0:
+        close_hp = asian['close_prob'].get('home_give', asian['close_prob'].get('home', 0.5))
+        close_ap = asian['close_prob'].get('away_recv', asian['close_prob'].get('away', 0.5))
+        open_hp = asian['open_prob'].get('home_give', asian['open_prob'].get('home', 0.5))
+        open_ap = asian['open_prob'].get('away_recv', asian['open_prob'].get('away', 0.5))
+    elif asian['handicap'] < 0:
+        close_hp = asian['close_prob'].get('home_recv', asian['close_prob'].get('home', 0.5))
+        close_ap = asian['close_prob'].get('away_give', asian['close_prob'].get('away', 0.5))
+        open_hp = asian['open_prob'].get('home_recv', asian['open_prob'].get('home', 0.5))
+        open_ap = asian['open_prob'].get('away_give', asian['open_prob'].get('away', 0.5))
+    else:
+        close_hp = asian['close_prob'].get('home', 0.5)
+        close_ap = asian['close_prob'].get('away', 0.5)
+        open_hp = asian['open_prob'].get('home', 0.5)
+        open_ap = asian['open_prob'].get('away', 0.5)
+    
     asian['implied_supremacy'] = asian_implied_supremacy(
-        asian['handicap'], asian['close_prob']['home_recv'], asian['close_prob']['away_give'],
+        asian['handicap'], close_hp, close_ap,
         target_total, open_handicap=asian.get('open_handicap'),
-        open_hp=asian['open_prob']['home_recv'], open_ap=asian['open_prob']['away_give'],
+        open_hp=open_hp, open_ap=open_ap,
     )
     euro['implied_supremacy'] = euro_implied_supremacy(p_home, p_draw, p_away, target_total)
     euro['implied_lambdas'] = dict(
@@ -4433,8 +4487,16 @@ def render_cli(result):
     print("\n【亚盘分析】（多家博彩公司平均值）")
     print(f"  让球变化: {asian['handicap_trend']}")
     print(f"  水位变化: {asian['water_trend']}")
-    print(f"  初盘真实概率: 主受让方 {op['home_recv']*100:.1f}% / 让球方 {op['away_give']*100:.1f}%")
-    print(f"  终盘真实概率: 主受让方 {cl['home_recv']*100:.1f}% / 让球方 {cl['away_give']*100:.1f}%")
+    # 根据让球方向显示正确的标签
+    if asian['handicap'] > 0:
+        print(f"  初盘真实概率: 主让球方 {op.get('home_give', op.get('home', 0.5))*100:.1f}% / 客受让方 {op.get('away_recv', op.get('away', 0.5))*100:.1f}%")
+        print(f"  终盘真实概率: 主让球方 {cl.get('home_give', cl.get('home', 0.5))*100:.1f}% / 客受让方 {cl.get('away_recv', cl.get('away', 0.5))*100:.1f}%")
+    elif asian['handicap'] < 0:
+        print(f"  初盘真实概率: 主受让方 {op.get('home_recv', op.get('home', 0.5))*100:.1f}% / 客让球方 {op.get('away_give', op.get('away', 0.5))*100:.1f}%")
+        print(f"  终盘真实概率: 主受让方 {cl.get('home_recv', cl.get('home', 0.5))*100:.1f}% / 客让球方 {cl.get('away_give', cl.get('away', 0.5))*100:.1f}%")
+    else:
+        print(f"  初盘真实概率: 主队 {op.get('home', 0.5)*100:.1f}% / 客队 {op.get('away', 0.5)*100:.1f}%")
+        print(f"  终盘真实概率: 主队 {cl.get('home', 0.5)*100:.1f}% / 客队 {cl.get('away', 0.5)*100:.1f}%")
     print(f"  终盘判断: {asian['favor_desc']}，{asian['diff_desc']}")
     if asian.get('implied_supremacy') is not None:
         print(f"  反推净胜球: {asian['implied_supremacy']:+.2f}（非盘口线 {asian['handicap']:+.2f}）")
