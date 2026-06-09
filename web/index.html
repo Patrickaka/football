@@ -218,7 +218,7 @@
 <div class="wrap">
   <header>
     <h1 id="page-title">⚽ 足球比分预测</h1>
-    <p id="page-desc">数据来源：odds.500.com（多家博彩公司平均值） · 泊松概率模型</p>
+    <p id="page-desc">数据来源：odds.500.com（<span style="color:var(--accent2)">Bet365/Pinnacle 独赔</span>） · 泊松概率模型</p>
   </header>
   <div class="tabs" role="tablist">
     <button type="button" class="tab active" data-tab="football" role="tab">⚽ 足球预测</button>
@@ -534,6 +534,34 @@ function renderResult(r) {
     <div class="row"><span class="k">终盘判断</span><span class="v">${esc(a.favor_desc || '')}，${esc(a.diff_desc || '')}</span></div>
     ${a.lambda_adjust && a.lambda_adjust.home != null && a.lambda_adjust.away != null && (a.lambda_adjust.home != 0 || a.lambda_adjust.away != 0) ? `<div class="row"><span class="k">λ 调整</span><span class="v">主队 ${a.lambda_adjust.home > 0 ? '+' : ''}${a.lambda_adjust.home.toFixed(3)} / 客队 ${a.lambda_adjust.away > 0 ? '+' : ''}${a.lambda_adjust.away.toFixed(3)}</span></div>` : ''}
     ${a.implied_supremacy != null ? `<div class="row"><span class="k">反推净胜球</span><span class="v">${a.implied_supremacy >= 0 ? '+' : ''}${a.implied_supremacy.toFixed(2)}（非盘口 ${a.handicap}）</span></div>` : ''}</div>`;
+
+  // 独赔分析
+  const singleOdds = r.single_odds;
+  if (singleOdds && (singleOdds.bet365 || singleOdds.pinnacle)) {
+    html += `<div class="card"><h3>⭐ 独赔分析</h3>`;
+    
+    if (singleOdds.bet365) {
+      const b = singleOdds.bet365;
+      html += `<div style="margin-bottom:8px;padding-bottom:8px;border-bottom:1px solid var(--line)">
+        <div style="font-weight:bold;color:var(--accent2);margin-bottom:4px">🏆 Bet365</div>
+        <div class="row"><span class="k">亚盘终盘</span><span class="v">${b.asian.close.handicap != null ? (b.asian.close.handicap > 0 ? '+' : '') + b.asian.close.handicap.toFixed(2) : '-'} @ ${b.asian.close.home_odds != null ? b.asian.close.home_odds.toFixed(2) + '-' + b.asian.close.away_odds.toFixed(2) : '-'}</span></div>
+        <div class="row"><span class="k">亚盘开盘</span><span class="v">${b.asian.open.handicap != null ? (b.asian.open.handicap > 0 ? '+' : '') + b.asian.open.handicap.toFixed(2) : '-'} @ ${b.asian.open.home_odds != null ? b.asian.open.home_odds.toFixed(2) + '-' + b.asian.open.away_odds.toFixed(2) : '-'}</span></div>
+        <div class="row"><span class="k">大小球</span><span class="v">${b.total.close.line != null ? b.total.close.line.toFixed(1) : '-'} @ ${b.total.close.over_odds != null ? b.total.close.over_odds.toFixed(2) + '-' + b.total.close.under_odds.toFixed(2) : '-'}</span></div>
+      </div>`;
+    }
+    
+    if (singleOdds.pinnacle) {
+      const p = singleOdds.pinnacle;
+      html += `<div>
+        <div style="font-weight:bold;color:var(--accent);margin-bottom:4px">🏅 Pinnacle</div>
+        <div class="row"><span class="k">亚盘终盘</span><span class="v">${p.asian.close.handicap != null ? (p.asian.close.handicap > 0 ? '+' : '') + p.asian.close.handicap.toFixed(2) : '-'} @ ${p.asian.close.home_odds != null ? p.asian.close.home_odds.toFixed(2) + '-' + p.asian.close.away_odds.toFixed(2) : '-'}</span></div>
+        <div class="row"><span class="k">亚盘开盘</span><span class="v">${p.asian.open.handicap != null ? (p.asian.open.handicap > 0 ? '+' : '') + p.asian.open.handicap.toFixed(2) : '-'} @ ${p.asian.open.home_odds != null ? p.asian.open.home_odds.toFixed(2) + '-' + p.asian.open.away_odds.toFixed(2) : '-'}</span></div>
+        <div class="row"><span class="k">大小球</span><span class="v">${p.total.close.line != null ? p.total.close.line.toFixed(1) : '-'} @ ${p.total.close.over_odds != null ? p.total.close.over_odds.toFixed(2) + '-' + p.total.close.under_odds.toFixed(2) : '-'}</span></div>
+      </div>`;
+    }
+    
+    html += `</div>`;
+  }
 
   html += `<div class="card"><h3>💶 欧赔分析</h3>
     ${probBar([

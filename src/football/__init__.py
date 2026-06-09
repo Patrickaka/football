@@ -418,6 +418,25 @@ def _extract_avg(html, keyword='平均值'):
     return [float(n) for n in numbers]
 
 
+def _extract_company_odds(html, company_name):
+    """从HTML中提取指定博彩公司的赔率数据"""
+    text = _html_to_text(html)
+    
+    # 找到公司名的位置
+    idx = text.find(company_name)
+    if idx < 0:
+        return None
+    
+    # 提取该公司行的数字
+    segment = text[idx:idx + 150]
+    numbers = re.findall(r'-?\d+\.\d+|-?\d+', segment)
+    
+    # 返回最多6个数字（初水位、初让球、初水位、终水位、终让球、终水位）
+    if len(numbers) >= 6:
+        return [float(n) for n in numbers[:6]]
+    return None
+
+
 def _fetch_avg_page(match_id, page):
     """抓取指定赔率页，返回 (html, 平均值行数字列表)，并校验数据量"""
     label = ODDS_PAGES[page]
@@ -426,6 +445,106 @@ def _fetch_avg_page(match_id, page):
     if len(nums) < MIN_AVG_NUMBERS:
         raise ValueError(f"{label}平均值数据不足 (match_id={match_id}), 获取到: {nums}")
     return html, nums
+
+
+# ========== 新增：独赔分析函数 ==========
+def fetch_single_company_odds(match_id):
+    """
+    抓取 Bet365 和 Pinnacle 的独赔数据
+    
+    返回：
+        dict: 包含各公司的亚盘和大小球数据
+    """
+    result = {
+        'bet365': None,
+        'pinnacle': None,
+    }
+    
+    try:
+        # 抓取亚盘页面
+        yazhi_html = fetch(f'{BASE}/fenxi/yazhi-{match_id}.shtml')
+        
+        # 抓取大小球页面
+        daxiao_html = fetch(f'{BASE}/fenxi/daxiao-{match_id}.shtml')
+        
+        # 提取 Bet365 数据
+        bet365_yazhi = _extract_company_odds(yazhi_html, 'Bet365')
+        bet365_daxiao = _extract_company_odds(daxiao_html, 'Bet365')
+        
+        if bet365_yazhi and bet365_daxiao:
+            result['bet365'] = {
+                'asian': {
+                    'open': {
+                        'handicap': -_extract_handicap_from_segment(
+                            _html_to_text(yazhi_html), bet365_yazhi[0], bet365_yazhi[2]
+                        ),
+                        'home_odds': bet365_yazhi[0],
+                        'away_odds': bet365_yazhi[2],
+                    },
+                    'close': {
+                        'handicap': -_extract_handicap_from_segment(
+                            _html_to_text(yazhi_html), bet365_yazhi[3], bet365_yazhi[5]
+                        ),
+                        'home_odds': bet365_yazhi[3],
+                        'away_odds': bet365_yazhi[5],
+                    }
+                },
+                'total': {
+                    'open': {
+                        'line': bet365_daxiao[1],
+                        'over_odds': bet365_daxiao[0],
+                        'under_odds': bet365_daxiao[2],
+                    },
+                    'close': {
+                        'line': bet365_daxiao[4],
+                        'over_odds': bet365_daxiao[3],
+                        'under_odds': bet365_daxiao[5],
+                    }
+                }
+            }
+        
+        # 提取 Pinnacle 数据
+        pinnacle_yazhi = _extract_company_odds(yazhi_html, 'Pinnacle')
+        pinnacle_daxiao = _extract_company_odds(daxiao_html, 'Pinnacle')
+        
+        if pinnacle_yazhi and pinnacle_daxiao:
+            result['pinnacle'] = {
+                'asian': {
+                    'open': {
+                        'handicap': -_extract_handicap_from_segment(
+                            _html_to_text(yazhi_html), pinnacle_yazhi[0], pinnacle_yazhi[2]
+                        ),
+                        'home_odds': pinnacle_yazhi[0],
+                        'away_odds': pinnacle_yazhi[2],
+                    },
+                    'close': {
+                        'handicap': -_extract_handicap_from_segment(
+                            _html_to_text(yazhi_html), pinnacle_yazhi[3], pinnacle_yazhi[5]
+                        ),
+                        'home_odds': pinnacle_yazhi[3],
+                        'away_odds': pinnacle_yazhi[5],
+                    }
+                },
+                'total': {
+                    'open': {
+                        'line': pinnacle_daxiao[1],
+                        'over_odds': pinnacle_daxiao[0],
+                        'under_odds': pinnacle_daxiao[2],
+                    },
+                    'close': {
+                        'line': pinnacle_daxiao[4],
+                        'over_odds': pinnacle_daxiao[3],
+                        'under_odds': pinnacle_daxiao[5],
+                    }
+                }
+            }
+        
+        log.info(f"独赔数据抓取完成: Bet365={'有' if result['bet365'] else '无'}, Pinnacle={'有' if result['pinnacle'] else '无'}")
+        
+    except Exception as e:
+        log.warning(f"抓取独赔数据失败: {e}")
+    
+    return result
 
 
 def fetch_yazhi(match_id):
@@ -706,6 +825,30 @@ def remove_vig(o1, o2, o3=None):
         p1, p2, p3 = 1 / o1, 1 / o2, 1 / o3
         total = p1 + p2 + p3
         return p1 / total, p2 / total, p3 / total
+
+
+def _analyze_handicap_trend(open_hcap, close_hcap):
+    """分析让球走势"""
+    dh = close_hcap - open_hcap
+    if dh > HANDICAP_TREND_EPS:
+        return f"让球升高 {open_hcap:+.2f} → {close_hcap:+.2f}（主队被看好）"
+    elif dh < -HANDICAP_TREND_EPS:
+        return f"让球降低 {open_hcap:+.2f} → {close_hcap:+.2f}（客队被看好）"
+    else:
+        return f"让球不变 {close_hcap:+.2f}（盘口稳定）"
+
+
+def calculate_implied_total(line, over_odds, under_odds):
+    """根据大小球盘口和水位计算隐含总进球数"""
+    # 简化版：直接使用盘口线作为隐含总进球数的基础
+    # 水位可以微调：低水方更被看好
+    if over_odds < under_odds:
+        # 大球低水，略微上调
+        return line + 0.1
+    elif under_odds < over_odds:
+        # 小球低水，略微下调
+        return line - 0.1
+    return line
 
 
 def analyze_asian(data):
@@ -3665,6 +3808,58 @@ def analyze_match(match):
     team = fetch_team_strength(mid, home, away, league_profile)
     if team:
         team['league_profile'] = league_profile
+    
+    # ========== 新增：抓取 Bet365 和 Pinnacle 独赔数据 ==========
+    single_odds = None
+    try:
+        single_odds = fetch_single_company_odds(mid)
+    except Exception as e:
+        log.warning(f"抓取独赔数据失败: {e}")
+    
+    # ========== 使用独赔数据替换平均赔率 ==========
+    # 优先使用 Bet365，其次是 Pinnacle
+    selected_odds = None
+    if single_odds and single_odds['bet365']:
+        selected_odds = single_odds['bet365']
+        log.info("使用 Bet365 独赔数据进行分析")
+    elif single_odds and single_odds['pinnacle']:
+        selected_odds = single_odds['pinnacle']
+        log.info("使用 Pinnacle 独赔数据进行分析")
+    
+    if selected_odds:
+        # 替换亚盘数据
+        if selected_odds['asian']:
+            asian['handicap'] = selected_odds['asian']['close']['handicap']
+            asian['open_handicap'] = selected_odds['asian']['open']['handicap']
+            asian['handicap_change'] = asian['handicap'] - asian['open_handicap']
+            asian['close_water'] = {
+                'home': selected_odds['asian']['close']['home_odds'],
+                'away': selected_odds['asian']['close']['away_odds']
+            }
+            asian['open_water'] = {
+                'home': selected_odds['asian']['open']['home_odds'],
+                'away': selected_odds['asian']['open']['away_odds']
+            }
+            # 重新计算让球走势
+            asian['handicap_trend'] = _analyze_handicap_trend(asian['open_handicap'], asian['handicap'])
+        
+        # 替换大小球数据
+        if selected_odds['total']:
+            total['close_line'] = selected_odds['total']['close']['line']
+            total['open_line'] = selected_odds['total']['open']['line']
+            total['line_change'] = total['close_line'] - total['open_line']
+            total['close_water'] = {
+                'over': selected_odds['total']['close']['over_odds'],
+                'under': selected_odds['total']['close']['under_odds']
+            }
+            total['open_water'] = {
+                'over': selected_odds['total']['open']['over_odds'],
+                'under': selected_odds['total']['open']['under_odds']
+            }
+            # 重新计算 implied_total
+            total['implied_total'] = calculate_implied_total(total['close_line'], 
+                                                              total['close_water']['over'], 
+                                                              total['close_water']['under'])
 
     # 注入 ELO xG 数据到 total 字典，供后续 xG 一致性校验使用
     if team and 'elo_xg_home' in team and 'elo_xg_away' in team:
@@ -3801,6 +3996,7 @@ def analyze_match(match):
         'euro': euro,
         'total': total,
         'team': team,
+        'single_odds': single_odds,  # 新增：Bet365 和 Pinnacle 独赔数据
         'confidence': confidence,
         'anomaly': {
             'joint_water': joint_anomaly,
