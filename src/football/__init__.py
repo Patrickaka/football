@@ -12,6 +12,7 @@
   - 进球数推荐
   - 半全场概率计算
   - ELO 评分系统
+  - 盘口比分频率数据库 (market_db)
 """
 
 import sys
@@ -132,8 +133,17 @@ LEAGUE_PROFILES = {
 # 比分冷热：相对历史基准频率的比值阈值
 HEAT_RATIO_HOT = 0.70
 HEAT_RATIO_COLD = 1.32
-HEAT_FILTER_PENALTY = 0.75   # 原0.62，缩小热分惩罚，避免高比分被过度压制
+HEAT_FILTER_PENALTY = 0.90   # 提高惩罚系数，减少对高比分的压制（原0.75）
 COLD_FILTER_BONUS = 1.08     # 原1.18，缩小冷门奖励，防止低比分通过"冷门"机制反复被加权
+
+# 盘口变化影响因子
+HANDICAP_CHANGE_LAMBDA_BOOST = 0.15  # 让球每变化1球对lambda的影响
+TOTAL_LINE_CHANGE_LAMBDA_BOOST = 0.6  # 大小球每变化1球对总进球的影响
+
+# λ 融合权重（市场盘口为主）
+LAMBDA_WEIGHT_MARKET = 0.5   # 盘口反推 λ 权重
+LAMBDA_WEIGHT_TEAM = 0.3     # 球队数据 λ 权重
+LAMBDA_WEIGHT_ELO = 0.2      # ELO xG 权重
 
 # 常见比分历史基准频率（用于冷热，非市场赔率）——参考欧洲主流联赛真实分布上调
 SCORE_BASELINE_FREQ = {
@@ -711,25 +721,46 @@ def analyze_asian(data):
     
     op, cl = data['open'], data['close']
     hcap = cl['handicap']
+    open_hcap = op['handicap']
 
-    dh = hcap - op['handicap']
+    dh = hcap - open_hcap
     if dh > HANDICAP_TREND_EPS:
-        handicap_trend = f"让球升高 {op['handicap']:+.2f} → {hcap:+.2f}（主队被看好）"
+        handicap_trend = f"让球升高 {open_hcap:+.2f} → {hcap:+.2f}（主队被看好）"
+        trend_direction = 'up'
+        trend_strength = min(dh / 0.5, 1.0)  # 归一化强度
     elif dh < -HANDICAP_TREND_EPS:
-        handicap_trend = f"让球降低 {op['handicap']:+.2f} → {hcap:+.2f}（客队被看好）"
+        handicap_trend = f"让球降低 {open_hcap:+.2f} → {hcap:+.2f}（客队被看好）"
+        trend_direction = 'down'
+        trend_strength = min(-dh / 0.5, 1.0)
     else:
         handicap_trend = f"让球不变 {hcap:+.2f}（盘口稳定）"
+        trend_direction = 'stable'
+        trend_strength = 0.0
 
+    # 水位变化分析
     dw = cl['home_odds'] - op['home_odds']
     if dw > WATER_TREND_EPS:
         water_trend = "主队水位上升 → 资金偏向客队"
+        water_direction = 'up'
     elif dw < -WATER_TREND_EPS:
         water_trend = "主队水位下降 → 资金偏向主队"
+        water_direction = 'down'
     else:
         water_trend = "水位基本稳定"
+        water_direction = 'stable'
 
     hp_o, ap_o = remove_vig(op['home_odds'], op['away_odds'])
     hp_c, ap_c = remove_vig(cl['home_odds'], cl['away_odds'])
+
+    # 概率变化分析
+    prob_change_home = hp_c - hp_o
+    prob_change_away = ap_c - ap_o
+    
+    # 让球变化评分（用于后续λ调整）
+    # 让球升高 → 主队λ +, 客队λ -
+    # 让球降低 → 主队λ -, 客队λ +
+    lambda_adjust_home = dh * 0.15  # 让球每变化0.25球，λ调整0.0375
+    lambda_adjust_away = -dh * 0.05  # 客队调整幅度较小
 
     if abs(hcap) <= 0.25:
         diff_range, diff_desc = [0, 0.5], "势均力敌"
@@ -750,16 +781,29 @@ def analyze_asian(data):
     else:
         favor, favor_desc = 'even', "平手盘（势均力敌）"
 
+    # 综合信号强度
+    signal_strength = 'weak'
+    if abs(dh) >= 0.5:
+        signal_strength = 'strong'
+    elif abs(dh) >= 0.25:
+        signal_strength = 'medium'
+
     return {
         'handicap': hcap,
-        'open_handicap': op['handicap'],
+        'open_handicap': open_hcap,
+        'handicap_change': dh,
         'favor': favor, 'favor_desc': favor_desc, 'diff_desc': diff_desc,
         'diff_range': diff_range,
         'handicap_trend': handicap_trend, 'water_trend': water_trend,
+        'trend_direction': trend_direction,
+        'trend_strength': trend_strength,
+        'signal_strength': signal_strength,
         'open_prob': {'home_recv': hp_o, 'away_give': ap_o},
         'close_prob': {'home_recv': hp_c, 'away_give': ap_c},
+        'prob_change': {'home': prob_change_home, 'away': prob_change_away},
         'open_water': {'home': op['home_odds'], 'away': op['away_odds']},
         'close_water': {'home': cl['home_odds'], 'away': cl['away_odds']},
+        'lambda_adjust': {'home': lambda_adjust_home, 'away': lambda_adjust_away},
     }
 
 
@@ -1091,9 +1135,34 @@ def analyze_total(data):
     """解析大小球，返回盘口线、大小球真实概率、倾向与期望进球区间"""
     op, cl = data['open'], data['close']
     line = cl['line']
+    open_line = op['line']
 
     po_o, pu_o = remove_vig(op['over_odds'], op['under_odds'])
     po_c, pu_c = remove_vig(cl['over_odds'], cl['under_odds'])
+
+    # 大小球盘口变化分析
+    dl = line - open_line
+    if dl > 0.125:
+        line_trend = f"盘口升高 {open_line:.2f} → {line:.2f}（大球被看好）"
+        trend_direction = 'up'
+        trend_strength = min(dl / 0.5, 1.0)
+    elif dl < -0.125:
+        line_trend = f"盘口降低 {open_line:.2f} → {line:.2f}（小球被看好）"
+        trend_direction = 'down'
+        trend_strength = min(-dl / 0.5, 1.0)
+    else:
+        line_trend = f"盘口稳定 {line:.2f}"
+        trend_direction = 'stable'
+        trend_strength = 0.0
+
+    # 概率变化分析
+    prob_change_over = po_c - po_o
+    prob_change_under = pu_c - pu_o
+
+    # 大小球变化对λ的调整
+    # 盘口升高 → 总进球λ +
+    # 盘口降低 → 总进球λ -
+    lambda_adjust_total = dl * 0.6  # 盘口每变化0.25球，λ调整0.15
 
     if po_c >= TOTAL_LEAN_THRESHOLD:
         lean, lean_desc = 'over', f"大球倾向（大球概率{po_c*100:.1f}%）"
@@ -1120,16 +1189,31 @@ def analyze_total(data):
     implied_total = implied_total_goals(line, po_c)
     open_implied = implied_total_goals(op['line'], po_o)
 
+    # 综合信号强度
+    signal_strength = 'weak'
+    if abs(dl) >= 0.5:
+        signal_strength = 'strong'
+    elif abs(dl) >= 0.25:
+        signal_strength = 'medium'
+
     return {
-        'open_line': op['line'], 'close_line': line,
+        'open_line': open_line, 'close_line': line,
+        'line_change': dl,
+        'line_trend': line_trend,
+        'trend_direction': trend_direction,
+        'trend_strength': trend_strength,
+        'signal_strength': signal_strength,
         'implied_total': implied_total,
         'open_implied_total': open_implied,
+        'implied_change': implied_total - open_implied,
         'lean': lean, 'lean_desc': lean_desc,
         'open_prob': {'over': po_o, 'under': pu_o},
         'close_prob': {'over': po_c, 'under': pu_c},
+        'prob_change': {'over': prob_change_over, 'under': prob_change_under},
         'open_water': {'over': op['over_odds'], 'under': op['under_odds']},
         'close_water': {'over': cl['over_odds'], 'under': cl['under_odds']},
         'expected_goals': expected_goals,
+        'lambda_adjust': {'total': lambda_adjust_total},
     }
 
 
@@ -1680,6 +1764,207 @@ def implied_total_goals(line, p_over, tol=1e-4):
         else:
             hi = mid
     return (lo + hi) / 2
+
+
+def market_implied_lambdas(handicap, total_line):
+    """
+    由盘口直接反推 λ（核心改进）
+    
+    公式：
+        home_lambda = (total_line + handicap) / 2
+        away_lambda = (total_line - handicap) / 2
+    
+    例如：主让1.0，大小球3.0 → home=2.0, away=1.0
+    
+    参数：
+        handicap: 亚盘让球（主队让球为正）
+        total_line: 大小球盘口线
+    
+    返回：
+        (lam_home, lam_away)
+    """
+    lam_home = max(0.08, (total_line + handicap) / 2)
+    lam_away = max(0.08, (total_line - handicap) / 2)
+    return lam_home, lam_away
+
+
+def apply_handicap_change_adjustment(lam_home, lam_away, open_handicap, close_handicap):
+    """
+    应用亚盘升降盘对 λ 的修正
+    
+    例如：
+        初盘主让0.5 → 终盘主让1.0 → 主队被看好
+        lambda_home += 0.15, lambda_away -= 0.05
+    
+    参数：
+        lam_home, lam_away: 当前 λ 值
+        open_handicap: 初盘让球
+        close_handicap: 终盘让球
+    
+    返回：
+        (adjusted_lam_home, adjusted_lam_away)
+    """
+    if open_handicap is None or close_handicap is None:
+        return lam_home, lam_away
+    
+    # 让球变化 = 终盘 - 初盘
+    # 正数 = 主队让球增加（主队被看好）
+    # 负数 = 主队让球减少（客队被看好）
+    handicap_change = close_handicap - open_handicap
+    
+    # 根据让球变化调整 λ
+    # 主队让球增加 → 主队进球期望增加，客队进球期望减少
+    delta_home = handicap_change * HANDICAP_CHANGE_LAMBDA_BOOST
+    delta_away = -handicap_change * HANDICAP_CHANGE_LAMBDA_BOOST * 0.33  # 客队调整幅度较小
+    
+    lam_home = max(0.08, lam_home + delta_home)
+    lam_away = max(0.08, lam_away + delta_away)
+    
+    return lam_home, lam_away
+
+
+def apply_total_line_change_adjustment(lam_home, lam_away, open_total, close_total):
+    """
+    应用大小球升降对 λ 的修正
+    
+    例如：
+        初盘2.5 → 终盘3.0 → 市场认为比赛更开放
+        lambda_total += delta * 0.6
+    
+    参数：
+        lam_home, lam_away: 当前 λ 值
+        open_total: 初盘大小球线
+        close_total: 终盘大小球线
+    
+    返回：
+        (adjusted_lam_home, adjusted_lam_away)
+    """
+    if open_total is None or close_total is None:
+        return lam_home, lam_away
+    
+    # 大小球变化
+    total_change = close_total - open_total
+    
+    # 按比例分配变化到主客队
+    total_lambda = lam_home + lam_away
+    if total_lambda > 0:
+        ratio_home = lam_home / total_lambda
+        ratio_away = lam_away / total_lambda
+        
+        delta_total = total_change * TOTAL_LINE_CHANGE_LAMBDA_BOOST
+        delta_home = delta_total * ratio_home
+        delta_away = delta_total * ratio_away
+        
+        lam_home = max(0.08, lam_home + delta_home)
+        lam_away = max(0.08, lam_away + delta_away)
+    
+    return lam_home, lam_away
+
+
+def blend_lambdas_with_market(market_lams, team_lams=None, elo_lams=None):
+    """
+    融合市场、球队和 ELO 的 λ 值
+    
+    权重配置：
+        market: 0.5（盘口反推，最主要）
+        team: 0.3（球队攻防数据）
+        elo: 0.2（ELO xG）
+    
+    参数：
+        market_lams: 盘口反推的 λ (lam_home, lam_away)
+        team_lams: 球队数据计算的 λ (lam_home, lam_away)
+        elo_lams: ELO xG (elo_xg_home, elo_xg_away)
+    
+    返回：
+        (blended_lam_home, blended_lam_away)
+    """
+    lam_home, lam_away = market_lams
+    
+    # 初始化加权和
+    weighted_home = lam_home * LAMBDA_WEIGHT_MARKET
+    weighted_away = lam_away * LAMBDA_WEIGHT_MARKET
+    total_weight = LAMBDA_WEIGHT_MARKET
+    
+    # 添加球队数据权重
+    if team_lams:
+        weighted_home += team_lams[0] * LAMBDA_WEIGHT_TEAM
+        weighted_away += team_lams[1] * LAMBDA_WEIGHT_TEAM
+        total_weight += LAMBDA_WEIGHT_TEAM
+    
+    # 添加 ELO xG 权重
+    if elo_lams:
+        weighted_home += elo_lams[0] * LAMBDA_WEIGHT_ELO
+        weighted_away += elo_lams[1] * LAMBDA_WEIGHT_ELO
+        total_weight += LAMBDA_WEIGHT_ELO
+    
+    # 归一化
+    if total_weight > 0:
+        lam_home = weighted_home / total_weight
+        lam_away = weighted_away / total_weight
+    
+    return max(0.08, lam_home), max(0.08, lam_away)
+
+
+def diverse_score_selection(candidates, top_n=3, diversity_threshold=0.5):
+    """
+    比分多样性选择机制
+    
+    如果前N个比分过于相似（都是低比分），允许高比分进入推荐池。
+    
+    参数：
+        candidates: 排序后的比分候选列表 [(score, prob), ...]
+        top_n: 推荐数量
+        diversity_threshold: 多样性阈值，低于此值则增加多样性
+    
+    返回：
+        多样化的比分推荐列表
+    """
+    if len(candidates) <= top_n:
+        return candidates
+    
+    result = []
+    selected_scores = set()
+    selected_total_goals = set()
+    
+    for score, prob in candidates:
+        h, a = score
+        total_goals = h + a
+        
+        # 检查是否已经有相似比分
+        is_similar = False
+        for selected_h, selected_a in selected_scores:
+            # 检查比分模式是否相似（同一类结果，进球数相近）
+            if _outcome(h, a) == _outcome(selected_h, selected_a):
+                if abs(total_goals - (selected_h + selected_a)) <= 1:
+                    is_similar = True
+                    break
+        
+        # 如果已经选了太多相似比分，跳过当前比分
+        if is_similar and len(result) >= top_n // 2:
+            continue
+        
+        result.append((score, prob))
+        selected_scores.add(score)
+        selected_total_goals.add(total_goals)
+        
+        if len(result) >= top_n:
+            break
+    
+    # 如果选中的比分进球数都偏低，尝试加入一个高比分
+    if result and len(selected_total_goals) > 0:
+        avg_goals = sum(selected_total_goals) / len(selected_total_goals)
+        if avg_goals < 2.5 and len(candidates) > top_n:
+            # 在剩余候选中找一个高比分
+            for score, prob in candidates[top_n:]:
+                h, a = score
+                if h + a >= 3 and (h, a) not in selected_scores:
+                    # 替换概率最低的一个
+                    min_idx = min(range(len(result)), key=lambda i: result[i][1])
+                    if result[min_idx][1] < prob * 1.2:  # 只有当高比分概率足够时才替换
+                        result[min_idx] = (score, prob)
+                    break
+    
+    return result
 
 
 def _dc_tau(h, a, lam_home, lam_away, rho):
@@ -2592,6 +2877,7 @@ def ensemble_predict_scores(asian, euro, total, team_strength=None, league_profi
         'target_total': meta.get('target_total'),
         'calibrated': True,
         'calibration_method': 'platt',
+        'market_db_used': meta.get('market_db_used', False),
     }
     
     return candidates, avg_lam_home, avg_lam_away, meta
@@ -2601,27 +2887,75 @@ def fit_lambdas_from_markets(
     supremacy, total_line, p_over,
     p_home, p_draw, p_away,
     open_total_line=None, team_strength=None, euro_lambdas=None,
-    league_profile=None,
+    league_profile=None, handicap=None, open_handicap=None,
 ):
-    """大小球反推总进球 + 反推净胜球 + 欧赔/球队先验，网格+坐标下降拟合 λ"""
+    """
+    大小球反推总进球 + 反推净胜球 + 欧赔/球队先验，网格+坐标下降拟合 λ
+    
+    核心改进（按优先级）：
+    1. 盘口直接反推 λ（主让1.0 + 大小球3.0 → home=2.0, away=1.0）
+    2. 亚盘升降盘对 λ 的修正
+    3. 大小球升降对 λ 的修正
+    4. ELO xG 直接参与 λ 融合
+    """
+    # 1. 计算融合后的大小球线
     line = _blend_close_open(total_line, open_total_line)
     lp = league_profile or LEAGUE_PROFILES['default']
     avg_goal = lp.get('avg_goal', AVG_LEAGUE_GOAL)
+    
+    # 2. 由大小球反推总进球期望
     target_total = implied_total_goals(line, p_over)
     target_total = max(avg_goal * 1.4, min(avg_goal * 3.2, target_total))
-    ou_targets = _ou_total_distribution(target_total)
+    
+    # 3. 核心改进：由盘口直接反推 λ（作为主先验）
+    market_lams = None
+    if handicap is not None:
+        market_lams = market_implied_lambdas(handicap, target_total)
+    
+    # 4. 计算球队攻防 λ
     team_lams = None
     if team_strength:
         team_lams = team_poisson_lambdas(team_strength, target_total, lp)
+    
+    # 5. 获取 ELO xG（如果可用）
+    elo_lams = None
+    if team_strength and 'elo_xg_home' in team_strength and 'elo_xg_away' in team_strength:
+        elo_lams = (team_strength['elo_xg_home'], team_strength['elo_xg_away'])
+    
+    # 6. 融合市场、球队和 ELO 的 λ 值
+    if market_lams:
+        lam_home, lam_away = blend_lambdas_with_market(market_lams, team_lams, elo_lams)
+    elif team_lams:
+        lam_home, lam_away = team_lams
+    else:
+        lam_home, lam_away = estimate_lambdas(supremacy, target_total)
+    
+    # 7. 应用盘口变化调整（亚盘升降盘）
+    lam_home, lam_away = apply_handicap_change_adjustment(
+        lam_home, lam_away, open_handicap, handicap
+    )
+    
+    # 8. 应用大小球变化调整
+    lam_home, lam_away = apply_total_line_change_adjustment(
+        lam_home, lam_away, open_total_line, total_line
+    )
+    
+    # 9. 使用融合后的 λ 作为先验，进行网格拟合精调
+    ou_targets = _ou_total_distribution(target_total)
+    fused_lams = (lam_home, lam_away)
+    
     lam_home, lam_away = _fit_lambda_grid(
         supremacy, target_total, p_home, p_draw, p_away, rho=0.0,
-        ou_targets=ou_targets, team_lambdas=team_lams, euro_lambdas=euro_lambdas,
+        ou_targets=ou_targets, team_lambdas=fused_lams, euro_lambdas=euro_lambdas,
     )
+    
+    # 10. 估计 Dixon-Coles rho 并再次精调
     rho = _estimate_dc_rho(lam_home, lam_away, p_draw)
     lam_home, lam_away = _fit_lambda_grid(
         supremacy, target_total, p_home, p_draw, p_away, rho=rho,
-        ou_targets=ou_targets, team_lambdas=team_lams, euro_lambdas=euro_lambdas,
+        ou_targets=ou_targets, team_lambdas=fused_lams, euro_lambdas=euro_lambdas,
     )
+    
     return lam_home, lam_away, target_total, rho
 
 
@@ -2748,7 +3082,7 @@ def _heat_filter_weight(heat):
     return 1.0
 
 
-def calculate_half_full_time_probs(candidates, team_strength=None):
+def calculate_half_full_time_probs(candidates, team_strength=None, asian=None, total=None):
     """
     计算半全场概率。
     
@@ -2760,6 +3094,8 @@ def calculate_half_full_time_probs(candidates, team_strength=None):
     参数:
         candidates: 比分候选列表，格式为 [((h, a), prob), ...]
         team_strength: 球队实力数据（可选）
+        asian: 亚盘数据（可选，用于历史库查询）
+        total: 大小球数据（可选，用于历史库查询）
     
     返回:
         dict: 半全场概率字典
@@ -2855,6 +3191,38 @@ def calculate_half_full_time_probs(candidates, team_strength=None):
     htf_total = sum(htf_probs.values())
     if htf_total > 0:
         htf_probs = {k: v / htf_total for k, v in htf_probs.items()}
+    
+    # ========== 新增：结合历史盘口数据调整半全场概率 ==========
+    if asian and total:
+        try:
+            from .market_db import MarketScoreDB
+            
+            handicap = asian.get('handicap', 0)
+            close_line = total.get('close_line', 2.5)
+            
+            db = MarketScoreDB()
+            db.load()
+            
+            market_htf = db.get_htf_probs(handicap, close_line)
+            
+            if market_htf and len(market_htf) >= 5:
+                # 融合模型概率和历史盘口概率（60%模型 + 40%历史）
+                blended_htf = {}
+                all_keys = set(htf_probs.keys()).union(set(market_htf.keys()))
+                
+                for key in all_keys:
+                    model_prob = htf_probs.get(key, 0.001)  # 避免0概率
+                    market_prob = market_htf.get(key, 0.001)
+                    blended_htf[key] = 0.6 * model_prob + 0.4 * market_prob
+                
+                # 归一化
+                blended_total = sum(blended_htf.values())
+                if blended_total > 0:
+                    htf_probs = {k: v / blended_total for k, v in sorted(blended_htf.items(), key=lambda x: -x[1])}
+                
+                log.info(f"半全场概率已结合历史盘口数据调整")
+        except Exception as e:
+            log.debug(f"无法加载历史盘口数据调整半全场概率: {e}")
     
     # 添加友好名称
     htf_names = {
@@ -2972,11 +3340,37 @@ def predict_scores(asian, euro, total, team_strength=None, league_profile=None,
 
     # 频率学派方法（泊松或负二项）
     try:
+        # 获取盘口数据用于 λ 反推
+        handicap = asian.get('handicap')
+        open_handicap = asian.get('open_handicap')
+        
         lam_home, lam_away, target_total, rho = fit_lambdas_from_markets(
             supremacy, line, p_over, p_home, p_draw, p_away,
             open_total_line=open_line, team_strength=team_strength, euro_lambdas=euro_lams,
-            league_profile=league_profile,
+            league_profile=league_profile, handicap=handicap, open_handicap=open_handicap,
         )
+        
+        # ========== 新增：应用盘口变化调整 λ ==========
+        # 亚盘让球变化调整
+        asian_lambda_adjust = asian.get('lambda_adjust', {})
+        if asian_lambda_adjust:
+            lam_home += asian_lambda_adjust.get('home', 0)
+            lam_away += asian_lambda_adjust.get('away', 0)
+        
+        # 大小球变化调整（按比例分配）
+        total_lambda_adjust = total.get('lambda_adjust', {}).get('total', 0)
+        if total_lambda_adjust != 0:
+            # 根据当前 λ 比例分配调整
+            if lam_home + lam_away > 0:
+                lam_home += total_lambda_adjust * (lam_home / (lam_home + lam_away))
+                lam_away += total_lambda_adjust * (lam_away / (lam_home + lam_away))
+            else:
+                lam_home += total_lambda_adjust * 0.5
+                lam_away += total_lambda_adjust * 0.5
+        
+        # 确保 λ 值为正
+        lam_home = max(0.08, lam_home)
+        lam_away = max(0.08, lam_away)
         
         # 选择分布类型
         distribution = 'negative_binomial' if model_type == 'negative_binomial' else 'poisson'
@@ -2991,11 +3385,64 @@ def predict_scores(asian, euro, total, team_strength=None, league_profile=None,
             matrix = calibrate_to_euro(matrix, p_home, p_draw, p_away)
     except (ValueError, ZeroDivisionError, OverflowError):
         lam_home, lam_away = estimate_lambdas(supremacy, line)
+        
+        # ========== 新增：应用盘口变化调整 λ（异常处理分支）==========
+        asian_lambda_adjust = asian.get('lambda_adjust', {})
+        if asian_lambda_adjust:
+            lam_home += asian_lambda_adjust.get('home', 0)
+            lam_away += asian_lambda_adjust.get('away', 0)
+        
+        total_lambda_adjust = total.get('lambda_adjust', {}).get('total', 0)
+        if total_lambda_adjust != 0:
+            if lam_home + lam_away > 0:
+                lam_home += total_lambda_adjust * (lam_home / (lam_home + lam_away))
+                lam_away += total_lambda_adjust * (lam_away / (lam_home + lam_away))
+        
+        lam_home = max(0.08, lam_home)
+        lam_away = max(0.08, lam_away)
+        
         distribution = 'negative_binomial' if model_type == 'negative_binomial' else 'poisson'
         matrix = build_score_matrix(lam_home, lam_away, distribution=distribution)
         matrix = calibrate_to_euro(matrix, p_home, p_draw, p_away)
         target_total = line
         rho = 0.0
+
+    # ========== 新增：结合历史盘口比分库进行融合 ==========
+    market_db_used = False
+    try:
+        from .market_db import get_market_score_prob, blend_predictions
+        
+        # 获取历史盘口比分概率
+        handicap = asian.get('handicap', 0)
+        close_line = total.get('close_line', 2.5)
+        log.info(f"尝试加载历史盘口比分库: 亚盘={handicap}, 大小球={close_line}")
+        
+        market_result = get_market_score_prob(handicap, close_line)
+        market_probs = market_result.get('probabilities', {})
+        sample_count = market_result.get('sample_count', 0)
+        
+        log.info(f"历史盘口数据: 样本数={sample_count}, 比分种类={len(market_probs)}")
+        
+        if market_probs and len(market_probs) >= 3:
+            # 将矩阵转换为字典格式
+            model_probs = {f"{h}-{a}": prob for (h, a), prob in matrix.items()}
+            
+            # 融合预测：模型概率 + 历史盘口概率
+            blended_probs = blend_predictions(model_probs, market_probs, 
+                                             weights={'poisson': 0.6, 'market': 0.4})
+            
+            # 更新矩阵
+            matrix = {}
+            for score, prob in blended_probs.items():
+                h, a = map(int, score.split('-'))
+                matrix[(h, a)] = prob
+            
+            market_db_used = True
+            log.info(f"历史盘口比分库融合成功，权重: 泊松70% + 历史30%")
+        else:
+            log.info(f"历史盘口数据不足，跳过融合")
+    except Exception as e:
+        log.debug(f"无法加载历史盘口比分库进行融合: {e}")
 
     # 应用残差修正（如果有训练好的模型）
     features = _build_residual_features(asian, euro, total, team_strength, league_profile)
@@ -3023,6 +3470,9 @@ def predict_scores(asian, euro, total, team_strength=None, league_profile=None,
         'distribution': distribution,
         'calibrated': enable_calibration,
         'calibration_method': calibration_method if enable_calibration else None,
+        'handicap_change': asian.get('handicap_change'),
+        'line_change': total.get('line_change'),
+        'market_db_used': market_db_used,
     }
     return candidates, lam_home, lam_away, meta
 
@@ -3332,14 +3782,14 @@ def analyze_match(match):
             'reasons': _recommend_reasons(h, a, asian, euro, total, team, heat=heat),
         })
 
-    # 计算半全场概率
-    half_full_time = calculate_half_full_time_probs(candidates, team)
+    # 计算半全场概率（结合历史盘口数据）
+    half_full_time = calculate_half_full_time_probs(candidates, team, asian, total)
 
-    # 新增：进球数推荐
+    # 新增：进球数推荐（结合历史盘口数据）
     goal_count_result = None
     try:
         from .ml import predict_goal_counts_from_candidates
-        goal_count_result = predict_goal_counts_from_candidates(candidates, max_goals=MAX_GOALS)
+        goal_count_result = predict_goal_counts_from_candidates(candidates, max_goals=MAX_GOALS, asian=asian, total=total)
         log.info(f"进球数推荐完成: {goal_count_result['recommendations']}")
     except Exception as e:
         log.warning(f"进球数推荐失败: {e}")

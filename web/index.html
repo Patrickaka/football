@@ -523,10 +523,16 @@ function renderResult(r) {
     ${cf && cf.score != null ? `<div class="meta" style="color:${cf.level === 'low' ? 'var(--away)' : 'var(--accent2)'}">置信度 ${esc(cf.label)} (${(cf.score * 100).toFixed(0)}%)</div>` : ''}</div>`;
 
   html += `<div class="card"><h3>🀄 亚盘分析</h3>
-    <div class="row"><span class="k">让球走势</span><span class="v">${esc(a.handicap_trend)}</span></div>
-    <div class="row"><span class="k">水位走势</span><span class="v">${esc(a.water_trend)}</span></div>
+    <div class="row"><span class="k">终盘让球</span><span class="v">${a.handicap != null ? (a.handicap > 0 ? '+' : '') + a.handicap : '-'}</span></div>
+    <div class="row"><span class="k">开盘让球</span><span class="v">${a.open_handicap != null ? (a.open_handicap > 0 ? '+' : '') + a.open_handicap : '-'}</span></div>
+    <div class="row"><span class="k">让球变化</span><span class="v" style="color:${a.handicap_change != null && a.handicap_change > 0 ? 'var(--accent2)' : a.handicap_change != null && a.handicap_change < 0 ? 'var(--away)' : 'var(--muted)'}">${a.handicap_change != null && a.handicap_change > 0 ? '↑' : a.handicap_change != null && a.handicap_change < 0 ? '↓' : '→'} ${a.handicap_change != null ? (a.handicap_change > 0 ? '+' : '') + a.handicap_change.toFixed(2) : '-'}</span></div>
+    <div class="row"><span class="k">让球走势</span><span class="v">${esc(a.handicap_trend || '')}</span></div>
+    <div class="row"><span class="k">水位走势</span><span class="v">${esc(a.water_trend || '')}</span></div>
+    <div class="row"><span class="k">信号强度</span><span class="v">${a.signal_strength === 'strong' ? '<span style="color:var(--accent2)">强信号</span>' : a.signal_strength === 'medium' ? '<span style="color:var(--warn)">中等信号</span>' : '<span style="color:var(--muted)">弱信号</span>'}</span></div>
     <div class="row"><span class="k">终盘真实概率</span><span class="v">主受让方 ${pct(a.close_prob.home_recv)} / 让球方 ${pct(a.close_prob.away_give)}</span></div>
-    <div class="row"><span class="k">终盘判断</span><span class="v">${esc(a.favor_desc)}，${esc(a.diff_desc)}</span></div>
+    <div class="row"><span class="k">概率变化</span><span class="v">主受让 ${a.prob_change && a.prob_change.home != null ? (a.prob_change.home > 0 ? '+' : '') + (a.prob_change.home * 100).toFixed(1) + '%' : '-'} / 让球方 ${a.prob_change && a.prob_change.away != null ? (a.prob_change.away > 0 ? '+' : '') + (a.prob_change.away * 100).toFixed(1) + '%' : '-'}</span></div>
+    <div class="row"><span class="k">终盘判断</span><span class="v">${esc(a.favor_desc || '')}，${esc(a.diff_desc || '')}</span></div>
+    ${a.lambda_adjust && a.lambda_adjust.home != null && a.lambda_adjust.away != null && (a.lambda_adjust.home != 0 || a.lambda_adjust.away != 0) ? `<div class="row"><span class="k">λ 调整</span><span class="v">主队 ${a.lambda_adjust.home > 0 ? '+' : ''}${a.lambda_adjust.home.toFixed(3)} / 客队 ${a.lambda_adjust.away > 0 ? '+' : ''}${a.lambda_adjust.away.toFixed(3)}</span></div>` : ''}
     ${a.implied_supremacy != null ? `<div class="row"><span class="k">反推净胜球</span><span class="v">${a.implied_supremacy >= 0 ? '+' : ''}${a.implied_supremacy.toFixed(2)}（非盘口 ${a.handicap}）</span></div>` : ''}</div>`;
 
   html += `<div class="card"><h3>💶 欧赔分析</h3>
@@ -561,10 +567,18 @@ function renderResult(r) {
       { cls: 'over', p: t.close_prob.over, label: '大 ' + pct(t.close_prob.over) },
       { cls: 'under', p: t.close_prob.under, label: '小 ' + pct(t.close_prob.under) },
     ])}
-    <div class="row"><span class="k">终盘盘口线</span><span class="v">${esc(t.close_line)}</span></div>
-    <div class="row"><span class="k">判断</span><span class="v">${esc(t.lean_desc)}</span></div>
-    <div class="row"><span class="k">反推总进球λ</span><span class="v">${(t.implied_total || 0).toFixed(2)}</span></div>
-    <div class="row"><span class="k">期望总进球</span><span class="v">${t.expected_goals[0]}-${t.expected_goals[1]} 球</span></div></div>`;
+    <div class="row"><span class="k">终盘盘口</span><span class="v">${t.close_line != null ? esc(t.close_line) : '-'}</span></div>
+    <div class="row"><span class="k">开盘盘口</span><span class="v">${t.open_line != null ? esc(t.open_line) : '-'}</span></div>
+    <div class="row"><span class="k">盘口变化</span><span class="v" style="color:${t.line_change != null && t.line_change > 0 ? 'var(--accent2)' : t.line_change != null && t.line_change < 0 ? 'var(--away)' : 'var(--muted)'}">${t.line_change != null && t.line_change > 0 ? '↑' : t.line_change != null && t.line_change < 0 ? '↓' : '→'} ${t.line_change != null ? (t.line_change > 0 ? '+' : '') + t.line_change.toFixed(2) : '-'}</span></div>
+    <div class="row"><span class="k">盘口走势</span><span class="v">${esc(t.line_trend || '')}</span></div>
+    <div class="row"><span class="k">信号强度</span><span class="v">${t.signal_strength === 'strong' ? '<span style="color:var(--accent2)">强信号</span>' : t.signal_strength === 'medium' ? '<span style="color:var(--warn)">中等信号</span>' : '<span style="color:var(--muted)">弱信号</span>'}</span></div>
+    <div class="row"><span class="k">判断</span><span class="v">${esc(t.lean_desc || '')}</span></div>
+    <div class="row"><span class="k">反推总进球λ</span><span class="v">${t.implied_total != null ? t.implied_total.toFixed(2) : '-'}</span></div>
+    <div class="row"><span class="k">开盘隐含总进球</span><span class="v">${t.open_implied_total != null ? t.open_implied_total.toFixed(2) : '-'}</span></div>
+    <div class="row"><span class="k">隐含变化</span><span class="v" style="color:${t.implied_change != null && t.implied_change > 0 ? 'var(--accent2)' : t.implied_change != null && t.implied_change < 0 ? 'var(--away)' : 'var(--muted)'}">${t.implied_change != null && t.implied_change > 0 ? '+' : ''}${t.implied_change != null ? t.implied_change.toFixed(2) : '-'}</span></div>
+    <div class="row"><span class="k">概率变化</span><span class="v">大球 ${t.prob_change && t.prob_change.over != null ? (t.prob_change.over > 0 ? '+' : '') + (t.prob_change.over * 100).toFixed(1) + '%' : '-'} / 小球 ${t.prob_change && t.prob_change.under != null ? (t.prob_change.under > 0 ? '+' : '') + (t.prob_change.under * 100).toFixed(1) + '%' : '-'}</span></div>
+    ${t.lambda_adjust && t.lambda_adjust.total != null && t.lambda_adjust.total != 0 ? `<div class="row"><span class="k">λ 调整</span><span class="v">总进球 ${t.lambda_adjust.total > 0 ? '+' : ''}${t.lambda_adjust.total.toFixed(3)}</span></div>` : ''}
+    <div class="row"><span class="k">期望总进球</span><span class="v">${t.expected_goals && t.expected_goals.length >= 2 ? t.expected_goals[0] + '-' + t.expected_goals[1] + ' 球' : '-'}</span></div></div>`;
 
   if (tm) {
     const attackHome = tm.attack_home != null ? tm.attack_home : 0;
@@ -597,8 +611,10 @@ function renderResult(r) {
 
   const lamHome = md.lam_home != null ? md.lam_home : 0;
   const lamAway = md.lam_away != null ? md.lam_away : 0;
-  html += `<div class="card"><h3>🎯 Top 5 候选比分 <span style="color:var(--muted);font-weight:400;font-size:12px">（含冷热过滤）</span></h3>
-    <div class="row" style="padding-bottom:8px"><span class="k">期望进球</span><span class="v">主队 λ=${lamHome.toFixed(2)} / 客队 λ=${lamAway.toFixed(2)}</span></div>`;
+  const marketUsed = md.market_db_used != null && md.market_db_used;
+  html += `<div class="card"><h3>🎯 Top 5 候选比分 <span style="color:var(--muted);font-weight:400;font-size:12px">（含冷热过滤${marketUsed ? ' · 历史库融合' : ''}）</span></h3>
+    <div class="row" style="padding-bottom:8px"><span class="k">期望进球</span><span class="v">主队 λ=${lamHome.toFixed(2)} / 客队 λ=${lamAway.toFixed(2)}</span></div>
+    ${marketUsed ? `<div class="row"><span class="k">融合权重</span><span class="v">泊松模型 60% + 历史盘口 40%</span></div>` : ''}`;
   top.forEach((s, i) => {
     const prob = s.prob != null ? s.prob : 0;
     const barWidth = maxProb > 0 ? (prob / maxProb * 100).toFixed(0) : 0;
@@ -674,19 +690,23 @@ function renderResult(r) {
     });
     html += `</div>`;
     
-    // 完整分布
+    // 完整分布（只显示到7球+）
     if (goalCount.distribution && goalCount.distribution.length > 0) {
       html += `<div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--line)">`;
       html += `<div style="font-size:13px;color:var(--muted);margin-bottom:8px">进球数分布</div>`;
       html += `<div class="goal-dist">`;
       goalCount.distribution.forEach(item => {
-        html += `<div class="goal-dist-item">
-          <span class="goal-dist-label">${esc(item.label)}</span>
-          <div class="goal-dist-bar-wrap">
-            <div class="goal-dist-bar" style="width:${(item.probability * 100).toFixed(1)}%"></div>
-          </div>
-          <span class="goal-dist-pct">${item.percentage}</span>
-        </div>`;
+        // 只显示到7球+，跳过8球及以上
+        const goals = parseInt(item.label);
+        if (isNaN(goals) || goals <= 7 || item.label.includes('7球')) {
+          html += `<div class="goal-dist-item">
+            <span class="goal-dist-label">${esc(item.label)}</span>
+            <div class="goal-dist-bar-wrap">
+              <div class="goal-dist-bar" style="width:${(item.probability * 100).toFixed(1)}%"></div>
+            </div>
+            <span class="goal-dist-pct">${item.percentage}</span>
+          </div>`;
+        }
       });
       html += `</div>`;
       html += `</div>`;

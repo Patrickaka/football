@@ -135,6 +135,19 @@ def recommend_goal_counts(prob_matrix: np.ndarray, top_n: int = 2) -> List[Dict]
         })
     return recommendations
 
+def recommend_goal_counts_from_dist(goal_dist: Dict[int, float], top_n: int = 2) -> List[Dict]:
+    """从进球数分布字典推荐概率最大的进球数"""
+    sorted_counts = sorted(goal_dist.items(), key=lambda x: -x[1])
+    recommendations = []
+    for i, (goals, prob) in enumerate(sorted_counts[:top_n], 1):
+        recommendations.append({
+            'goals': goals,
+            'label': GOAL_COUNT_LABELS.get(goals, f'{goals}球'),
+            'probability': prob,
+            'rank': i
+        })
+    return recommendations
+
 def get_goal_count_distribution(prob_matrix: np.ndarray) -> List[Dict]:
     """获取进球数分布统计"""
     goal_counts = calculate_goal_counts(prob_matrix)
@@ -149,7 +162,7 @@ def get_goal_count_distribution(prob_matrix: np.ndarray) -> List[Dict]:
         })
     return distribution
 
-def predict_goal_counts_from_candidates(candidates: List[Tuple], max_goals: int = 7) -> Dict:
+def predict_goal_counts_from_candidates(candidates: List[Tuple], max_goals: int = 7, asian=None, total=None) -> Dict:
     """从候选比分列表计算进球数推荐"""
     prob_matrix = np.zeros((max_goals + 1, max_goals + 1))
     for item in candidates:
@@ -165,11 +178,51 @@ def predict_goal_counts_from_candidates(candidates: List[Tuple], max_goals: int 
     if total_prob > 0:
         prob_matrix = prob_matrix / total_prob
     
+    # 获取进球数分布（字典格式）
+    goal_dist = calculate_goal_counts(prob_matrix)
+    
+    # ========== 新增：结合历史盘口数据调整进球数分布 ==========
+    if asian and total:
+        try:
+            from .market_db import MarketScoreDB
+            
+            handicap = asian.get('handicap', 0)
+            close_line = total.get('close_line', 2.5)
+            
+            db = MarketScoreDB()
+            db.load()
+            
+            market_goal_dist = db.get_goal_count_dist(handicap, close_line)
+            
+            if market_goal_dist and len(market_goal_dist) >= 3:
+                # 融合模型分布和历史盘口分布（60%模型 + 40%历史）
+                blended_dist = {}
+                all_keys = set(goal_dist.keys()).union(set(market_goal_dist.keys()))
+                
+                for key in all_keys:
+                    model_prob = goal_dist.get(key, 0.001)
+                    market_prob = market_goal_dist.get(key, 0.001)
+                    blended_dist[key] = 0.6 * model_prob + 0.4 * market_prob
+                
+                # 归一化
+                blended_total = sum(blended_dist.values())
+                if blended_total > 0:
+                    goal_dist = {k: v / blended_total for k, v in sorted(blended_dist.items())}
+                
+                import logging
+                log = logging.getLogger('football')
+                log.info(f"进球数分布已结合历史盘口数据调整")
+        except Exception as e:
+            import logging
+            log = logging.getLogger('football')
+            log.debug(f"无法加载历史盘口数据调整进球数分布: {e}")
+    
+    # 基于调整后的分布重新计算推荐
     return {
-        'recommendations': recommend_goal_counts(prob_matrix, top_n=2),
+        'recommendations': recommend_goal_counts_from_dist(goal_dist, top_n=2),
         'distribution': get_goal_count_distribution(prob_matrix),
-        'over_under': {'over': np.sum(prob_matrix[np.triu_indices(max_goals+1, k=3)]),
-                       'under': np.sum(prob_matrix[np.tril_indices(max_goals+1, k=2)])},
+        'over_under': {'over': sum(v for k, v in goal_dist.items() if k >= 3),
+                       'under': sum(v for k, v in goal_dist.items() if k <= 2)},
         'matrix': prob_matrix.tolist()
     }
 
