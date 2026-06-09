@@ -419,31 +419,54 @@ def _extract_avg(html, keyword='平均值'):
 
 
 def _handicap_text_to_num(handicap_text):
-    """将让球文字转换为数字"""
+    """将让球文字转换为数字
+    
+    主队让球 → 正数（如：半球 → 0.5）
+    主队受让球 → 负数（如：受让半球 → -0.5）
+    """
     if not handicap_text:
         return 0
     
-    # 定义让球类型映射
-    handicap_map = {
-        '平手': 0,
-        '平半': 0.25,
-        '平手/半球': 0.25,
-        '半球': 0.5,
-        '半一': 0.75,
-        '半球/一球': 0.75,
-        '一球': 1.0,
-        '一球/球半': 1.25,
-        '球半': 1.5,
-        '球半/两球': 1.75,
-        '两球': 2.0,
-        '两球/两球半': 2.25,
-        '两球半': 2.5,
-    }
+    # 定义让球类型映射（不含受让前缀）
+    # 按字符串长度排序，确保长字符串优先匹配
+    handicap_map = [
+        ('平手/半球', 0.25),
+        ('半球/一球', 0.75),
+        ('一球/球半', 1.25),
+        ('球半/两球', 1.75),
+        ('两球/两球半', 2.25),
+        ('平半', 0.25),
+        ('半球', 0.5),
+        ('半一', 0.75),
+        ('一球', 1.0),
+        ('球半', 1.5),
+        ('两球', 2.0),
+        ('两球半', 2.5),
+        ('平手', 0),
+    ]
+    
+    # 判断是否为受让球
+    is_receive = False
+    text_to_check = handicap_text
+    
+    # 移除受让前缀
+    if handicap_text.startswith('受让'):
+        is_receive = True
+        text_to_check = handicap_text[2:]  # 移除"受让"
+    elif handicap_text.startswith('受'):
+        is_receive = True
+        text_to_check = handicap_text[1:]  # 移除"受"
     
     # 尝试精确匹配
-    for key, value in handicap_map.items():
-        if key in handicap_text:
-            return value
+    for key, value in handicap_map:
+        if key == text_to_check:
+            # 受让球返回负数，让球返回正数
+            return -value if is_receive else value
+    
+    # 如果精确匹配失败，尝试包含匹配（长字符串优先）
+    for key, value in handicap_map:
+        if key in text_to_check:
+            return -value if is_receive else value
     
     return 0
 
@@ -511,7 +534,11 @@ def _extract_company_odds(html, company_name, is_total=False):
         elif -5 <= num <= 5 and abs(num) != 0:
             filtered.append(num)
     
-    log.debug(f"{company_name} 原始数字: {numbers[:15]}, 过滤后: {filtered}")
+    # 提取时间记录
+    time_pattern = r'(\d{2}-\d{2}\s+\d{2}:\d{2})'
+    times = re.findall(time_pattern, data_part)
+    
+    log.debug(f"{company_name} 原始数字: {numbers[:15]}, 过滤后: {filtered}, 时间: {times}")
     
     if is_total:
         # 大小球页面格式：公司名 公司名 终大球水位 大小球盘 终小球水位 时间 初大球水位 大小球盘 初小球水位 时间
@@ -558,6 +585,10 @@ def _extract_company_odds(html, company_name, is_total=False):
             if len(filtered) >= 6:
                 initial_over = filtered[3]
                 initial_under = filtered[4]
+            
+            # 提取时间
+            final_time = times[0] if len(times) > 0 else None
+            initial_time = times[1] if len(times) > 1 else None
                 
             result = [
                 initial_over,
@@ -566,14 +597,16 @@ def _extract_company_odds(html, company_name, is_total=False):
                 final_over,
                 final_line,
                 final_under,
+                final_time,
+                initial_time,
             ]
             log.debug(f"{company_name} 大小球提取结果: {result}")
             return result
         return None
     else:
         # 亚盘格式：公司名 公司名 终主队水位 让球类型 终客队水位 时间 初主队水位 让球类型 初客队水位 时间
-        # 提取让球类型文本
-        handicap_pattern = r'(平手|平半|半球|半一|一球|球半|两球|两球半|平手/半球|半球/一球|一球/球半|球半/两球|两球/两球半)'
+        # 提取让球类型文本（包含受让球情况）
+        handicap_pattern = r'(受让平手|受让平半|受让半球|受让半一|受让一球|受让球半|受让两球|受让两球半|平手|平半|半球|半一|一球|球半|两球|两球半|平手/半球|半球/一球|一球/球半|球半/两球|两球/两球半|受平手|受平半|受半球|受半一|受一球|受球半|受两球|受两球半)'
         handicap_matches = re.findall(handicap_pattern, data_part)
         
         # 解析让球值
@@ -584,12 +617,16 @@ def _extract_company_odds(html, company_name, is_total=False):
         if len(handicap_matches) >= 2:
             initial_handicap = _handicap_text_to_num(handicap_matches[1])
         
-        # 返回6个数字（初主队水位、初让球、初客队水位、终主队水位、终让球、终客队水位）
+        # 返回8个数据（初主队水位、初让球、初客队水位、终主队水位、终让球、终客队水位、终盘时间、初盘时间）
         # 需要确保数据足够且合理
         if len(filtered) >= 4:
             # 过滤后的数字应该是：终主队水位, 终客队水位, 初主队水位, 初客队水位
             # 检查前两个是否是合理的水位（0.3-2.5）
             if 0.3 <= filtered[0] <= 2.5 and 0.3 <= filtered[1] <= 2.5:
+                # 提取时间
+                final_time = times[0] if len(times) > 0 else None
+                initial_time = times[1] if len(times) > 1 else None
+                
                 result = [
                     filtered[2] if len(filtered) > 2 and 0.3 <= filtered[2] <= 2.5 else filtered[0],
                     initial_handicap if initial_handicap != 0 else final_handicap,
@@ -597,6 +634,8 @@ def _extract_company_odds(html, company_name, is_total=False):
                     filtered[0],
                     final_handicap,
                     filtered[1],
+                    final_time,
+                    initial_time,
                 ]
                 log.debug(f"{company_name} 亚盘提取结果: {result}")
                 return result
@@ -638,6 +677,8 @@ def fetch_single_company_odds(match_id):
         bet365_yazhi = _extract_company_odds(yazhi_html, 'Bet365', is_total=False)
         bet365_daxiao = _extract_company_odds(daxiao_html, 'Bet365', is_total=True)
         
+        log.info(f"Bet365 亚盘原始数据: {bet365_yazhi}")
+        
         # 只要有亚盘数据就返回（大小球可选）
         if bet365_yazhi:
             bet365_data = {
@@ -646,11 +687,13 @@ def fetch_single_company_odds(match_id):
                         'handicap': bet365_yazhi[1],  # 初让球
                         'home_odds': bet365_yazhi[0],  # 初主队水位
                         'away_odds': bet365_yazhi[2],  # 初客队水位
+                        'time': bet365_yazhi[7] if len(bet365_yazhi) > 7 else None,  # 初盘时间
                     },
                     'close': {
                         'handicap': bet365_yazhi[4],  # 终让球
                         'home_odds': bet365_yazhi[3],  # 终主队水位
                         'away_odds': bet365_yazhi[5],  # 终客队水位
+                        'time': bet365_yazhi[6] if len(bet365_yazhi) > 6 else None,  # 终盘时间
                     }
                 }
             }
@@ -661,11 +704,13 @@ def fetch_single_company_odds(match_id):
                         'line': bet365_daxiao[1],
                         'over_odds': bet365_daxiao[0],
                         'under_odds': bet365_daxiao[2],
+                        'time': bet365_daxiao[7] if len(bet365_daxiao) > 7 else None,
                     },
                     'close': {
                         'line': bet365_daxiao[4],
                         'over_odds': bet365_daxiao[3],
                         'under_odds': bet365_daxiao[5],
+                        'time': bet365_daxiao[6] if len(bet365_daxiao) > 6 else None,
                     }
                 }
             result['bet365'] = bet365_data
@@ -682,11 +727,13 @@ def fetch_single_company_odds(match_id):
                         'handicap': pinnacle_yazhi[1],  # 初让球
                         'home_odds': pinnacle_yazhi[0],  # 初主队水位
                         'away_odds': pinnacle_yazhi[2],  # 初客队水位
+                        'time': pinnacle_yazhi[7] if len(pinnacle_yazhi) > 7 else None,  # 初盘时间
                     },
                     'close': {
                         'handicap': pinnacle_yazhi[4],  # 终让球
                         'home_odds': pinnacle_yazhi[3],  # 终主队水位
                         'away_odds': pinnacle_yazhi[5],  # 终客队水位
+                        'time': pinnacle_yazhi[6] if len(pinnacle_yazhi) > 6 else None,  # 终盘时间
                     }
                 }
             }
@@ -697,11 +744,13 @@ def fetch_single_company_odds(match_id):
                         'line': pinnacle_daxiao[1],
                         'over_odds': pinnacle_daxiao[0],
                         'under_odds': pinnacle_daxiao[2],
+                        'time': pinnacle_daxiao[7] if len(pinnacle_daxiao) > 7 else None,
                     },
                     'close': {
                         'line': pinnacle_daxiao[4],
                         'over_odds': pinnacle_daxiao[3],
                         'under_odds': pinnacle_daxiao[5],
+                        'time': pinnacle_daxiao[6] if len(pinnacle_daxiao) > 6 else None,
                     }
                 }
             result['pinnacle'] = pinnacle_data
@@ -2098,18 +2147,46 @@ def market_implied_lambdas(handicap, total_line):
     return lam_home, lam_away
 
 
-def apply_handicap_change_adjustment(lam_home, lam_away, open_handicap, close_handicap):
+def _parse_time(time_str):
+    """解析时间字符串为分钟数"""
+    if not time_str:
+        return None
+    try:
+        # 格式：06-09 17:20
+        parts = time_str.strip().split()
+        if len(parts) != 2:
+            return None
+        date_part = parts[0]
+        time_part = parts[1]
+        
+        month, day = map(int, date_part.split('-'))
+        hour, minute = map(int, time_part.split(':'))
+        
+        # 转换为分钟数（假设在同一个月内）
+        return day * 24 * 60 + hour * 60 + minute
+    except:
+        return None
+
+
+def apply_handicap_change_adjustment(lam_home, lam_away, open_handicap, close_handicap, 
+                                     open_time=None, close_time=None):
     """
-    应用亚盘升降盘对 λ 的修正
+    应用亚盘升降盘对 λ 的修正（包含时间因素）
     
     例如：
         初盘主让0.5 → 终盘主让1.0 → 主队被看好
         lambda_home += 0.15, lambda_away -= 0.05
+        
+    时间因素：
+        相同变化幅度下，越临近比赛的变化越有价值
+        变化速度越快（单位时间变化量大），信号越强
     
     参数：
         lam_home, lam_away: 当前 λ 值
         open_handicap: 初盘让球
         close_handicap: 终盘让球
+        open_time: 初盘时间（格式：06-09 17:20）
+        close_time: 终盘时间（格式：06-09 17:20）
     
     返回：
         (adjusted_lam_home, adjusted_lam_away)
@@ -2122,10 +2199,24 @@ def apply_handicap_change_adjustment(lam_home, lam_away, open_handicap, close_ha
     # 负数 = 主队让球减少（客队被看好）
     handicap_change = close_handicap - open_handicap
     
+    # 计算时间权重
+    # 变化发生得越晚（越临近比赛），权重越高
+    time_weight = 1.0
+    if open_time and close_time:
+        open_minutes = _parse_time(open_time)
+        close_minutes = _parse_time(close_time)
+        if open_minutes and close_minutes and open_minutes < close_minutes:
+            # 时间间隔（分钟）
+            time_diff = close_minutes - open_minutes
+            # 间隔越短，权重越高（变化速度越快）
+            if time_diff > 0:
+                # 基准：30分钟内变化权重为2.0，24小时以上变化权重为0.5
+                time_weight = min(2.0, max(0.5, 1800 / time_diff + 0.5))
+    
     # 根据让球变化调整 λ
     # 主队让球增加 → 主队进球期望增加，客队进球期望减少
-    delta_home = handicap_change * HANDICAP_CHANGE_LAMBDA_BOOST
-    delta_away = -handicap_change * HANDICAP_CHANGE_LAMBDA_BOOST * 0.33  # 客队调整幅度较小
+    delta_home = handicap_change * HANDICAP_CHANGE_LAMBDA_BOOST * time_weight
+    delta_away = -handicap_change * HANDICAP_CHANGE_LAMBDA_BOOST * 0.33 * time_weight  # 客队调整幅度较小
     
     lam_home = max(0.08, lam_home + delta_home)
     lam_away = max(0.08, lam_away + delta_away)
@@ -2133,18 +2224,24 @@ def apply_handicap_change_adjustment(lam_home, lam_away, open_handicap, close_ha
     return lam_home, lam_away
 
 
-def apply_total_line_change_adjustment(lam_home, lam_away, open_total, close_total):
+def apply_total_line_change_adjustment(lam_home, lam_away, open_total, close_total,
+                                       open_time=None, close_time=None):
     """
-    应用大小球升降对 λ 的修正
+    应用大小球升降对 λ 的修正（包含时间因素）
     
     例如：
         初盘2.5 → 终盘3.0 → 市场认为比赛更开放
         lambda_total += delta * 0.6
     
+    时间因素：
+        相同变化幅度下，越临近比赛的变化越有价值
+    
     参数：
         lam_home, lam_away: 当前 λ 值
         open_total: 初盘大小球线
         close_total: 终盘大小球线
+        open_time: 初盘时间（格式：06-09 17:20）
+        close_time: 终盘时间（格式：06-09 17:20）
     
     返回：
         (adjusted_lam_home, adjusted_lam_away)
@@ -2155,13 +2252,23 @@ def apply_total_line_change_adjustment(lam_home, lam_away, open_total, close_tot
     # 大小球变化
     total_change = close_total - open_total
     
+    # 计算时间权重
+    time_weight = 1.0
+    if open_time and close_time:
+        open_minutes = _parse_time(open_time)
+        close_minutes = _parse_time(close_time)
+        if open_minutes and close_minutes and open_minutes < close_minutes:
+            time_diff = close_minutes - open_minutes
+            if time_diff > 0:
+                time_weight = min(2.0, max(0.5, 1800 / time_diff + 0.5))
+    
     # 按比例分配变化到主客队
     total_lambda = lam_home + lam_away
     if total_lambda > 0:
         ratio_home = lam_home / total_lambda
         ratio_away = lam_away / total_lambda
         
-        delta_total = total_change * TOTAL_LINE_CHANGE_LAMBDA_BOOST
+        delta_total = total_change * TOTAL_LINE_CHANGE_LAMBDA_BOOST * time_weight
         delta_home = delta_total * ratio_home
         delta_away = delta_total * ratio_away
         
@@ -3198,14 +3305,15 @@ def fit_lambdas_from_markets(
     p_home, p_draw, p_away,
     open_total_line=None, team_strength=None, euro_lambdas=None,
     league_profile=None, handicap=None, open_handicap=None,
+    open_time=None, close_time=None,
 ):
     """
     大小球反推总进球 + 反推净胜球 + 欧赔/球队先验，网格+坐标下降拟合 λ
     
     核心改进（按优先级）：
     1. 盘口直接反推 λ（主让1.0 + 大小球3.0 → home=2.0, away=1.0）
-    2. 亚盘升降盘对 λ 的修正
-    3. 大小球升降对 λ 的修正
+    2. 亚盘升降盘对 λ 的修正（包含时间因素）
+    3. 大小球升降对 λ 的修正（包含时间因素）
     4. ELO xG 直接参与 λ 融合
     """
     # 1. 计算融合后的大小球线
@@ -3240,14 +3348,16 @@ def fit_lambdas_from_markets(
     else:
         lam_home, lam_away = estimate_lambdas(supremacy, target_total)
     
-    # 7. 应用盘口变化调整（亚盘升降盘）
+    # 7. 应用盘口变化调整（亚盘升降盘，包含时间因素）
     lam_home, lam_away = apply_handicap_change_adjustment(
-        lam_home, lam_away, open_handicap, handicap
+        lam_home, lam_away, open_handicap, handicap,
+        open_time, close_time
     )
     
-    # 8. 应用大小球变化调整
+    # 8. 应用大小球变化调整（包含时间因素）
     lam_home, lam_away = apply_total_line_change_adjustment(
-        lam_home, lam_away, open_total_line, total_line
+        lam_home, lam_away, open_total_line, total_line,
+        open_time, close_time
     )
     
     # 9. 使用融合后的 λ 作为先验，进行网格拟合精调
@@ -3653,11 +3763,15 @@ def predict_scores(asian, euro, total, team_strength=None, league_profile=None,
         # 获取盘口数据用于 λ 反推
         handicap = asian.get('handicap')
         open_handicap = asian.get('open_handicap')
+        # 获取时间数据用于盘口变化速度分析
+        open_time = asian.get('open_time')
+        close_time = asian.get('close_time')
         
         lam_home, lam_away, target_total, rho = fit_lambdas_from_markets(
             supremacy, line, p_over, p_home, p_draw, p_away,
             open_total_line=open_line, team_strength=team_strength, euro_lambdas=euro_lams,
             league_profile=league_profile, handicap=handicap, open_handicap=open_handicap,
+            open_time=open_time, close_time=close_time,
         )
         
         # ========== 新增：应用盘口变化调整 λ ==========
@@ -4008,6 +4122,9 @@ def analyze_match(match):
                 'home': selected_odds['asian']['open']['home_odds'],
                 'away': selected_odds['asian']['open']['away_odds']
             }
+            # 保存时间数据用于盘口变化分析
+            asian['close_time'] = selected_odds['asian']['close'].get('time')
+            asian['open_time'] = selected_odds['asian']['open'].get('time')
             # 重新计算让球走势
             asian['handicap_trend'] = _analyze_handicap_trend(asian['open_handicap'], asian['handicap'])
         
@@ -4024,10 +4141,23 @@ def analyze_match(match):
                 'over': selected_odds['total']['open']['over_odds'],
                 'under': selected_odds['total']['open']['under_odds']
             }
+            # 保存时间数据
+            total['close_time'] = selected_odds['total']['close'].get('time')
+            total['open_time'] = selected_odds['total']['open'].get('time')
             # 重新计算 implied_total
             total['implied_total'] = calculate_implied_total(total['close_line'], 
                                                               total['close_water']['over'], 
                                                               total['close_water']['under'])
+    
+    # 确保时间字段始终存在（用于盘口变化速度分析）
+    if 'close_time' not in asian:
+        asian['close_time'] = None
+    if 'open_time' not in asian:
+        asian['open_time'] = None
+    if 'close_time' not in total:
+        total['close_time'] = None
+    if 'open_time' not in total:
+        total['open_time'] = None
 
     # 注入 ELO xG 数据到 total 字典，供后续 xG 一致性校验使用
     if team and 'elo_xg_home' in team and 'elo_xg_away' in team:
