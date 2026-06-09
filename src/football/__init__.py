@@ -1910,8 +1910,11 @@ def team_poisson_lambdas(strength, total_target, league_profile=None):
         a_gf_per_game = away_recent.get('gf', 0) / away_games
         a_ga_per_game = away_recent.get('ga', 0) / away_games
         # 近期进球比长期预期多/少 → ±10% 微调
-        lam_home *= (1.0 + (h_gf_per_game - attack_home) / max(attack_home, 0.01) * 0.10)
-        lam_away *= (1.0 + (a_gf_per_game - attack_away) / max(attack_away, 0.01) * 0.10)
+        # 使用原始 attack 值（场均进球数）与近期场均进球对比
+        raw_attack_home = strength.get('attack_home', avg)
+        raw_attack_away = strength.get('attack_away', avg)
+        lam_home *= (1.0 + (h_gf_per_game - raw_attack_home) / max(raw_attack_home, 0.01) * 0.10)
+        lam_away *= (1.0 + (a_gf_per_game - raw_attack_away) / max(raw_attack_away, 0.01) * 0.10)
         lam_home = max(0.06, lam_home)
         lam_away = max(0.06, lam_away)
     
