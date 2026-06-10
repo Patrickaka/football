@@ -117,13 +117,16 @@ AUTH_ENABLED = bool(CREDENTIALS)
 
 
 def _json_default(obj):
-    """json.dumps 兜底：numpy 标量 / 数组 等转为原生 Python 类型"""
+    """json.dumps 兜底：numpy 标量 / 数组 / SteamSignal 等转为原生 Python 类型"""
     # numpy 数组 → list
     if hasattr(obj, 'tolist'):
         return obj.tolist()
     # numpy 标量 → Python 原生标量
     if hasattr(obj, 'item'):
         return obj.item()
+    # SteamSignal 对象 → dict
+    if hasattr(obj, 'to_dict') and callable(getattr(obj, 'to_dict')):
+        return obj.to_dict()
     raise TypeError(f'Object of type {type(obj).__name__} is not JSON serializable')
 
 

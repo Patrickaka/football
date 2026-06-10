@@ -35,6 +35,22 @@ except ImportError:
     log = setup_logger('football')
     log.warning("ELO 模块未导入，将使用默认球队实力计算")
 
+# 相似盘口数据库（延迟导入）
+try:
+    from .similar_market import similar_market_match
+    SIMILAR_MARKET_AVAILABLE = True
+except ImportError:
+    SIMILAR_MARKET_AVAILABLE = False
+    log.warning("相似盘口数据库模块未导入")
+
+# 临场资金流检测器（延迟导入）
+try:
+    from .steam_move import steam_move_detector, integrate_steam_signal
+    STEAM_MOVE_AVAILABLE = True
+except ImportError:
+    STEAM_MOVE_AVAILABLE = False
+    log.warning("临场资金流检测器模块未导入")
+
 log = setup_logger('football')
 
 sys.stdout.reconfigure(encoding='utf-8')
@@ -4125,8 +4141,8 @@ def _evaluate_upset_risk(asian, euro, team=None):
     return risk_score
 
 
-def _pick_recommendations(candidates, asian, euro, total, n=2, pool=12, confidence=None, league_profile=None, team=None):
-    """Top 池内按 概率×一致性×冷热×置信度 选取"""
+def _pick_recommendations(candidates, asian, euro, total, n=2, pool=12, confidence=None, league_profile=None, team=None, similar_market=None):
+    """Top 池内按 概率×一致性×冷热×置信度×相似盘口 选取"""
     if confidence:
         n = confidence.get('recommend_count', n)
     pool = min(16, len(candidates))  # 原12，扩大候选池让高比分有更多入选机会
@@ -4147,6 +4163,15 @@ def _pick_recommendations(candidates, asian, euro, total, n=2, pool=12, confiden
     
     # 动态评估爆冷风险
     upset_risk = _evaluate_upset_risk(asian, euro, team)
+    
+    # 相似盘口比分权重（融合历史数据）
+    similar_weight = {}
+    similar_confidence = 0.0
+    if similar_market and similar_market.get('goals_dist') and similar_market.get('confidence', 0) >= 0.3:
+        similar_confidence = similar_market['confidence']
+        for score, prob in similar_market['goals_dist'].items():
+            h, a = map(int, score.split('-'))
+            similar_weight[(h, a)] = prob
     
     scored = []
     favor = asian.get('favor', 'home')
@@ -4174,7 +4199,13 @@ def _pick_recommendations(candidates, asian, euro, total, n=2, pool=12, confiden
                 # 强弱分明但有一定爆冷风险，适度降权
                 upset_penalty = 0.7
         
-        scored.append(((h, a), prob, align, heat, prob * (1.0 + 0.45 * align) * w * (0.65 + 0.35 * conf_w) * xg_penalty * upset_penalty))
+        # 融合相似盘口比分权重
+        market_bonus = 1.0
+        if (h, a) in similar_weight and similar_confidence > 0:
+            # 相似盘口比分概率越高，权重越大
+            market_bonus = 1.0 + similar_weight[(h, a)] * similar_confidence * 0.5
+        
+        scored.append(((h, a), prob, align, heat, prob * (1.0 + 0.45 * align) * w * (0.65 + 0.35 * conf_w) * xg_penalty * upset_penalty * market_bonus))
     scored.sort(key=lambda x: -x[4])
     
     seen = set()
@@ -4459,6 +4490,28 @@ def analyze_match(match):
         'away': euro['raw_odds']['close']['away'],
     }
 
+    # ========== 相似盘口数据库匹配（提前到比分推荐之前）==========
+    similar_market_result = None
+    if SIMILAR_MARKET_AVAILABLE:
+        try:
+            asian_handicap = asian.get('handicap', 0)
+            total_line = total.get('close_line') or total.get('line', 2.5)
+            euro_home_odds = euro['raw_odds']['close']['home']
+            euro_draw_odds = euro['raw_odds']['close']['draw']
+            euro_away_odds = euro['raw_odds']['close']['away']
+            
+            similar_market_result = similar_market_match(
+                asian=asian_handicap,
+                total=total_line,
+                euro_home=euro_home_odds,
+                euro_draw=euro_draw_odds,
+                euro_away=euro_away_odds,
+                k=1000
+            )
+            log.info(f"相似盘口匹配完成: {similar_market_result['count']} 场匹配, 置信度 {similar_market_result['confidence']:.2%}")
+        except Exception as e:
+            log.warning(f"相似盘口匹配失败: {e}")
+
     # 判断球队实力差距：通过亚盘让球判断
     handicap = abs(asian.get('handicap', 0))
     is_clear_favorite = handicap >= 1.0  # 让球>=1球视为强弱分明
@@ -4505,7 +4558,7 @@ def analyze_match(match):
     ]
     recommend = []
     for h, a, prob in _pick_recommendations(
-        candidates, asian, euro, total, confidence=confidence, league_profile=league_profile, team=team,
+        candidates, asian, euro, total, confidence=confidence, league_profile=league_profile, team=team, similar_market=similar_market_result,
     ):
         heat, _ = score_heat_label(h, a, prob, league_profile, euro_odds_for_heat)
         recommend.append({
@@ -4525,6 +4578,15 @@ def analyze_match(match):
     except Exception as e:
         log.warning(f"进球数推荐失败: {e}")
 
+    # ========== 临场资金流检测 ==========
+    steam_result = None
+    if STEAM_MOVE_AVAILABLE:
+        try:
+            steam_result = steam_move_detector(asian, total, match.get('time'))
+            log.info(f"资金流检测完成: {len(steam_result['signals'])} 个信号")
+        except Exception as e:
+            log.warning(f"资金流检测失败: {e}")
+
     return {
         'match': {k: match.get(k) for k in ('home', 'away', 'league', 'time', 'match_id', 'num')},
         'league_profile': league_profile,
@@ -4538,6 +4600,8 @@ def analyze_match(match):
             'joint_water': joint_anomaly,
             'euro_asian_deviation': euro_asian_dev,
         },
+        'similar_market': similar_market_result,  # 新增：相似盘口匹配结果
+        'steam_move': steam_result,  # 新增：临场资金流检测结果
         'model': {
             'lam_home': lam_home, 'lam_away': lam_away,
             'top_scores': top_scores, 'recommend': recommend,
