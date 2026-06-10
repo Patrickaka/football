@@ -51,6 +51,46 @@ except ImportError:
     STEAM_MOVE_AVAILABLE = False
     log.warning("临场资金流检测器模块未导入")
 
+# 贝叶斯校准层（延迟导入）
+try:
+    from .bayesian_calibration import calibrate_predictions, get_calibrator
+    BAYESIAN_CALIBRATION_AVAILABLE = True
+except ImportError:
+    BAYESIAN_CALIBRATION_AVAILABLE = False
+    log.warning("贝叶斯校准层模块未导入")
+
+# 动态ELO系统（延迟导入）
+try:
+    from .dynamic_elo import get_team_elo, get_elo_difference
+    DYNAMIC_ELO_AVAILABLE = True
+except ImportError:
+    DYNAMIC_ELO_AVAILABLE = False
+    log.warning("动态ELO系统模块未导入")
+
+# 赔率价值分析（延迟导入）
+try:
+    from .value_betting import adjust_by_value, identify_value_bets, calculate_value, calculate_ev
+    VALUE_BETTING_AVAILABLE = True
+except ImportError:
+    VALUE_BETTING_AVAILABLE = False
+    log.warning("赔率价值分析模块未导入")
+
+# 动态权重调整（延迟导入）
+try:
+    from .dynamic_weights import get_dynamic_weights, fuse_predictions
+    DYNAMIC_WEIGHTS_AVAILABLE = True
+except ImportError:
+    DYNAMIC_WEIGHTS_AVAILABLE = False
+    log.warning("动态权重调整模块未导入")
+
+# 盘口聚类（延迟导入）
+try:
+    from .market_clustering import fuse_poisson_with_prior, get_market_prior
+    MARKET_CLUSTERING_AVAILABLE = True
+except ImportError:
+    MARKET_CLUSTERING_AVAILABLE = False
+    log.warning("盘口聚类模块未导入")
+
 log = setup_logger('football')
 
 sys.stdout.reconfigure(encoding='utf-8')
@@ -3537,9 +3577,9 @@ def _heat_filter_weight(heat):
     return 1.0
 
 
-def calculate_half_full_time_probs(candidates, team_strength=None, asian=None, total=None):
+def calculate_half_full_time_probs(candidates, team_strength=None, asian=None, total=None, home_team='', away_team=''):
     """
-    计算半全场概率。
+    计算半全场概率（集成动态ELO和贝叶斯校准）。
     
     半全场结果共9种：
     HH - 半胜全胜, HD - 半胜全平, HA - 半胜全负
@@ -3551,6 +3591,8 @@ def calculate_half_full_time_probs(candidates, team_strength=None, asian=None, t
         team_strength: 球队实力数据（可选）
         asian: 亚盘数据（可选，用于历史库查询）
         total: 大小球数据（可选，用于历史库查询）
+        home_team: 主队名称（用于动态ELO查询）
+        away_team: 客队名称（用于动态ELO查询）
     
     返回:
         dict: 半全场概率字典
@@ -3568,8 +3610,19 @@ def calculate_half_full_time_probs(candidates, team_strength=None, asian=None, t
     
     candidates = formatted_candidates
     
-    # 半场进球期望值（通常是全场的40-45%）
-    half_time_ratio = 0.42
+    # 使用动态ELO调整半场进球比例
+    elo_factor = 1.0
+    if DYNAMIC_ELO_AVAILABLE and home_team and away_team:
+        try:
+            from .dynamic_elo import get_elo_difference
+            elo_diff = get_elo_difference(home_team, away_team)
+            # ELO差距会影响半场进球比例
+            elo_factor = 1.0 + (elo_diff / 1000) * 0.1
+        except Exception as e:
+            log.debug(f"动态ELO计算失败: {e}")
+    
+    # 半场进球期望值（通常是全场的40-45%，根据ELO调整）
+    half_time_ratio = 0.42 * elo_factor
     
     # 从比分候选计算全场进球期望
     total_goals_exp = sum((h + a) * prob for h, a, prob in candidates)
@@ -3960,6 +4013,42 @@ def _result_label(h, a):
     return "主胜" if h > a else "平局" if h == a else "客胜"
 
 
+def _estimate_score_odds(h, a, euro_odds):
+    """
+    估算比分赔率（基于欧赔）
+    
+    参数：
+        h: 主队进球数
+        a: 客队进球数
+        euro_odds: 欧赔赔率 {'home': x, 'draw': y, 'away': z}
+    
+    返回：
+        估算的比分赔率
+    """
+    try:
+        home_odds = euro_odds.get('home', 2.0)
+        draw_odds = euro_odds.get('draw', 3.0)
+        away_odds = euro_odds.get('away', 4.0)
+        
+        # 基于结果类型估算比分赔率
+        if h > a:
+            base_odds = home_odds
+        elif h == a:
+            base_odds = draw_odds
+        else:
+            base_odds = away_odds
+        
+        # 根据进球数调整
+        total_goals = h + a
+        if total_goals <= 1:
+            return base_odds * 1.5
+        elif total_goals <= 3:
+            return base_odds * 1.2
+        else:
+            return base_odds * 1.8
+    except Exception:
+        return 1.0
+
 def _score_entry(h, a, prob, heat_info=None):
     entry = {'home': h, 'away': a, 'prob': prob, 'result': _result_label(h, a)}
     if heat_info:
@@ -4200,12 +4289,43 @@ def _pick_recommendations(candidates, asian, euro, total, n=2, pool=12, confiden
                 upset_penalty = 0.7
         
         # 融合相似盘口比分权重
-        market_bonus = 1.0
-        if (h, a) in similar_weight and similar_confidence > 0:
-            # 相似盘口比分概率越高，权重越大
-            market_bonus = 1.0 + similar_weight[(h, a)] * similar_confidence * 0.5
-        
-        scored.append(((h, a), prob, align, heat, prob * (1.0 + 0.45 * align) * w * (0.65 + 0.35 * conf_w) * xg_penalty * upset_penalty * market_bonus))
+    market_bonus = 1.0
+    if (h, a) in similar_weight and similar_confidence > 0:
+        # 相似盘口比分概率越高，权重越大
+        market_bonus = 1.0 + similar_weight[(h, a)] * similar_confidence * 0.5
+    
+    # 盘口聚类先验权重
+    prior_bonus = 1.0
+    if MARKET_CLUSTERING_AVAILABLE and asian.get('handicap') is not None and total.get('close_line') is not None:
+        try:
+            from .market_clustering import get_market_prior
+            prior = get_market_prior(asian['handicap'], total.get('close_line', total.get('line', 2.5)))
+            if prior:
+                score_key = f"{h}-{a}"
+                prior_prob = prior.get(score_key, 0.0)
+                if prior_prob > 0:
+                    # 先验概率越高，权重越大
+                    prior_bonus = 1.0 + prior_prob * 0.3
+        except Exception as e:
+            log.debug(f"盘口聚类先验获取失败: {e}")
+    
+    # 赔率价值调整
+    value_bonus = 1.0
+    if VALUE_BETTING_AVAILABLE and euro.get('raw_odds', {}).get('close'):
+        try:
+            from .value_betting import calculate_value, calculate_ev
+            close_odds = euro['raw_odds']['close']
+            # 计算比分赔率（简化：使用市场平均）
+            score_odds = _estimate_score_odds(h, a, close_odds)
+            if score_odds > 1.0:
+                value = calculate_value(prob, score_odds)
+                if value > 0:
+                    # 存在价值，增加权重
+                    value_bonus = 1.0 + value * 5
+        except Exception as e:
+            log.debug(f"赔率价值计算失败: {e}")
+    
+    scored.append(((h, a), prob, align, heat, prob * (1.0 + 0.45 * align) * w * (0.65 + 0.35 * conf_w) * xg_penalty * upset_penalty * market_bonus * prior_bonus * value_bonus))
     scored.sort(key=lambda x: -x[4])
     
     seen = set()
@@ -4506,7 +4626,8 @@ def analyze_match(match):
                 euro_home=euro_home_odds,
                 euro_draw=euro_draw_odds,
                 euro_away=euro_away_odds,
-                k=1000
+                k=1000,
+                league=match.get('league', '')
             )
             log.info(f"相似盘口匹配完成: {similar_market_result['count']} 场匹配, 置信度 {similar_market_result['confidence']:.2%}")
         except Exception as e:
@@ -4566,8 +4687,8 @@ def analyze_match(match):
             'reasons': _recommend_reasons(h, a, asian, euro, total, team, heat=heat),
         })
 
-    # 计算半全场概率（结合历史盘口数据）
-    half_full_time = calculate_half_full_time_probs(candidates, team, asian, total)
+    # 计算半全场概率（集成动态ELO）
+    half_full_time = calculate_half_full_time_probs(candidates, team, asian, total, home_team=home, away_team=away)
 
     # 新增：进球数推荐（结合历史盘口数据）
     goal_count_result = None

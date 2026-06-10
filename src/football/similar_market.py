@@ -30,6 +30,16 @@ SIMILAR_DB_FILE = os.path.join(DATA_DIR, 'similar_market_db.json')
 DEFAULT_K = 1000  # 默认取最近1000场
 MIN_SAMPLE_SIZE = 50  # 最小样本数
 
+# 联赛分层配置
+LEAGUE_TIERS = {
+    'tier1': ['英超', '英超联赛', 'English Premier League'],
+    'tier2': ['德甲', '德甲联赛', 'Bundesliga'],
+    'tier3': ['西甲', '西甲联赛', 'La Liga'],
+    'tier4': ['意甲', '意甲联赛', 'Serie A'],
+    'tier5': ['法甲', '法甲联赛', 'Ligue 1'],
+    'tier6': ['中超', '中国超级联赛', 'Chinese Super League'],
+}
+
 # 特征权重（标准化后）
 FEATURE_WEIGHTS = {
     'asian': 1.0,      # 亚盘让球
@@ -280,18 +290,99 @@ class SimilarMarketDB:
         # 返回前k条
         return distances[:k]
     
-    def get_similar_stats(self, query: MatchRecord, k: int = DEFAULT_K) -> Dict:
+    def _get_dynamic_k(self, asian: float) -> int:
         """
-        获取相似比赛的统计结果
+        根据让球大小动态调整K值
+        
+        深盘口样本少，用较小的K值
+        平手盘样本多，用较大的K值
+        """
+        abs_asian = abs(asian)
+        if abs_asian >= 1.5:
+            return 200    # 深盘口
+        elif abs_asian >= 1.0:
+            return 500    # 中深盘
+        elif abs_asian >= 0.5:
+            return 1000   # 普通盘
+        else:
+            return 1500   # 平手盘
+    
+    def _get_league_tier(self, league_name: str) -> Optional[str]:
+        """获取联赛所属层级"""
+        for tier, leagues in LEAGUE_TIERS.items():
+            for league in leagues:
+                if league in league_name or league_name in league:
+                    return tier
+        return None
+    
+    def _find_similar_with_league_filter(self, query: MatchRecord, k: int, league_filter: List[str] = None) -> List[Tuple[float, MatchRecord]]:
+        """
+        根据联赛过滤查找相似比赛
+        """
+        if not self.records:
+            return []
+        
+        distances = []
+        for record in self.records:
+            if not record.result:
+                continue
+            # 联赛过滤
+            if league_filter and record.league not in league_filter:
+                continue
+            dist = self._distance(query, record)
+            distances.append((dist, record))
+        
+        distances.sort(key=lambda x: x[0])
+        return distances[:k]
+    
+    def find_similar(self, query: MatchRecord, k: int = DEFAULT_K, league: str = '') -> List[Tuple[float, MatchRecord]]:
+        """
+        KNN查找相似比赛（支持联赛分层）
+        
+        参数：
+            query: 查询记录（待预测的比赛）
+            k: 返回最近的k条记录
+            league: 联赛名称（用于分层搜索）
+        
+        返回：
+            排序后的相似记录列表 [(距离, 记录), ...]
+        """
+        # 使用动态K值
+        dynamic_k = self._get_dynamic_k(query.asian)
+        actual_k = min(k, dynamic_k)
+        
+        # 1. 先找同联赛
+        if league:
+            same_league = [league]
+            results = self._find_similar_with_league_filter(query, actual_k, same_league)
+            if len(results) >= actual_k * 0.8:
+                return results
+            
+            # 2. 找同级别联赛
+            tier = self._get_league_tier(league)
+            if tier:
+                tier_leagues = LEAGUE_TIERS.get(tier, [])
+                if tier_leagues:
+                    results = self._find_similar_with_league_filter(query, actual_k, tier_leagues)
+                    if len(results) >= actual_k * 0.8:
+                        return results
+        
+        # 3. 全库搜索
+        return self._find_similar_with_league_filter(query, actual_k, None)
+    
+    def get_similar_stats(self, query: MatchRecord, k: int = DEFAULT_K, league: str = '') -> Dict:
+        """
+        获取相似比赛的统计结果（距离加权版本）
         
         参数：
             query: 查询记录
             k: 使用的近邻数量
+            league: 联赛名称（用于分层搜索）
         
         返回：
             统计结果字典
         """
-        similar = self.find_similar(query, k)
+        similar = self.find_similar(query, k, league)
         
         if not similar:
             return {
@@ -303,41 +394,45 @@ class SimilarMarketDB:
                 'confidence': 0.0,
             }
         
-        total = len(similar)
-        
-        # 统计结果分布
-        result_counts = defaultdict(int)
-        goals_dist = defaultdict(int)
+        # 统计结果分布（距离加权）
+        result_counts = defaultdict(float)
+        goals_dist = defaultdict(float)
         total_distance = 0.0
+        total_weight = 0.0
         
         for dist, record in similar:
-            result_counts[record.result] += 1
-            goals_dist[f"{record.goals_home}-{record.goals_away}"] += 1
+            # 使用指数衰减权重: weight = exp(-distance * 3)
+            # 距离越近，权重越高
+            weight = math.exp(-dist * 3)
+            
+            result_counts[record.result] += weight
+            goals_dist[f"{record.goals_home}-{record.goals_away}"] += weight
             total_distance += dist
+            total_weight += weight
         
-        # 计算概率
+        # 计算概率（加权后）
         probabilities = {}
         for res in ['H', 'D', 'A']:
-            probabilities[res] = result_counts[res] / total
+            probabilities[res] = result_counts[res] / total_weight if total_weight > 0 else 0.0
         
         # 计算置信度（基于距离和样本量）
-        avg_distance = total_distance / total
-        # 距离越小、样本量越大，置信度越高
+        avg_distance = total_distance / len(similar)
         distance_confidence = max(0.0, 1.0 - avg_distance * 2)
-        sample_confidence = min(1.0, total / 500)
+        sample_confidence = min(1.0, len(similar) / 500)
         confidence = (distance_confidence + sample_confidence) / 2
         
         # 排序比分分布
         sorted_goals = sorted(goals_dist.items(), key=lambda x: -x[1])[:10]
-        goals_prob = {k: v / total for k, v in sorted_goals}
+        goals_prob = {k: round(v / total_weight, 4) for k, v in sorted_goals}
         
         return {
-            'count': total,
+            'count': len(similar),
             'avg_distance': round(avg_distance, 4),
-            'result_dist': dict(result_counts),
+            'result_dist': {k: round(v, 2) for k, v in dict(result_counts).items()},
             'probabilities': {k: round(v, 4) for k, v in probabilities.items()},
             'goals_dist': goals_prob,
             'confidence': round(confidence, 4),
+            'used_k': len(similar),
         }
 
 
@@ -541,9 +636,10 @@ def similar_market_match(asian: float, total: float, euro_home: float,
                          asian_odds_away: float = 0.0,
                          total_over: float = 0.0,
                          total_under: float = 0.0,
-                         k: int = DEFAULT_K) -> Dict:
+                         k: int = DEFAULT_K,
+                         league: str = '') -> Dict:
     """
-    相似盘口匹配主接口
+    相似盘口匹配主接口（距离加权 + 动态K值 + 联赛分层）
     
     参数：
         asian: 亚盘让球（主队视角，负数为主队让球）
@@ -555,17 +651,19 @@ def similar_market_match(asian: float, total: float, euro_home: float,
         asian_odds_away: 亚盘客队赔率（可选）
         total_over: 大球赔率（可选）
         total_under: 小球赔率（可选）
-        k: 近邻数量（默认1000）
+        k: 近邻数量（默认1000，实际会根据盘口动态调整）
+        league: 联赛名称（用于分层搜索）
     
     返回：
         统计结果字典：
         {
             'count': 匹配数量,
             'avg_distance': 平均距离,
-            'result_dist': {'H': 数量, 'D': 数量, 'A': 数量},
+            'result_dist': {'H': 加权数量, 'D': 加权数量, 'A': 加权数量},
             'probabilities': {'H': 概率, 'D': 概率, 'A': 概率},
             'goals_dist': {比分: 概率},
             'confidence': 置信度(0~1),
+            'used_k': 实际使用的K值,
         }
     """
     # 创建查询记录
@@ -593,9 +691,10 @@ def similar_market_match(asian: float, total: float, euro_home: float,
             'probabilities': {'H': 0.333, 'D': 0.333, 'A': 0.334},
             'goals_dist': {},
             'confidence': 0.0,
+            'used_k': 0,
         }
     
-    return db.get_similar_stats(query, k)
+    return db.get_similar_stats(query, k, league)
 
 
 # ==================== 命令行工具 ====================
