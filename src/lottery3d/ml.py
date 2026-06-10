@@ -79,7 +79,7 @@ URL = "https://www.8300.cn/kjhhis/3/200.html"
 # 模型参数
 BACKTEST_TRIALS = 80
 TRAIN_RATIO = 0.8  # 时序划分比例
-NEGATIVE_SAMPLES_PER_PERIOD = 100  # 每期负例采样数（150 更接近真实开奖）
+NEGATIVE_SAMPLES_PER_PERIOD = 100  # 每期负例采样数（150 更接近真实开奖）  
 TOP_K = 15  # 推荐注数
 FEATURE_SUBSET_RATIO = 0.8  # 特征选择保留比例
 MIN_VARIANCE = 0.001  # 方差过滤阈值

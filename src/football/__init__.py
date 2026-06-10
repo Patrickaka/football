@@ -4041,7 +4041,91 @@ def _recommend_reasons(h, a, asian, euro, total, team=None, heat=None):
     return reasons or ["综合赔率推断"]
 
 
-def _pick_recommendations(candidates, asian, euro, total, n=2, pool=12, confidence=None, league_profile=None):
+def _evaluate_upset_risk(asian, euro, team=None):
+    """
+    动态评估爆冷可能性（0~1），基于盘口走势和球队状态分析
+    
+    评估因素：
+    1. 欧赔客胜概率变化：终盘 vs 初盘
+    2. 凯利指数：客胜凯利是否偏低（资金不看好热门方）
+    3. 球队状态差异：客队近期状态是否明显好于主队
+    4. 盘口走势：让球是否朝着不利于热门方的方向变化
+    """
+    risk_score = 0.0
+    factors = []
+    
+    # 1. 欧赔客胜概率变化
+    if euro.get('open') and euro.get('close'):
+        p_away_open = euro['open'].get('away', 0)
+        p_away_close = euro['close'].get('away', 0)
+        if p_away_open > 0 and p_away_close > 0:
+            # 客胜概率上升越多，爆冷风险越高
+            prob_change = (p_away_close - p_away_open) / max(p_away_open, 0.01)
+            if prob_change > 0.1:
+                risk_score += 0.15
+                factors.append(f"客胜概率上升 {prob_change*100:.0f}%")
+            elif prob_change < -0.1:
+                risk_score -= 0.1
+                factors.append(f"客胜概率下降 {abs(prob_change)*100:.0f}%")
+    
+    # 2. 凯利指数分析
+    kelly = euro.get('kelly')
+    if kelly:
+        # 客胜凯利偏低可能意味着资金不看好热门方
+        if kelly.get('hardest') == 'home':
+            risk_score += 0.15
+            factors.append("凯利提示主胜打出难度大")
+        if kelly.get('favored') == 'away':
+            risk_score += 0.1
+            factors.append("凯利相对看好客胜")
+    
+    # 3. 球队状态差异
+    if team:
+        home_form = team.get('home_recent', {}).get('form_pts', 0) / 3.0 if team else 0.5
+        away_form = team.get('away_recent', {}).get('form_pts', 0) / 3.0 if team else 0.5
+        form_diff = away_form - home_form
+        if form_diff > 0.3:
+            risk_score += 0.15
+            factors.append(f"客队状态更佳（{away_form:.2f} vs {home_form:.2f}）")
+        elif form_diff < -0.3:
+            risk_score -= 0.1
+            factors.append(f"主队状态更佳")
+    
+    # 4. 盘口走势分析
+    if asian.get('open_handicap') is not None and asian.get('handicap') is not None:
+        open_hcap = asian['open_handicap']
+        close_hcap = asian['handicap']
+        favor = asian.get('favor', 'home')
+        
+        # 让球降低意味着热门方支持度下降
+        if favor == 'home':
+            hcap_change = close_hcap - open_hcap
+            if hcap_change < -0.25:
+                risk_score += 0.15
+                factors.append(f"让球下降 {open_hcap:+.2f}→{close_hcap:+.2f}")
+        else:
+            hcap_change = close_hcap - open_hcap
+            if hcap_change > 0.25:
+                risk_score += 0.15
+                factors.append(f"让球上升 {open_hcap:+.2f}→{close_hcap:+.2f}")
+    
+    # 5. 欧赔变化趋势
+    changes = euro.get('changes', [])
+    if changes:
+        if '客胜下调' in changes:
+            risk_score += 0.1
+            factors.append("欧赔客胜下调")
+        if '主胜上调' in changes:
+            risk_score += 0.1
+            factors.append("欧赔主胜上调")
+    
+    # 归一化到 0~1 范围
+    risk_score = max(0.0, min(1.0, risk_score))
+    
+    return risk_score
+
+
+def _pick_recommendations(candidates, asian, euro, total, n=2, pool=12, confidence=None, league_profile=None, team=None):
     """Top 池内按 概率×一致性×冷热×置信度 选取"""
     if confidence:
         n = confidence.get('recommend_count', n)
@@ -4057,18 +4141,72 @@ def _pick_recommendations(candidates, asian, euro, total, n=2, pool=12, confiden
         if xg_deviation > 0.5:
             xg_penalty = max(0.75, 1.0 - (xg_deviation - 0.5) * 0.20)  # 偏差>0.5开始渐进扣分
 
+    # 判断球队实力差距：通过亚盘让球判断
+    handicap = abs(asian.get('handicap', 0))
+    is_clear_favorite = handicap >= 1.0  # 让球>=1球视为强弱分明
+    
+    # 动态评估爆冷风险
+    upset_risk = _evaluate_upset_risk(asian, euro, team)
+    
     scored = []
+    favor = asian.get('favor', 'home')
+    
     for (h, a), prob in candidates[:pool]:
         align = _alignment_score(h, a, asian, euro, total)
         heat, _ = score_heat_label(h, a, prob, league_profile)
         w = _heat_filter_weight(heat)
-        scored.append(((h, a), prob, align, heat, prob * (1.0 + 0.45 * align) * w * (0.65 + 0.35 * conf_w) * xg_penalty))
+        
+        # 检查是否是冷门
+        diff = h - a
+        is_upset = False
+        if favor == 'home' and diff < 0:
+            is_upset = True  # 主队让球但客队赢
+        elif favor == 'away' and diff > 0:
+            is_upset = True  # 客队让球但主队赢
+        
+        # 根据爆冷风险动态调整冷门比分权重
+        upset_penalty = 1.0
+        if is_upset:
+            if is_clear_favorite and upset_risk < 0.3:
+                # 强弱分明且无爆冷迹象，冷门大幅降权
+                upset_penalty = 0.4
+            elif is_clear_favorite and upset_risk < 0.5:
+                # 强弱分明但有一定爆冷风险，适度降权
+                upset_penalty = 0.7
+        
+        scored.append(((h, a), prob, align, heat, prob * (1.0 + 0.45 * align) * w * (0.65 + 0.35 * conf_w) * xg_penalty * upset_penalty))
     scored.sort(key=lambda x: -x[4])
+    
     seen = set()
     picked = []
+    upset_count = 0
+    
+    # 根据爆冷风险决定最大冷门数量
+    max_upsets = n  # 默认不限制
+    if is_clear_favorite:
+        if upset_risk >= 0.4:
+            max_upsets = 1  # 爆冷风险较高，允许1个冷门
+        else:
+            max_upsets = 0  # 强弱分明且无爆冷迹象，不允许冷门
+    
     for (h, a), prob, _, _heat, _ in scored:
         if (h, a) in seen:
             continue
+        
+        # 检查是否是冷门
+        diff = h - a
+        is_upset_pick = False
+        if favor == 'home' and diff < 0:
+            is_upset_pick = True
+        elif favor == 'away' and diff > 0:
+            is_upset_pick = True
+        
+        # 根据爆冷风险限制冷门数量
+        if is_upset_pick:
+            if upset_count >= max_upsets:
+                continue
+            upset_count += 1
+        
         seen.add((h, a))
         picked.append((h, a, prob))
         if len(picked) >= n:
@@ -4084,6 +4222,13 @@ def _pick_recommendations(candidates, asian, euro, total, n=2, pool=12, confiden
     if len(picked) < n:
         for (h, a), prob in candidates:
             if (h, a) not in seen:
+                # 强弱分明时不再添加冷门
+                if is_clear_favorite:
+                    diff = h - a
+                    if favor == 'home' and diff < 0:
+                        continue
+                    if favor == 'away' and diff > 0:
+                        continue
                 picked.append((h, a, prob))
                 if len(picked) >= n:
                     break
@@ -4314,14 +4459,53 @@ def analyze_match(match):
         'away': euro['raw_odds']['close']['away'],
     }
 
+    # 判断球队实力差距：通过亚盘让球判断
+    handicap = abs(asian.get('handicap', 0))
+    is_clear_favorite = handicap >= 1.0  # 让球>=1球视为强弱分明
+    favor = asian.get('favor', 'home')
+    
+    # 动态评估爆冷可能性
+    upset_risk = _evaluate_upset_risk(asian, euro, team)
+    
+    # 根据爆冷风险决定最大冷门数量
+    # 风险高：允许1个冷门；风险中：允许1个冷门；风险低：不允许冷门
+    max_upsets = 0
+    if upset_risk >= 0.4:
+        max_upsets = 1  # 爆冷风险较高，允许1个冷门提示
+    elif is_clear_favorite:
+        max_upsets = 0  # 强弱分明且无爆冷迹象，不给出冷门
+    
+    # 过滤冷门比分
+    filtered_candidates = []
+    upset_count = 0
+    
+    for (h, a), prob in candidates:
+        # 检查是否是冷门
+        diff = h - a
+        is_upset = False
+        if favor == 'home' and diff < 0:
+            is_upset = True  # 主队让球但客队赢
+        elif favor == 'away' and diff > 0:
+            is_upset = True  # 客队让球但主队赢
+        
+        # 根据爆冷风险限制冷门数量
+        if is_upset:
+            if upset_count >= max_upsets:
+                continue
+            upset_count += 1
+        
+        filtered_candidates.append(((h, a), prob))
+        if len(filtered_candidates) >= 5:
+            break
+    
     # 更新比分冷热计算：使用赔率隐含概率 vs 模型概率
     top_scores = [
         _score_entry(h, a, prob, score_heat_label(h, a, prob, league_profile, euro_odds_for_heat))
-        for (h, a), prob in candidates[:5]
+        for (h, a), prob in filtered_candidates
     ]
     recommend = []
     for h, a, prob in _pick_recommendations(
-        candidates, asian, euro, total, confidence=confidence, league_profile=league_profile,
+        candidates, asian, euro, total, confidence=confidence, league_profile=league_profile, team=team,
     ):
         heat, _ = score_heat_label(h, a, prob, league_profile, euro_odds_for_heat)
         recommend.append({
