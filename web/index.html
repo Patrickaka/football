@@ -141,8 +141,8 @@
     display: flex; align-items: center; gap: 6px; }
   .row { display: flex; justify-content: space-between; gap: 12px;
     font-size: 14px; padding: 4px 0; }
-  .row .k { color: var(--muted); }
-  .row .v { text-align: right; }
+  .row .k { color: var(--muted); min-width: 80px; flex-shrink: 0; }
+  .row .v { text-align: right; flex: 1; }
 
   .probbar { display: flex; height: 22px; border-radius: 6px; overflow: hidden;
     margin: 6px 0 10px; font-size: 11px; }
@@ -222,6 +222,7 @@
     align-items: center;
     gap: 12px;
     font-variant-numeric: tabular-nums;
+    padding: 8px 0;
   }
   .lottery-issue {
     color: var(--muted);
@@ -258,7 +259,7 @@
     font-size: 12px;
     flex-shrink: 0;
     text-align: right;
-    min-width: 60px;
+    min-width: 70px;
   }
 
   /* 移动端响应式优化 */
@@ -383,27 +384,29 @@
     
     /* 大乐透开奖结果移动端优化 */
     .lottery-row {
-      flex-wrap: wrap;
+      display: grid;
+      grid-template-columns: 70px 1fr;
       gap: 8px;
+      padding: 10px 0;
     }
     .lottery-issue {
-      min-width: 70px;
       font-size: 12px;
+      min-width: 70px;
     }
     .lottery-numbers {
       font-size: 16px;
       letter-spacing: 1px;
-      width: 100%;
-      order: 3;
+      grid-column: 1 / -1;
       justify-content: flex-start;
+      margin-top: 4px;
     }
     .lottery-plus {
       font-size: 14px;
       width: 16px;
     }
     .lottery-date {
-      min-width: 50px;
       font-size: 11px;
+      text-align: right;
     }
   }
 
