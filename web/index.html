@@ -213,6 +213,54 @@
   .disclaimer { color: var(--muted); font-size: 12px; text-align: center;
     margin-top: 20px; line-height: 1.7; }
 
+  /* 大乐透开奖结果样式 */
+  .lottery-results {
+    overflow-x: hidden;
+  }
+  .lottery-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-variant-numeric: tabular-nums;
+  }
+  .lottery-issue {
+    color: var(--muted);
+    font-size: 13px;
+    min-width: 80px;
+    flex-shrink: 0;
+  }
+  .lottery-numbers {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 18px;
+    font-weight: 700;
+    letter-spacing: 2px;
+  }
+  .lottery-front {
+    color: #f85149;
+    white-space: nowrap;
+  }
+  .lottery-plus {
+    color: var(--muted);
+    font-size: 16px;
+    width: 20px;
+    text-align: center;
+    flex-shrink: 0;
+  }
+  .lottery-back {
+    color: #4493f8;
+    white-space: nowrap;
+  }
+  .lottery-date {
+    color: var(--muted);
+    font-size: 12px;
+    flex-shrink: 0;
+    text-align: right;
+    min-width: 60px;
+  }
+
   /* 移动端响应式优化 */
   @media (max-width: 768px) {
     body {
@@ -332,6 +380,31 @@
     .seg-zu6, .seg-zu3, .seg-baozi { padding: 4px 10px; font-size: 13px; }
     
     .note { font-size: 11px; }
+    
+    /* 大乐透开奖结果移动端优化 */
+    .lottery-row {
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    .lottery-issue {
+      min-width: 70px;
+      font-size: 12px;
+    }
+    .lottery-numbers {
+      font-size: 16px;
+      letter-spacing: 1px;
+      width: 100%;
+      order: 3;
+      justify-content: flex-start;
+    }
+    .lottery-plus {
+      font-size: 14px;
+      width: 16px;
+    }
+    .lottery-date {
+      min-width: 50px;
+      font-size: 11px;
+    }
   }
 
   /* 小屏手机优化 (< 480px) */
@@ -1809,16 +1882,18 @@ function renderLottery(r) {
   
   // ── 最近开奖结果 ──
   html += `<div class="section-title">最近开奖结果</div>`;
-  html += `<div class="card">`;
+  html += `<div class="card lottery-results">`;
   recent.forEach((item, i) => {
     const front = item.front?.map(n => String(n).padStart(2, '0')).join(' ') || '-';
     const back = item.back?.map(n => String(n).padStart(2, '0')).join(' ') || '-';
-    html += `<div class="row" style="justify-content:flex-start;font-variant-numeric:tabular-nums;${i > 0 ? 'border-top:1px solid var(--line);margin-top:8px;padding-top:8px' : ''}">
-      <span class="k" style="width:90px;flex:none">${item.issue || '未知期'}</span>
-      <span style="width:180px;flex:none;text-align:left;letter-spacing:2px;font-size:18px;font-weight:700;color:#f85149">${front}</span>
-      <span style="width:24px;flex:none;text-align:center;color:var(--muted)">+</span>
-      <span style="width:80px;flex:none;text-align:left;letter-spacing:2px;font-size:18px;font-weight:700;color:#4493f8">${back}</span>
-      <span style="flex:1;text-align:right;color:var(--muted);font-size:12px">${item.date || ''}</span>
+    html += `<div class="lottery-row" style="${i > 0 ? 'border-top:1px solid var(--line);margin-top:8px;padding-top:8px' : ''}">
+      <div class="lottery-issue">${item.issue || '未知期'}</div>
+      <div class="lottery-numbers">
+        <span class="lottery-front">${front}</span>
+        <span class="lottery-plus">+</span>
+        <span class="lottery-back">${back}</span>
+      </div>
+      <div class="lottery-date">${item.date || ''}</div>
     </div>`;
   });
   html += `</div>`;
