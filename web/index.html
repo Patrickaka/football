@@ -795,7 +795,7 @@ function renderLottery3d(r) {
   const f = r.form;
   const ss = r.sum_span;
   const z6 = r.zu6_four;
-  const bt = r.backtest;
+  const bt = r.backtest || {};
   const maxScore = r.zhixuan[0]?.score || 1;
   const n = r.zhixuan.length;
   const top3 = r.zhixuan_top3 || r.zhixuan.slice(0, 3);
@@ -979,18 +979,20 @@ function renderLottery3d(r) {
   html += `</div>`;
 
   // ── 回测 ──
-  html += `<div class="section-title">滚动回测（仅供参考）</div>`;
-  html += `<div class="card">
-    <div class="row"><span class="k">回测期数</span><span class="v">${bt.trials}</span></div>
-    <div class="row"><span class="k">直选Top3命中</span><span class="v">${pct(bt.top3_rate)} (${bt.top3_hit}/${bt.trials})</span></div>
-    <div class="row"><span class="k">直选${n}注命中</span><span class="v">${pct(bt.top_rate)} (${bt.top_hit}/${bt.trials})</span></div>
-    <div class="row"><span class="k">随机基线（${n}注）</span><span class="v">${pct(bt.top_rate_baseline)}</span></div>
-    ${bt.significance ? `<div class="row"><span class="k">置换检验 p 值</span><span class="v" style="color:${bt.significance.significant ? 'var(--accent2)' : 'var(--muted)'}">${bt.significance.pvalue.toFixed(3)} · ${bt.significance.significant ? '显著优于随机' : '未显著优于随机（打乱均值 ' + pct(bt.significance.shuffled_mean_rate) + '）'}</span></div>` : ''}
-    <div class="row"><span class="k">推荐池至少中2个数字</span><span class="v">${pct(bt.ge2_digit_rate)}</span></div>
-    <div class="row"><span class="k">和值落在预测带±4</span><span class="v">${pct(bt.sum_band_rate)}</span></div>
-    <div class="row"><span class="k">组六四码命中</span><span class="v">${bt.zu6_draws ? pct(bt.zu6_four_rate) + ' (' + bt.zu6_four_hit + '/' + bt.zu6_draws + '，开奖为组六时)' : '—'}</span></div>
-    <div class="row"><span class="k">五码组六池含开奖三码</span><span class="v">${bt.zu6_draws ? pct(bt.zu6_pool_rate) + ' (' + bt.zu6_pool_hit + '/' + bt.zu6_draws + ')' : '—'}</span></div>
-  </div>`;
+  if (bt && bt.trials) {
+    html += `<div class="section-title">滚动回测（仅供参考）</div>`;
+    html += `<div class="card">
+      <div class="row"><span class="k">回测期数</span><span class="v">${bt.trials}</span></div>
+      <div class="row"><span class="k">直选Top3命中</span><span class="v">${pct(bt.top3_rate)} (${bt.top3_hit}/${bt.trials})</span></div>
+      <div class="row"><span class="k">直选${n}注命中</span><span class="v">${pct(bt.top_rate)} (${bt.top_hit}/${bt.trials})</span></div>
+      <div class="row"><span class="k">随机基线（${n}注）</span><span class="v">${pct(bt.top_rate_baseline)}</span></div>
+      ${bt.significance ? `<div class="row"><span class="k">置换检验 p 值</span><span class="v" style="color:${bt.significance.significant ? 'var(--accent2)' : 'var(--muted)'}">${bt.significance.pvalue.toFixed(3)} · ${bt.significance.significant ? '显著优于随机' : '未显著优于随机（打乱均值 ' + pct(bt.significance.shuffled_mean_rate) + '）'}</span></div>` : ''}
+      <div class="row"><span class="k">推荐池至少中2个数字</span><span class="v">${pct(bt.ge2_digit_rate)}</span></div>
+      <div class="row"><span class="k">和值落在预测带±4</span><span class="v">${pct(bt.sum_band_rate)}</span></div>
+      <div class="row"><span class="k">组六四码命中</span><span class="v">${bt.zu6_draws ? pct(bt.zu6_four_rate) + ' (' + bt.zu6_four_hit + '/' + bt.zu6_draws + '，开奖为组六时)' : '—'}</span></div>
+      <div class="row"><span class="k">五码组六池含开奖三码</span><span class="v">${bt.zu6_draws ? pct(bt.zu6_pool_rate) + ' (' + bt.zu6_pool_hit + '/' + bt.zu6_draws + ')' : '—'}</span></div>
+    </div>`;
+  }
 
   // ── 统计 ──
   html += `<div class="section-title">统计信息</div>`;
@@ -1095,18 +1097,27 @@ async function loadLottery3d(force) {
   if (lottery3dLoaded && !force) return;
   app3d.innerHTML = `<div class="status"><span class="spinner"></span>正在抓取开奖数据并计算…</div>`;
   try {
+    console.log('开始加载3D数据...');
     const data = await fetchJson('/api/3d?_=' + Date.now());
+    console.log('3D数据加载完成:', data);
+    
     if (data.error) {
       app3d.innerHTML = `<div class="status error">✗ ${esc(data.error)}</div>`;
       return;
     }
-    if (data.result?.error) {
+    if (!data.result) {
+      app3d.innerHTML = `<div class="status error">✗ 未获取到数据</div>`;
+      return;
+    }
+    if (data.result.error) {
       app3d.innerHTML = `<div class="status error">✗ ${esc(data.result.error)}</div>`;
       return;
     }
+    
     lottery3dLoaded = true;
     renderLottery3d(data.result);
   } catch (e) {
+    console.error('3D数据加载失败:', e);
     app3d.innerHTML = `<div class="status error">加载失败：${esc(e.message)}</div>`;
   }
 }

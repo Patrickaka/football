@@ -79,11 +79,18 @@ URL = "https://www.8300.cn/kjhhis/3/200.html"
 # 模型参数
 BACKTEST_TRIALS = 80
 TRAIN_RATIO = 0.8  # 时序划分比例
-NEGATIVE_SAMPLES_PER_PERIOD = 20  # 每期负例采样数（减少以加速）
+NEGATIVE_SAMPLES_PER_PERIOD = 100  # 每期负例采样数（150 更接近真实开奖）
 TOP_K = 15  # 推荐注数
 FEATURE_SUBSET_RATIO = 0.8  # 特征选择保留比例
 MIN_VARIANCE = 0.001  # 方差过滤阈值
 TRAINING_WINDOW = 50  # 训练窗口大小（减少以加速）
+
+# 时间衰减训练参数
+TIME_DECAY_RECENT = 30  # 最近 30 期
+TIME_DECAY_RECENT_WEIGHT = 1.5  # 最近 30 期权重
+TIME_DECAY_MID = 60  # 最近 60 期
+TIME_DECAY_MID_WEIGHT = 1.2  # 最近 60 期权重
+TIME_DECAY_OLD_WEIGHT = 1.0  # 历史数据权重
 
 
 def _native_number(x):
@@ -574,17 +581,23 @@ def build_training_data(numbers, neg_samples=NEGATIVE_SAMPLES_PER_PERIOD, rng=No
     构造训练数据（优化版 - 减少采样数）
     正例：历史每一期的开奖号码
     负例：每期随机抽取 neg_samples 个未开出的号码
+    
+    时间衰减：
+    - 最近 30 期：权重 1.5
+    - 最近 60 期：权重 1.2
+    - 历史数据：权重 1.0
     """
     if rng is None:
         rng = random.Random(42)
     
     X = []
     y = []
+    sample_weights = []
     
     # 需要足够的历史数据来构建特征
     min_history = 30  # 减少最小历史期数
     if len(numbers) <= min_history:
-        return None, None
+        return None, None, None
     
     # 使用滑动窗口，只使用最近的数据构建特征（加速）
     window_size = 60  # 只使用最近 60 期数据构建特征
@@ -597,10 +610,20 @@ def build_training_data(numbers, neg_samples=NEGATIVE_SAMPLES_PER_PERIOD, rng=No
         
         fe = FeatureEngineer(train_numbers)
         
+        # 计算时间衰减权重
+        periods_ago = len(numbers) - i
+        if periods_ago <= TIME_DECAY_RECENT:
+            weight = TIME_DECAY_RECENT_WEIGHT
+        elif periods_ago <= TIME_DECAY_MID:
+            weight = TIME_DECAY_MID_WEIGHT
+        else:
+            weight = TIME_DECAY_OLD_WEIGHT
+        
         # 正例：1 个
         features = fe.build_features(*actual)
         X.append(features)
         y.append(1)
+        sample_weights.append(weight)
         
         # 负例：neg_samples 个（排除已开出的号码）
         neg_count = 0
@@ -616,9 +639,10 @@ def build_training_data(numbers, neg_samples=NEGATIVE_SAMPLES_PER_PERIOD, rng=No
             features = fe.build_features(*combo)
             X.append(features)
             y.append(0)
+            sample_weights.append(weight)  # 负例同样权重
             neg_count += 1
     
-    return X, y
+    return X, y, sample_weights
 
 
 def select_features(X, y, feature_names, keep_ratio=FEATURE_SUBSET_RATIO):
@@ -838,13 +862,16 @@ def backtest_ml(numbers, trials=BACKTEST_TRIALS, train_ratio=TRAIN_RATIO):
             continue
         
         # 构建训练数据
-        X, y = build_training_data(train_nums, neg_samples=NEGATIVE_SAMPLES_PER_PERIOD)
-        if X is None or len(X) < 100:
+        result = build_training_data(train_nums, neg_samples=NEGATIVE_SAMPLES_PER_PERIOD)
+        if result is None or len(result) < 3:
+            continue
+        X, y, sample_weights = result
+        if len(X) < 100:
             continue
         
-        # 训练模型
+        # 训练模型（使用时间衰减权重）
         try:
-            model = train_model(X, y)
+            model = train_model(X, y, sample_weights=sample_weights)
         except Exception as e:
             print(f"训练失败：{e}")
             continue
@@ -906,8 +933,11 @@ def predict_current(numbers, top_k=TOP_K, model_type="ensemble"):
     window_size = 60
     recent_numbers = numbers[-window_size:]
 
-    X, y = build_training_data(recent_numbers, neg_samples=NEGATIVE_SAMPLES_PER_PERIOD)
-    if X is None or len(X) < 100:
+    result = build_training_data(recent_numbers, neg_samples=NEGATIVE_SAMPLES_PER_PERIOD)
+    if result is None or len(result) < 3:
+        return {"error": "训练数据不足"}
+    X, y, sample_weights = result
+    if len(X) < 100:
         return {"error": "训练数据不足"}
 
     try:
@@ -916,7 +946,7 @@ def predict_current(numbers, top_k=TOP_K, model_type="ensemble"):
             models, selected_indices = train_ensemble(X, y)
             model_names = [name for _, name, _ in models]
             model_weights = [score for _, _, score in models]
-            log.info(f'3D-ML 多模型集成完成: {model_names}')
+            log.info(f'3D-ML 多模型集成完成：{model_names}')
         else:
             # 单模型
             model, used_name = train_single_model(X, y, model_type)
@@ -931,7 +961,7 @@ def predict_current(numbers, top_k=TOP_K, model_type="ensemble"):
                 model_names = [used_name]
                 model_weights = [1.0]
     except Exception as e:
-        log.error(f'3D-ML 训练失败: {e}', exc_info=True)
+        log.error(f'3D-ML 训练失败：{e}', exc_info=True)
         return {'error': '训练失败'}
     
     # 对所有 1000 个直选组合预测（批量处理）

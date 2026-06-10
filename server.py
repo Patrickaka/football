@@ -306,23 +306,28 @@ class Handler(BaseHTTPRequestHandler):
         try:
             now = time.time()
             cache = _CACHE['3d']
+            self._log.info('3D 请求到达，缓存状态: data=%s, timestamp=%s', 
+                          cache['data'] is not None, cache['timestamp'])
             
             # 检查缓存是否有效（TTL + 跨天双重校验）
             if cache['data'] is not None and _is_cache_valid(cache, now):
                 self._log.info('3D 预测使用缓存')
                 return {'result': cache['data']}
             
-            # 缓存失效，重新计算
-            self._log.info('3D 预测重新计算')
-            result = run_prediction()
+            # 缓存失效，重新计算（使用快速模式：关闭回测和权重计算）
+            self._log.info('3D 预测重新计算...')
+            start = time.time()
+            result = run_prediction(enable_backtest=False, compute_weights=False)
+            elapsed = time.time() - start
+            self._log.info('3D 预测计算完成，耗时 %.2f秒，结果长度 %d', elapsed, len(result))
             
             # 更新缓存
             cache['data'] = result
             cache['timestamp'] = now
             
             return {'result': result}
-        except Exception:
-            self._log.error('3D 预测失败', exc_info=True)
+        except Exception as e:
+            self._log.error('3D 预测失败: %s', str(e), exc_info=True)
             return {'error': '3D 预测失败'}
 
     def _lottery_3d_ml_payload(self):
@@ -330,6 +335,9 @@ class Handler(BaseHTTPRequestHandler):
             now = time.time()
             ml_cache = _CACHE['3d_ml']
             data_cache = _CACHE['3d_data']
+            
+            self._log.info('3D ML 请求到达，ML缓存状态: data=%s, timestamp=%s', 
+                          ml_cache['data'] is not None, ml_cache['timestamp'])
             
             # 检查 ML 缓存是否有效（TTL + 跨天双重校验）
             if ml_cache['data'] is not None and _is_cache_valid(ml_cache, now):
@@ -347,10 +355,17 @@ class Handler(BaseHTTPRequestHandler):
                 data_cache['timestamp'] = now
             
             # 缓存失效，重新计算
-            self._log.info('3D ML 预测重新计算')
+            self._log.info('3D ML 预测重新计算，数据量: %d', len(data) if data else 0)
             numbers = [x[2] for x in data] if data else []
+            self._log.info('numbers 长度: %d', len(numbers))
             # 使用多模型集成
             result = predict_current(numbers, model_type="ensemble")
+            self._log.info('predict_current 结果类型: %s', type(result))
+            if 'error' in result:
+                self._log.error('predict_current 返回错误: %s', result['error'])
+                return {'error': result['error']}
+            self._log.info('predict_current 结果: model_type=%s, recommendations=%d', 
+                          result.get('model_type'), len(result.get('recommendations', [])))
 
             formatted = {
                 'model_type': result.get('model_type', 'unknown'),
