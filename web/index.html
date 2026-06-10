@@ -212,6 +212,185 @@
 
   .disclaimer { color: var(--muted); font-size: 12px; text-align: center;
     margin-top: 20px; line-height: 1.7; }
+
+  /* 移动端响应式优化 */
+  @media (max-width: 768px) {
+    body {
+      padding: 16px 12px;
+      font-size: 14px;
+    }
+    .wrap { max-width: 100%; }
+    
+    header h1 { font-size: 20px; }
+    header p { font-size: 12px; }
+    
+    .tabs { flex-wrap: wrap; }
+    .tab { 
+      flex: 1; 
+      min-width: calc(50% - 1px);
+      padding: 10px 6px; 
+      font-size: 13px;
+    }
+    
+    .highlight {
+      padding: 12px 14px;
+      margin-bottom: 12px;
+    }
+    .highlight .big { font-size: 26px; letter-spacing: 4px; }
+    .highlight .sub { font-size: 12px; }
+    
+    .card {
+      padding: 12px 14px;
+      margin-bottom: 12px;
+      border-radius: 10px;
+    }
+    
+    .row {
+      font-size: 13px;
+      padding: 3px 0;
+    }
+    
+    .section-title {
+      font-size: 13px;
+      margin: 14px 0 8px;
+    }
+    
+    .zhixuan {
+      gap: 10px;
+      padding: 6px 0;
+    }
+    .zhixuan .num { font-size: 16px; min-width: 42px; letter-spacing: 1px; }
+    .zhixuan .rank { min-width: 24px; font-size: 12px; }
+    .zhixuan .score { min-width: 42px; font-size: 12px; }
+    
+    .digit-grid {
+      grid-template-columns: repeat(5, 1fr);
+      gap: 6px;
+    }
+    .digit-cell {
+      padding: 6px 3px;
+      font-size: 12px;
+    }
+    .digit-cell .d { font-size: 16px; }
+    .digit-cell .s { font-size: 10px; }
+    
+    .match {
+      padding: 10px 12px;
+      gap: 10px;
+    }
+    .match .num { font-size: 11px; min-width: 46px; }
+    .match .time { font-size: 11px; min-width: 68px; }
+    .match .teams { font-size: 14px; }
+    .match .teams .vs { font-size: 12px; margin: 0 6px; }
+    
+    .search {
+      padding: 10px 14px;
+      font-size: 14px;
+      margin-bottom: 12px;
+    }
+    
+    .group-bar button {
+      padding: 5px 10px;
+      font-size: 12px;
+    }
+    
+    .rec {
+      padding: 12px 14px;
+      margin-bottom: 10px;
+    }
+    .rec .title { font-size: 18px; }
+    .rec .sub { font-size: 12px; }
+    
+    .htf-grid {
+      grid-template-columns: repeat(3, 1fr);
+      gap: 8px;
+    }
+    .htf-item { padding: 8px; }
+    .htf-code { font-size: 16px; }
+    .htf-name { font-size: 11px; }
+    
+    .goal-grid {
+      grid-template-columns: repeat(2, 1fr);
+      gap: 10px;
+    }
+    .goal-item { padding: 12px; }
+    .goal-label { font-size: 18px; }
+    
+    .kelly-grid {
+      gap: 6px;
+      font-size: 12px;
+    }
+    .kelly-cell { padding: 6px 3px; }
+    
+    .probbar-3d { height: 24px; font-size: 11px; }
+    
+    .back { font-size: 13px; margin-bottom: 12px; }
+    
+    .match-head .names { font-size: 20px; }
+    .match-head .meta { font-size: 12px; }
+    
+    .seg-zu6, .seg-zu3, .seg-baozi { padding: 4px 10px; font-size: 13px; }
+    
+    .note { font-size: 11px; }
+  }
+
+  /* 小屏手机优化 (< 480px) */
+  @media (max-width: 480px) {
+    body {
+      padding: 12px 8px;
+    }
+    
+    .tabs {
+      flex-direction: column;
+      border-radius: 8px;
+    }
+    .tab {
+      min-width: 100%;
+      border-bottom: 1px solid var(--line);
+    }
+    .tab:last-child { border-bottom: none; }
+    
+    .highlight .big { font-size: 22px; letter-spacing: 2px; }
+    
+    .zhixuan .num { font-size: 15px; letter-spacing: 0; }
+    
+    .digit-grid {
+      grid-template-columns: repeat(5, 1fr);
+    }
+    
+    .match {
+      flex-wrap: wrap;
+    }
+    .match .num, .match .time {
+      min-width: auto;
+      width: auto;
+    }
+    .match .teams {
+      width: 100%;
+      order: 3;
+      margin-top: 6px;
+    }
+    
+    .htf-grid {
+      grid-template-columns: repeat(3, 1fr);
+    }
+    
+    .goal-grid {
+      grid-template-columns: 1fr;
+    }
+    
+    .blend-row {
+      gap: 6px;
+    }
+    .blend-row span {
+      padding: 4px 10px;
+      font-size: 12px;
+    }
+    
+    .kelly-grid {
+      grid-template-columns: repeat(3, 1fr);
+    }
+  }
 </style>
 </head>
 <body>
