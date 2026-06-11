@@ -4289,43 +4289,43 @@ def _pick_recommendations(candidates, asian, euro, total, n=2, pool=12, confiden
                 upset_penalty = 0.7
         
         # 融合相似盘口比分权重
-    market_bonus = 1.0
-    if (h, a) in similar_weight and similar_confidence > 0:
-        # 相似盘口比分概率越高，权重越大
-        market_bonus = 1.0 + similar_weight[(h, a)] * similar_confidence * 0.5
-    
-    # 盘口聚类先验权重
-    prior_bonus = 1.0
-    if MARKET_CLUSTERING_AVAILABLE and asian.get('handicap') is not None and total.get('close_line') is not None:
-        try:
-            from .market_clustering import get_market_prior
-            prior = get_market_prior(asian['handicap'], total.get('close_line', total.get('line', 2.5)))
-            if prior:
-                score_key = f"{h}-{a}"
-                prior_prob = prior.get(score_key, 0.0)
-                if prior_prob > 0:
-                    # 先验概率越高，权重越大
-                    prior_bonus = 1.0 + prior_prob * 0.3
-        except Exception as e:
-            log.debug(f"盘口聚类先验获取失败: {e}")
-    
-    # 赔率价值调整
-    value_bonus = 1.0
-    if VALUE_BETTING_AVAILABLE and euro.get('raw_odds', {}).get('close'):
-        try:
-            from .value_betting import calculate_value, calculate_ev
-            close_odds = euro['raw_odds']['close']
-            # 计算比分赔率（简化：使用市场平均）
-            score_odds = _estimate_score_odds(h, a, close_odds)
-            if score_odds > 1.0:
-                value = calculate_value(prob, score_odds)
-                if value > 0:
-                    # 存在价值，增加权重
-                    value_bonus = 1.0 + value * 5
-        except Exception as e:
-            log.debug(f"赔率价值计算失败: {e}")
-    
-    scored.append(((h, a), prob, align, heat, prob * (1.0 + 0.45 * align) * w * (0.65 + 0.35 * conf_w) * xg_penalty * upset_penalty * market_bonus * prior_bonus * value_bonus))
+        market_bonus = 1.0
+        if (h, a) in similar_weight and similar_confidence > 0:
+            # 相似盘口比分概率越高，权重越大
+            market_bonus = 1.0 + similar_weight[(h, a)] * similar_confidence * 0.5
+        
+        # 盘口聚类先验权重
+        prior_bonus = 1.0
+        if MARKET_CLUSTERING_AVAILABLE and asian.get('handicap') is not None and total.get('close_line') is not None:
+            try:
+                from .market_clustering import get_market_prior
+                prior = get_market_prior(asian['handicap'], total.get('close_line', total.get('line', 2.5)))
+                if prior:
+                    score_key = f"{h}-{a}"
+                    prior_prob = prior.get(score_key, 0.0)
+                    if prior_prob > 0:
+                        # 先验概率越高，权重越大
+                        prior_bonus = 1.0 + prior_prob * 0.3
+            except Exception as e:
+                log.debug(f"盘口聚类先验获取失败: {e}")
+        
+        # 赔率价值调整
+        value_bonus = 1.0
+        if VALUE_BETTING_AVAILABLE and euro.get('raw_odds', {}).get('close'):
+            try:
+                from .value_betting import calculate_value, calculate_ev
+                close_odds = euro['raw_odds']['close']
+                # 计算比分赔率（简化：使用市场平均）
+                score_odds = _estimate_score_odds(h, a, close_odds)
+                if score_odds > 1.0:
+                    value = calculate_value(prob, score_odds)
+                    if value > 0:
+                        # 存在价值，增加权重
+                        value_bonus = 1.0 + value * 5
+            except Exception as e:
+                log.debug(f"赔率价值计算失败: {e}")
+        
+        scored.append(((h, a), prob, align, heat, prob * (1.0 + 0.45 * align) * w * (0.65 + 0.35 * conf_w) * xg_penalty * upset_penalty * market_bonus * prior_bonus * value_bonus))
     scored.sort(key=lambda x: -x[4])
     
     seen = set()
