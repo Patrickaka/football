@@ -26,13 +26,14 @@ import urllib.error
 import random
 from ..common.logger import setup_logger
 
+log = setup_logger('football')
+
 # ELO 评分系统（延迟导入）
 try:
     from .elo import get_elo_system, elo_to_goals_expected, elo_to_strength_factor
     ELO_AVAILABLE = True
 except ImportError:
     ELO_AVAILABLE = False
-    log = setup_logger('football')
     log.warning("ELO 模块未导入，将使用默认球队实力计算")
 
 # 相似盘口数据库（延迟导入）
@@ -90,8 +91,6 @@ try:
 except ImportError:
     MARKET_CLUSTERING_AVAILABLE = False
     log.warning("盘口聚类模块未导入")
-
-log = setup_logger('football')
 
 sys.stdout.reconfigure(encoding='utf-8')
 
