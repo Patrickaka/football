@@ -14,7 +14,7 @@
 
 import pickle
 import numpy as np
-from typing import Dict, Tuple, Optional
+from typing import Dict, List, Tuple, Optional
 
 # 尝试导入机器学习库
 XGBOOST_AVAILABLE = False

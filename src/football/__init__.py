@@ -26,13 +26,14 @@ import urllib.error
 import random
 from ..common.logger import setup_logger
 
+log = setup_logger('football')
+
 # ELO 评分系统（延迟导入）
 try:
     from .elo import get_elo_system, elo_to_goals_expected, elo_to_strength_factor
     ELO_AVAILABLE = True
 except ImportError:
     ELO_AVAILABLE = False
-    log = setup_logger('football')
     log.warning("ELO 模块未导入，将使用默认球队实力计算")
 
 # 相似盘口数据库（延迟导入）
@@ -90,8 +91,6 @@ try:
 except ImportError:
     MARKET_CLUSTERING_AVAILABLE = False
     log.warning("盘口聚类模块未导入")
-
-log = setup_logger('football')
 
 sys.stdout.reconfigure(encoding='utf-8')
 
@@ -712,12 +711,12 @@ def _fetch_avg_page(match_id, page):
 def calculate_bookmaker_consensus(bet365_data, pinnacle_data, avg_handicap):
     """
     计算博彩公司分歧指数
-    
+
     参数：
         bet365_data: Bet365 的亚盘数据 {'asian': {'close': {'handicap': ...}}}
         pinnacle_data: Pinnacle 的亚盘数据
         avg_handicap: 平均盘口数据
-    
+
     返回：
         dict: 包含分歧指数和调整值
     """
@@ -731,24 +730,24 @@ def calculate_bookmaker_consensus(bet365_data, pinnacle_data, avg_handicap):
         'adjustment': 0.0,
         'confidence': 0.0
     }
-    
+
     if not bet365_data or not pinnacle_data:
         return result
-    
+
     try:
         bet365_handicap = bet365_data.get('asian', {}).get('close', {}).get('handicap')
         pinnacle_handicap = pinnacle_data.get('asian', {}).get('close', {}).get('handicap')
-        
+
         if bet365_handicap is None or pinnacle_handicap is None:
             return result
-        
+
         result['bet365_handicap'] = bet365_handicap
         result['pinnacle_handicap'] = pinnacle_handicap
         result['available'] = True
-        
+
         # Pinnacle 与平均盘的差异（Pinnacle 更接近真实概率）
         result['pinnacle_diff'] = pinnacle_handicap - avg_handicap
-        
+
         # 判断 Sharp Money 方向
         # Pinnacle 让球更激进（数值更大）= 更看好主队
         # Pinnacle 让球更保守（数值更小）= 更看好客队
@@ -766,12 +765,12 @@ def calculate_bookmaker_consensus(bet365_data, pinnacle_data, avg_handicap):
             result['sharp_bias'] = 'neutral'
             result['confidence'] = 0.0
             result['adjustment'] = 0.0
-        
+
         log.info(f"博彩公司分歧指数: Pinnacle={pinnacle_handicap}, 平均={avg_handicap}, 差异={result['pinnacle_diff']:.3f}, 方向={result['sharp_bias']}, 调整={result['adjustment']:.3f}")
-        
+
     except Exception as e:
         log.warning(f"计算博彩公司分歧指数失败: {e}")
-    
+
     return result
 
 
@@ -2708,7 +2707,7 @@ def team_poisson_lambdas(strength, total_target, league_profile=None):
     集成 ELO 评分系统：
     - 使用 ELO 实力因子调整攻防强度
     - ELO 评分高的球队会获得更高的进球期望值
-    
+
     集成 xG（Expected Goals）：
     - 使用最近5场的 xG/xGA 数据
     - 当实际进球与 xG 有较大差异时，预测回归均值
@@ -2745,50 +2744,50 @@ def team_poisson_lambdas(strength, total_target, league_profile=None):
     away_xg_last5 = strength.get('away_xg_last5', 0)
     home_xga_last5 = strength.get('home_xga_last5', 0)
     away_xga_last5 = strength.get('away_xga_last5', 0)
-    
+
     # 计算 xG 修正因子
     # 原理：如果球队近期 xG 很高但实际进球少，说明运气差，下一场可能反弹
     if home_xg_last5 > 0 and home_recent:
         home_games = max(1, home_recent.get('games', 5))
         h_gf_per_game = home_recent.get('gf', 0) / home_games
-        
+
         # xG 均值（最近5场）
         xg_avg_h = home_xg_last5 / min(5, home_games)
-        
+
         # 计算运气偏差：实际进球 / xG
         # 如果 < 0.7，说明运气差；如果 > 1.3，说明运气好
         luck_ratio = h_gf_per_game / max(xg_avg_h, 0.1)
-        
+
         # 运气回归修正：运气差的球队增加 λ，运气好的球队减少 λ
         # 修正范围：0.8 ~ 1.4
         xg_factor_h = min(1.4, max(0.8, 1.0 + (1.0 - luck_ratio) * 0.3))
         lam_home *= xg_factor_h
-        
+
         log.debug(f"主队 xG 修正: xG={xg_avg_h:.2f}, 实际进球={h_gf_per_game:.2f}, 运气因子={xg_factor_h:.2f}")
-    
+
     if away_xg_last5 > 0 and away_recent:
         away_games = max(1, away_recent.get('games', 5))
         a_gf_per_game = away_recent.get('gf', 0) / away_games
-        
+
         xg_avg_a = away_xg_last5 / min(5, away_games)
         luck_ratio = a_gf_per_game / max(xg_avg_a, 0.1)
         xg_factor_a = min(1.4, max(0.8, 1.0 + (1.0 - luck_ratio) * 0.3))
         lam_away *= xg_factor_a
-        
+
         log.debug(f"客队 xG 修正: xG={xg_avg_a:.2f}, 实际进球={a_gf_per_game:.2f}, 运气因子={xg_factor_a:.2f}")
-    
+
     # 使用 xGA 调整防守端
     # xGA 高说明防守差，对手更容易进球
     if home_xga_last5 > 0:
         # 主队 xGA 越高，客队进球期望越高
         xga_factor_a = 1.0 + (home_xga_last5 / 5.0 - avg) / avg * 0.2
         lam_away *= min(1.3, max(0.7, xga_factor_a))
-    
+
     if away_xga_last5 > 0:
         # 客队 xGA 越高，主队进球期望越高
         xga_factor_h = 1.0 + (away_xga_last5 / 5.0 - avg) / avg * 0.2
         lam_home *= min(1.3, max(0.7, xga_factor_h))
-    
+
     # ========== 近期状态衰减加权 ==========
     # 如果 strength 包含近期数据则应用，否则仅依赖长期均值
     home_recent = strength.get('home_recent', {})
@@ -3354,59 +3353,59 @@ def calibrate_probabilities(matrix, method='platt', calibration_data=None):
 def hierarchical_calibration(matrix, calibration_data=None):
     """
     三级分层概率校准：比分层 → 进球层 → 胜平负层
-    
+
     结构：
         比分层: 针对每个具体比分进行校准
         进球层: 针对总进球数进行校准（低进球、中等进球、高进球）
         胜平负层: 针对主胜/平局/客胜进行校准
-    
+
     最终概率 = score_prob × draw_factor × goal_factor × score_factor
-    
+
     参数:
         matrix: 原始概率矩阵 {(h, a): prob}
         calibration_data: 历史校准数据
-    
+
     返回:
         校准后的概率矩阵
     """
     if not calibration_data:
         return matrix
-    
+
     calibrated = {}
-    
+
     # 1. 计算基础概率和边际概率
     margins = _matrix_margins(matrix)
     p_home = margins['home']
     p_draw = margins['draw']
     p_away = margins['away']
-    
+
     # 2. 计算总进球分布
     goal_dist = {}
     for (h, a), prob in matrix.items():
         total = h + a
         goal_dist[total] = goal_dist.get(total, 0) + prob
-    
+
     # 3. 获取校准因子
     # 胜平负校准因子
     draw_factor = _get_draw_calibration_factor(calibration_data, p_draw)
-    
+
     for (h, a), prob in matrix.items():
         total_goals = h + a
-        
+
         # 进球层校准因子（低进球<3, 中进球3-5, 高进球>5）
         goal_factor = _get_goal_calibration_factor(calibration_data, total_goals, goal_dist)
-        
+
         # 比分层校准因子
         score_factor = _get_score_calibration_factor(calibration_data, h, a, prob)
-        
+
         # 应用三级校准
         calibrated[(h, a)] = prob * draw_factor * goal_factor * score_factor
-    
+
     # 归一化
     total = sum(calibrated.values())
     if total > 0:
         calibrated = {cell: prob / total for cell, prob in calibrated.items()}
-    
+
     log.info("三级分层校准完成")
     return calibrated
 
@@ -3414,28 +3413,28 @@ def hierarchical_calibration(matrix, calibration_data=None):
 def _get_draw_calibration_factor(calibration_data, p_draw):
     """
     获取平局校准因子。
-    
+
     参数:
         calibration_data: 历史校准数据
         p_draw: 当前预测的平局概率
-    
+
     返回:
         平局校准因子
     """
     draw_calib = calibration_data.get('draw_calibration', {})
-    
+
     # 基于历史数据计算校准因子
     # 如果历史平局概率被低估/高估，调整因子
     expected_draw = draw_calib.get('expected_draw_rate', 0.25)
     actual_draw = draw_calib.get('actual_draw_rate', 0.25)
-    
+
     if actual_draw == 0:
         return 1.0
-    
+
     # 校准因子 = 实际平局率 / 期望平局率
     # 但需要平滑处理，避免极端值
     base_factor = actual_draw / expected_draw
-    
+
     # 应用概率相关的调整
     # 如果预测概率偏离历史均值，适当调整
     draw_prob_factor = 1.0
@@ -3443,24 +3442,24 @@ def _get_draw_calibration_factor(calibration_data, p_draw):
         # 如果预测平局概率高于平均，适当下调（防止过度自信）
         if p_draw > expected_draw:
             draw_prob_factor = 0.95 + (p_draw - expected_draw) * 0.1
-    
+
     return min(max(base_factor * draw_prob_factor, 0.7), 1.3)
 
 
 def _get_goal_calibration_factor(calibration_data, total_goals, goal_dist):
     """
     获取进球数校准因子。
-    
+
     参数:
         calibration_data: 历史校准数据
         total_goals: 总进球数
         goal_dist: 当前预测的进球分布
-    
+
     返回:
         进球数校准因子
     """
     goal_calib = calibration_data.get('goal_calibration', {})
-    
+
     # 按进球数分组
     if total_goals <= 2:
         group = 'low'
@@ -3468,68 +3467,68 @@ def _get_goal_calibration_factor(calibration_data, total_goals, goal_dist):
         group = 'medium'
     else:
         group = 'high'
-    
+
     # 获取历史校准数据
     expected_rate = goal_calib.get(f'{group}_expected', 0.33)
     actual_rate = goal_calib.get(f'{group}_actual', 0.33)
-    
+
     if actual_rate == 0 or expected_rate == 0:
         return 1.0
-    
+
     # 基础校准因子
     base_factor = actual_rate / expected_rate
-    
+
     # 当前预测的该组概率
-    current_prob = sum(prob for g, prob in goal_dist.items() 
-                      if (group == 'low' and g <= 2) or 
-                         (group == 'medium' and 3 <= g <= 5) or 
+    current_prob = sum(prob for g, prob in goal_dist.items()
+                      if (group == 'low' and g <= 2) or
+                         (group == 'medium' and 3 <= g <= 5) or
                          (group == 'high' and g > 5))
-    
+
     # 如果预测概率与历史差异较大，适当调整
     prob_factor = 1.0
     if current_prob > 0 and expected_rate > 0:
         prob_ratio = current_prob / expected_rate
         # 温和调整，避免过度校正
         prob_factor = 0.9 + (prob_ratio - 1) * 0.2
-    
+
     return min(max(base_factor * prob_factor, 0.7), 1.4)
 
 
 def _get_score_calibration_factor(calibration_data, h, a, prob):
     """
     获取具体比分校准因子。
-    
+
     参数:
         calibration_data: 历史校准数据
         h: 主队进球数
         a: 客队进球数
         prob: 当前预测的该比分概率
-    
+
     返回:
         比分校准因子
     """
     score_calib = calibration_data.get('score_calibration', {})
-    
+
     # 获取该比分的历史校准数据
     score_key = f"{h}-{a}"
     score_data = score_calib.get(score_key, {})
-    
+
     expected_prob = score_data.get('expected', 0.02)
     actual_prob = score_data.get('actual', 0.02)
-    
+
     if actual_prob == 0 or expected_prob == 0:
         return 1.0
-    
+
     # 基础校准因子
     base_factor = actual_prob / expected_prob
-    
+
     # 考虑比分类型（常见比分 vs 冷门比分）
     # 常见比分需要更保守的校准
     is_common = (h, a) in [(0, 0), (1, 0), (0, 1), (1, 1), (2, 0), (0, 2), (2, 1), (1, 2)]
     if is_common:
         # 常见比分，校准因子趋向于1
         base_factor = 0.95 + (base_factor - 0.95) * 0.5
-    
+
     # 概率置信度调整
     # 低概率比分需要更强的校准
     confidence_factor = 1.0
@@ -3539,7 +3538,7 @@ def _get_score_calibration_factor(calibration_data, h, a, prob):
     elif prob > 0.1:
         # 高概率事件，减弱校准强度
         confidence_factor = 0.95
-    
+
     return min(max(base_factor * confidence_factor, 0.6), 1.5)
 
 
@@ -4219,7 +4218,7 @@ def predict_scores(asian, euro, total, team_strength=None, league_profile=None,
             if adjustment != 0:
                 lam_home += adjustment
                 log.info(f"应用博彩公司分歧指数调整: lam_home += {adjustment:.3f}")
-        
+
         # 确保 λ 值为正
         lam_home = max(0.08, lam_home)
         lam_away = max(0.08, lam_away)
@@ -4591,7 +4590,7 @@ def _get_cluster_name(cluster):
     """获取簇的中文名称"""
     cluster_names = {
         'home_win_1': '主胜1球',
-        'home_win_2': '主胜2球', 
+        'home_win_2': '主胜2球',
         'home_win_3': '主胜3球+',
         'draw': '平局',
         'away_win_1': '客胜1球',
@@ -4632,7 +4631,16 @@ def _pick_recommendations(candidates, asian, euro, total, n=2, pool=12, confiden
         for score, prob in similar_market['goals_dist'].items():
             h, a = map(int, score.split('-'))
             similar_weight[(h, a)] = prob
-    
+
+    # 盘口聚类先验（与候选比分无关，循环外只计算一次）
+    market_prior = {}
+    if MARKET_CLUSTERING_AVAILABLE and asian.get('handicap') is not None and total.get('close_line') is not None:
+        try:
+            from .market_clustering import get_market_prior
+            market_prior = get_market_prior(asian['handicap'], total.get('close_line', total.get('line', 2.5))) or {}
+        except Exception as e:
+            log.debug(f"盘口聚类先验获取失败: {e}")
+
     scored = []
     favor = asian.get('favor', 'home')
     
@@ -4661,7 +4669,7 @@ def _pick_recommendations(candidates, asian, euro, total, n=2, pool=12, confiden
         market_bonus = 1.0
         if (h, a) in similar_weight and similar_confidence > 0:
             market_bonus = 1.0 + similar_weight[(h, a)] * similar_confidence * 0.5
-        
+
         # 盘口聚类先验权重
         prior_bonus = 1.0
         if MARKET_CLUSTERING_AVAILABLE and asian.get('handicap') is not None and total.get('close_line') is not None:
@@ -4675,7 +4683,7 @@ def _pick_recommendations(candidates, asian, euro, total, n=2, pool=12, confiden
                         prior_bonus = 1.0 + prior_prob * 0.3
             except Exception as e:
                 log.debug(f"盘口聚类先验获取失败: {e}")
-        
+
         # 赔率价值调整
         value_bonus = 1.0
         if VALUE_BETTING_AVAILABLE and euro.get('raw_odds', {}).get('close'):
@@ -4689,18 +4697,18 @@ def _pick_recommendations(candidates, asian, euro, total, n=2, pool=12, confiden
                         value_bonus = 1.0 + value * 5
             except Exception as e:
                 log.debug(f"赔率价值计算失败: {e}")
-        
+
         final_score = prob * (1.0 + 0.45 * align) * w * (0.65 + 0.35 * conf_w) * xg_penalty * upset_penalty * market_bonus * prior_bonus * value_bonus
         cluster = _get_score_cluster(h, a)
         scored.append(((h, a), prob, align, heat, cluster, final_score))
-    
+
     scored.sort(key=lambda x: -x[5])
     
     # ========== 比分簇推荐策略 ==========
     # 核心比分：概率最高的比分所在簇
     # 保护比分：同簇内的其他高概率比分 + 邻近簇的比分
     # 冷门覆盖：对立簇的一个比分（如果爆冷风险足够）
-    
+
     seen = set()
     picked = []
     picked_clusters = set()
@@ -4717,14 +4725,14 @@ def _pick_recommendations(candidates, asian, euro, total, n=2, pool=12, confiden
         picked.append((h, a, prob, cluster, 'core'))
         seen.add((h, a))
         picked_clusters.add(cluster)
-    
+
     # 阶段2：选择保护比分（同簇或邻近簇）
     for (h, a), prob, _, _, cluster, _ in scored[1:]:
         if (h, a) in seen:
             continue
         if len(picked) >= n:
             break
-        
+
         # 检查是否是冷门
         diff = h - a
         is_upset_pick = False
@@ -4742,7 +4750,7 @@ def _pick_recommendations(candidates, asian, euro, total, n=2, pool=12, confiden
             seen.add((h, a))
             picked_clusters.add(cluster)
             continue
-        
+
         # 优先选择同簇或邻近簇的比分作为保护
         if cluster in picked_clusters:
             picked.append((h, a, prob, cluster, 'protection'))
@@ -4752,7 +4760,7 @@ def _pick_recommendations(candidates, asian, euro, total, n=2, pool=12, confiden
             picked.append((h, a, prob, cluster, 'protection'))
             seen.add((h, a))
             picked_clusters.add(cluster)
-    
+
     # 阶段3：补充剩余推荐（如果还不够）
     if len(picked) < n:
         for (h, a), prob, _, _, cluster, _ in scored:
@@ -4760,24 +4768,24 @@ def _pick_recommendations(candidates, asian, euro, total, n=2, pool=12, confiden
                 continue
             if len(picked) >= n:
                 break
-            
+
             diff = h - a
             is_upset_pick = False
             if favor == 'home' and diff < 0:
                 is_upset_pick = True
             elif favor == 'away' and diff > 0:
                 is_upset_pick = True
-            
+
             if is_upset_pick and upset_count >= max_upsets:
                 continue
-            
+
             if is_upset_pick:
                 upset_count += 1
                 picked.append((h, a, prob, cluster, 'upset'))
             else:
                 picked.append((h, a, prob, cluster, 'protection'))
             seen.add((h, a))
-    
+
     # 转换为原有格式 (h, a, prob)
     return [(h, a, prob) for h, a, prob, _, _ in picked]
 
@@ -4832,12 +4840,12 @@ def analyze_match(match):
     original_handicap = asian.get('handicap')
     if single_odds and single_odds.get('bet365') and single_odds.get('pinnacle') and original_handicap:
         bookmaker_consensus = calculate_bookmaker_consensus(
-            single_odds['bet365'], 
-            single_odds['pinnacle'], 
+            single_odds['bet365'],
+            single_odds['pinnacle'],
             original_handicap
         )
         log.info(f"博彩公司分歧指数计算完成: 可用={bookmaker_consensus['available']}, Sharp方向={bookmaker_consensus['sharp_bias']}, 调整={bookmaker_consensus['adjustment']:.3f}")
-    
+
     # ========== 使用独赔数据替换平均赔率 ==========
     # 优先使用 Bet365，其次是 Pinnacle
     selected_odds = None
@@ -4903,8 +4911,8 @@ def analyze_match(match):
     bookmaker_consensus = None
     if single_odds and single_odds.get('bet365') and single_odds.get('pinnacle'):
         bookmaker_consensus = calculate_bookmaker_consensus(
-            single_odds['bet365'], 
-            single_odds['pinnacle'], 
+            single_odds['bet365'],
+            single_odds['pinnacle'],
             asian.get('handicap', 0)
         )
         log.info(f"博彩公司分歧指数: 可用={bookmaker_consensus['available']}, Sharp方向={bookmaker_consensus['sharp_bias']}, 调整={bookmaker_consensus['adjustment']:.3f}")
