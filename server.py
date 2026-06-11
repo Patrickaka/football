@@ -115,6 +115,8 @@ def _load_credentials():
 CREDENTIALS = _load_credentials()
 AUTH_ENABLED = bool(CREDENTIALS)
 
+CORS_ORIGIN = os.environ.get('CORS_ORIGIN', '*')
+
 
 def _json_default(obj):
     """json.dumps 兜底：numpy 标量 / 数组 / SteamSignal 等转为原生 Python 类型"""
@@ -190,6 +192,12 @@ class Handler(BaseHTTPRequestHandler):
             self._serve_json(self._pailie5_contribution_payload())
         elif path == '/api/lottery':
             self._serve_json(self._lottery_payload())
+        elif path == '/api/lottery-refresh':
+            self._serve_json(self._lottery_refresh_payload())
+        elif path == '/api/pailie5-refresh':
+            self._serve_json(self._pailie5_refresh_payload())
+        elif path == '/api/3d-refresh':
+            self._serve_json(self._lottery_3d_refresh_payload())
         elif path == '/api/lottery/recommend':
             params = parse_qs(route.query)
             self._serve_json(self._lottery_recommend_payload(params))
@@ -222,6 +230,19 @@ class Handler(BaseHTTPRequestHandler):
         else:
             self._send_json_error(404, f'Not Found: {route.path}')
         self._log_request(200, start)
+
+    def do_POST(self):
+        self.do_GET()
+
+    def do_OPTIONS(self):
+        self._handle_options()
+
+    def _handle_options(self):
+        self.send_response(200)
+        self.send_header('Access-Control-Allow-Origin', CORS_ORIGIN)
+        self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+        self.send_header('Access-Control-Allow-Headers', 'Content-Type')
+        self.end_headers()
 
     def _log_request(self, status, start):
         elapsed = time.perf_counter() - start
@@ -273,6 +294,9 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header('Content-Type', 'application/json; charset=utf-8')
         self.send_header('Content-Length', str(len(body)))
         self.send_header('Cache-Control', 'no-store')
+        self.send_header('Access-Control-Allow-Origin', CORS_ORIGIN)
+        self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+        self.send_header('Access-Control-Allow-Headers', 'Content-Type')
         self.end_headers()
         self.wfile.write(body)
 
@@ -332,6 +356,45 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:
             self._log.error('3D 预测失败: %s', str(e), exc_info=True)
             return {'error': '3D 预测失败'}
+
+    def _lottery_3d_refresh_payload(self):
+        """强制刷新3D数据缓存"""
+        try:
+            self._log.info('3D 强制刷新请求到达')
+            
+            # 清除模块级缓存
+            from src.lottery3d import clear_cache
+            clear_cache()
+            
+            # 清除服务器级缓存
+            _CACHE['3d']['data'] = None
+            _CACHE['3d']['timestamp'] = 0
+            _CACHE['3d_ml']['data'] = None
+            _CACHE['3d_ml']['timestamp'] = 0
+            _CACHE['3d_data']['data'] = None
+            _CACHE['3d_data']['timestamp'] = 0
+            
+            # 立即重新抓取并计算
+            self._log.info('3D 强制刷新：重新抓取数据...')
+            start = time.time()
+            result = run_prediction(enable_backtest=False, compute_weights=False)
+            elapsed = time.time() - start
+            
+            # 更新缓存
+            _CACHE['3d']['data'] = result
+            _CACHE['3d']['timestamp'] = time.time()
+            
+            self._log.info('3D 强制刷新完成，耗时 %.2f秒', elapsed)
+            
+            return {
+                'success': True,
+                'message': '缓存已刷新',
+                'elapsed': round(elapsed, 2),
+                'data_count': len(result)
+            }
+        except Exception as e:
+            self._log.error('3D 强制刷新失败: %s', str(e), exc_info=True)
+            return {'success': False, 'error': str(e)}
 
     def _lottery_3d_ml_payload(self):
         try:
@@ -426,6 +489,41 @@ class Handler(BaseHTTPRequestHandler):
             self._log.error('排列五分析失败', exc_info=True)
             return {'error': '排列五分析失败'}
 
+    def _pailie5_refresh_payload(self):
+        """强制刷新排列五数据缓存"""
+        try:
+            self._log.info('排列五强制刷新请求到达')
+            
+            # 清除模块级缓存
+            from src.pailie5 import clear_cache
+            clear_cache()
+            
+            # 清除服务器级缓存
+            _CACHE['pailie5']['data'] = None
+            _CACHE['pailie5']['timestamp'] = 0
+            
+            # 立即重新抓取并计算
+            self._log.info('排列五强制刷新：重新抓取数据...')
+            start = time.time()
+            result = pailie5_run_prediction()
+            elapsed = time.time() - start
+            
+            # 更新缓存
+            _CACHE['pailie5']['data'] = result
+            _CACHE['pailie5']['timestamp'] = time.time()
+            
+            self._log.info('排列五强制刷新完成，耗时 %.2f秒', elapsed)
+            
+            return {
+                'success': True,
+                'message': '缓存已刷新',
+                'elapsed': round(elapsed, 2),
+                'data_count': len(result)
+            }
+        except Exception as e:
+            self._log.error('排列五强制刷新失败: %s', str(e), exc_info=True)
+            return {'success': False, 'error': str(e)}
+
     def _pailie5_recommend_payload(self, params):
         """获取排列五推荐号码"""
         try:
@@ -450,11 +548,39 @@ class Handler(BaseHTTPRequestHandler):
             return {'error': '排列五推荐失败'}
 
     def _pailie5_fetch_payload(self):
-        """动态抓取排列五最新开奖号码"""
+        """动态抓取排列五最新开奖号码（强制刷新并重新分析）"""
         try:
-            analyzer = get_pailie5_analyzer()
+            self._log.info('排列五抓取并重新分析请求到达')
             
-            result = analyzer.fetch_latest_results()
+            # 清除服务器级缓存
+            _CACHE['pailie5']['data'] = None
+            _CACHE['pailie5']['timestamp'] = 0
+            
+            # 清除模块级缓存
+            from src.pailie5 import clear_cache
+            clear_cache()
+            
+            # 强制抓取最新数据
+            analyzer = get_pailie5_analyzer()
+            fetch_result = analyzer.fetch_latest_results(force_refresh=True)
+            
+            # 重新分析
+            self._log.info('排列五抓取完成，开始重新分析...')
+            analysis_result = pailie5_run_prediction(force_refresh=True)
+            
+            # 更新缓存
+            _CACHE['pailie5']['data'] = analysis_result
+            _CACHE['pailie5']['timestamp'] = time.time()
+            
+            # 合并结果
+            result = {
+                'success': fetch_result.get('success', False),
+                'source': fetch_result.get('source'),
+                'message': fetch_result.get('message'),
+                'latest_issue': fetch_result.get('latest_issue'),
+                'fetched_count': fetch_result.get('count', 0),
+                'analysis': analysis_result
+            }
             
             return {'result': result}
         except Exception:
@@ -697,6 +823,41 @@ class Handler(BaseHTTPRequestHandler):
             self._log.error('大乐透分析失败', exc_info=True)
             return {'error': '大乐透分析失败'}
 
+    def _lottery_refresh_payload(self):
+        """强制刷新大乐透数据缓存"""
+        try:
+            self._log.info('大乐透强制刷新请求到达')
+            
+            # 清除模块级缓存
+            from src.lottery import clear_cache
+            clear_cache()
+            
+            # 清除服务器级缓存
+            _CACHE['lottery']['data'] = None
+            _CACHE['lottery']['timestamp'] = 0
+            
+            # 立即重新抓取并计算
+            self._log.info('大乐透强制刷新：重新抓取数据...')
+            start = time.time()
+            result = lottery_run_prediction()
+            elapsed = time.time() - start
+            
+            # 更新缓存
+            _CACHE['lottery']['data'] = result
+            _CACHE['lottery']['timestamp'] = time.time()
+            
+            self._log.info('大乐透强制刷新完成，耗时 %.2f秒', elapsed)
+            
+            return {
+                'success': True,
+                'message': '缓存已刷新',
+                'elapsed': round(elapsed, 2),
+                'data_count': len(result)
+            }
+        except Exception as e:
+            self._log.error('大乐透强制刷新失败: %s', str(e), exc_info=True)
+            return {'success': False, 'error': str(e)}
+
     def _lottery_recommend_payload(self, params):
         """获取大乐透推荐号码 - 返回3组概率最高的推荐"""
         try:
@@ -790,11 +951,39 @@ class Handler(BaseHTTPRequestHandler):
             return {'error': '大乐透回测失败'}
 
     def _lottery_fetch_payload(self):
-        """动态抓取最新开奖号码"""
+        """动态抓取大乐透最新开奖号码（强制刷新并重新分析）"""
         try:
-            analyzer = get_lottery_analyzer()
+            self._log.info('大乐透抓取并重新分析请求到达')
             
-            result = analyzer.fetch_latest_results()
+            # 清除服务器级缓存
+            _CACHE['lottery']['data'] = None
+            _CACHE['lottery']['timestamp'] = 0
+            
+            # 清除模块级缓存
+            from src.lottery import clear_cache
+            clear_cache()
+            
+            # 强制抓取最新数据
+            analyzer = get_lottery_analyzer()
+            fetch_result = analyzer.fetch_latest_results(force_refresh=True)
+            
+            # 重新分析
+            self._log.info('大乐透抓取完成，开始重新分析...')
+            analysis_result = lottery_run_prediction(force_refresh=True)
+            
+            # 更新缓存
+            _CACHE['lottery']['data'] = analysis_result
+            _CACHE['lottery']['timestamp'] = time.time()
+            
+            # 合并结果
+            result = {
+                'success': fetch_result.get('success', False),
+                'source': fetch_result.get('source'),
+                'message': fetch_result.get('message'),
+                'latest_issue': fetch_result.get('latest_issue'),
+                'fetched_count': fetch_result.get('count', 0),
+                'analysis': analysis_result
+            }
             
             return {'result': result}
         except Exception:

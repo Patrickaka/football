@@ -30,9 +30,25 @@ BACKTEST_TRIALS = 80
 PERMUTATION_SHUFFLES = 20  # 置换检验打乱次数，评估命中率是否显著优于随机
 
 # 缓存配置
-CACHE_EXPIRE_SECONDS = 86400  # 24小时缓存过期时间（当天有效）
 _prediction_cache = None
 _cache_time = 0
+
+def _is_today_cache(cache_timestamp):
+    """检查缓存是否是今天的（按自然天判断）"""
+    if cache_timestamp is None or cache_timestamp == 0:
+        return False
+    
+    import datetime
+    cache_date = datetime.date.fromtimestamp(cache_timestamp)
+    today = datetime.date.today()
+    return cache_date == today
+
+def clear_cache():
+    """清除缓存"""
+    global _prediction_cache, _cache_time
+    _prediction_cache = None
+    _cache_time = 0
+    log.info("3D模块缓存已清除")
 
 W_HOT_GLOBAL = 2.5   # 原 4.0；降低热号全局权重，减少同一号码长期霸榜
 W_HOT_POS = 3.0     # 原 5.0；降低分位热号权重，让转移概率有更多发言权
@@ -2075,12 +2091,14 @@ def run_prediction(data=None, force_refresh=False, enable_backtest=False, enable
     """
     global _prediction_cache, _cache_time
     
-    # 检查缓存
+    # 检查缓存（按自然天判断）
     if not force_refresh and _prediction_cache is not None:
-        elapsed = time.time() - _cache_time
-        if elapsed < CACHE_EXPIRE_SECONDS:
-            log.info(f"使用缓存数据（缓存时间：{elapsed:.1f}秒前）")
+        if _is_today_cache(_cache_time):
+            elapsed = time.time() - _cache_time
+            log.info(f"使用今日缓存数据（缓存时间：{elapsed:.1f}秒前）")
             return _prediction_cache
+        else:
+            log.info("缓存已过期（非今日数据），重新抓取")
     
     try:
         if data is None:

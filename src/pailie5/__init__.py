@@ -41,10 +41,26 @@ DATA_FILE = data_path('pailie5_history.json')
 HISTORY_URL = 'https://www.8300.cn/kjhhis/5/200.html'
 NUMBERS = list(range(0, 10))  # 0-9
 
-# 预测结果缓存配置（与3D模块一致）
-CACHE_EXPIRE_SECONDS = 86400  # 24小时缓存过期时间（当天有效）
+# 预测结果缓存配置
 _prediction_cache = None
 _cache_time = 0
+
+def _is_today_cache(cache_timestamp):
+    """检查缓存是否是今天的（按自然天判断）"""
+    if cache_timestamp is None or cache_timestamp == 0:
+        return False
+    
+    import datetime
+    cache_date = datetime.date.fromtimestamp(cache_timestamp)
+    today = datetime.date.today()
+    return cache_date == today
+
+def clear_cache():
+    """清除缓存"""
+    global _prediction_cache, _cache_time
+    _prediction_cache = None
+    _cache_time = 0
+    logger.info("排列五模块缓存已清除")
 
 
 class Pailie5Analyzer:
@@ -66,7 +82,12 @@ class Pailie5Analyzer:
         if os.path.exists(DATA_FILE):
             try:
                 with open(DATA_FILE, 'r', encoding='utf-8') as f:
-                    self.history = json.load(f)
+                    content = f.read().strip()
+                    if not content:
+                        self.history = []
+                        logger.info("排列五历史数据文件为空")
+                    else:
+                        self.history = json.loads(content)
                 logger.info(f"已加载 {len(self.history)} 期排列五历史数据")
             except Exception as e:
                 logger.error(f"加载排列五历史数据失败: {e}")
@@ -222,7 +243,11 @@ class Pailie5Analyzer:
         # 检查是否已存在
         for r in self.history:
             if r['issue'] == issue:
-                # 期号已存在，跳过但返回 True（表示处理成功）
+                # 期号已存在，更新数据
+                r['numbers'] = numbers
+                r['date'] = date
+                r['timestamp'] = datetime.now().isoformat()
+                self._save_history()
                 return True
         
         result = {
@@ -232,24 +257,27 @@ class Pailie5Analyzer:
             'timestamp': datetime.now().isoformat()
         }
         
-        self.history.insert(0, result)
+        self.history.append(result)
+        # 按期号降序排序，确保最新数据在前面
+        self.history.sort(key=lambda x: x['issue'], reverse=True)
         self._save_history()
         return True
     
-    def fetch_latest_results(self, count: int = 10) -> Dict:
+    def fetch_latest_results(self, count: int = 10, force_refresh: bool = False) -> Dict:
         """动态抓取最新开奖号码
         
         尝试从网站抓取最新的排列五开奖结果，如果网络不可用则返回本地数据。
         
         Args:
             count: 要抓取的期数（默认 10 期）
+            force_refresh: 是否强制刷新缓存（默认 False）
         
         Returns:
             包含抓取结果和状态信息的字典
         """
         try:
             # 重新抓取数据
-            fetched_count = self.fetch_history_data(days=1)
+            fetched_count = self.fetch_history_data(days=1, force_refresh=force_refresh)
             
             if fetched_count > 0:
                 # 获取最新的结果
@@ -530,6 +558,7 @@ class Pailie5Analyzer:
         avg_gaps = self.analyze_average_gaps()
         
         max_freq = max(freq.values()) if freq else 1
+        max_freq = max(max_freq, 1)  # 确保至少为1，避免除以零
         max_gap = max(gaps.values()) if gaps else 1
         
         scores = {}
@@ -814,6 +843,22 @@ class Pailie5Analyzer:
         """
         # 准备数据
         numbers = [r['numbers'] for r in self.history]
+        
+        # 检查数据量是否足够
+        if len(numbers) < 30:
+            logger.warning(f"排列五回测数据不足，仅 {len(numbers)} 期，跳过回测")
+            return {
+                'hit_top3': 0,
+                'hit_top5': 0,
+                'hit_ge2_digit': 0,
+                'hit_ge3_digit': 0,
+                'total_trials': 0,
+                'hit_rate_top3': 0,
+                'hit_rate_top5': 0,
+                'avg_correct_digits': 0,
+                'predictions': []
+            }
+        
         if len(numbers) < trials + 10:
             trials = max(20, len(numbers) - 10)
         
@@ -879,6 +924,7 @@ class Pailie5Analyzer:
         pos_freq = self.analyze_position_frequency()
         
         max_freq = max(freq.values()) if freq else 1
+        max_freq = max(max_freq, 1)  # 确保至少为1，避免除以零
         max_gap = max(gaps.values()) if gaps else 1
         
         contributions = {}
@@ -1126,15 +1172,20 @@ def run_prediction(force_refresh=False):
     """
     global _prediction_cache, _cache_time
 
-    # 检查模块级内存缓存
+    # 检查模块级内存缓存（按自然天判断）
     if not force_refresh and _prediction_cache is not None:
-        elapsed = time.time() - _cache_time
-        if elapsed < CACHE_EXPIRE_SECONDS:
-            logger.info(f"使用缓存数据（缓存时间：{elapsed:.1f}秒前）")
+        if _is_today_cache(_cache_time):
+            elapsed = time.time() - _cache_time
+            logger.info(f"使用今日缓存数据（缓存时间：{elapsed:.1f}秒前）")
             return _prediction_cache
+        else:
+            logger.info("缓存已过期（非今日数据），重新计算")
 
     try:
         analyzer = get_pailie5_analyzer()
+
+        # 抓取最新开奖数据
+        analyzer.fetch_history_data(days=1, force_refresh=force_refresh)
 
         # 获取统计数据
         stats = analyzer.get_statistics()

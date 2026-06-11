@@ -1264,8 +1264,42 @@ function renderLottery3d(r) {
   </div>`;
 
   app3d.innerHTML = html;
-  document.getElementById('refresh-3d').onclick = () => loadLottery3d(true);
+  document.getElementById('refresh-3d').onclick = () => refreshLottery3d();
   document.getElementById('run-ml').onclick = () => runMLPrediction();
+}
+
+async function refreshLottery3d() {
+  const btn = document.getElementById('refresh-3d');
+  btn.style.opacity = '0.5';
+  btn.style.cursor = 'not-allowed';
+  
+  app3d.innerHTML = `<div class="status"><span class="spinner"></span>正在重新抓取数据并计算…</div>`;
+  
+  try {
+    // 调用强制刷新API
+    const response = await fetch('/api/3d-refresh', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      }
+    });
+    
+    const result = await response.json();
+    
+    if (result.success) {
+      console.log('3D缓存刷新成功:', result);
+      // 刷新成功后重新加载数据
+      await loadLottery3dData();
+    } else {
+      app3d.innerHTML = `<div class="status error">✗ 刷新失败: ${esc(result.error || '未知错误')}</div>`;
+    }
+  } catch (error) {
+    console.error('3D刷新失败:', error);
+    app3d.innerHTML = `<div class="status error">✗ 刷新失败: ${esc(error.message)}</div>`;
+  } finally {
+    btn.style.opacity = '1';
+    btn.style.cursor = 'pointer';
+  }
 }
 
 async function runMLPrediction() {
@@ -1399,7 +1433,7 @@ async function loadPailie5() {
 
 async function fetchPailie5Data() {
   const appPailie5 = document.getElementById('app-pailie5');
-  appPailie5.innerHTML = `<div class="status"><span class="spinner"></span>正在抓取最新开奖号码…</div>`;
+  appPailie5.innerHTML = `<div class="status"><span class="spinner"></span>正在抓取最新开奖号码并重新分析…</div>`;
   
   try {
     const data = await fetchJson('/api/pailie5/fetch');
@@ -1413,6 +1447,14 @@ async function fetchPailie5Data() {
     const message = result.message || '';
     const latestIssue = result.latest_issue || '';
     
+    // 如果服务器返回了重新分析的数据，直接渲染分析结果
+    if (result.analysis) {
+      pailie5Loaded = true;
+      renderPailie5(result.analysis);
+      return;
+    }
+    
+    // 备用：显示抓取结果和返回按钮
     let html = `<div class="card">`;
     html += `<div class="highlight">`;
     if (success) {
@@ -1639,13 +1681,48 @@ function renderPailie5(r) {
   html += `<div class="section-title">推荐号码</div>`;
   html += `<div class="card">
     <button type="button" style="width:100%;padding:10px;background:var(--accent);color:white;border:none;border-radius:8px;font-size:15px;font-weight:600;cursor:pointer;margin-bottom:8px" onclick="getPailie5Recommend()">🔢 基础推荐</button>
-    <button type="button" style="width:100%;padding:10px;background:var(--card2);color:var(--text);border:1px solid var(--line);border-radius:8px;font-size:14px;cursor:pointer" onclick="getPailie5Ensemble()">🤝 集成投票推荐</button>
+    <button type="button" style="width:100%;padding:10px;background:var(--card2);color:var(--text);border:1px solid var(--line);border-radius:8px;font-size:14px;cursor:pointer;margin-bottom:8px" onclick="getPailie5Ensemble()">🤝 集成投票推荐</button>
+    <button type="button" id="refresh-pailie5" style="width:100%;padding:10px;background:var(--card2);color:var(--accent2);border:1px solid var(--line);border-radius:8px;font-size:14px;cursor:pointer" onclick="refreshPailie5()">↻ 重新抓取并计算</button>
   </div>`;
   
   // ── 推荐结果区域 ──
   html += `<div id="pailie5-recommend"></div>`;
   
   appPailie5.innerHTML = html;
+}
+
+async function refreshPailie5() {
+  const btn = document.getElementById('refresh-pailie5');
+  btn.style.opacity = '0.5';
+  btn.style.cursor = 'not-allowed';
+  
+  const appPailie5 = document.getElementById('app-pailie5');
+  appPailie5.innerHTML = `<div class="status"><span class="spinner"></span>正在重新抓取数据并计算…</div>`;
+  
+  try {
+    const response = await fetch('/api/pailie5-refresh', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      }
+    });
+    
+    const result = await response.json();
+    
+    if (result.success) {
+      console.log('排列五缓存刷新成功:', result);
+      pailie5Loaded = false;
+      await loadPailie5();
+    } else {
+      appPailie5.innerHTML = `<div class="status error">✗ 刷新失败: ${esc(result.error || '未知错误')}</div>`;
+    }
+  } catch (error) {
+    console.error('排列五刷新失败:', error);
+    appPailie5.innerHTML = `<div class="status error">✗ 刷新失败: ${esc(error.message)}</div>`;
+  } finally {
+    btn.style.opacity = '1';
+    btn.style.cursor = 'pointer';
+  }
 }
 
 async function getPailie5Recommend() {
@@ -2050,13 +2127,48 @@ function renderLottery(r) {
         <div class="sub">投票策略</div>
       </div>
     </div>
-    <button type="button" style="width:100%;padding:10px;background:var(--card2);color:var(--text);border:1px solid var(--line);border-radius:8px;font-size:14px;cursor:pointer" onclick="getLotteryEnsemble()">🗳️ 启动投票</button>
+    <button type="button" style="width:100%;padding:10px;background:var(--card2);color:var(--text);border:1px solid var(--line);border-radius:8px;font-size:14px;cursor:pointer;margin-bottom:8px" onclick="getLotteryEnsemble()">🗳️ 启动投票</button>
+    <button type="button" id="refresh-lottery" style="width:100%;padding:10px;background:var(--card2);color:var(--accent2);border:1px solid var(--line);border-radius:8px;font-size:14px;cursor:pointer" onclick="refreshLottery()">↻ 重新抓取并计算</button>
   </div>`;
   
   appLottery.innerHTML = html;
   
   // 自动加载快速推荐
   getLotteryRecommend();
+}
+
+async function refreshLottery() {
+  const btn = document.getElementById('refresh-lottery');
+  btn.style.opacity = '0.5';
+  btn.style.cursor = 'not-allowed';
+  
+  const appLottery = document.getElementById('app-lottery');
+  appLottery.innerHTML = `<div class="status"><span class="spinner"></span>正在重新抓取数据并计算…</div>`;
+  
+  try {
+    const response = await fetch('/api/lottery-refresh', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      }
+    });
+    
+    const result = await response.json();
+    
+    if (result.success) {
+      console.log('大乐透缓存刷新成功:', result);
+      lotteryLoaded = false;
+      await loadLottery();
+    } else {
+      appLottery.innerHTML = `<div class="status error">✗ 刷新失败: ${esc(result.error || '未知错误')}</div>`;
+    }
+  } catch (error) {
+    console.error('大乐透刷新失败:', error);
+    appLottery.innerHTML = `<div class="status error">✗ 刷新失败: ${esc(error.message)}</div>`;
+  } finally {
+    btn.style.opacity = '1';
+    btn.style.cursor = 'pointer';
+  }
 }
 
 async function getLotteryRecommend() {
@@ -2256,7 +2368,7 @@ async function fetchLotteryData() {
   const appLottery = document.getElementById('app-lottery');
   const originalContent = appLottery.innerHTML;
   
-  appLottery.innerHTML = `<div class="status"><span class="spinner"></span>正在抓取最新开奖号码…</div>`;
+  appLottery.innerHTML = `<div class="status"><span class="spinner"></span>正在抓取最新开奖号码并重新分析…</div>`;
   
   try {
     const data = await fetchJson('/api/lottery/fetch');
@@ -2270,7 +2382,37 @@ async function fetchLotteryData() {
     const message = result.message || '';
     const latestIssue = result.latest_issue || '';
     
-    // 重新加载页面
+    // 如果服务器返回了重新分析的数据，直接渲染分析结果
+    if (result.analysis) {
+      lotteryLoaded = true;
+      renderLottery(result.analysis);
+      
+      // 显示抓取结果提示
+      const toast = document.createElement('div');
+      toast.style.cssText = `
+        position: fixed;
+        bottom: 30px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: ${success ? '#2ea043' : '#f85149'};
+        color: white;
+        padding: 12px 24px;
+        border-radius: 8px;
+        font-size: 14px;
+        z-index: 1000;
+        animation: fadeInUp 0.3s ease;
+      `;
+      toast.innerHTML = `${success ? '✅' : '❌'} ${message}${latestIssue ? ' · 最新期号: ' + latestIssue : ''}`;
+      document.body.appendChild(toast);
+      
+      setTimeout(() => {
+        toast.style.animation = 'fadeOutDown 0.3s ease';
+        setTimeout(() => toast.remove(), 300);
+      }, 3000);
+      return;
+    }
+    
+    // 备用：重新加载页面
     lotteryLoaded = false;
     await loadLottery();
     
