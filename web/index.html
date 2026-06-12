@@ -1508,9 +1508,41 @@ function renderLottery3d(r) {
   });
   html += `</div>`;
 
+  // ── 诊断区 1: 推荐稳定度 ──
+  if (r.stability) {
+    const stability = r.stability;
+    const levelColor = stability.level === 'high' ? 'var(--away)' : stability.level === 'low' ? 'var(--warn)' : 'var(--accent2)';
+    const levelText = stability.level === 'high' ? '⚠ 过度稳定' : stability.level === 'low' ? '⚠ 过度随机' : '正常';
+    html += `<div class="section-title">📊 推荐稳定度诊断</div>`;
+    html += `<div class="card">
+      <div class="row"><span class="k">与最近7次重合率</span><span class="v" style="color:${levelColor}">${(stability.score * 100).toFixed(0)}%</span></div>
+      <div class="row"><span class="k">稳定度等级</span><span class="v" style="color:${levelColor}">${levelText}</span></div>
+      <div class="row"><span class="k">调整后探索率</span><span class="v">${(stability.adjusted_exploration_rate * 100).toFixed(0)}%</span></div>
+      <div class="note">判断标准：>80%=过度稳定 · 30%-80%=正常 · <30%=过度随机</div>
+    </div>`;
+  }
+
+  // ── 诊断区 2: Top1 推荐原因拆解 ──
+  if (r.zhixuan && r.zhixuan[0] && r.zhixuan[0].detail) {
+    const detail = r.zhixuan[0].detail;
+    html += `<div class="section-title">🔍 Top1 推荐原因（${r.zhixuan[0].num}）</div>`;
+    html += `<div class="card">
+      <div class="row"><span class="k">总分</span><span class="v"><b>${r.zhixuan[0].score.toFixed(1)}</b></span></div>
+      <div class="row"><span class="k">基础数字分</span><span class="v" style="color:${detail.base_digit > 40 ? 'var(--accent2)' : 'var(--text)'}">${detail.base_digit.toFixed(1)}</span></div>
+      <div class="row"><span class="k">和值跨度</span><span class="v" style="color:${detail.sum_span > 8 ? 'var(--accent2)' : 'var(--text)'}">${detail.sum_span.toFixed(1)}</span></div>
+      <div class="row"><span class="k">胆码加分</span><span class="v" style="color:${detail.danma > 0 ? 'var(--accent2)' : 'var(--text)'}">${detail.danma > 0 ? '+' : ''}${detail.danma.toFixed(1)}</span></div>
+      <div class="row"><span class="k">杀码惩罚</span><span class="v" style="color:${detail.kill < 0 ? 'var(--away)' : 'var(--text)'}">${detail.kill < 0 ? '' : '+'}${detail.kill.toFixed(1)}</span></div>
+      <div class="row"><span class="k">配对加分</span><span class="v" style="color:${detail.pair > 1 ? 'var(--accent2)' : 'var(--text)'}">${detail.pair > 0 ? '+' : ''}${detail.pair.toFixed(1)}</span></div>
+      <div class="row"><span class="k">形态加分</span><span class="v">${detail.pattern > 0 ? '+' : ''}${detail.pattern.toFixed(1)}</span></div>
+      <div class="row"><span class="k">上期重复</span><span class="v">${detail.last_repeat > 0 ? '+' : ''}${detail.last_repeat.toFixed(1)}</span></div>
+      <div class="row"><span class="k">比例匹配</span><span class="v">${detail.ratio_match > 0 ? '+' : ''}${detail.ratio_match.toFixed(1)}</span></div>
+      <div class="row"><span class="k">形态切换</span><span class="v">${detail.form_switch > 0 ? '+' : ''}${detail.form_switch.toFixed(1)}</span></div>
+    </div>`;
+  }
+
   // ── 回测 ──
   if (bt && bt.trials) {
-    html += `<div class="section-title">滚动回测（仅供参考）</div>`;
+    html += `<div class="section-title">📈 滚动回测（仅供参考）</div>`;
     html += `<div class="card">
       <div class="row"><span class="k">回测期数</span><span class="v">${bt.trials}</span></div>
       <div class="row"><span class="k">直选Top3命中</span><span class="v">${pct(bt.top3_rate)} (${bt.top3_hit}/${bt.trials})</span></div>
@@ -1522,15 +1554,161 @@ function renderLottery3d(r) {
       <div class="row"><span class="k">组六四码命中</span><span class="v">${bt.zu6_draws ? pct(bt.zu6_four_rate) + ' (' + bt.zu6_four_hit + '/' + bt.zu6_draws + '，开奖为组六时)' : '—'}</span></div>
       <div class="row"><span class="k">五码组六池含开奖三码</span><span class="v">${bt.zu6_draws ? pct(bt.zu6_pool_rate) + ' (' + bt.zu6_pool_hit + '/' + bt.zu6_draws + ')' : '—'}</span></div>
     </div>`;
+
+    // 诊断区 3: 真实号码排名统计
+    if (bt.actual_rank_avg != null) {
+      html += `<div class="section-title">🎯 真实号码排名诊断</div>`;
+      html += `<div class="card">
+        <div class="row"><span class="k">平均排名</span><span class="v" style="color:${bt.actual_rank_avg < 300 ? 'var(--accent2)' : bt.actual_rank_avg < 500 ? 'var(--warn)' : 'var(--away)'}">${bt.actual_rank_avg}</span></div>
+        <div class="row"><span class="k">中位排名</span><span class="v">${bt.actual_rank_median}</span></div>
+        <div class="row"><span class="k">Top100 覆盖率</span><span class="v">${pct(bt.actual_rank_top100_rate)}</span></div>
+        <div class="row"><span class="k">Top300 覆盖率</span><span class="v">${pct(bt.actual_rank_top300_rate)}</span></div>
+        <div class="note">排名越低越好 · 随机期望排名：500 · Top100期望：10%</div>
+      </div>`;
+    }
+
+    // 诊断区 4: 随机基准对照
+    if (bt.random_rate != null) {
+      const lift = (bt.top_rate - bt.random_rate) * 100;
+      html += `<div class="section-title">🎲 随机基准对照</div>`;
+      html += `<div class="card">
+        <div class="row"><span class="k">模型 Top${n} 命中率</span><span class="v">${pct(bt.top_rate)}</span></div>
+        <div class="row"><span class="k">随机 Top${n} 命中率</span><span class="v">${pct(bt.random_rate)}</span></div>
+        <div class="row"><span class="k">提升</span><span class="v" style="color:${lift > 0 ? 'var(--accent2)' : lift < 0 ? 'var(--away)' : 'var(--text)'}">${lift > 0 ? '+' : ''}${lift.toFixed(1)}%</span></div>
+        <div class="note">理论随机命中率：${pct(n / 1000)}</div>
+      </div>`;
+    }
+
+    // 诊断区 5: 胆码/杀码回测
+    if (bt.dan_kill) {
+      const dk = bt.dan_kill;
+      html += `<div class="section-title">🎯 胆码/杀码回测</div>`;
+      html += `<div class="card">
+        <div class="row"><span class="k">胆码任中一</span><span class="v" style="color:${dk.dan_hit1_rate >= 0.5 ? 'var(--accent2)' : 'var(--text)'}">${pct(dk.dan_hit1_rate)}</span></div>
+        <div class="row"><span class="k">胆码全中</span><span class="v">${pct(dk.dan_hit2_rate)}</span></div>
+        <div class="row"><span class="k">杀码失败率</span><span class="v" style="color:${dk.kill_fail_rate > 0.25 ? 'var(--away)' : 'var(--text)'}">${pct(dk.kill_fail_rate)}</span></div>
+        <div class="note">杀码失败率高建议使用软降权而非硬杀</div>
+      </div>`;
+    }
+
+    // 诊断区 6: 形态预测回测
+    if (bt.form_prediction) {
+      const fp = bt.form_prediction;
+      html += `<div class="section-title">📊 形态预测回测</div>`;
+      html += `<div class="card">
+        <div class="row"><span class="k">形态 Top1 命中</span><span class="v">${pct(fp.form_top1_rate)}</span></div>
+        <div class="row"><span class="k">组六判断精度</span><span class="v">${pct(fp.zu6_precision)}</span></div>
+        <div class="row"><span class="k">组三判断精度</span><span class="v">${pct(fp.zu3_precision)}</span></div>
+      </div>`;
+    }
+
+    // 诊断区 7: 和值/跨度区间回测
+    if (bt.sum_span_interval) {
+      const ssi = bt.sum_span_interval;
+      html += `<div class="section-title">📐 和值/跨度区间回测</div>`;
+      html += `<div class="card">
+        <div class="row"><span class="k">和值 ±2 命中</span><span class="v">${pct(ssi.sum_hit_2_rate)}</span></div>
+        <div class="row"><span class="k">和值 ±3 命中</span><span class="v">${pct(ssi.sum_hit_3_rate)}</span></div>
+        <div class="row"><span class="k">和值 ±4 命中</span><span class="v">${pct(ssi.sum_hit_4_rate)}</span></div>
+        <div class="row"><span class="k">跨度 ±1 命中</span><span class="v">${pct(ssi.span_hit_1_rate)}</span></div>
+        <div class="row"><span class="k">跨度 ±2 命中</span><span class="v">${pct(ssi.span_hit_2_rate)}</span></div>
+      </div>`;
+    }
   }
 
-  // ── 统计 ──
-  html += `<div class="section-title">统计信息</div>`;
+  // ── 版本信息 ──
+  html += `<div class="section-title">📌 版本信息</div>`;
   html += `<div class="card">
+    <div class="row"><span class="k">预测版本</span><span class="v" style="font-family:monospace">${esc(r.version || 'unknown')}</span></div>
     <div class="row"><span class="k">总期数</span><span class="v">${r.total_periods}</span></div>
     <div class="row"><span class="k">最近一期</span><span class="v">${esc(r.period)}</span></div>
     <div class="row"><span class="k">平均和值</span><span class="v">${r.avg_sum}</span></div>
   </div>`;
+
+  // ── 策略模式 ──
+  if (r.strategy_mode) {
+    const modeLabels = {
+      conservative: '保守',
+      balanced: '均衡',
+      explore: '探索'
+    };
+    html += `<div class="section-title">🎯 本期策略模式</div>`;
+    html += `<div class="card">
+      <div class="row"><span class="k">模式</span><span class="v" style="color:${r.strategy_mode.mode === 'conservative' ? 'var(--accent2)' : r.strategy_mode.mode === 'explore' ? 'var(--warn)' : 'var(--text)' }">${modeLabels[r.strategy_mode.mode] || r.strategy_mode.mode}</span></div>
+      <div class="row"><span class="k">原因</span><span class="v">${esc(r.strategy_mode.reason)}</span></div>
+    </div>`;
+  }
+
+  // ── 资金建议 ──
+  if (r.budget_recommendation) {
+    const br = r.budget_recommendation;
+    html += `<div class="section-title">💰 资金/注数建议</div>`;
+    html += `<div class="card">
+      <div class="row"><span class="k">风险等级</span><span class="v" style="color:${br.level === '高' ? 'var(--away)' : br.level === '中' ? 'var(--warn)' : 'var(--text)' }">${br.level}</span></div>
+      <div class="row"><span class="k">建议注数</span><span class="v"><b>${br.suggest_count}</b> 注</span></div>
+      <div class="row"><span class="k">理由</span><span class="v">${esc(br.reason)}</span></div>
+    </div>`;
+  }
+
+  // ── 自动推荐注数 ──
+  if (r.auto_recommend_count) {
+    const arc = r.auto_recommend_count;
+    html += `<div class="section-title">📊 自动推荐注数</div>`;
+    html += `<div class="card">
+      <div class="row"><span class="k">本期推荐</span><span class="v"><b style="font-size:18px">${arc.count}</b> 注</span></div>
+      <div class="row"><span class="k">原因</span><span class="v">${esc(arc.reason)}</span></div>
+    </div>`;
+  }
+
+  // ── 三套策略推荐 ──
+  if (r.strategy_recommendations) {
+    const sr = r.strategy_recommendations;
+    html += `<div class="section-title">🎮 推荐策略组合</div>`;
+    
+    if (sr.conservative && sr.conservative.length > 0) {
+      html += `<div class="card">
+        <div style="font-weight:700;color:var(--accent2);margin-bottom:8px">🔒 保守策略（${sr.conservative.length}注）</div>
+        <div style="letter-spacing:3px">${sr.conservative.map(x => x.num).join(' ')}</div>
+        <div class="note">规则+ML交集，适合少量尝试</div>
+      </div>`;
+    }
+    
+    if (sr.balanced && sr.balanced.length > 0) {
+      html += `<div class="card">
+        <div style="font-weight:700;color:var(--text);margin-bottom:8px">⚖️ 均衡策略（${sr.balanced.length}注）</div>
+        <div style="letter-spacing:3px">${sr.balanced.map(x => x.num).join(' ')}</div>
+        <div class="note">规则主导，少量探索补充（默认推荐）</div>
+      </div>`;
+    }
+    
+    if (sr.explore && sr.explore.length > 0) {
+      html += `<div class="card">
+        <div style="font-weight:700;color:var(--warn);margin-bottom:8px">🔍 探索策略（${sr.explore.length}注）</div>
+        <div style="letter-spacing:3px">${sr.explore.map(x => x.num).join(' ')}</div>
+        <div class="note">ML独有+冷号特征，防止模型过度固定</div>
+      </div>`;
+    }
+  }
+
+  // ── 线上实盘统计 ──
+  if (r.online_stats && r.online_stats.settled_count > 0) {
+    const os = r.online_stats;
+    html += `<div class="section-title">📊 线上实盘统计</div>`;
+    html += `<div class="card">
+      <div class="row"><span class="k">已结算期数</span><span class="v">${os.settled_count}</span></div>
+      <div class="row"><span class="k">Top3 命中</span><span class="v">${os.hit_top3_count}/${os.settled_count} = ${pct(os.hit_top3_rate)}</span></div>
+      <div class="row"><span class="k">Top30 命中</span><span class="v">${os.hit_top30_count}/${os.settled_count} = ${pct(os.hit_top30_rate)}</span></div>
+      <div class="row"><span class="k">≥2码命中</span><span class="v">${os.ge2_digit_count}/${os.settled_count} = ${pct(os.ge2_digit_rate)}</span></div>`;
+    
+    if (os.by_version && Object.keys(os.by_version).length > 0) {
+      html += `<div class="note" style="margin-top:8px">各版本命中率：</div>`;
+      Object.entries(os.by_version).forEach(([ver, stats]) => {
+        html += `<div class="row"><span class="k" style="font-size:12px">${esc(ver)}</span><span class="v">Top30 ${pct(stats.hit_top30_rate)}</span></div>`;
+      });
+    }
+    
+    html += `</div>`;
+  }
 
   html += `<div class="status" style="padding:12px 0;font-size:13px">
     <span style="cursor:pointer;color:var(--accent2)" id="refresh-3d">↻ 重新抓取数据并计算</span>
@@ -1564,7 +1742,7 @@ async function refreshLottery3d() {
     if (result.success) {
       console.log('3D缓存刷新成功:', result);
       // 刷新成功后重新加载数据
-      await loadLottery3dData();
+      await loadLottery3d(true);
     } else {
       app3d.innerHTML = `<div class="status error">✗ 刷新失败: ${esc(result.error || '未知错误')}</div>`;
     }
@@ -1612,26 +1790,59 @@ function renderMLResult(r) {
   </div>`;
 
   // ── 直选推荐 ──
-  html += `<div class="section-title">【直选推荐 ${r.recommendations.length} 注】（按概率排序）</div>`;
-  html += `<div class="card">`;
-  r.recommendations.forEach((item, i) => {
+  const recs = r.recommendations || [];
+  html += `<div class="section-title">【直选推荐 ${recs.length} 注】（按模型分排序）</div>`;
+  html += `<div class="card">
+    <div class="note" style="margin-bottom:10px">模型分：ML模型输出的原始分数 · 相对占比：在Top${recs.length}中的权重占比</div>`;
+  recs.forEach((item, i) => {
     const marker = i < 3 ? '★' : ' ';
+    const model_score = typeof item.model_score === 'number' ? item.model_score : 0;
     html += `<div class="zhixuan">
       <span class="rank">${marker} ${String(i + 1).padStart(2, '0')}</span>
-      <span class="num">${esc(item.num)}</span>
-      <span class="bar"><i style="width:${(item.probability * 100).toFixed(0)}%"></i></span>
-      <span class="score">${(item.probability * 100).toFixed(2)}%</span></div>`;
+      <span class="num">${esc(item.num || '---')}</span>
+      <span class="bar"><i style="width:${(model_score * 100).toFixed(0)}%"></i></span>
+      <span class="score">${model_score.toFixed(3)}</span></div>`;
   });
   html += `</div>`;
 
   // ── Top3 独立显示 ──
+  const top3 = r.top3 || [];
   html += `<div class="section-title">【Top3 重点推荐】</div>`;
   html += `<div class="highlight" style="border-color:var(--warn)">`;
-  r.top3.forEach((item, i) => {
+  top3.forEach((item, i) => {
+    const model_score = typeof item.model_score === 'number' ? item.model_score : 0;
+    const relative_prob = typeof item.relative_prob === 'number' ? item.relative_prob : 0;
     html += `<div class="row"><span class="k">第${i + 1}推荐</span>
-      <span class="v"><b style="font-size:22px;letter-spacing:4px;color:var(--accent2)">${esc(item.num)}</b> · 概率 ${(item.probability * 100).toFixed(2)}%</span></div>`;
+      <span class="v"><b style="font-size:22px;letter-spacing:4px;color:var(--accent2)">${esc(item.num || '---')}</b> · 模型分 ${model_score.toFixed(3)} · Top${recs.length}占比 ${(relative_prob * 100).toFixed(1)}%</span></div>`;
   });
   html += `</div>`;
+
+  // ── 诊断区 4: 规则 vs ML 对比 ──
+  if (r.rule_recommendations) {
+    const ruleSet = new Set(r.rule_recommendations.map(x => x.num));
+    const mlSet = new Set(r.recommendations.map(x => x.num));
+    const both = [...ruleSet].filter(x => mlSet.has(x));
+    const ruleOnly = [...ruleSet].filter(x => !mlSet.has(x));
+    const mlOnly = [...mlSet].filter(x => !ruleSet.has(x));
+    
+    html += `<div class="section-title">⚖️ 规则模型 vs ML 模型对比</div>`;
+    html += `<div class="card">
+      <div class="row"><span class="k">共同推荐</span><span class="v" style="color:var(--accent2)">${both.length} 注</span></div>
+      <div class="row"><span class="k">仅规则推荐</span><span class="v">${ruleOnly.length} 注</span></div>
+      <div class="row"><span class="k">仅 ML 推荐</span><span class="v">${mlOnly.length} 注</span></div>`;
+    
+    if (both.length > 0) {
+      html += `<div class="row"><span class="k">共同号码</span><span class="v" style="color:var(--accent2);letter-spacing:2px">${both.join(' ')}</span></div>`;
+    }
+    if (ruleOnly.length > 0) {
+      html += `<div class="row"><span class="k">规则独有</span><span class="v">${ruleOnly.join(' ')}</span></div>`;
+    }
+    if (mlOnly.length > 0) {
+      html += `<div class="row"><span class="k">ML 独有（探索）</span><span class="v">${mlOnly.join(' ')}</span></div>`;
+    }
+    html += `<div class="note">共同推荐=高置信 · 规则独有=经验偏好 · ML独有=探索候选</div>`;
+    html += `</div>`;
+  }
 
   // ── 特征重要性 ──
   html += `<div class="section-title">【特征重要性】（36 维特征）</div>`;

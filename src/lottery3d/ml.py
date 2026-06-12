@@ -79,11 +79,11 @@ URL = "https://www.8300.cn/kjhhis/3/200.html"
 # 模型参数
 BACKTEST_TRIALS = 80
 TRAIN_RATIO = 0.8  # 时序划分比例
-NEGATIVE_SAMPLES_PER_PERIOD = 100  # 每期负例采样数（150 更接近真实开奖）  
+NEGATIVE_SAMPLES_PER_PERIOD = 30  # 每期负例采样数（减少负例，提高正负样本比例）
 TOP_K = 15  # 推荐注数
 FEATURE_SUBSET_RATIO = 0.8  # 特征选择保留比例
 MIN_VARIANCE = 0.001  # 方差过滤阈值
-TRAINING_WINDOW = 50  # 训练窗口大小（减少以加速）
+TRAINING_WINDOW = 180  # 训练窗口大小（增大以获取更多训练样本）
 
 # 时间衰减训练参数
 TIME_DECAY_RECENT = 30  # 最近 30 期
@@ -588,19 +588,19 @@ def build_training_data(numbers, neg_samples=NEGATIVE_SAMPLES_PER_PERIOD, rng=No
     - 历史数据：权重 1.0
     """
     if rng is None:
-        rng = random.Random(42)
+        rng = random.Random()
     
     X = []
     y = []
     sample_weights = []
     
     # 需要足够的历史数据来构建特征
-    min_history = 30  # 减少最小历史期数
+    min_history = 60
     if len(numbers) <= min_history:
         return None, None, None
     
-    # 使用滑动窗口，只使用最近的数据构建特征（加速）
-    window_size = 60  # 只使用最近 60 期数据构建特征
+    # 使用滑动窗口，只使用最近的数据构建特征
+    window_size = 120
     
     for i in range(min_history, len(numbers)):
         # 使用滑动窗口构建特征
@@ -869,9 +869,9 @@ def backtest_ml(numbers, trials=BACKTEST_TRIALS, train_ratio=TRAIN_RATIO):
         if len(X) < 100:
             continue
         
-        # 训练模型（使用时间衰减权重）
+        # 训练模型（使用集成方法）
         try:
-            model = train_model(X, y, sample_weights=sample_weights)
+            models, selected_indices = train_ensemble(X, y)
         except Exception as e:
             print(f"训练失败：{e}")
             continue
@@ -884,11 +884,12 @@ def backtest_ml(numbers, trials=BACKTEST_TRIALS, train_ratio=TRAIN_RATIO):
             for b in range(10):
                 for c in range(10):
                     features = fe.build_features(a, b, c)
-                    all_probs.append((a, b, c, features))
+                    features_selected = [features[j] for j in selected_indices]
+                    all_probs.append((a, b, c, features_selected))
         
-        # 预测
+        # 预测（使用集成方法）
         X_all = [x[3] for x in all_probs]
-        probs = predict(model, X_all)
+        probs = ensemble_predict(models, X_all)
         
         # 排序
         ranked = sorted(
@@ -914,7 +915,7 @@ def backtest_ml(numbers, trials=BACKTEST_TRIALS, train_ratio=TRAIN_RATIO):
         "top_rate": hit_top / n if n > 0 else 0,
         "top3_hit": hit_top3,
         "top3_rate": hit_top3 / n if n > 0 else 0,
-        "model_type": "random_forest",
+        "model_type": "ensemble",
         "train_ratio": train_ratio,
     }
 
@@ -930,7 +931,7 @@ def predict_current(numbers, top_k=TOP_K, model_type="ensemble"):
     if len(numbers) < 100:
         return {"error": "历史数据不足"}
 
-    window_size = 60
+    window_size = 180
     recent_numbers = numbers[-window_size:]
 
     result = build_training_data(recent_numbers, neg_samples=NEGATIVE_SAMPLES_PER_PERIOD)
@@ -988,12 +989,17 @@ def predict_current(numbers, top_k=TOP_K, model_type="ensemble"):
         key=lambda x: -x[0]
     )
     
-    # 返回 Top K
+    # 计算 Top K 的相对占比
+    top_probs = [probs[i] for i in range(top_k)]
+    total_top_prob = sum(top_probs) or 1.0
+    
+    # 返回 Top K（使用模型分而非概率，避免误导）
     recommendations = []
     for prob, a, b, c in ranked[:top_k]:
         recommendations.append({
             "num": f"{a}{b}{c}",
-            "probability": round(_native_number(prob), 4),
+            "model_score": round(_native_number(prob), 4),
+            "relative_prob": round(_native_number(prob) / total_top_prob, 4),
         })
 
     # 特征重要性（取第一个模型的）

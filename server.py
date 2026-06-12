@@ -462,6 +462,10 @@ class Handler(BaseHTTPRequestHandler):
             self._log.info('predict_current 结果: model_type=%s, recommendations=%d', 
                           result.get('model_type'), len(result.get('recommendations', [])))
 
+            # 获取规则模型推荐用于对比
+            rule_result = run_prediction(data=data, force_refresh=False, enable_backtest=False, use_prediction_cache=False)
+            rule_recommendations = rule_result.get('zhixuan', [])
+            
             formatted = {
                 'model_type': result.get('model_type', 'unknown'),
                 'model_info': result.get('model_info', '未知模型'),
@@ -471,12 +475,24 @@ class Handler(BaseHTTPRequestHandler):
                 'pos_samples': int(result.get('pos_samples', 0)),
                 'neg_samples': int(result.get('neg_samples', 0)),
                 'recommendations': [
-                    {'num': r['num'], 'probability': float(r['probability'])}
+                    {
+                        'num': r['num'],
+                        'model_score': float(r.get('model_score', r.get('probability', 0))),
+                        'relative_prob': float(r.get('relative_prob', 0)),
+                    }
                     for r in result.get('recommendations', [])
                 ],
                 'top3': [
-                    {'num': r['num'], 'probability': float(r['probability'])}
+                    {
+                        'num': r['num'],
+                        'model_score': float(r.get('model_score', r.get('probability', 0))),
+                        'relative_prob': float(r.get('relative_prob', 0)),
+                    }
                     for r in result.get('top3', [])
+                ],
+                'rule_recommendations': [
+                    {'num': r['num'], 'score': float(r.get('score', 0))}
+                    for r in rule_recommendations
                 ],
                 'feature_importance': result.get('feature_importance', []),
             }
