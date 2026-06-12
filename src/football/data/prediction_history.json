@@ -267,5 +267,135 @@
         "xg_total": 3.0
       }
     }
+  },
+  {
+    "match_id": "test_past_match",
+    "league": "测试联赛",
+    "home": "阿森纳",
+    "away": "切尔西",
+    "match_time": "06-10 22:00",
+    "asian": -0.5,
+    "total_line": 2.5,
+    "predicted_scores": {
+      "2-1": 0.15,
+      "1-1": 0.12,
+      "2-0": 0.1
+    },
+    "predicted_1x2": {
+      "H": 0.45,
+      "D": 0.28,
+      "A": 0.27
+    },
+    "time_layers": {
+      "T-24h": null,
+      "T-6h": null,
+      "T-1h": null,
+      "T-15min": null,
+      "final": {
+        "2-1": 0.15,
+        "1-1": 0.12,
+        "2-0": 0.1
+      }
+    },
+    "actual_score": null,
+    "actual_result": null,
+    "settled": false,
+    "sync_status": "retry",
+    "sync_attempts": 1,
+    "last_sync_at": "2026-06-12T16:49:11.045177",
+    "last_sync_error": "未找到赛果",
+    "next_sync_at": "2026-06-12T18:49:11.045187",
+    "created_at": "2026-06-12T16:49:10.780479",
+    "updated_at": "2026-06-12T16:49:10.780488",
+    "odds_snapshot": null
+  },
+  {
+    "match_id": "test_full_sync",
+    "league": "测试联赛",
+    "home": "测试主队",
+    "away": "测试客队",
+    "match_time": "06-10 22:00",
+    "asian": -0.5,
+    "total_line": 2.5,
+    "predicted_scores": {
+      "2-1": 0.15,
+      "1-1": 0.12,
+      "2-0": 0.1
+    },
+    "predicted_1x2": {
+      "H": 0.45,
+      "D": 0.28,
+      "A": 0.27
+    },
+    "time_layers": {
+      "T-24h": null,
+      "T-6h": null,
+      "T-1h": null,
+      "T-15min": null,
+      "final": {
+        "2-1": 0.15,
+        "1-1": 0.12,
+        "2-0": 0.1
+      }
+    },
+    "actual_score": null,
+    "actual_result": null,
+    "settled": false,
+    "sync_status": "retry",
+    "sync_attempts": 1,
+    "last_sync_at": "2026-06-12T16:56:42.440086",
+    "last_sync_error": "未找到赛果",
+    "next_sync_at": "2026-06-12T18:56:42.440100",
+    "created_at": "2026-06-12T16:56:42.016908",
+    "updated_at": "2026-06-12T16:56:42.016915",
+    "odds_snapshot": null
+  },
+  {
+    "match_id": "test_full_sync_001",
+    "league": "世界杯",
+    "home": "墨西哥",
+    "away": "新西兰",
+    "match_time": "06-11 03:00",
+    "asian": -0.5,
+    "total_line": 2.5,
+    "predicted_scores": {
+      "2-1": 0.15,
+      "1-1": 0.12,
+      "2-0": 0.1,
+      "1-0": 0.08
+    },
+    "predicted_1x2": {
+      "H": 0.45,
+      "D": 0.28,
+      "A": 0.27
+    },
+    "time_layers": {
+      "T-24h": null,
+      "T-6h": null,
+      "T-1h": null,
+      "T-15min": null,
+      "final": {
+        "2-1": 0.15,
+        "1-1": 0.12,
+        "2-0": 0.1,
+        "1-0": 0.08
+      }
+    },
+    "actual_score": "1-0",
+    "actual_result": "H",
+    "settled": true,
+    "sync_status": "synced",
+    "sync_attempts": 0,
+    "last_sync_at": null,
+    "last_sync_error": null,
+    "next_sync_at": null,
+    "created_at": "2026-06-12T17:07:01.589168",
+    "updated_at": "2026-06-12T17:07:01.589173",
+    "odds_snapshot": null,
+    "settled_at": "2026-06-12T17:07:01.592261",
+    "hit_top1": false,
+    "hit_top3": false,
+    "hit_top5": true,
+    "hit_1x2": true
   }
 ]

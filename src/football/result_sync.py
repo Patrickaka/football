@@ -221,12 +221,12 @@ class PredictionHistory:
             records = records[-limit:]
         return records
     
-    def get_ready_to_settle(self, minutes: int = 150) -> List[Dict]:
+    def get_ready_to_settle(self, minutes: int = 180) -> List[Dict]:
         """
         获取可以结算的记录（比赛时间已过）
         
         参数：
-            minutes: 比赛结束后等待分钟数（默认150分钟，给足补时）
+            minutes: 比赛开始后等待分钟数（默认180分钟=3小时）
         """
         ready = []
         now = datetime.now()
@@ -366,12 +366,12 @@ class PredictionHistory:
             record['next_sync_at'] = (datetime.now() + timedelta(hours=hours)).isoformat()
             log.debug(f"同步失败，等待 {hours} 小时后重试: {record.get('home')} vs {record.get('away')}")
     
-    def get_ready_to_sync(self, minutes: int = 150) -> List[Dict]:
+    def get_ready_to_sync(self, minutes: int = 180) -> List[Dict]:
         """
         获取可以同步的记录（比赛结束且未结算）
         
         参数：
-            minutes: 比赛结束后等待分钟数（默认150分钟，给足补时）
+            minutes: 比赛开始后等待分钟数（默认180分钟=3小时）
         """
         ready = []
         now = datetime.now()
@@ -719,14 +719,16 @@ def fetch_result_by_match_id(match_id: str) -> Optional[Dict]:
         import urllib.request
         import re
         
-        url = f"https://odds.500.com/close/?id={match_id}"
+        url = f"https://www.500.com/close/?id={match_id}"
         
         req = urllib.request.Request(url, headers={
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8'
         })
         
         with urllib.request.urlopen(req, timeout=10) as response:
-            html = response.read().decode('utf-8')
+            html = response.read().decode('gbk', errors='ignore')
             
             # 解析比分
             score_match = re.search(r'<[^>]*class=["\']score["\'][^>]*>([\d]+)-([\d]+)</span>', html)
@@ -747,42 +749,61 @@ def fetch_result_by_team_and_date(home: str, away: str, match_time: str) -> Opti
     try:
         import urllib.request
         import re
+        from datetime import datetime
         
         # 提取日期
         date_match = re.search(r'(\d{2}-\d{2})', match_time)
         if not date_match:
             return None
         
-        search_date = date_match.group(1)
+        search_date_short = date_match.group(1)
         
-        # 构建搜索 URL
-        url = f"https://odds.500.com/close/?date={search_date}"
+        # 构建完整日期格式 2026-06-12
+        year = datetime.now().year
+        search_date = f"{year}-{search_date_short}"
         
-        req = urllib.request.Request(url, headers={
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        })
+        # 尝试多个可能的URL（使用正确的参数 e= 而不是 date=）
+        urls = [
+            f"https://live.500.com/?e={search_date}",
+            f"https://live.500.com/index.php?e={search_date}",
+        ]
         
-        with urllib.request.urlopen(req, timeout=10) as response:
-            html = response.read().decode('utf-8')
-            
-            # 查找包含两队名称的比赛
-            # 简化匹配逻辑
-            pattern = rf'{re.escape(home)}.*?(\d+)-(\d+).*?{re.escape(away)}|{re.escape(away)}.*?(\d+)-(\d+).*?{re.escape(home)}'
-            match = re.search(pattern, html)
-            
-            if match:
-                groups = match.groups()
-                if groups[0] and groups[1]:
-                    home_goals = int(groups[0])
-                    away_goals = int(groups[1])
-                elif groups[2] and groups[3]:
-                    away_goals = int(groups[2])
-                    home_goals = int(groups[3])
-                else:
-                    return None
+        for url in urls:
+            try:
+                req = urllib.request.Request(url, headers={
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                    'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8'
+                })
                 
-                score = f"{home_goals}-{away_goals}"
-                return _parse_score_string(score)
+                with urllib.request.urlopen(req, timeout=10) as response:
+                    html = response.read().decode('gbk', errors='ignore')
+                    
+                    # 查找包含两队名称的比赛
+                    # 使用更精确的模式，比分通常是小数字（0-10），日期是两位数
+                    pattern = rf'{re.escape(home)}.*?<[^>]*>(\d{1,2})-(\d{1,2})</.*?>.*?{re.escape(away)}|{re.escape(away)}.*?<[^>]*>(\d{1,2})-(\d{1,2})</.*?>.*?{re.escape(home)}'
+                    match = re.search(pattern, html, re.DOTALL)
+                    
+                    if match:
+                        groups = match.groups()
+                        if groups[0] and groups[1]:
+                            home_goals = int(groups[0])
+                            away_goals = int(groups[1])
+                        elif groups[2] and groups[3]:
+                            away_goals = int(groups[2])
+                            home_goals = int(groups[3])
+                        else:
+                            continue
+                        
+                        # 验证比分合理性（通常不超过10球）
+                        if home_goals <= 10 and away_goals <= 10:
+                            score = f"{home_goals}-{away_goals}"
+                            log.info(f"成功抓取赛果: {home} vs {away} -> {score}")
+                            return _parse_score_string(score)
+                        
+            except Exception as e:
+                log.debug(f"尝试URL {url} 失败: {e}")
+                continue
         
     except Exception as e:
         log.debug(f"通过球队名+日期抓取失败: {e}")

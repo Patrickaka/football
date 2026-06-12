@@ -1,0 +1,22 @@
+{
+  "2-1": {
+    "count": 1,
+    "success": 0,
+    "predicted_sum": 0.15
+  },
+  "1-1": {
+    "count": 1,
+    "success": 0,
+    "predicted_sum": 0.12
+  },
+  "2-0": {
+    "count": 1,
+    "success": 0,
+    "predicted_sum": 0.1
+  },
+  "1-0": {
+    "count": 1,
+    "success": 1,
+    "predicted_sum": 0.08
+  }
+}

@@ -1215,6 +1215,24 @@ def _candidate_ips():
     return sorted(ips, key=lambda ip: (not _is_private_lan(ip), ip))
 
 
+def _start_background_sync():
+    """启动后台自动同步线程"""
+    try:
+        from src.football.result_sync import start_background_sync
+        import threading
+        
+        # 使用后台线程启动同步（非阻塞）
+        sync_thread = threading.Thread(
+            target=start_background_sync,
+            args=(7200,),  # 2小时间隔
+            daemon=True,
+            name='ResultSyncThread'
+        )
+        sync_thread.start()
+        log.info('后台自动同步线程已启动')
+    except Exception as e:
+        log.warning(f"启动后台同步失败: {e}")
+
 def main():
     server = ThreadingHTTPServer((HOST, PORT), Handler)
     local_url = f'http://localhost:{PORT}'
@@ -1228,6 +1246,10 @@ def main():
         log.info('鉴权: 已启用 (用户: %s)', ', '.join(sorted(CREDENTIALS)))
     else:
         log.warning('鉴权: 未启用 — 公网暴露前请设置 FOOTBALL_USERS')
+    
+    # 启动后台自动同步
+    _start_background_sync()
+    
     log.info('=' * 50)
     try:
         webbrowser.open(local_url)
