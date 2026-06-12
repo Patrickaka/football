@@ -87,27 +87,46 @@ class BacktestRunner:
         hit_total = str(actual_goals) in top2_totals
         
         # 让球方向
-        asian = record.get('asian', 0)
+        asian = record.get('asian')
         hit_handicap = False
-        if asian is not None and actual_result:
-            # 主队让球情况下
-            if asian < 0:  # 主队让球
-                if actual_result == 'H':
-                    hit_handicap = True
-            elif asian > 0:  # 主队受让
-                if actual_result == 'A':
-                    hit_handicap = True
+        if asian is not None and actual_score:
+            home_score, away_score = map(int, actual_score.split('-'))
+            handicap_margin = home_score - away_score - asian
+            
+            if asian > 0:
+                # 主队让球，主队赢盘需要净胜超过盘口
+                hit_handicap = handicap_margin > 0
+            elif asian < 0:
+                # 客队让球（主队受让），主队赢盘条件
+                hit_handicap = handicap_margin > 0
+            else:
+                # 平手盘，主队赢盘即胜负分
+                hit_handicap = home_score != away_score
         
-        # 计算 Brier Score（Top1）
-        p1 = predicted_scores.get(top1_score, 0) if top1_score else 0
-        brier_score = (1 - p1) ** 2 if hit_top1 else p1 ** 2
+        # 计算比分 LogLoss
+        actual_prob = predicted_scores.get(actual_score, 1e-15)
+        score_logloss = -math.log(max(1e-15, min(1 - 1e-15, actual_prob)))
         
-        # 计算 LogLoss
-        log_loss = 0.0
-        for score, prob in predicted_scores.items():
-            actual_bin = 1.0 if score == actual_score else 0.0
-            prob_clipped = max(1e-15, min(1 - 1e-15, prob))
-            log_loss -= actual_bin * math.log(prob_clipped)
+        # 计算比分 Brier Score（多分类版本）
+        all_scores = set(predicted_scores.keys()) | {actual_score}
+        score_brier = sum(
+            (predicted_scores.get(score, 0.0) - (1.0 if score == actual_score else 0.0)) ** 2
+            for score in all_scores
+        )
+        
+        # 计算胜平负 LogLoss 和 Brier
+        predicted_1x2 = record.get('predicted_1x2', {})
+        result_logloss = 0.0
+        result_brier = 0.0
+        if actual_result and predicted_1x2:
+            actual_prob_1x2 = predicted_1x2.get(actual_result, 1e-15)
+            result_logloss = -math.log(max(1e-15, min(1 - 1e-15, actual_prob_1x2)))
+            
+            all_results = {'H', 'D', 'A'}
+            result_brier = sum(
+                (predicted_1x2.get(res, 0.0) - (1.0 if res == actual_result else 0.0)) ** 2
+                for res in all_results
+            )
         
         result = {
             'match_id': record.get('match_id'),
@@ -123,8 +142,10 @@ class BacktestRunner:
             'hit_1x2': hit_1x2,
             'hit_total': hit_total,
             'hit_handicap': hit_handicap,
-            'brier_score': brier_score,
-            'log_loss': log_loss,
+            'score_logloss': score_logloss,
+            'score_brier': score_brier,
+            'result_logloss': result_logloss,
+            'result_brier': result_brier,
         }
         
         self.results.append(result)

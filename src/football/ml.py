@@ -768,7 +768,7 @@ class MarketTimingPredictor:
             包含各比分概率的字典
         """
         if not self.is_trained or self.model is None:
-            return self._default_prediction()
+            return None
         
         try:
             # 预处理

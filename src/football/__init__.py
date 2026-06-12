@@ -5016,6 +5016,7 @@ def analyze_match(match, force_refresh=False):
         match: 比赛信息字典
         force_refresh: 是否强制刷新缓存（重新抓取数据）
     """
+    log.info("========== analyze_match 函数开始执行 ==========")
     mid = match['match_id']
     home, away = match.get('home', ''), match.get('away', '')
     league_profile = resolve_league_profile(match.get('league', ''))
@@ -5027,6 +5028,51 @@ def analyze_match(match, force_refresh=False):
         cached_result = get_cache('match_analysis', cache_key)
         if cached_result is not None:
             log.info(f"使用缓存的比赛分析结果: {home} vs {away}")
+            # 即使使用缓存，也要确保预测记录被保存
+            try:
+                from .result_sync import save_prediction
+                
+                model = cached_result.get('model', {})
+                top_scores = model.get('top_scores', [])
+                result_probs = model.get('result_probs', {})
+                
+                predicted_scores = {
+                    f"{item['home']}-{item['away']}": item['prob']
+                    for item in top_scores
+                }
+                
+                # 处理 result_probs 为 None 的情况
+                predicted_1x2 = {
+                    'H': result_probs.get('home', 0.33),
+                    'D': result_probs.get('draw', 0.34),
+                    'A': result_probs.get('away', 0.33),
+                }
+                
+                save_prediction(
+                    match_id=mid,
+                    league=match.get('league', ''),
+                    home=home,
+                    away=away,
+                    match_time=match.get('time', ''),
+                    predicted_scores=predicted_scores,
+                    predicted_1x2=predicted_1x2,
+                    asian=cached_result.get('asian', {}).get('handicap'),
+                    total_line=cached_result.get('total', {}).get('close_line'),
+                    odds_data={
+                        'asian': cached_result.get('asian'),
+                        'euro': cached_result.get('euro'),
+                        'total': cached_result.get('total'),
+                    }
+                )
+                log.info(f"缓存结果的预测记录已保存: {home} vs {away}")
+                if 'model_status' in cached_result:
+                    cached_result['model_status']['prediction_saved'] = True
+                    log.info(f"更新缓存结果的 model_status['prediction_saved'] 为 True")
+                    # 将更新后的缓存重新保存
+                    set_cache('match_analysis', cache_key, cached_result)
+                    log.info(f"已将更新后的缓存重新保存")
+            except Exception as e:
+                log.error(f"保存缓存结果的预测记录失败: {e}")
             return cached_result
 
     try:
@@ -5502,22 +5548,65 @@ def analyze_match(match, force_refresh=False):
     except Exception:
         ml_reason = "ML模块不可用"
     
+    # 获取真实统计数据
+    pending_count = 0
+    settled_count = 0
+    calib_sample_count = 0
+    market_sample_count = 0
+    prediction_saved = False  # 预测记录保存状态
+    
+    try:
+        from .result_sync import get_history_stats
+        history_stats = get_history_stats()
+        pending_count = history_stats.get('unsettled', 0)
+        settled_count = history_stats.get('settled', 0)
+    except Exception as e:
+        log.debug(f"获取历史统计失败: {e}")
+    
+    try:
+        from .bayesian_calibration import get_calibrator
+        calibrator = get_calibrator()
+        calib_sample_count = sum(v.get('count', 0) for v in calibrator.history.values())
+    except Exception as e:
+        log.debug(f"获取校准器统计失败: {e}")
+    
+    try:
+        from .market_db import MarketScoreDB
+        db = MarketScoreDB()
+        market_sample_count = sum(db.sample_counts.values())
+    except Exception as e:
+        log.debug(f"获取盘口库统计失败: {e}")
+    
+    # 判断相似盘口质量等级
+    similar_quality = '-'
+    if similar_market_result:
+        avg_dist = similar_market_result.get('avg_distance', 1)
+        count = similar_market_result.get('count', 0)
+        if count >= 100 and avg_dist <= 0.25:
+            similar_quality = '高'
+        elif count >= 50 and avg_dist <= 0.4:
+            similar_quality = '中'
+        else:
+            similar_quality = '低'
+    
     model_status = {
+        'prediction_saved': False,  # 稍后更新
         'result_sync': {
             'enabled': True,
-            'pending_count': 0,
-            'settled_count': 0
+            'pending_count': pending_count,
+            'settled_count': settled_count
         },
         'bayesian_calibration': {
             'enabled': BAYESIAN_CALIBRATION_AVAILABLE,
-            'sample_count': 0
+            'sample_count': calib_sample_count
         },
         'market_db': {
             'enabled': True,
-            'sample_count': 0
+            'sample_count': market_sample_count
         },
         'similar_market': {
             'enabled': SIMILAR_MARKET_AVAILABLE,
+            'quality': similar_quality,
             'sample_count': similar_market_result.get('count', 0) if similar_market_result else 0,
             'avg_distance': similar_market_result.get('avg_distance', 0) if similar_market_result else 0,
             'confidence': similar_market_result.get('confidence', 0) if similar_market_result else 0
@@ -5583,6 +5672,60 @@ def analyze_match(match, force_refresh=False):
     if CACHE_AVAILABLE:
         set_cache('match_analysis', cache_key, result)
         log.debug(f"比赛分析结果已缓存: {home} vs {away}")
+    
+    # 保存预测记录用于赛后回填
+    log.info(f"开始保存预测记录: {home} vs {away}")
+    try:
+        from .result_sync import save_prediction
+        log.info(f"导入 save_prediction 成功")
+
+        model = result.get('model', {})
+        top_scores = model.get('top_scores', [])
+        result_probs = model.get('result_probs', {})
+        log.info(f"获取模型数据: top_scores={len(top_scores)}, result_probs={result_probs}")
+
+        predicted_scores = {
+            f"{item['home']}-{item['away']}": item['prob']
+            for item in top_scores
+        }
+        log.info(f"构建 predicted_scores: {len(predicted_scores)} 条")
+
+        # 处理 result_probs 为 None 的情况
+        predicted_1x2 = {
+            'H': result_probs.get('home', 0.33),
+            'D': result_probs.get('draw', 0.34),
+            'A': result_probs.get('away', 0.33),
+        }
+        log.info(f"构建 predicted_1x2: {predicted_1x2}")
+
+        save_prediction(
+            match_id=mid,
+            league=match.get('league', ''),
+            home=home,
+            away=away,
+            match_time=match.get('time', ''),
+            predicted_scores=predicted_scores,
+            predicted_1x2=predicted_1x2,
+            asian=asian.get('handicap'),
+            total_line=total.get('close_line'),
+            odds_data={
+                'asian': asian,
+                'euro': euro,
+                'total': total,
+            }
+        )
+        prediction_saved = True
+        log.info(f"预测记录已保存: {home} vs {away}")
+        # 更新模型状态中的保存状态
+        if 'model_status' in result:
+            result['model_status']['prediction_saved'] = True
+            log.info(f"更新 model_status['prediction_saved'] 为 True")
+            # 更新缓存以包含最新的 prediction_saved 状态
+            if CACHE_AVAILABLE:
+                set_cache('match_analysis', cache_key, result)
+                log.info(f"已更新缓存中的 prediction_saved 状态")
+    except Exception as e:
+        log.error(f"保存预测记录失败: {e}", exc_info=True)
     
     return result
 

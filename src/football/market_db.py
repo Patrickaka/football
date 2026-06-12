@@ -372,6 +372,22 @@ class MarketScoreDB:
         self.db[key][score] += 1.0
         self.sample_counts[key] += 1
     
+    def add_match_result(self, asian: float, ou: float, score: str):
+        """
+        赛后结算时添加比赛结果（兼容接口）
+        
+        参数：
+            asian: 亚盘让球值
+            ou: 大小球线
+            score: 比分字符串（如 "2-1"）
+        """
+        asian = normalize_asian(asian)
+        ou = normalize_ou(ou)
+        if asian is None or ou is None or not score:
+            return
+        self.add_record(asian, ou, score)
+        self._normalize_all()
+    
     def add_records(self, records: List[Dict]):
         """批量添加记录"""
         for record in records:

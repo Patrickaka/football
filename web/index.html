@@ -166,6 +166,11 @@
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.05);
     border-color: rgba(44, 58, 78, 0.8);
 }
+  .card.model-health { border-color: rgba(46, 160, 67, 0.3); }
+  .status-item { display: flex; align-items: flex-start; gap: 10px; padding: 6px 0; font-size: 13px; }
+  .status-item .status-dot { font-size: 16px; }
+  .status-item .status-name { color: var(--text); font-weight: 500; }
+  .status-item .status-desc { color: var(--muted); font-size: 12px; margin-top: 2px; }
   .card h3 { font-size: 15px; margin-bottom: 12px; color: var(--accent2);
     display: flex; align-items: center; gap: 6px; }
   .row { display: flex; justify-content: space-between; gap: 12px;
@@ -542,6 +547,7 @@
     <button type="button" class="tab" data-tab="lottery3d" role="tab">🎲 福彩3D</button>
     <button type="button" class="tab" data-tab="pailie5" role="tab">🔢 排列五</button>
     <button type="button" class="tab" data-tab="lottery" role="tab">🎯 大乐透</button>
+    <button type="button" class="tab" data-tab="predictions" role="tab">📋 预测记录</button>
   </div>
   <div id="panel-football" class="tab-panel active">
     <div id="search-wrap" style="display:none"></div>
@@ -555,6 +561,9 @@
   </div>
   <div id="panel-lottery" class="tab-panel">
     <div id="app-lottery"></div>
+  </div>
+  <div id="panel-predictions" class="tab-panel">
+    <div id="app-predictions"></div>
   </div>
   <div class="disclaimer" id="disclaimer">
     ⚠ 以上分析仅为概率统计参考，不构成任何投注建议。请理性对待！
@@ -594,11 +603,171 @@ const TAB_META = {
     desc: '数据来源：官方开奖数据 · 多模型集成投票 + 周期识别 + 特征贡献度分析',
     disclaimer: '⚠ 大乐透开奖具有随机性，以上分析仅为历史统计参考，不构成任何投注建议。请理性对待！',
   },
+  predictions: {
+    title: '📋 预测记录',
+    desc: '自动赛果同步 · 预测历史 · 回测统计',
+    disclaimer: '⚠ 预测记录由系统自动保存和更新，无需人工维护。',
+  },
 };
 
 const pct = x => x != null ? (x * 100).toFixed(1) + '%' : '0%';
 const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c =>
   ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+function renderModelStatus(status) {
+  if (!status) return '';
+
+  const item = (ok, name, desc) => `
+    <div class="status-item">
+      <span class="status-dot">${ok ? '✅' : '⚠️'}</span>
+      <div>
+        <div class="status-name">${esc(name)}</div>
+        <div class="status-desc">${esc(desc)}</div>
+      </div>
+    </div>`;
+
+  let html = `<div class="card model-health"><h3>🧠 模型状态</h3>`;
+
+  html += item(
+    status.prediction_saved,
+    '预测记录',
+    status.prediction_saved ? '本场预测已保存，可用于赛后回填' : '本场预测未保存，赛后无法参与校准'
+  );
+
+  if (status.result_sync) {
+    html += item(
+      status.result_sync.enabled,
+      '赛后回填',
+      `待回填 ${status.result_sync.pending_count || 0} 场 / 已回填 ${status.result_sync.settled_count || 0} 场`
+    );
+  }
+
+  if (status.bayesian_calibration) {
+    html += item(
+      status.bayesian_calibration.enabled,
+      '贝叶斯校准',
+      `历史样本 ${status.bayesian_calibration.sample_count || 0} 条`
+    );
+  }
+
+  if (status.market_db) {
+    html += item(
+      status.market_db.enabled,
+      '盘口比分库',
+      `历史样本 ${status.market_db.sample_count || 0} 场`
+    );
+  }
+
+  if (status.similar_market) {
+    html += item(
+      status.similar_market.enabled,
+      '相似盘口',
+      `质量${status.similar_market.quality || '-'}，样本 ${status.similar_market.sample_count || 0} 场`
+    );
+  }
+
+  if (status.ml) {
+    html += item(
+      status.ml.enabled,
+      'ML 模型',
+      status.ml.enabled ? '已参与融合' : (status.ml.reason || '未参与融合')
+    );
+  }
+
+  html += `</div>`;
+  return html;
+}
+
+function renderModelWeights(weights) {
+  if (!weights) return '';
+
+  const labels = {
+    market: '市场盘口',
+    team: '球队近期',
+    elo: 'ELO',
+    similar: '相似盘口',
+    ml: 'ML'
+  };
+
+  let html = `<div class="card"><h3>⚖️ 模型融合权重</h3>`;
+
+  Object.entries(labels).forEach(([key, label]) => {
+    const val = Number(weights[key] || 0);
+    html += `<div class="zhixuan">
+      <span class="rank">${esc(label)}</span>
+      <span class="num">${(val * 100).toFixed(0)}%</span>
+      <span class="bar"><i style="width:${Math.max(val * 100, 2).toFixed(0)}%"></i></span>
+      <span class="score">${val === 0 ? '未参与' : pct(val)}</span>
+    </div>`;
+  });
+
+  html += `</div>`;
+  return html;
+}
+
+function renderCalibrationEffect(list) {
+  if (!list || !list.length) return '';
+
+  let html = `<div class="card"><h3>🎚️ 贝叶斯校准影响</h3>`;
+  html += `<div class="row" style="color:var(--muted)">
+    <span class="k">比分</span>
+    <span class="v">原始概率 / 校准后 / 变化</span>
+  </div>`;
+
+  list.slice(0, 8).forEach(x => {
+    const delta = Number(x.delta || 0);
+    html += `<div class="row">
+      <span class="k">${esc(x.score)}</span>
+      <span class="v">
+        ${pct(x.before)} → ${pct(x.after)}
+        <span style="color:${delta >= 0 ? 'var(--accent2)' : 'var(--away)'}"">
+          ${delta >= 0 ? '+' : ''}${(delta * 100).toFixed(1)}%
+        </span>
+        ${x.sample_count != null ? ` · 样本 ${x.sample_count}` : ''}
+      </span>
+    </div>`;
+  });
+
+  html += `</div>`;
+  return html;
+}
+
+function renderSimilarMarketDetail(detail) {
+  if (!detail) return '';
+
+  const quality = detail.quality || detail.sample_quality || {};
+  const level = quality.level || detail.quality_level || '-';
+  const enabled = detail.fusion_enabled !== false;
+
+  let html = `<div class="card"><h3>🧩 相似盘口质量</h3>
+    <div class="row"><span class="k">样本数</span><span class="v">${detail.count || detail.sample_count || 0}</span></div>
+    <div class="row"><span class="k">平均距离</span><span class="v">${detail.avg_distance != null ? detail.avg_distance.toFixed(3) : '-'}</span></div>
+    <div class="row"><span class="k">同联赛占比</span><span class="v">${pct(quality.same_league_ratio || detail.same_league_ratio)}</span></div>
+    <div class="row"><span class="k">近赛季占比</span><span class="v">${pct(quality.recent_season_ratio || detail.recent_season_ratio)}</span></div>
+    <div class="row"><span class="k">质量等级</span><span class="v" style="color:${level === '高' ? 'var(--accent2)' : level === '中' ? 'var(--warn)' : 'var(--away)'}"">${esc(level)}</span></div>
+    <div class="row"><span class="k">融合状态</span><span class="v">${enabled ? '已参与概率融合' : '仅展示，未参与融合'}</span></div>`;
+
+  if (detail.top_scores && detail.top_scores.length) {
+    html += `<div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--line)">
+      <div style="font-size:12px;color:var(--muted);margin-bottom:6px">常见比分分布</div>`;
+    detail.top_scores.slice(0, 5).forEach(x => {
+      html += `<div class="row"><span class="k">${esc(x.score)}</span><span class="v">${pct(x.prob)}</span></div>`;
+    });
+    html += `</div>`;
+  }
+
+  if (detail.result_dist) {
+    html += `<div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--line)">
+      <div style="font-size:12px;color:var(--muted);margin-bottom:6px">赛果分布</div>
+      <div class="row"><span class="k">主胜</span><span class="v">${pct(detail.result_dist.home)}</span></div>
+      <div class="row"><span class="k">平局</span><span class="v">${pct(detail.result_dist.draw)}</span></div>
+      <div class="row"><span class="k">客胜</span><span class="v">${pct(detail.result_dist.away)}</span></div>
+    </div>`;
+  }
+
+  html += `</div>`;
+  return html;
+}
 
 /** 本地根路径部署为 ''；子路径如 /football/ 时自动加前缀 */
 function apiPrefix() {
@@ -870,6 +1039,11 @@ function renderResult(r) {
     ${modelInfo.length ? `<div class="meta" style="color:${'var(--warn)'}">${modelInfo.join(' · ')}</div>` : ''}
     ${cf && cf.score != null ? `<div class="meta" style="color:${cf.level === 'low' ? 'var(--away)' : 'var(--accent2)'}">置信度 ${esc(cf.label)} (${(cf.score * 100).toFixed(0)}%)</div>` : ''}</div>`;
 
+  html += renderModelStatus(r.model_status);
+  html += renderModelWeights(r.model_weights);
+  html += renderCalibrationEffect(r.calibration_effect);
+  html += renderSimilarMarketDetail(r.similar_market_detail);
+
   html += `<div class="card"><h3>🀄 亚盘分析</h3>
     <div class="row"><span class="k">终盘让球</span><span class="v">${a.handicap != null ? (a.handicap > 0 ? '+' : '') + a.handicap : '-'}</span></div>
     <div class="row"><span class="k">开盘让球</span><span class="v">${a.open_handicap != null ? (a.open_handicap > 0 ? '+' : '') + a.open_handicap : '-'}</span></div>
@@ -992,35 +1166,37 @@ function renderResult(r) {
   const lamHome = md.lam_home != null ? md.lam_home : 0;
   const lamAway = md.lam_away != null ? md.lam_away : 0;
   const marketUsed = md.market_db_used != null && md.market_db_used;
-  html += `<div class="card"><h3>🎯 Top 5 候选比分 <span style="color:var(--muted);font-weight:400;font-size:12px">（含冷热过滤${marketUsed ? ' · 历史库融合' : ''}）</span></h3>
+  
+  const probabilityRank = r.probability_rank || md.top_scores || [];
+  html += `<div class="card"><h3>🎯 模型概率 Top5 <span style="color:var(--muted);font-weight:400;font-size:12px">（含冷热过滤${marketUsed ? ' · 历史库融合' : ''}）</span></h3>
     <div class="row" style="padding-bottom:8px"><span class="k">期望进球</span><span class="v">主队 λ=${lamHome.toFixed(2)} / 客队 λ=${lamAway.toFixed(2)}</span></div>
     ${marketUsed ? `<div class="row"><span class="k">融合权重</span><span class="v">泊松模型 60% + 历史盘口 40%</span></div>` : ''}`;
-  top.forEach((s, i) => {
+  probabilityRank.slice(0, 5).forEach((s, i) => {
     const prob = s.prob != null ? s.prob : 0;
     const barWidth = maxProb > 0 ? (prob / maxProb * 100).toFixed(0) : 0;
     html += `<div class="score">
       <span class="rank">#${i + 1}</span>
-      <span class="sc">${esc(m.home)} ${s.home} - ${s.away} ${esc(m.away)}</span>
-      <span class="res res-${s.result}">${s.result}</span>
+      <span class="sc">${esc(m.home)} ${s.home || (s.score ? s.score.split('-')[0] : '-')} - ${s.away || (s.score ? s.score.split('-')[1] : '-')} ${esc(m.away)}</span>
+      <span class="res res-${s.result || (s.home > s.away ? '主胜' : s.home < s.away ? '客胜' : '平局')}">${s.result || (s.home > s.away ? '主胜' : s.home < s.away ? '客胜' : '平局')}</span>
       <span class="bar"><i style="width:${barWidth}%"></i></span>
       <span class="pct">${pct(prob)} ${heatLabel(s.heat)}</span></div>`;
   });
   html += `</div>`;
 
-  const recommend = md && md.recommend ? md.recommend : [];
+  const recommendRank = r.recommend_rank || md.recommend || [];
   const recTitle = cf && cf.level === 'low'
-    ? '⭐ 推荐：低置信仅 1 个比分'
-    : `⭐ 推荐：最可能的 ${recommend.length} 个比分`;
+    ? '⭐ 最终策略推荐：低置信仅 1 个比分'
+    : `⭐ 最终策略推荐：${recommendRank.length} 个比分`;
   html += `<h3 style="color:var(--accent2);font-size:15px;margin:18px 0 10px">${recTitle}</h3>`;
   if (cf && cf.notes && cf.notes.length) {
     html += `<div class="status" style="padding:0 0 12px;font-size:13px;text-align:left">${cf.notes.map(esc).join('；')}</div>`;
   }
-  recommend.forEach((s, i) => {
+  recommendRank.forEach((s, i) => {
     const recProb = s.prob != null ? s.prob : 0;
     const reasons = s.reasons && s.reasons.length ? s.reasons : [];
     html += `<div class="rec">
-      <div class="title"><span class="star">★</span> ${esc(m.home)} ${s.home} : ${s.away} ${esc(m.away)} <span class="star">★</span></div>
-      <div class="sub">第${i + 1}推荐 · 结果：${s.result} · 比分概率 ${pct(recProb)}</div>
+      <div class="title"><span class="star">★</span> ${esc(m.home)} ${s.home || (s.score ? s.score.split('-')[0] : '-')} : ${s.away || (s.score ? s.score.split('-')[1] : '-')} ${esc(m.away)} <span class="star">★</span></div>
+      <div class="sub">第${i + 1}推荐 · 结果：${s.result || (s.home > s.away ? '主胜' : s.home < s.away ? '客胜' : '平局')} · 比分概率 ${pct(recProb)}${s.recommend_score != null ? ' · 推荐评分 ' + pct(s.recommend_score) : ''}</div>
       <div class="reasons">${reasons.map(x => `<span>${esc(x)}</span>`).join('')}</div></div>`;
   });
 
@@ -1111,7 +1287,7 @@ function switchTab(tab) {
   pageTitle.textContent = meta.title;
   pageDesc.textContent = meta.desc;
   document.getElementById('disclaimer').innerHTML = meta.disclaimer;
-  location.hash = tab === 'lottery3d' ? '3d' : tab === 'pailie5' ? 'pailie5' : tab === 'lottery' ? 'lottery' : 'football';
+  location.hash = tab === 'lottery3d' ? '3d' : tab === 'pailie5' ? 'pailie5' : tab === 'lottery' ? 'lottery' : tab === 'predictions' ? 'predictions' : 'football';
   if (tab === 'football') {
     if (!allMatches.length) loadMatches();
     else showListView();
@@ -1121,6 +1297,8 @@ function switchTab(tab) {
     loadPailie5();
   } else if (tab === 'lottery') {
     loadLottery();
+  } else if (tab === 'predictions') {
+    loadPredictions();
   }
 }
 
@@ -2541,7 +2719,172 @@ async function fetchLotteryData() {
 
 function initPage() {
   const hash = location.hash.replace('#', '');
-  switchTab(hash === '3d' ? 'lottery3d' : hash === 'pailie5' ? 'pailie5' : hash === 'lottery' ? 'lottery' : 'football');
+  switchTab(hash === '3d' ? 'lottery3d' : hash === 'pailie5' ? 'pailie5' : hash === 'lottery' ? 'lottery' : hash === 'predictions' ? 'predictions' : 'football');
+}
+
+async function loadPredictions() {
+  const app = document.getElementById('app-predictions');
+  app.innerHTML = `<div class="status"><span class="spinner"></span>正在加载预测记录…</div>`;
+  
+  try {
+    const [syncStatus, recordsData] = await Promise.all([
+      fetchJson('/api/sync/status'),
+      fetchJson('/api/predictions')
+    ]);
+    
+    const sync = syncStatus.result || {};
+    const records = recordsData.result?.records || [];
+    
+    let html = '';
+    
+    // ── 自动同步状态卡片 ──
+    html += `<div class="card model-health"><h3>🔄 自动赛果同步</h3>
+      <div class="status-item">
+        <span class="status-dot">✅</span>
+        <div>
+          <div class="status-name">已回填</div>
+          <div class="status-desc">${sync.settled || 0} 场</div>
+        </div>
+      </div>
+      <div class="status-item">
+        <span class="status-dot">⏳</span>
+        <div>
+          <div class="status-name">待同步</div>
+          <div class="status-desc">${sync.pending_sync || 0} 场</div>
+        </div>
+      </div>
+      <div class="status-item ${sync.failed > 0 ? '' : ''}">
+        <span class="status-dot">${sync.failed > 0 ? '⚠️' : '✅'}</span>
+        <div>
+          <div class="status-name">同步失败</div>
+          <div class="status-desc">${sync.failed || 0} 场</div>
+        </div>
+      </div>
+      ${sync.last_sync_at ? `<div class="status-item">
+        <span class="status-dot">🕐</span>
+        <div>
+          <div class="status-name">最近同步</div>
+          <div class="status-desc">${sync.last_sync_at?.replace('T', ' ').slice(0, 19) || '-'}</div>
+        </div>
+      </div>` : ''}
+    </div>`;
+    
+    // ── 操作按钮 ──
+    html += `<div style="display:flex;gap:10px;margin-bottom:16px">
+      <button type="button" onclick="triggerSync()" style="flex:1;padding:10px;background:var(--card2);color:var(--text);border:1px solid var(--line);border-radius:8px;font-size:14px;cursor:pointer">
+        🔁 立即同步一次
+      </button>
+      ${sync.failed > 0 ? `<button type="button" onclick="hideFailedRecords()" style="flex:1;padding:10px;background:var(--card2);color:var(--muted);border:1px solid var(--line);border-radius:8px;font-size:14px;cursor:pointer">
+        🧹 隐藏失败记录
+      </button>` : ''}
+    </div>`;
+    
+    // ── 预测记录列表 ──
+    html += `<div class="section-title">📋 预测记录（共 ${records.length} 条）</div>`;
+    
+    if (records.length === 0) {
+      html += `<div class="card">
+        <div class="status" style="padding:20px">暂无预测记录。点击足球预测标签页查看比赛并进行预测。</div>
+      </div>`;
+    } else {
+      records.forEach((record, idx) => {
+        const statusMap = {
+          'pending': { label: '等待自动同步', color: 'var(--muted)' },
+          'ready': { label: '准备同步', color: 'var(--warn)' },
+          'synced': { label: '已回填', color: 'var(--accent2)' },
+          'retry': { label: '重试中', color: 'var(--warn)' },
+          'failed': { label: '同步失败', color: 'var(--away)' },
+          'ignored': { label: '已隐藏', color: 'var(--muted)' },
+        };
+        const status = statusMap[record.sync_status] || statusMap['pending'];
+        
+        // 获取预测比分Top1
+        const predictedScores = record.predicted_scores || {};
+        const topScore = Object.entries(predictedScores).sort((a, b) => b[1] - a[1])[0];
+        const topScoreStr = topScore ? `${topScore[0]} (${(topScore[1] * 100).toFixed(1)}%)` : '-';
+        
+        html += `<div class="card" style="${idx > 0 ? 'margin-top:8px' : ''}">
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <div>
+              <div style="font-weight:600;font-size:15px">${esc(record.home)} vs ${esc(record.away)}</div>
+              <div style="color:var(--muted);font-size:12px;margin-top:2px">${esc(record.league || '')} · ${esc(record.match_time || '')}</div>
+            </div>
+            <div style="text-align:right">
+              <div style="color:${status.color};font-size:13px;font-weight:500">${status.label}</div>
+              ${record.sync_attempts > 0 ? `<div style="color:var(--muted);font-size:11px">失败${record.sync_attempts}次</div>` : ''}
+            </div>
+          </div>`;
+        
+        if (record.settled) {
+          // 已结算
+          const hitTop1 = record.hit_top1 ? '✅' : '❌';
+          const hitTop3 = record.hit_top3 ? '✅' : '❌';
+          html += `<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--line);display:flex;gap:16px;font-size:13px">
+            <div><span style="color:var(--muted)">预测：</span>${topScoreStr}</div>
+            <div><span style="color:var(--muted)">实际：</span><b style="color:var(--accent2)">${esc(record.actual_score || '-')}</b></div>
+            <div><span style="color:var(--muted)">Top1：</span>${hitTop1}</div>
+            <div><span style="color:var(--muted)">Top3：</span>${hitTop3}</div>
+          </div>`;
+        } else if (record.sync_status === 'failed') {
+          // 同步失败
+          html += `<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--line);font-size:12px">
+            <div style="color:var(--away)">失败原因：${esc(record.last_sync_error || '未知')}</div>
+            ${record.next_sync_at ? `<div style="color:var(--muted);margin-top:2px">下次重试：${record.next_sync_at?.replace('T', ' ').slice(0, 16) || '-'}</div>` : ''}
+          </div>`;
+        } else {
+          // 待同步
+          html += `<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--line);font-size:12px">
+            <div><span style="color:var(--muted)">预测Top1：</span>${topScoreStr}</div>
+            ${record.next_sync_at ? `<div style="color:var(--muted);margin-top:2px">预计同步：${record.next_sync_at?.replace('T', ' ').slice(0, 16) || '-'}</div>` : ''}
+          </div>`;
+        }
+        
+        html += `</div>`;
+      });
+    }
+    
+    app.innerHTML = html;
+  } catch (e) {
+    app.innerHTML = `<div class="status error">加载失败：${esc(e.message)}</div>`;
+  }
+}
+
+async function triggerSync() {
+  const btn = event.target;
+  const originalText = btn.textContent;
+  btn.textContent = '同步中...';
+  btn.disabled = true;
+  
+  try {
+    const data = await fetchJson('/api/sync/trigger');
+    if (data.result) {
+      alert(`同步完成：${data.result.message || '同步成功'}`);
+      loadPredictions();
+    } else {
+      alert('同步失败：' + (data.error || '未知错误'));
+    }
+  } catch (e) {
+    alert('同步失败：' + e.message);
+  } finally {
+    btn.textContent = originalText;
+    btn.disabled = false;
+  }
+}
+
+async function hideFailedRecords() {
+  if (!confirm('确定要隐藏所有失败记录吗？')) return;
+  
+  try {
+    const data = await fetchJson('/api/sync/hide_failed');
+    if (data.result?.success) {
+      alert('已隐藏所有失败记录');
+      loadPredictions();
+    } else {
+      alert('操作失败：' + (data.error || '未知错误'));
+    }
+  } catch (e) {
+    alert('操作失败：' + e.message);
+  }
 }
 
 initPage();

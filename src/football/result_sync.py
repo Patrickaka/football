@@ -10,6 +10,20 @@
 3. 自动抓取实际比分
 4. 更新校准库、盘口库、ELO、命中率统计
 
+同步状态：
+- pending: 等待比赛结束
+- ready: 可以同步
+- synced: 已回填
+- retry: 等待重试
+- failed: 多次失败，不再重试
+- ignored: 不参与回填
+
+重试策略：
+- 失败1次：2小时后再试
+- 失败2次：6小时后再试
+- 失败3次：24小时后再试
+- 失败5次：标记为failed
+
 数据结构：
 {
     "match_id": "123456",
@@ -24,6 +38,11 @@
     "actual_score": null,
     "actual_result": null,
     "settled": false,
+    "sync_status": "pending",      # 新增：同步状态
+    "sync_attempts": 0,            # 新增：同步尝试次数
+    "last_sync_at": null,          # 新增：上次同步时间
+    "last_sync_error": null,       # 新增：上次同步错误
+    "next_sync_at": null,          # 新增：下次同步时间
     "created_at": "..."
 }
 """
@@ -42,6 +61,45 @@ log = logging.getLogger('football')
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), 'data')
 HISTORY_FILE = os.path.join(DATA_DIR, 'prediction_history.json')
+
+
+def infer_time_layer(match_time_str: str) -> str:
+    """
+    根据比赛时间推断当前预测应该记录到哪个时间层
+    
+    参数：
+        match_time_str: 比赛时间字符串（格式："06-14 09:00"）
+    
+    返回：
+        时间层标识: 'T-24h', 'T-6h', 'T-1h', 'T-15min', 'final'
+    """
+    try:
+        now = datetime.now()
+        for fmt in ['%m-%d %H:%M', '%Y-%m-%d %H:%M', '%Y/%m/%d %H:%M']:
+            try:
+                match_time = datetime.strptime(match_time_str, fmt)
+                if match_time.year == 1900:
+                    match_time = match_time.replace(year=now.year)
+                break
+            except ValueError:
+                continue
+        else:
+            return 'final'
+        
+        diff_minutes = (match_time - now).total_seconds() / 60
+        
+        if diff_minutes >= 24 * 60:
+            return 'T-24h'
+        if diff_minutes >= 6 * 60:
+            return 'T-6h'
+        if diff_minutes >= 60:
+            return 'T-1h'
+        if diff_minutes >= 15:
+            return 'T-15min'
+        return 'final'
+    except Exception as e:
+        log.debug(f"推断时间层失败: {e}")
+        return 'final'
 
 
 class PredictionHistory:
@@ -102,6 +160,16 @@ class PredictionHistory:
                     'updated_at': datetime.now().isoformat(),
                     'odds_snapshot': odds_data,
                 })
+                
+                # 更新对应时间层的预测
+                layer = infer_time_layer(match_time)
+                if 'time_layers' not in record:
+                    record['time_layers'] = {}
+                record['time_layers']['final'] = predicted_scores  # 始终更新最终预测
+                # 只在该层为None时才更新（保留更早时间点的预测）
+                if record['time_layers'].get(layer) is None:
+                    record['time_layers'][layer] = predicted_scores
+                
                 self._save()
                 return
         
@@ -129,6 +197,12 @@ class PredictionHistory:
             'actual_score': None,
             'actual_result': None,
             'settled': False,
+            # 同步状态字段
+            'sync_status': 'pending',
+            'sync_attempts': 0,
+            'last_sync_at': None,
+            'last_sync_error': None,
+            'next_sync_at': None,
             'created_at': datetime.now().isoformat(),
             'updated_at': datetime.now().isoformat(),
             'odds_snapshot': odds_data,
@@ -209,7 +283,28 @@ class PredictionHistory:
                 return True
         return False
     
-    def update_result(self, match_id: str, actual_score: str, actual_result: str):
+    def _calculate_hit_flags(self, record: Dict) -> Dict:
+        """计算命中标志"""
+        actual_score = record.get('actual_score')
+        actual_result = record.get('actual_result')
+        predicted_scores = record.get('predicted_scores', {})
+        predicted_1x2 = record.get('predicted_1x2', {})
+        
+        sorted_scores = sorted(predicted_scores.items(), key=lambda x: -x[1])
+        top1 = sorted_scores[0][0] if sorted_scores else None
+        top3 = [s for s, _ in sorted_scores[:3]]
+        top5 = [s for s, _ in sorted_scores[:5]]
+        
+        pred_result = max(predicted_1x2.items(), key=lambda x: x[1])[0] if predicted_1x2 else None
+        
+        return {
+            'hit_top1': actual_score == top1,
+            'hit_top3': actual_score in top3,
+            'hit_top5': actual_score in top5,
+            'hit_1x2': pred_result == actual_result,
+        }
+    
+    def update_result(self, match_id: str, actual_score: str, actual_result: str, error: str = None):
         """
         更新比赛结果
         
@@ -217,27 +312,162 @@ class PredictionHistory:
             match_id: 比赛ID
             actual_score: 实际比分 "2-1"
             actual_result: 实际结果 "H"/"D"/"A"
+            error: 同步错误信息（可选）
         """
         for record in self.records:
             if record.get('match_id') == match_id:
-                record['actual_score'] = actual_score
-                record['actual_result'] = actual_result
-                record['settled'] = True
-                record['settled_at'] = datetime.now().isoformat()
+                if actual_score and actual_result:
+                    # 成功结算
+                    record['actual_score'] = actual_score
+                    record['actual_result'] = actual_result
+                    record['settled'] = True
+                    record['settled_at'] = datetime.now().isoformat()
+                    record['sync_status'] = 'synced'
+                    
+                    # 计算命中结果
+                    record.update(self._calculate_hit_flags(record))
+                    
+                    # 更新各模块
+                    self._update_calibrator(record)
+                    self._update_market_db(record)
+                    self._update_score_frequency_db(record)
+                    
+                    log.info(f"结算比赛: {record['home']} vs {record['away']} -> {actual_score} ({actual_result})")
+                else:
+                    # 同步失败
+                    self._handle_sync_failure(record, error or '无法获取赛果')
+                
                 self._save()
-                
-                # 更新贝叶斯校准库
-                self._update_calibrator(record)
-                
-                # 更新盘口聚类库
-                self._update_market_db(record)
-                
-                # 更新盘口比分频率库
-                self._update_score_frequency_db(record)
-                
-                log.info(f"结算比赛: {record['home']} vs {record['away']} -> {actual_score} ({actual_result})")
                 return True
         return False
+    
+    def _handle_sync_failure(self, record: Dict, error: str):
+        """处理同步失败"""
+        attempts = record.get('sync_attempts', 0) + 1
+        record['sync_attempts'] = attempts
+        record['last_sync_at'] = datetime.now().isoformat()
+        record['last_sync_error'] = error
+        
+        # 计算下次重试时间
+        retry_intervals = {
+            1: 2,    # 2小时
+            2: 6,    # 6小时
+            3: 24,   # 24小时
+            4: 48,   # 48小时
+        }
+        
+        if attempts >= 5:
+            record['sync_status'] = 'failed'
+            record['next_sync_at'] = None
+            log.warning(f"同步失败超过5次，标记为失败: {record.get('home')} vs {record.get('away')}")
+        else:
+            hours = retry_intervals.get(attempts, 24)
+            record['sync_status'] = 'retry'
+            record['next_sync_at'] = (datetime.now() + timedelta(hours=hours)).isoformat()
+            log.debug(f"同步失败，等待 {hours} 小时后重试: {record.get('home')} vs {record.get('away')}")
+    
+    def get_ready_to_sync(self, minutes: int = 150) -> List[Dict]:
+        """
+        获取可以同步的记录（比赛结束且未结算）
+        
+        参数：
+            minutes: 比赛结束后等待分钟数（默认150分钟，给足补时）
+        """
+        ready = []
+        now = datetime.now()
+        
+        for record in self.records:
+            if record.get('settled', False):
+                continue
+            
+            sync_status = record.get('sync_status', 'pending')
+            if sync_status in ('synced', 'failed', 'ignored'):
+                continue
+            
+            # 检查是否在重试等待中
+            if sync_status == 'retry':
+                next_sync = record.get('next_sync_at')
+                if next_sync:
+                    try:
+                        next_time = datetime.fromisoformat(next_sync)
+                        if now < next_time:
+                            continue
+                    except:
+                        pass
+            
+            # 检查比赛是否已结束
+            match_time_str = record.get('match_time')
+            if not match_time_str:
+                continue
+            
+            try:
+                for fmt in ['%Y-%m-%d %H:%M:%S', '%Y-%m-%d %H:%M', '%m-%d %H:%M']:
+                    try:
+                        match_time = datetime.strptime(match_time_str, fmt)
+                        if fmt == '%m-%d %H:%M':
+                            match_time = match_time.replace(year=now.year)
+                        break
+                    except ValueError:
+                        continue
+                else:
+                    continue
+                
+                settle_time = match_time + timedelta(minutes=minutes)
+                
+                if now >= settle_time:
+                    record['sync_status'] = 'ready'
+                    ready.append(record)
+                    
+            except Exception:
+                continue
+        
+        return ready
+    
+    def get_sync_status_summary(self) -> Dict:
+        """获取同步状态汇总"""
+        pending = 0
+        ready = 0
+        synced = 0
+        retry = 0
+        failed = 0
+        ignored = 0
+        
+        last_sync = None
+        
+        for record in self.records:
+            status = record.get('sync_status', 'pending')
+            
+            if status == 'pending':
+                pending += 1
+            elif status == 'ready':
+                ready += 1
+            elif status == 'synced':
+                synced += 1
+            elif status == 'retry':
+                retry += 1
+            elif status == 'failed':
+                failed += 1
+            elif status == 'ignored':
+                ignored += 1
+            
+            last_sync_at = record.get('last_sync_at')
+            if last_sync_at:
+                try:
+                    sync_time = datetime.fromisoformat(last_sync_at)
+                    if last_sync is None or sync_time > last_sync:
+                        last_sync = sync_time
+                except:
+                    pass
+        
+        return {
+            'total': len(self.records),
+            'settled': synced,
+            'pending_sync': pending + ready,
+            'retry': retry,
+            'failed': failed,
+            'ignored': ignored,
+            'last_sync_at': last_sync.isoformat() if last_sync else None,
+        }
     
     def _update_calibrator(self, record: Dict):
         """更新贝叶斯校准库"""
@@ -260,17 +490,17 @@ class PredictionHistory:
     def _update_market_db(self, record: Dict):
         """更新盘口聚类库"""
         try:
-            from .market_db import MarketScoreDB
+            from .market_clustering import get_cluster
             
-            db = MarketScoreDB()
+            cluster = get_cluster()
             
             asian = record.get('asian')
             total_line = record.get('total_line')
             actual_score = record.get('actual_score', '')
             
             if asian is not None and total_line is not None and actual_score:
-                db.add_match_result(asian, total_line, actual_score)
-                db.save()
+                cluster.add_match(asian, total_line, actual_score)
+                cluster.save()
                 log.debug(f"已更新盘口聚类库")
         except Exception as e:
             log.debug(f"更新盘口聚类库失败: {e}")
@@ -428,50 +658,67 @@ def save_prediction(match_id: str, league: str, home: str, away: str,
 
 def sync_results():
     """同步比赛结果"""
-    ready = _global_history.get_ready_to_settle()
+    return auto_sync_results()
+
+
+def auto_sync_results():
+    """
+    自动同步比赛结果（三层兜底）
+    1. 第一优先：match_id 对应赛果页面
+    2. 第二优先：主队 + 客队 + 比赛日期模糊匹配
+    3. 第三优先：放弃自动同步，标记 failed
+    """
+    ready = _global_history.get_ready_to_sync()
     
     if not ready:
-        return {'synced': 0, 'message': '没有需要结算的比赛'}
+        return {'synced': 0, 'failed': 0, 'message': '没有需要同步的比赛'}
     
     synced = 0
+    failed = 0
     
     for record in ready:
         match_id = record['match_id']
-        league = record['league']
         home = record['home']
+        away = record['away']
+        match_time = record.get('match_time', '')
+        league = record.get('league', '')
         
         try:
-            # 尝试从网络抓取实际比分
-            actual_score, actual_result = _fetch_result(match_id, league, home)
+            # 三层兜底抓取赛果
+            result = fetch_result_by_match_id(match_id)
+            if not result:
+                result = fetch_result_by_team_and_date(home, away, match_time)
             
-            if actual_score:
-                _global_history.update_result(match_id, actual_score, actual_result)
+            if result:
+                _global_history.update_result(match_id, result['score'], result['result'])
                 synced += 1
+                log.info(f"同步成功: {home} vs {away} -> {result['score']}")
             else:
-                log.warning(f"无法获取比赛结果: {home} vs {record['away']}")
+                _global_history.update_result(match_id, None, None, error='未找到赛果')
+                failed += 1
+                log.warning(f"无法获取比赛结果: {home} vs {away}")
                 
         except Exception as e:
-            log.error(f"同步比赛结果失败: {e}")
+            _global_history.update_result(match_id, None, None, error=str(e))
+            failed += 1
+            log.error(f"同步比赛结果异常: {home} vs {away} - {e}")
     
     return {
         'synced': synced,
+        'failed': failed,
         'total': len(ready),
-        'message': f'结算了 {synced}/{len(ready)} 场比赛'
+        'message': f'结算了 {synced}/{len(ready)} 场比赛，失败 {failed} 场'
     }
 
 
-def _fetch_result(match_id: str, league: str, home: str) -> Tuple[Optional[str], Optional[str]]:
+def fetch_result_by_match_id(match_id: str) -> Optional[Dict]:
     """
-    从网络抓取比赛结果
-    
-    返回：(actual_score, actual_result)
+    第一优先：通过 match_id 抓取赛果
     """
     try:
-        # 尝试从 odds.500.com 获取结果
         import urllib.request
         import re
         
-        # 使用比赛ID或球队名搜索
         url = f"https://odds.500.com/close/?id={match_id}"
         
         req = urllib.request.Request(url, headers={
@@ -482,28 +729,94 @@ def _fetch_result(match_id: str, league: str, home: str) -> Tuple[Optional[str],
             html = response.read().decode('utf-8')
             
             # 解析比分
-            # 格式示例: <span class="score">2-1</span>
             score_match = re.search(r'<[^>]*class=["\']score["\'][^>]*>([\d]+)-([\d]+)</span>', html)
             
             if score_match:
-                home_goals = int(score_match.group(1))
-                away_goals = int(score_match.group(2))
-                actual_score = f"{home_goals}-{away_goals}"
-                
-                # 计算结果
-                if home_goals > away_goals:
-                    actual_result = 'H'
-                elif home_goals < away_goals:
-                    actual_result = 'A'
-                else:
-                    actual_result = 'D'
-                
-                return actual_score, actual_result
+                return _parse_score_result(score_match)
         
     except Exception as e:
-        log.debug(f"抓取比赛结果失败: {e}")
+        log.debug(f"通过 match_id 抓取失败: {e}")
     
-    return None, None
+    return None
+
+
+def fetch_result_by_team_and_date(home: str, away: str, match_time: str) -> Optional[Dict]:
+    """
+    第二优先：通过球队名和日期模糊匹配抓取赛果
+    """
+    try:
+        import urllib.request
+        import re
+        
+        # 提取日期
+        date_match = re.search(r'(\d{2}-\d{2})', match_time)
+        if not date_match:
+            return None
+        
+        search_date = date_match.group(1)
+        
+        # 构建搜索 URL
+        url = f"https://odds.500.com/close/?date={search_date}"
+        
+        req = urllib.request.Request(url, headers={
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        })
+        
+        with urllib.request.urlopen(req, timeout=10) as response:
+            html = response.read().decode('utf-8')
+            
+            # 查找包含两队名称的比赛
+            # 简化匹配逻辑
+            pattern = rf'{re.escape(home)}.*?(\d+)-(\d+).*?{re.escape(away)}|{re.escape(away)}.*?(\d+)-(\d+).*?{re.escape(home)}'
+            match = re.search(pattern, html)
+            
+            if match:
+                groups = match.groups()
+                if groups[0] and groups[1]:
+                    home_goals = int(groups[0])
+                    away_goals = int(groups[1])
+                elif groups[2] and groups[3]:
+                    away_goals = int(groups[2])
+                    home_goals = int(groups[3])
+                else:
+                    return None
+                
+                score = f"{home_goals}-{away_goals}"
+                return _parse_score_string(score)
+        
+    except Exception as e:
+        log.debug(f"通过球队名+日期抓取失败: {e}")
+    
+    return None
+
+
+def _parse_score_result(score_match) -> Optional[Dict]:
+    """解析比分匹配结果"""
+    home_goals = int(score_match.group(1))
+    away_goals = int(score_match.group(2))
+    return _parse_score_string(f"{home_goals}-{away_goals}")
+
+
+def _parse_score_string(score_str: str) -> Optional[Dict]:
+    """解析比分字符串"""
+    try:
+        parts = score_str.split('-')
+        if len(parts) != 2:
+            return None
+        
+        home_goals = int(parts[0])
+        away_goals = int(parts[1])
+        
+        if home_goals > away_goals:
+            result = 'H'
+        elif home_goals < away_goals:
+            result = 'A'
+        else:
+            result = 'D'
+        
+        return {'score': score_str, 'result': result}
+    except:
+        return None
 
 
 def get_history_stats() -> Dict:
@@ -511,28 +824,100 @@ def get_history_stats() -> Dict:
     return _global_history.get_stats()
 
 
-def start_background_sync(interval_seconds: int = 300):
+def get_sync_status_summary() -> Dict:
+    """获取同步状态汇总"""
+    return _global_history.get_sync_status_summary()
+
+
+def get_prediction_records(include_hidden: bool = False) -> List[Dict]:
     """
-    启动后台定时同步线程
+    获取预测记录列表
     
     参数：
-        interval_seconds: 同步间隔（秒），默认5分钟
+        include_hidden: 是否包含已失败的记录
     """
-    def sync_loop():
-        while True:
-            try:
-                result = sync_results()
-                if result['synced'] > 0:
-                    log.info(f"后台同步: {result['message']}")
-            except Exception as e:
-                log.error(f"后台同步异常: {e}")
-            
-            time.sleep(interval_seconds)
+    records = []
+    for record in _global_history.records:
+        if not include_hidden:
+            if record.get('sync_status') == 'failed':
+                continue
+        
+        records.append({
+            'match_id': record.get('match_id'),
+            'league': record.get('league'),
+            'home': record.get('home'),
+            'away': record.get('away'),
+            'match_time': record.get('match_time'),
+            'settled': record.get('settled', False),
+            'actual_score': record.get('actual_score'),
+            'sync_status': record.get('sync_status', 'pending'),
+            'sync_attempts': record.get('sync_attempts', 0),
+            'last_sync_error': record.get('last_sync_error'),
+            'next_sync_at': record.get('next_sync_at'),
+            'hit_top1': record.get('hit_top1'),
+            'hit_top3': record.get('hit_top3'),
+            'predicted_scores': record.get('predicted_scores'),
+        })
     
-    thread = Thread(target=sync_loop, daemon=True)
-    thread.start()
-    log.info(f"已启动后台同步线程，间隔 {interval_seconds} 秒")
-    return thread
+    # 按比赛时间倒序排列
+    records.sort(key=lambda x: x.get('match_time', ''), reverse=True)
+    return records
+
+
+def hide_failed_records():
+    """隐藏所有失败记录（标记为 ignored）"""
+    for record in _global_history.records:
+        if record.get('sync_status') == 'failed':
+            record['sync_status'] = 'ignored'
+    _global_history._save()
+    log.info("已隐藏所有失败记录")
+
+
+def start_background_sync(interval_seconds: int = 7200):
+    """
+    启动后台定时同步线程（使用 APScheduler）
+    
+    参数：
+        interval_seconds: 同步间隔（秒），默认2小时
+    """
+    try:
+        from apscheduler.schedulers.background import BackgroundScheduler
+        from apscheduler.schedulers.blocking import BlockingScheduler
+        
+        scheduler = BlockingScheduler(timezone="Asia/Shanghai")
+        
+        # 每2小时同步一次
+        scheduler.add_job(
+            auto_sync_results,
+            'interval',
+            seconds=interval_seconds,
+            id='football_result_sync',
+            replace_existing=True
+        )
+        
+        scheduler.start()
+        log.info(f"已启动后台同步调度器，间隔 {interval_seconds} 秒")
+        return scheduler
+        
+    except ImportError:
+        # 如果没有 APScheduler，使用简单线程
+        log.warning("APScheduler 未安装，使用简单线程调度")
+        
+        def sync_loop():
+            while True:
+                try:
+                    result = auto_sync_results()
+                    if result['synced'] > 0 or result['failed'] > 0:
+                        log.info(f"后台同步: {result['message']}")
+                except Exception as e:
+                    log.error(f"后台同步异常: {e}")
+                
+                time.sleep(interval_seconds)
+        
+        thread = Thread(target=sync_loop, daemon=True)
+        thread.start()
+        log.info(f"已启动后台同步线程，间隔 {interval_seconds} 秒")
+        return thread
 
 
 # ==================== 测试 ====================

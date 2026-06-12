@@ -234,6 +234,14 @@ class Handler(BaseHTTPRequestHandler):
         elif path == '/api/model/backtest_stats':
             params = parse_qs(route.query)
             self._serve_json(self._backtest_stats_payload(params))
+        elif path == '/api/predictions':
+            self._serve_json(self._predictions_payload())
+        elif path == '/api/sync/status':
+            self._serve_json(self._sync_status_payload())
+        elif path == '/api/sync/trigger':
+            self._serve_json(self._sync_trigger_payload())
+        elif path == '/api/sync/hide_failed':
+            self._serve_json(self._sync_hide_failed_payload())
         else:
             self._send_json_error(404, f'Not Found: {route.path}')
         self._log_request(200, start)
@@ -1027,7 +1035,7 @@ class Handler(BaseHTTPRequestHandler):
         try:
             from src.football.result_sync import PredictionHistory
             from src.football.bayesian_calibration import get_calibrator
-            from src.football.market_db import MarketDB
+            from src.football.market_db import MarketScoreDB
             from src.football.similar_market import SimilarMarketDB
             from src.football.dynamic_elo import get_team_elo
             
@@ -1040,7 +1048,7 @@ class Handler(BaseHTTPRequestHandler):
             calib_sample_count = sum(v['count'] for v in calibrator.history.values())
             
             # 盘口历史库状态
-            market_db = MarketDB()
+            market_db = MarketScoreDB()
             market_sample_count = market_db.count()
             
             # 相似盘口状态
@@ -1139,6 +1147,46 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:
             self._log.error('获取回测统计失败', exc_info=True)
             return {'error': f'获取失败: {str(e)}'}
+
+    def _predictions_payload(self):
+        """获取预测记录列表"""
+        try:
+            from src.football.result_sync import get_prediction_records
+            records = get_prediction_records(include_hidden=False)
+            return {'result': {'records': records, 'count': len(records)}}
+        except Exception as e:
+            self._log.error('获取预测记录失败', exc_info=True)
+            return {'error': f'获取失败: {str(e)}'}
+
+    def _sync_status_payload(self):
+        """获取自动同步状态"""
+        try:
+            from src.football.result_sync import get_sync_status_summary, auto_sync_results
+            summary = get_sync_status_summary()
+            return {'result': summary}
+        except Exception as e:
+            self._log.error('获取同步状态失败', exc_info=True)
+            return {'error': f'获取失败: {str(e)}'}
+
+    def _sync_trigger_payload(self):
+        """手动触发一次同步"""
+        try:
+            from src.football.result_sync import auto_sync_results
+            result = auto_sync_results()
+            return {'result': result}
+        except Exception as e:
+            self._log.error('触发同步失败', exc_info=True)
+            return {'error': f'同步失败: {str(e)}'}
+
+    def _sync_hide_failed_payload(self):
+        """隐藏所有失败记录"""
+        try:
+            from src.football.result_sync import hide_failed_records
+            hide_failed_records()
+            return {'result': {'success': True, 'message': '已隐藏所有失败记录'}}
+        except Exception as e:
+            self._log.error('隐藏失败记录失败', exc_info=True)
+            return {'error': f'操作失败: {str(e)}'}
 
 
 def _is_private_lan(ip):
