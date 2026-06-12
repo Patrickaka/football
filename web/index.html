@@ -547,7 +547,6 @@
     <button type="button" class="tab" data-tab="lottery3d" role="tab">🎲 福彩3D</button>
     <button type="button" class="tab" data-tab="pailie5" role="tab">🔢 排列五</button>
     <button type="button" class="tab" data-tab="lottery" role="tab">🎯 大乐透</button>
-    <button type="button" class="tab" data-tab="predictions" role="tab">📋 预测记录</button>
   </div>
   <div id="panel-football" class="tab-panel active">
     <div id="search-wrap" style="display:none"></div>
@@ -895,10 +894,11 @@ function renderMatchList() {
     html += `</div>`;
   }
   
-  // 添加刷新按钮区域
+  // 添加操作按钮区域
   html += `<div style="margin-top:20px;padding-top:16px;border-top:1px solid var(--line)">
     <div class="group-bar">
       <button id="btn-refresh" onclick="clearCacheAndRefresh()">🔄 重新抓取数据</button>
+      <button id="btn-predictions" class="footer-link" data-tab="predictions">📋 预测记录</button>
     </div>
     <div style="font-size:12px;color:var(--muted);text-align:center;margin-top:8px">
       提示：缓存按自然天自动失效，每天会自动重新抓取最新数据
@@ -1277,7 +1277,7 @@ function renderResult(r) {
 
 function switchTab(tab) {
   activeTab = tab;
-  document.querySelectorAll('.tab').forEach(el => {
+  document.querySelectorAll('[data-tab]').forEach(el => {
     el.classList.toggle('active', el.dataset.tab === tab);
   });
   document.querySelectorAll('.tab-panel').forEach(el => {
@@ -1302,7 +1302,7 @@ function switchTab(tab) {
   }
 }
 
-document.querySelectorAll('.tab').forEach(el => {
+document.querySelectorAll('[data-tab]').forEach(el => {
   el.onclick = () => switchTab(el.dataset.tab);
 });
 
