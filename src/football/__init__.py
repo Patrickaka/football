@@ -24,6 +24,7 @@ import json
 import urllib.request
 import urllib.error
 import random
+from typing import Dict
 from ..common.logger import setup_logger
 
 log = setup_logger('football')
