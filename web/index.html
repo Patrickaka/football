@@ -789,6 +789,23 @@ async function fetchJson(path) {
   }
 }
 
+async function fetchJsonPost(path) {
+  const url = apiPrefix() + path;
+  const r = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' }
+  });
+  const text = await r.text();
+  if (!r.ok) {
+    throw new Error(r.status === 404 ? `接口不存在: ${url}` : text.slice(0, 120));
+  }
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error('响应不是 JSON: ' + text.slice(0, 60));
+  }
+}
+
 function loading(text) {
   searchWrap.style.display = 'none';
   app.innerHTML = `<div class="status"><span class="spinner"></span>${esc(text)}</div>`;
@@ -1729,15 +1746,7 @@ async function refreshLottery3d() {
   app3d.innerHTML = `<div class="status"><span class="spinner"></span>正在重新抓取数据并计算…</div>`;
   
   try {
-    // 调用强制刷新API
-    const response = await fetch('/api/3d-refresh', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      }
-    });
-    
-    const result = await response.json();
+    const result = await fetchJsonPost('/api/3d-refresh');
     
     if (result.success) {
       console.log('3D缓存刷新成功:', result);
@@ -2186,14 +2195,7 @@ async function refreshPailie5() {
   appPailie5.innerHTML = `<div class="status"><span class="spinner"></span>正在重新抓取数据并计算…</div>`;
   
   try {
-    const response = await fetch('/api/pailie5-refresh', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      }
-    });
-    
-    const result = await response.json();
+    const result = await fetchJsonPost('/api/pailie5-refresh');
     
     if (result.success) {
       console.log('排列五缓存刷新成功:', result);
@@ -2632,14 +2634,7 @@ async function refreshLottery() {
   appLottery.innerHTML = `<div class="status"><span class="spinner"></span>正在重新抓取数据并计算…</div>`;
   
   try {
-    const response = await fetch('/api/lottery-refresh', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      }
-    });
-    
-    const result = await response.json();
+    const result = await fetchJsonPost('/api/lottery-refresh');
     
     if (result.success) {
       console.log('大乐透缓存刷新成功:', result);
