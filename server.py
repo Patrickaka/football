@@ -159,6 +159,8 @@ class Handler(BaseHTTPRequestHandler):
         elif path == '/api/predict':
             params = parse_qs(route.query)
             self._serve_json(self._predict_payload(params))
+        elif path == '/api/football/clear_cache':
+            self._serve_json(self._football_clear_cache_payload())
         elif path == '/api/3d':
             self._serve_json(self._lottery_3d_payload())
         elif path == '/api/3d-ml':
@@ -315,6 +317,10 @@ class Handler(BaseHTTPRequestHandler):
         match_id = params.get('match_id', [''])[0]
         if not match_id:
             return {'error': '缺少 match_id 参数'}
+        
+        # 检查是否强制刷新缓存
+        force_refresh = params.get('force_refresh', ['false'])[0].lower() == 'true'
+        
         match = {
             'match_id': match_id,
             'home': params.get('home', [''])[0],
@@ -324,10 +330,20 @@ class Handler(BaseHTTPRequestHandler):
             'num': params.get('num', [''])[0],
         }
         try:
-            return {'result': analyze_match(match)}
+            return {'result': analyze_match(match, force_refresh=force_refresh)}
         except Exception:
             self._log.error('赔率分析失败 match_id=%s', match_id, exc_info=True)
             return {'error': '赔率分析失败'}
+
+    def _football_clear_cache_payload(self):
+        """清除足球模块缓存"""
+        try:
+            from src.football.cache_manager import clear_all_cache
+            result = clear_all_cache()
+            return result
+        except Exception as e:
+            self._log.error('清除足球缓存失败', exc_info=True)
+            return {'error': f'清除缓存失败: {str(e)}'}
 
     def _lottery_3d_payload(self):
         try:

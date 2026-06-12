@@ -58,7 +58,14 @@ try:
     BAYESIAN_CALIBRATION_AVAILABLE = True
 except ImportError:
     BAYESIAN_CALIBRATION_AVAILABLE = False
-    log.warning("贝叶斯校准层模块未导入")
+
+# 缓存管理器（延迟导入）
+try:
+    from .cache_manager import get_cache, set_cache, invalidate_cache, clear_all_cache
+    CACHE_AVAILABLE = True
+except ImportError:
+    CACHE_AVAILABLE = False
+    log.warning("缓存管理器模块未导入")
 
 # 动态ELO系统（延迟导入）
 try:
@@ -4790,12 +4797,25 @@ def _pick_recommendations(candidates, asian, euro, total, n=2, pool=12, confiden
     return [(h, a, prob) for h, a, prob, _, _ in picked]
 
 
-def analyze_match(match):
-    """抓取赔率 + 球队攻防 + 泊松模型，返回完整结果 dict"""
+def analyze_match(match, force_refresh=False):
+    """抓取赔率 + 球队攻防 + 泊松模型，返回完整结果 dict
+    
+    参数：
+        match: 比赛信息字典
+        force_refresh: 是否强制刷新缓存（重新抓取数据）
+    """
     mid = match['match_id']
     home, away = match.get('home', ''), match.get('away', '')
     league_profile = resolve_league_profile(match.get('league', ''))
     log.info('分析比赛 %s vs %s (id=%s)', home, away, mid)
+    
+    # 尝试从缓存获取结果
+    cache_key = f"{mid}_{home}_{away}"
+    if not force_refresh and CACHE_AVAILABLE:
+        cached_result = get_cache('match_analysis', cache_key)
+        if cached_result is not None:
+            log.info(f"使用缓存的比赛分析结果: {home} vs {away}")
+            return cached_result
 
     try:
         yazhi_raw = fetch_yazhi(mid)
@@ -5134,7 +5154,7 @@ def analyze_match(match):
         except Exception as e:
             log.warning(f"资金流检测失败: {e}")
 
-    return {
+    result = {
         'match': {k: match.get(k) for k in ('home', 'away', 'league', 'time', 'match_id', 'num')},
         'league_profile': league_profile,
         'asian': asian,
@@ -5160,6 +5180,13 @@ def analyze_match(match):
             **meta,
         },
     }
+    
+    # 保存结果到缓存
+    if CACHE_AVAILABLE:
+        set_cache('match_analysis', cache_key, result)
+        log.debug(f"比赛分析结果已缓存: {home} vs {away}")
+    
+    return result
 
 
 # ===================== 主程序 =====================

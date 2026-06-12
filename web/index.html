@@ -663,9 +663,21 @@ function renderMatchList() {
     });
     html += `</div>`;
   }
+  
+  // 添加刷新按钮区域
+  html += `<div style="margin-top:20px;padding-top:16px;border-top:1px solid var(--line)">
+    <div class="group-bar">
+      <button id="btn-refresh" onclick="clearCacheAndRefresh()">🔄 重新抓取数据</button>
+    </div>
+    <div style="font-size:12px;color:var(--muted);text-align:center;margin-top:8px">
+      提示：缓存按自然天自动失效，每天会自动重新抓取最新数据
+    </div>
+  </div>`;
+  
   app.innerHTML = html;
 
-  app.querySelectorAll('.group-bar button').forEach(btn => {
+  // 只绑定具有 data-mode 属性的按钮（切换联赛/时间模式）
+  app.querySelectorAll('.group-bar button[data-mode]').forEach(btn => {
     btn.onclick = () => { groupMode = btn.dataset.mode; renderMatchList(); };
   });
   app.querySelectorAll('.match').forEach(el => {
@@ -712,6 +724,25 @@ const backBtn = () => `<div class="back" id="back">‹ 返回比赛列表</div>`
 function bindBack() {
   const b = document.getElementById('back');
   if (b) b.onclick = () => showListView(listFilter);
+}
+
+async function clearCacheAndRefresh() {
+  const btn = document.getElementById('btn-refresh');
+  const originalText = btn.textContent;
+  btn.textContent = '处理中...';
+  btn.disabled = true;
+  
+  try {
+    // 先清除缓存
+    await fetchJson('/api/football/clear_cache');
+    // 然后重新加载比赛列表
+    await loadMatches();
+  } catch (e) {
+    alert('重新抓取失败: ' + e.message);
+  } finally {
+    btn.textContent = originalText;
+    btn.disabled = false;
+  }
 }
 
 function probBar(segs) {
