@@ -40,6 +40,17 @@ LEAGUE_TIERS = {
     'tier6': ['中超', '中国超级联赛', 'Chinese Super League'],
 }
 
+# 友谊赛关键词（用于过滤）
+FRIENDLY_KEYWORDS = ['友谊赛', '友谊', '热身赛', '热身', 'Friendly', 'friendly', 'Test']
+
+# 赔率异常阈值
+MIN_ODDS = 1.01   # 最小有效赔率
+MAX_ODDS = 100.0  # 最大有效赔率
+
+# 赛季配置
+CURRENT_SEASON = '2026-27'
+RECENT_SEASONS = ['2026-27', '2025-26', '2024-25']
+
 # 特征权重（标准化后）
 FEATURE_WEIGHTS = {
     'asian': 1.0,      # 亚盘让球
@@ -72,6 +83,10 @@ class MatchRecord:
     - result: 比赛结果 (H/D/A)
     - goals_home: 主队进球
     - goals_away: 客队进球
+    
+    元数据：
+    - season: 赛季
+    - is_friendly: 是否友谊赛
     """
     
     def __init__(self, data: Dict):
@@ -96,6 +111,17 @@ class MatchRecord:
         self.league = data.get('league', '')
         self.home_team = data.get('home_team', '')
         self.away_team = data.get('away_team', '')
+        
+        # 新增元数据
+        self.season = data.get('season', '')
+        self.is_friendly = self._check_friendly()
+    
+    def _check_friendly(self) -> bool:
+        """检查是否为友谊赛"""
+        for keyword in FRIENDLY_KEYWORDS:
+            if keyword in self.league or keyword in self.date:
+                return True
+        return False
     
     def to_dict(self) -> Dict:
         """转换为字典"""
@@ -116,6 +142,8 @@ class MatchRecord:
             'league': self.league,
             'home_team': self.home_team,
             'away_team': self.away_team,
+            'season': self.season,
+            'is_friendly': self.is_friendly,
         }
 
 
@@ -127,13 +155,59 @@ class SimilarMarketDB:
     
     核心功能：
     1. 存储历史比赛的完整盘口特征
-    2. KNN算法查找相似盘口
+    2. KNN算法查找相似盘口（支持样本质量过滤）
     3. 统计相似比赛的结果分布
+    4. 输出样本质量指标
     """
     
     def __init__(self):
         self.records: List[MatchRecord] = []
         self._load()
+    
+    def _filter_record(self, record: MatchRecord, query_league: str = '', 
+                      filter_friendly: bool = True, 
+                      filter_recent_seasons: bool = True,
+                      filter_odds_anomaly: bool = True) -> bool:
+        """
+        过滤记录（样本质量控制）
+        
+        参数：
+            record: 待过滤的记录
+            query_league: 查询的联赛（用于同联赛优先）
+            filter_friendly: 是否过滤友谊赛
+            filter_recent_seasons: 是否只保留近三赛季
+            filter_odds_anomaly: 是否过滤赔率异常记录
+        
+        返回：
+            True: 保留该记录
+            False: 过滤掉该记录
+        """
+        # 1. 过滤友谊赛
+        if filter_friendly and record.is_friendly:
+            return False
+        
+        # 2. 过滤赔率异常记录
+        if filter_odds_anomaly:
+            odds_values = [
+                record.euro_home, record.euro_draw, record.euro_away,
+                record.asian_odds_home, record.asian_odds_away,
+                record.total_over, record.total_under
+            ]
+            for odds in odds_values:
+                if odds > 0:
+                    if odds < MIN_ODDS or odds > MAX_ODDS:
+                        return False
+        
+        # 3. 过滤非近三赛季（如果指定了赛季）
+        if filter_recent_seasons and record.season:
+            if record.season not in RECENT_SEASONS:
+                return False
+        
+        # 4. 检查结果是否存在
+        if not record.result:
+            return False
+        
+        return True
     
     def _load(self):
         """从文件加载数据库"""
@@ -372,7 +446,7 @@ class SimilarMarketDB:
     
     def get_similar_stats(self, query: MatchRecord, k: int = DEFAULT_K, league: str = '') -> Dict:
         """
-        获取相似比赛的统计结果（距离加权版本）
+        获取相似比赛的统计结果（距离加权版本 + 样本质量指标）
         
         参数：
             query: 查询记录
@@ -380,7 +454,7 @@ class SimilarMarketDB:
             league: 联赛名称（用于分层搜索）
         
         返回：
-            统计结果字典
+            统计结果字典（包含样本质量指标）
         """
         similar = self.find_similar(query, k, league)
         
@@ -389,9 +463,17 @@ class SimilarMarketDB:
                 'count': 0,
                 'avg_distance': 0.0,
                 'result_dist': {'H': 0, 'D': 0, 'A': 0},
-                'probabilities': {'H': 0.0, 'D': 0.0, 'A': 0.0},
+                'probabilities': {'H': 0.333, 'D': 0.333, 'A': 0.334},
                 'goals_dist': {},
                 'confidence': 0.0,
+                'used_k': 0,
+                'sample_quality': {
+                    'same_league_ratio': 0.0,
+                    'recent_season_ratio': 0.0,
+                    'avg_distance': 0.0,
+                    'level': '低',
+                    'description': '无足够样本'
+                }
             }
         
         # 统计结果分布（距离加权）
@@ -400,15 +482,27 @@ class SimilarMarketDB:
         total_distance = 0.0
         total_weight = 0.0
         
+        # 样本质量统计
+        same_league_count = 0
+        recent_season_count = 0
+        friendly_count = 0
+        
         for dist, record in similar:
             # 使用指数衰减权重: weight = exp(-distance * 3)
-            # 距离越近，权重越高
             weight = math.exp(-dist * 3)
             
             result_counts[record.result] += weight
             goals_dist[f"{record.goals_home}-{record.goals_away}"] += weight
             total_distance += dist
             total_weight += weight
+            
+            # 样本质量统计
+            if league and record.league and (league in record.league or record.league in league):
+                same_league_count += 1
+            if record.season in RECENT_SEASONS:
+                recent_season_count += 1
+            if record.is_friendly:
+                friendly_count += 1
         
         # 计算概率（加权后）
         probabilities = {}
@@ -425,6 +519,36 @@ class SimilarMarketDB:
         sorted_goals = sorted(goals_dist.items(), key=lambda x: -x[1])[:10]
         goals_prob = {k: round(v / total_weight, 4) for k, v in sorted_goals}
         
+        # 计算样本质量指标
+        same_league_ratio = same_league_count / len(similar) if len(similar) > 0 else 0.0
+        recent_season_ratio = recent_season_count / len(similar) if len(similar) > 0 else 0.0
+        
+        # 评估样本质量等级
+        quality_score = (same_league_ratio * 0.4 + 
+                        recent_season_ratio * 0.3 + 
+                        max(0, 1 - avg_distance * 2) * 0.3)
+        
+        if quality_score >= 0.7:
+            quality_level = '高'
+            quality_desc = '样本质量高，可信度好'
+        elif quality_score >= 0.4:
+            quality_level = '中'
+            quality_desc = '样本质量中等，建议谨慎使用'
+        else:
+            quality_level = '低'
+            quality_desc = '样本质量较低，仅供参考'
+        
+        sample_quality = {
+            'same_league_ratio': round(same_league_ratio, 2),
+            'recent_season_ratio': round(recent_season_ratio, 2),
+            'avg_distance': round(avg_distance, 4),
+            'sample_count': len(similar),
+            'friendly_count': friendly_count,
+            'level': quality_level,
+            'description': quality_desc,
+            'score': round(quality_score, 2)
+        }
+        
         return {
             'count': len(similar),
             'avg_distance': round(avg_distance, 4),
@@ -433,6 +557,7 @@ class SimilarMarketDB:
             'goals_dist': goals_prob,
             'confidence': round(confidence, 4),
             'used_k': len(similar),
+            'sample_quality': sample_quality,
         }
 
 

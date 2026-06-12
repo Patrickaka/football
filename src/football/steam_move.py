@@ -456,6 +456,40 @@ def _summarize_signals(signals: List) -> Dict:
 
 # ==================== 集成接口 ====================
 
+def _signal_to_dict(s) -> Dict:
+    """兼容函数：将信号转换为字典（支持字典和对象两种形式）"""
+    return s if isinstance(s, dict) else s.to_dict()
+
+
+def _normalize_match_time(match_time: str) -> str:
+    """
+    标准化比赛时间格式为 YYYY-MM-DD HH:MM:SS
+    
+    输入格式支持：
+    - YYYY-MM-DD HH:MM:SS（已有年份）
+    - MM-DD HH:MM（需要补年份）
+    """
+    if not match_time:
+        return None
+    
+    from datetime import datetime
+    
+    # 尝试解析不同格式
+    formats = ['%Y-%m-%d %H:%M:%S', '%Y-%m-%d %H:%M', '%m-%d %H:%M']
+    
+    for fmt in formats:
+        try:
+            dt = datetime.strptime(match_time, fmt)
+            # 如果只有月日，补充当前年份
+            if fmt == '%m-%d %H:%M':
+                dt = dt.replace(year=datetime.now().year)
+            return dt.strftime('%Y-%m-%d %H:%M:%S')
+        except ValueError:
+            continue
+    
+    return match_time
+
+
 def integrate_steam_signal(asian: Dict, euro: Dict, total: Dict, match: Dict) -> Dict:
     """
     将资金流信号集成到现有分析数据中
@@ -469,8 +503,8 @@ def integrate_steam_signal(asian: Dict, euro: Dict, total: Dict, match: Dict) ->
     返回：
         包含资金流信号的综合结果
     """
-    # 获取时间戳
-    match_time = match.get('time')
+    # 获取时间戳并标准化格式
+    match_time = _normalize_match_time(match.get('time'))
     
     # 运行资金流检测
     steam_result = steam_move_detector(asian, total, match_time)
@@ -484,21 +518,21 @@ def integrate_steam_signal(asian: Dict, euro: Dict, total: Dict, match: Dict) ->
     asian['water_speed'] = asian_steam.get('water_speed', 0.0)
     asian['is_critical_period'] = asian_steam.get('is_critical_period', False)
     asian['trap_analysis'] = asian_steam.get('trap_analysis')
-    asian['steam_signals'] = [s.to_dict() for s in asian_steam.get('signals', [])]
+    asian['steam_signals'] = [_signal_to_dict(s) for s in asian_steam.get('signals', [])]
     
     # 更新total字典
     if total:
         total['steam_speed'] = total_steam.get('line_speed', 0.0)
         total['is_critical_period'] = total_steam.get('is_critical_period', False)
         total['trap_analysis'] = total_steam.get('trap_analysis')
-        total['steam_signals'] = [s.to_dict() for s in total_steam.get('signals', [])]
+        total['steam_signals'] = [_signal_to_dict(s) for s in total_steam.get('signals', [])]
     
     # 返回综合结果
     return {
         'asian': asian,
         'total': total,
         'steam_summary': steam_result.get('summary'),
-        'all_signals': [s.to_dict() for s in steam_result.get('signals', [])],
+        'all_signals': [_signal_to_dict(s) for s in steam_result.get('signals', [])],
     }
 
 

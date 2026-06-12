@@ -3027,6 +3027,171 @@ def _sigmoid(x):
 LEAGUE_CALIBRATION_CACHE = {}
 
 
+# ==================== 风险等级评估 ====================
+
+def _evaluate_risk_level(asian: Dict, euro: Dict, total: Dict,
+                         steam_result: Dict, confidence: Dict,
+                         similar_market: Dict) -> Dict:
+    """
+    评估比赛预测的风险等级
+    
+    风险等级定义：
+    - A级：盘口、欧赔、大小球、相似盘口一致 → 推荐3个比分
+    - B级：有一个方向冲突 → 推荐2个比分
+    - C级：欧亚分歧/盘口剧烈反转/样本不足 → 只给倾向，不给比分
+    
+    参数：
+        asian: 亚盘分析结果
+        euro: 欧赔分析结果
+        total: 大小球分析结果
+        steam_result: 临场资金流结果
+        confidence: 置信度
+        similar_market: 相似盘口结果
+    
+    返回：
+        风险等级字典
+    """
+    risk_factors = []
+    conflict_count = 0
+    risk_score = 0.0
+    
+    # 因素1：欧亚一致性
+    euro_asian_consistent = True
+    try:
+        if euro.get('implied_home') is not None and asian.get('home_prob') is not None:
+            euro_home = euro['implied_home']
+            asian_home = asian['home_prob']
+            if abs(euro_home - asian_home) > 0.15:
+                euro_asian_consistent = False
+                conflict_count += 1
+                risk_factors.append('欧亚分歧')
+                risk_score += 0.2
+    except Exception:
+        pass
+    
+    # 因素2：大小球与总进球预期一致性
+    total_consistent = True
+    try:
+        if total.get('close_line') is not None and euro.get('expected_total') is not None:
+            market_total = euro['expected_total']
+            total_line = total['close_line']
+            if abs(market_total - total_line) > 0.5:
+                total_consistent = False
+                conflict_count += 1
+                risk_factors.append('大小球分歧')
+                risk_score += 0.15
+    except Exception:
+        pass
+    
+    # 因素3：相似盘口置信度
+    similar_confident = True
+    if similar_market and similar_market.get('confidence', 0) < 0.4:
+        similar_confident = False
+        conflict_count += 1
+        risk_factors.append('相似盘口样本不足')
+        risk_score += 0.25
+    
+    # 因素4：资金流异常
+    steam_anomaly = False
+    if steam_result and steam_result.get('summary'):
+        summary = steam_result['summary']
+        if summary.get('has_strong_signal') or summary.get('confidence', 0) > 0.5:
+            steam_anomaly = True
+            conflict_count += 1
+            risk_factors.append('资金流异常')
+            risk_score += 0.2
+    
+    # 因素5：置信度过低
+    low_confidence = False
+    if confidence:
+        conf_score = confidence.get('score', 1.0)
+        if conf_score < 0.5:
+            low_confidence = True
+            conflict_count += 1
+            risk_factors.append('置信度过低')
+            risk_score += 0.2
+    
+    # 因素6：盘口变化剧烈（让球反转）
+    handicap_reversed = False
+    try:
+        if asian.get('open_handicap') is not None and asian.get('handicap') is not None:
+            open_h = asian['open_handicap']
+            close_h = asian['handicap']
+            if open_h * close_h < 0:  # 让球方向反转
+                handicap_reversed = True
+                conflict_count += 1
+                risk_factors.append('让球方向反转')
+                risk_score += 0.3
+    except Exception:
+        pass
+    
+    # 确定风险等级
+    if conflict_count == 0 and risk_score < 0.1:
+        level = 'A'
+        recommend_count = 3
+        description = '各指标一致，预测置信度高'
+    elif conflict_count <= 2 and risk_score < 0.4:
+        level = 'B'
+        recommend_count = 2
+        description = f'存在{conflict_count}个冲突因素，需要谨慎'
+    else:
+        level = 'C'
+        recommend_count = 0  # 不给具体比分
+        description = f'冲突因素较多({conflict_count}个)，建议观望'
+    
+    return {
+        'level': level,
+        'recommend_count': recommend_count,
+        'description': description,
+        'risk_factors': risk_factors,
+        'risk_score': risk_score,
+        'recommend': '正常推荐' if level == 'A' else ('精简推荐' if level == 'B' else '不建议投注比分'),
+    }
+
+
+# ==================== 球队名称标准化 ====================
+
+def normalize_team_name(name: str) -> str:
+    """
+    标准化球队名称，将所有别名映射到统一名称
+    
+    参数：
+        name: 球队名称（可能是任意别名）
+    
+    返回：
+        标准化后的球队名称
+    """
+    if not name:
+        return name
+    
+    # 去除首尾空格
+    name = name.strip()
+    
+    # 加载别名映射表
+    try:
+        import json
+        import os
+        
+        alias_file = os.path.join(os.path.dirname(__file__), 'team_alias.json')
+        if os.path.exists(alias_file):
+            with open(alias_file, 'r', encoding='utf-8') as f:
+                alias_map = json.load(f)
+            
+            # 遍历映射表，找到对应的标准名称
+            for standard_name, aliases in alias_map.items():
+                if name in aliases or name == standard_name:
+                    return standard_name
+                
+                # 模糊匹配（包含关系）
+                for alias in aliases:
+                    if alias in name or name in alias:
+                        return standard_name
+    except Exception:
+        pass
+    
+    return name
+
+
 def fetch_league_historical_data(league_name, limit=10):
     """
     获取指定联赛的历史比赛数据（包含模型预测和实际结果）。
@@ -3040,39 +3205,50 @@ def fetch_league_historical_data(league_name, limit=10):
     """
     log.info(f"获取联赛 {league_name} 的最近 {limit} 场历史数据")
     
-    # 模拟获取历史数据（实际应用中应从数据库或文件读取）
-    # 这里生成一些模拟数据用于演示
-    historical_data = []
-    
-    # 模拟最近10场比赛的预测和结果
-    import random
-    for i in range(limit):
-        home_goals = random.randint(0, 4)
-        away_goals = random.randint(0, 4)
+    try:
+        from .prediction_records import get_historical_data
         
-        # 模拟模型预测的比分概率
-        predicted_probs = {}
-        total_prob = 0.0
-        for h in range(5):
-            for a in range(5):
-                prob = random.random() * 0.1
-                predicted_probs[(h, a)] = prob
-                total_prob += prob
+        # 从真实预测记录中获取数据
+        records = get_historical_data(league_name, limit)
         
-        # 归一化
-        if total_prob > 0:
-            predicted_probs = {k: v / total_prob for k, v in predicted_probs.items()}
+        historical_data = []
+        for record in records:
+            # 将比分字符串转换为元组
+            predicted_probs = {}
+            for score_str, prob in record.get('predicted_scores', {}).items():
+                try:
+                    h, a = map(int, score_str.split('-'))
+                    predicted_probs[(h, a)] = prob
+                except ValueError:
+                    continue
+            
+            # 解析实际比分
+            actual_score = record.get('actual_score', '')
+            actual_home, actual_away = 0, 0
+            if actual_score:
+                try:
+                    actual_home, actual_away = map(int, actual_score.split('-'))
+                except ValueError:
+                    pass
+            
+            historical_data.append({
+                'match_id': record['match_id'],
+                'home': record['home'],
+                'away': record['away'],
+                'predicted_probs': predicted_probs,
+                'actual_home': actual_home,
+                'actual_away': actual_away,
+            })
         
-        historical_data.append({
-            'match_id': f'hist_{league_name}_{i}',
-            'home': f'主队{i}',
-            'away': f'客队{i}',
-            'predicted_probs': predicted_probs,
-            'actual_home': home_goals,
-            'actual_away': away_goals,
-        })
-    
-    return historical_data
+        # 如果真实数据不足，返回空列表（不使用随机数据）
+        return historical_data
+        
+    except ImportError:
+        log.warning("预测记录模块未导入，无法获取真实历史数据")
+        return []
+    except Exception as e:
+        log.error(f"获取历史数据失败: {e}")
+        return []
 
 
 def train_league_platt_params(league_name, recent_matches=10):
@@ -4308,15 +4484,31 @@ def predict_scores(asian, euro, total, team_strength=None, league_profile=None,
 
     # 应用概率输出校准
     if enable_calibration:
-        # 获取联赛名称（用于加载特定联赛的校准参数）
-        league_name = league_profile.get('name', 'default') if league_profile else 'default'
-        
-        # 获取该联赛的校准数据（如果没有缓存则自动训练）
-        calibration_data = get_league_calibration_data(league_name)
-        
-        log.debug(f"使用联赛 {league_name} 的校准参数: Platt(A={calibration_data['platt_params'][0]:.4f}, B={calibration_data['platt_params'][1]:.4f})")
-        
-        matrix = calibrate_probabilities(matrix, method=calibration_method, calibration_data=calibration_data)
+        # 优先使用贝叶斯校准（基于真实历史预测记录）
+        if BAYESIAN_CALIBRATION_AVAILABLE:
+            try:
+                # 转换为字典格式 {"1-1": 0.108, ...}
+                score_probs = {f"{h}-{a}": p for (h, a), p in matrix.items()}
+                # 使用贝叶斯校准
+                score_probs = calibrate_predictions(score_probs)
+                # 转换回原始格式
+                matrix = {
+                    tuple(map(int, score.split("-"))): prob
+                    for score, prob in score_probs.items()
+                }
+                log.info("已应用贝叶斯概率校准")
+            except Exception as e:
+                log.warning(f"贝叶斯校准失败，降级使用Platt校准: {e}")
+                # 降级到 Platt 校准
+                league_name = league_profile.get('name', 'default') if league_profile else 'default'
+                calibration_data = get_league_calibration_data(league_name)
+                matrix = calibrate_probabilities(matrix, method=calibration_method, calibration_data=calibration_data)
+        else:
+            # 使用传统 Platt 校准
+            league_name = league_profile.get('name', 'default') if league_profile else 'default'
+            calibration_data = get_league_calibration_data(league_name)
+            log.debug(f"使用联赛 {league_name} 的校准参数: Platt(A={calibration_data['platt_params'][0]:.4f}, B={calibration_data['platt_params'][1]:.4f})")
+            matrix = calibrate_probabilities(matrix, method=calibration_method, calibration_data=calibration_data)
 
     candidates = sorted(matrix.items(), key=lambda kv: -kv[1])
     meta = {
@@ -4613,6 +4805,9 @@ def _pick_recommendations(candidates, asian, euro, total, n=2, pool=12, confiden
         n = confidence.get('recommend_count', n)
     pool = min(16, len(candidates))  # 原12，扩大候选池让高比分有更多入选机会
     conf_w = confidence['score'] if confidence else 1.0
+    
+    # 价值投注列表（单独输出，不参与命中率排序）
+    value_bets = []
 
     # xG 一致性校验：ELO xG 与市场总进球线偏差 >0.5 则降低置信度
     xg_penalty = 1.0
@@ -4691,8 +4886,8 @@ def _pick_recommendations(candidates, asian, euro, total, n=2, pool=12, confiden
             except Exception as e:
                 log.debug(f"盘口聚类先验获取失败: {e}")
 
-        # 赔率价值调整
-        value_bonus = 1.0
+        # 赔率价值计算（仅记录，不参与命中率排序）
+        value_info = None
         if VALUE_BETTING_AVAILABLE and euro.get('raw_odds', {}).get('close'):
             try:
                 from .value_betting import calculate_value, calculate_ev
@@ -4700,12 +4895,23 @@ def _pick_recommendations(candidates, asian, euro, total, n=2, pool=12, confiden
                 score_odds = _estimate_score_odds(h, a, close_odds)
                 if score_odds > 1.0:
                     value = calculate_value(prob, score_odds)
-                    if value > 0:
-                        value_bonus = 1.0 + value * 5
+                    ev = calculate_ev(prob, score_odds)
+                    value_info = {
+                        'score': f"{h}-{a}",
+                        'value': value,
+                        'ev': ev,
+                        'odds': score_odds,
+                        'probability': prob
+                    }
             except Exception as e:
                 log.debug(f"赔率价值计算失败: {e}")
 
-        final_score = prob * (1.0 + 0.45 * align) * w * (0.65 + 0.35 * conf_w) * xg_penalty * upset_penalty * market_bonus * prior_bonus * value_bonus
+        # 计算最终得分（不含价值投注调整，价值投注单独输出）
+        final_score = prob * (1.0 + 0.45 * align) * w * (0.65 + 0.35 * conf_w) * xg_penalty * upset_penalty * market_bonus * prior_bonus
+        
+        # 记录价值信息
+        if value_info:
+            value_bets.append(value_info)
         cluster = _get_score_cluster(h, a)
         scored.append(((h, a), prob, align, heat, cluster, final_score))
 
@@ -4794,7 +5000,13 @@ def _pick_recommendations(candidates, asian, euro, total, n=2, pool=12, confiden
             seen.add((h, a))
 
     # 转换为原有格式 (h, a, prob)
-    return [(h, a, prob) for h, a, prob, _, _ in picked]
+    # 返回推荐列表和价值投注列表（分开输出）
+    recommendations = [(h, a, prob) for h, a, prob, _, _ in picked]
+    
+    # 对价值投注按 EV 排序
+    value_bets.sort(key=lambda x: -x.get('ev', 0))
+    
+    return recommendations, value_bets
 
 
 def analyze_match(match, force_refresh=False):
@@ -5124,9 +5336,14 @@ def analyze_match(match, force_refresh=False):
         for (h, a), prob in filtered_candidates
     ]
     recommend = []
-    for h, a, prob in _pick_recommendations(
+    value_bets = []
+    
+    # 获取推荐比分和价值投注（分开处理）
+    rec_list, value_bets = _pick_recommendations(
         candidates, asian, euro, total, confidence=confidence, league_profile=league_profile, team=team, similar_market=similar_market_result,
-    ):
+    )
+    
+    for h, a, prob in rec_list:
         heat, _ = score_heat_label(h, a, prob, league_profile, euro_odds_for_heat)
         recommend.append({
             **_score_entry(h, a, prob, (heat, _)),
@@ -5154,6 +5371,169 @@ def analyze_match(match, force_refresh=False):
         except Exception as e:
             log.warning(f"资金流检测失败: {e}")
 
+    # ========== 风险等级评估 ==========
+    risk_level = _evaluate_risk_level(asian, euro, total, steam_result, confidence, similar_market_result)
+    
+    # ========== 构建概率排序（纯模型概率）==========
+    probability_rank = []
+    for (h, a), prob in candidates[:5]:
+        probability_rank.append({
+            'score': f"{h}-{a}",
+            'prob': prob
+        })
+    
+    # ========== 构建推荐排序（带推荐原因）==========
+    recommend_rank = []
+    for rec in recommend:
+        recommend_rank.append({
+            'score': f"{rec['home']}-{rec['away']}",
+            'prob': rec['prob'],
+            'recommend_score': rec.get('prob', 0),
+            'reasons': rec.get('reasons', [])
+        })
+    
+    # ========== 获取模型融合权重 ==========
+    model_weights = {
+        'market': 0.55,
+        'team': 0.18,
+        'elo': 0.17,
+        'similar': 0.10,
+        'ml': 0.0
+    }
+    try:
+        if DYNAMIC_WEIGHTS_AVAILABLE:
+            market_w, team_w, elo_w, ml_w = get_dynamic_weights(confidence.get('score', 0.5))
+            model_weights = {
+                'market': market_w,
+                'team': team_w,
+                'elo': elo_w,
+                'similar': 0.10,
+                'ml': ml_w
+            }
+    except Exception as e:
+        log.warning(f"获取动态权重失败: {e}")
+    
+    # ========== 贝叶斯校准影响分析 ==========
+    calibration_effect = []
+    if BAYESIAN_CALIBRATION_AVAILABLE:
+        try:
+            calibrator = get_calibrator()
+            # 计算校准前后的概率变化
+            for (h, a), prob in candidates[:6]:
+                score_str = f"{h}-{a}"
+                calibrated_prob = calibrator.calibrate(score_str, prob)
+                delta = calibrated_prob - prob
+                record = calibrator.history.get(score_str, {})
+                calibration_effect.append({
+                    'score': score_str,
+                    'before': prob,
+                    'after': calibrated_prob,
+                    'delta': delta,
+                    'sample_count': record.get('count', 0)
+                })
+        except Exception as e:
+            log.warning(f"计算贝叶斯校准影响失败: {e}")
+    
+    # ========== 相似盘口样本质量详情 ==========
+    similar_market_detail = {}
+    if similar_market_result:
+        detail = similar_market_result.get('sample_quality', {})
+        result_dist = similar_market_result.get('result_dist', {})
+        top_scores_list = []
+        if 'goals_dist' in similar_market_result:
+            for score, prob in sorted(similar_market_result['goals_dist'].items(), key=lambda x: -x[1])[:3]:
+                top_scores_list.append({'score': score, 'prob': prob})
+        
+        similar_market_detail = {
+            'count': similar_market_result.get('count', 0),
+            'avg_distance': similar_market_result.get('avg_distance', 0),
+            'confidence': similar_market_result.get('confidence', 0),
+            'same_league_ratio': detail.get('same_league_ratio', 0),
+            'recent_season_ratio': detail.get('recent_season_ratio', 0),
+            'result_dist': {
+                'home': result_dist.get('H', 0),
+                'draw': result_dist.get('D', 0),
+                'away': result_dist.get('A', 0)
+            },
+            'top_scores': top_scores_list
+        }
+    
+    # ========== 赛后回填状态 ==========
+    settlement = {
+        'status': 'pending',
+        'actual_score': None,
+        'hit': None,
+        'updated_modules': []
+    }
+    try:
+        from .result_sync import PredictionHistory
+        ph = PredictionHistory()
+        for rec in ph.records:
+            if rec.get('match_id') == mid:
+                if rec.get('settled'):
+                    settlement = {
+                        'status': 'settled',
+                        'actual_score': rec.get('actual_score'),
+                        'hit': {
+                            'top1': rec.get('hit_top1', False),
+                            'top3': rec.get('hit_top3', False),
+                            'result_1x2': rec.get('hit_1x2', False),
+                            'goal_count': rec.get('hit_total', False)
+                        },
+                        'updated_modules': [
+                            'bayesian_calibration',
+                            'elo',
+                            'market_cluster',
+                            'market_score_db'
+                        ]
+                    }
+                break
+    except Exception as e:
+        log.debug(f"获取赛后回填状态失败: {e}")
+    
+    # ========== 模型状态汇总 ==========
+    ml_enabled = False
+    ml_reason = "模型未训练，未参与融合"
+    try:
+        from .ml import MLFootballPredictor
+        ml_predictor = MLFootballPredictor()
+        ml_enabled = ml_predictor.is_trained
+        ml_reason = "已训练，参与融合" if ml_enabled else "模型未训练，未参与融合"
+    except Exception:
+        ml_reason = "ML模块不可用"
+    
+    model_status = {
+        'result_sync': {
+            'enabled': True,
+            'pending_count': 0,
+            'settled_count': 0
+        },
+        'bayesian_calibration': {
+            'enabled': BAYESIAN_CALIBRATION_AVAILABLE,
+            'sample_count': 0
+        },
+        'market_db': {
+            'enabled': True,
+            'sample_count': 0
+        },
+        'similar_market': {
+            'enabled': SIMILAR_MARKET_AVAILABLE,
+            'sample_count': similar_market_result.get('count', 0) if similar_market_result else 0,
+            'avg_distance': similar_market_result.get('avg_distance', 0) if similar_market_result else 0,
+            'confidence': similar_market_result.get('confidence', 0) if similar_market_result else 0
+        },
+        'elo': {
+            'enabled': DYNAMIC_ELO_AVAILABLE,
+            'home_elo': team.get('elo_home', 1500) if team else 1500,
+            'away_elo': team.get('elo_away', 1500) if team else 1500,
+            'reliability': 1.0
+        },
+        'ml': {
+            'enabled': ml_enabled,
+            'reason': ml_reason
+        }
+    }
+    
     result = {
         'match': {k: match.get(k) for k in ('home', 'away', 'league', 'time', 'match_id', 'num')},
         'league_profile': league_profile,
@@ -5161,22 +5541,40 @@ def analyze_match(match, force_refresh=False):
         'euro': euro,
         'total': total,
         'team': team,
-        'single_odds': single_odds,  # 新增：Bet365 和 Pinnacle 独赔数据
-        'bookmaker_consensus': asian.get('bookmaker_consensus'),  # 新增：博彩公司分歧指数
+        'single_odds': single_odds,
+        'bookmaker_consensus': asian.get('bookmaker_consensus'),
         'confidence': confidence,
         'anomaly': {
             'joint_water': joint_anomaly,
             'euro_asian_deviation': euro_asian_dev,
         },
-        'similar_market': similar_market_result,  # 新增：相似盘口匹配结果
-        'steam_move': steam_result,  # 新增：临场资金流检测结果
+        'similar_market': similar_market_result,
+        'steam_move': steam_result,
+        
+        # ========== 新增字段 ==========
+        'model_status': model_status,
+        'probability_rank': probability_rank,
+        'recommend_rank': recommend_rank,
+        'model_weights': model_weights,
+        'calibration_effect': calibration_effect,
+        'similar_market_detail': similar_market_detail,
+        'risk_level': {
+            'level': risk_level,
+            'score': confidence.get('score', 0.5),
+            'reasons': confidence.get('notes', []),
+            'recommend_count': len(recommend)
+        },
+        'settlement': settlement,
+        
         'model': {
             'lam_home': lam_home, 'lam_away': lam_away,
             'top_scores': top_scores, 'recommend': recommend,
+            'value_bets': value_bets,
             'half_full_time': half_full_time,
             'goal_count': goal_count_result,
             'dixon_coles': dixon_coles_result,
             'ml': ml_result,
+            'risk_level': risk_level,
             **meta,
         },
     }

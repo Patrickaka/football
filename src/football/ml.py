@@ -65,6 +65,46 @@ except ImportError:
 
 DEFAULT_RHO = 0.1
 
+
+def get_dc_rho(league: str = None, total_line: float = None, handicap: float = None) -> float:
+    """
+    根据比赛特征动态获取 Dixon-Coles 的 rho 参数
+    
+    参数：
+        league: 联赛名称
+        total_line: 大小球盘口
+        handicap: 亚盘让球
+    
+    返回：
+        动态 rho 值
+    """
+    # 默认值
+    rho = 0.1
+    
+    # 低进球联赛（如意甲防守强联赛）使用更高的 rho
+    low_goal_leagues = ['意甲', '意乙', '葡超', '希腊超', '阿甲']
+    if league and league in low_goal_leagues:
+        rho = 0.12
+    
+    # 亚冠/欧冠等大赛倾向于低 rho
+    big_leagues = ['欧冠', '欧联', '世界杯', '欧洲杯', '美洲杯']
+    if league and league in big_leagues:
+        rho = 0.08
+    
+    # 根据总进球盘口调整
+    if total_line is not None:
+        if total_line <= 2.25:
+            rho = max(rho, 0.12)  # 低进球盘口，提高 rho
+        elif total_line >= 3.0:
+            rho = min(rho, 0.04)  # 高进球盘口，降低 rho
+    
+    # 根据让球调整
+    if handicap is not None:
+        if abs(handicap) <= 0.25:
+            rho = max(rho, 0.10)  # 平手盘，提高 rho
+    
+    return rho
+
 def poisson_pmf(k: int, lam: float) -> float:
     """泊松概率质量函数 P(X=k)"""
     return math.exp(-lam) * lam ** k / math.factorial(k)
@@ -348,10 +388,16 @@ class MLFootballPredictor:
             self.model.fit(X, y_encoded)
             self.is_trained = True
 
-    def predict(self, match_data: Dict) -> Dict[str, float]:
-        """预测比赛结果"""
+    def predict(self, match_data: Dict) -> Optional[Dict[str, float]]:
+        """
+        预测比赛结果
+        
+        返回：
+            如果模型已训练，返回 {'home': p1, 'draw': p2, 'away': p3}
+            如果模型未训练，返回 None（不参与融合）
+        """
         if not self.is_trained or self.model is None:
-            return {'home': 0.333, 'draw': 0.334, 'away': 0.333}
+            return None
         
         try:
             features = self.extract_features(match_data)
@@ -363,7 +409,7 @@ class MLFootballPredictor:
             probs = self.model.predict_proba(X)[0]
             return {'home': float(probs[0]), 'draw': float(probs[1]), 'away': float(probs[2])}
         except Exception:
-            return {'home': 0.333, 'draw': 0.334, 'away': 0.333}
+            return None
 
     def save_model(self, filepath: str):
         """保存模型"""

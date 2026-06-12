@@ -23,14 +23,16 @@
   header h1 { font-size: 24px; font-weight: 600; }
   header p { color: var(--muted); font-size: 13px; margin-top: 4px; }
 
-  .tabs { display: flex; margin-bottom: 20px; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  .tabs { display: flex; margin-bottom: 20px; border: 2px solid rgba(44, 58, 78, 0.8); border-radius: 10px; overflow: hidden; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2); }
   .tab {
     flex: 1; padding: 12px 8px; text-align: center; cursor: pointer;
     background: var(--card); color: var(--muted); font-size: 15px; font-weight: 500;
     border: none; transition: .15s;
+    border-right: 1px solid rgba(44, 58, 78, 0.5);
   }
+  .tab:last-child { border-right: none; }
   .tab:hover { color: var(--text); background: var(--card2); }
-  .tab.active { background: var(--card2); color: var(--accent2); box-shadow: inset 0 -2px 0 var(--accent); }
+  .tab.active { background: var(--card2); color: var(--accent2); box-shadow: inset 0 -3px 0 var(--accent); }
   .tab-panel { display: none; }
   .tab-panel.active { display: block; }
 
@@ -85,25 +87,45 @@
   .probbar-3d { height: 28px; font-size: 12px; font-weight: 600; }
 
   .search { width: 100%; padding: 12px 16px; font-size: 15px;
-    background: var(--card); border: 1px solid var(--line); border-radius: 10px;
-    color: var(--text); margin-bottom: 16px; outline: none; }
-  .search:focus { border-color: var(--accent); }
+    background: var(--card); 
+    border: 2px solid rgba(44, 58, 78, 0.7); 
+    border-radius: 10px;
+    color: var(--text); margin-bottom: 16px; outline: none; 
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
+  }
+  .search:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(46, 160, 67, 0.1); }
 
   .group-bar { display: flex; gap: 8px; margin: 0 4px 14px; }
   .group-bar button {
-    background: var(--card); border: 1px solid var(--line); border-radius: 8px;
+    background: var(--card); 
+    border: 2px solid rgba(44, 58, 78, 0.6); 
+    border-radius: 8px;
     color: var(--muted); font-size: 13px; padding: 6px 14px; cursor: pointer; transition: .15s;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
   }
-  .group-bar button.on { color: var(--text); border-color: var(--accent); background: var(--card2); }
+  .group-bar button.on { 
+    color: var(--text); 
+    border-color: var(--accent); 
+    background: var(--card2); 
+    box-shadow: 0 0 0 2px rgba(46, 160, 67, 0.2);
+  }
   .league-group { margin-bottom: 18px; }
   .league-title { font-size: 13px; color: var(--accent2); font-weight: 600;
     margin: 0 4px 8px; letter-spacing: .5px; }
   .match {
     display: flex; align-items: center; gap: 12px;
-    background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+    background: var(--card); 
+    border: 2px solid rgba(44, 58, 78, 0.6); 
+    border-radius: 10px;
     padding: 12px 16px; margin-bottom: 8px; cursor: pointer; transition: .15s;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
   }
-  .match:hover { border-color: var(--accent); background: var(--card2); transform: translateX(2px); }
+  .match:hover { 
+    border-color: var(--accent); 
+    background: var(--card2); 
+    transform: translateX(2px); 
+    box-shadow: 0 4px 12px rgba(46, 160, 67, 0.15);
+  }
   .match .num { color: var(--accent2); font-size: 12px; font-weight: 600;
     min-width: 52px; letter-spacing: .5px; }
   .match .time { color: var(--muted); font-size: 12px; min-width: 78px; }
@@ -135,8 +157,15 @@
   .match-head .names b { color: var(--accent2); }
   .match-head .meta { color: var(--muted); font-size: 13px; margin-top: 4px; }
 
-  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px;
-    padding: 16px 18px; margin-bottom: 14px; }
+  .card { 
+    background: var(--card); 
+    border: 2px solid var(--line); 
+    border-radius: 12px;
+    padding: 16px 18px; 
+    margin-bottom: 14px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+    border-color: rgba(44, 58, 78, 0.8);
+}
   .card h3 { font-size: 15px; margin-bottom: 12px; color: var(--accent2);
     display: flex; align-items: center; gap: 6px; }
   .row { display: flex; justify-content: space-between; gap: 12px;
@@ -165,8 +194,14 @@
   .score .bar > i { display: block; height: 100%; background: var(--accent); }
   .score .pct { font-size: 13px; min-width: 52px; text-align: right; color: var(--accent2); }
 
-  .rec { background: linear-gradient(135deg, #1a2230, #1e2a1e);
-    border: 1px solid var(--accent); border-radius: 12px; padding: 16px 18px; margin-bottom: 12px; }
+  .rec { 
+    background: linear-gradient(135deg, #1a2230, #1e2a1e);
+    border: 2px solid var(--accent); 
+    border-radius: 12px; 
+    padding: 16px 18px; 
+    margin-bottom: 12px;
+    box-shadow: 0 4px 12px rgba(46, 160, 67, 0.2);
+}
   .rec .title { font-size: 20px; font-weight: 700; }
   .rec .title .star { color: var(--warn); }
   .rec .sub { color: var(--muted); font-size: 13px; margin: 4px 0 8px; }
@@ -176,9 +211,24 @@
 
   /* 半全场分析样式 */
   .htf-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
-  .htf-item { background: var(--card2); border-radius: 10px; padding: 10px; text-align: center; }
-  .htf-item.high { border: 1px solid var(--accent); background: rgba(46, 160, 67, 0.1); }
-  .htf-item.medium { border: 1px solid var(--warn); background: rgba(210, 153, 34, 0.1); }
+  .htf-item { 
+    background: var(--card2); 
+    border: 2px solid rgba(44, 58, 78, 0.5); 
+    border-radius: 10px; 
+    padding: 10px; 
+    text-align: center; 
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  }
+  .htf-item.high { 
+    border: 2px solid var(--accent); 
+    background: rgba(46, 160, 67, 0.1); 
+    box-shadow: 0 2px 8px rgba(46, 160, 67, 0.15);
+  }
+  .htf-item.medium { 
+    border: 2px solid var(--warn); 
+    background: rgba(210, 153, 34, 0.1); 
+    box-shadow: 0 2px 8px rgba(210, 153, 34, 0.15);
+  }
   .htf-code { font-size: 18px; font-weight: 700; color: var(--text); margin-bottom: 4px; }
   .htf-name { font-size: 12px; color: var(--muted); margin-bottom: 8px; }
   .htf-bar { height: 6px; background: var(--card); border-radius: 3px; overflow: hidden; margin-bottom: 4px; }
@@ -187,8 +237,20 @@
 
   /* 进球数推荐样式 */
   .goal-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
-  .goal-item { background: var(--card2); border-radius: 12px; padding: 14px; text-align: center; position: relative; }
-  .goal-item.top { border: 2px solid var(--accent); background: rgba(46, 160, 67, 0.08); }
+  .goal-item { 
+    background: var(--card2); 
+    border: 2px solid rgba(44, 58, 78, 0.5); 
+    border-radius: 12px; 
+    padding: 14px; 
+    text-align: center; 
+    position: relative;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
+  }
+  .goal-item.top { 
+    border: 2px solid var(--accent); 
+    background: rgba(46, 160, 67, 0.08); 
+    box-shadow: 0 4px 12px rgba(46, 160, 67, 0.15);
+  }
   .goal-rank { position: absolute; top: -8px; right: -8px; width: 24px; height: 24px; background: var(--accent); color: white; border-radius: 50%; font-size: 12px; font-weight: 700; display: flex; align-items: center; justify-content: center; }
   .goal-label { font-size: 20px; font-weight: 700; color: var(--text); margin-bottom: 8px; }
   .goal-bar { height: 8px; background: var(--card); border-radius: 4px; overflow: hidden; margin-bottom: 6px; }

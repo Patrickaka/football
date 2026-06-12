@@ -318,7 +318,7 @@ class MarketScoreDB:
         self._load()
     
     def _load(self):
-        """从文件加载数据库"""
+        """从文件加载数据库（内部方法）"""
         if os.path.exists(DB_FILE):
             try:
                 with open(DB_FILE, 'r', encoding='utf-8') as f:
@@ -330,6 +330,10 @@ class MarketScoreDB:
                 print(f"加载数据库失败: {e}")
                 self.db = {}
                 self.sample_counts = {}
+    
+    def load(self):
+        """从文件加载数据库（公开方法）"""
+        self._load()
     
     def save(self):
         """保存数据库到文件"""
