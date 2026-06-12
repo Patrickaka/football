@@ -917,6 +917,10 @@ function renderMatchList() {
       if (m) predict(m);
     };
   });
+  const btnPredictions = app.querySelector('#btn-predictions');
+  if (btnPredictions) {
+    btnPredictions.onclick = () => switchTab('predictions');
+  }
 }
 
 function showListView(filter) {
