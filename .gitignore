@@ -26,6 +26,15 @@ data/pailie5_history.json
 
 # 预测缓存（运行时生成，重启自动重建）
 data/*_cache.json
+src/football/cache/
+
+# 线上运行时持续写入的数据（不入 git，避免每次发版 pull 冲突）
+src/football/data/prediction_history.json
+data/calibration_db.json
+data/market_score_db.json
+data/market_cluster_db.json
+data/lottery3d_online_predictions.json
+data/lottery3d_recent_recommend.json
 
 # CatBoost 训练产物
 catboost_info/
