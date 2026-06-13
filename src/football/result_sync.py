@@ -48,6 +48,7 @@
 """
 
 import os
+import re
 import json
 import time
 import logging
@@ -682,10 +683,14 @@ def auto_sync_results():
         away = record['away']
         match_time = record.get('match_time', '')
         league = record.get('league', '')
+
+        if not _is_valid_match_id(match_id):
+            log.debug(f"跳过非数字 match_id 的同步: {home} vs {away} ({match_id})")
+            continue
         
         try:
             # 三层兜底抓取赛果
-            result = fetch_result_by_match_id(match_id)
+            result = fetch_result_by_match_id(match_id, match_time)
             if not result:
                 result = fetch_result_by_team_and_date(home, away, match_time)
             
@@ -711,103 +716,246 @@ def auto_sync_results():
     }
 
 
-def fetch_result_by_match_id(match_id: str) -> Optional[Dict]:
+def _is_valid_match_id(match_id: str) -> bool:
+    """仅对 500.com 数字型 fid 尝试抓取赛果"""
+    return bool(match_id) and str(match_id).isdigit()
+
+
+def _extract_score_text(raw: str) -> Optional[str]:
+    """将页面比分文本规范为 home-away 格式，未开赛返回 None"""
+    text = (raw or '').strip().replace('：', ':')
+    if not text or text.upper() == 'VS':
+        return None
+
+    text = re.sub(r'\s+', '', text)
+    if ':' in text:
+        home_goals, away_goals = text.split(':', 1)
+    elif '-' in text:
+        home_goals, away_goals = text.split('-', 1)
+    else:
+        return None
+
+    if not (home_goals.isdigit() and away_goals.isdigit()):
+        return None
+
+    home_goals = int(home_goals)
+    away_goals = int(away_goals)
+    if home_goals > 15 or away_goals > 15:
+        return None
+
+    return f"{home_goals}-{away_goals}"
+
+
+def _fetch_match_html(match_id: str) -> str:
+    """复用足球模块抓取逻辑，保持与预测数据同源"""
+    from . import fetch as fetch_html
+    return fetch_html(f'https://odds.500.com/fenxi/shuju-{match_id}.shtml')
+
+
+def _parse_shuju_score(html: str, match_id: str) -> Optional[str]:
+    """从 odds.500.com 赛事数据页解析终场比分"""
+    patterns = [
+        rf'shuju-{re.escape(match_id)}\.shtml[^>]*>.*?<em class="l">[^<]*</em><span class="gray">([^<]+)</span><em class="r">[^<]*</em>',
+        rf'<em class="l">[^<]*</em><span class="gray">([^<]+)</span><em class="r">[^<]*</em>',
+    ]
+    for pat in patterns:
+        m = re.search(pat, html, re.DOTALL)
+        if m:
+            score = _extract_score_text(m.group(1))
+            if score:
+                return score
+    return None
+
+
+def fetch_result_by_match_id(match_id: str, match_time: str = '') -> Optional[Dict]:
     """
-    第一优先：通过 match_id 抓取赛果
+    通过 match_id 抓取赛果：
+    1. live.500.com 按 fid + 动态日期（竞彩官方赛果页）
+    2. odds.500.com 赛事数据页（兜底）
     """
+    if not _is_valid_match_id(match_id):
+        return None
+
+    if match_time:
+        score = _fetch_live_score_by_fid(match_id, match_time)
+        if score:
+            return _parse_score_string(score)
+
     try:
-        import urllib.request
-        import re
-        
-        url = f"https://www.500.com/close/?id={match_id}"
-        
-        req = urllib.request.Request(url, headers={
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-            'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8'
-        })
-        
-        with urllib.request.urlopen(req, timeout=10) as response:
-            html = response.read().decode('gbk', errors='ignore')
-            
-            # 解析比分
-            score_match = re.search(r'<[^>]*class=["\']score["\'][^>]*>([\d]+)-([\d]+)</span>', html)
-            
-            if score_match:
-                return _parse_score_result(score_match)
-        
+        html = _fetch_match_html(match_id)
+        score = _parse_shuju_score(html, match_id)
+        if score:
+            log.info(f"通过 shuju 页面抓取赛果: match_id={match_id} -> {score}")
+            return _parse_score_string(score)
     except Exception as e:
-        log.debug(f"通过 match_id 抓取失败: {e}")
-    
+        log.debug(f"shuju 页面抓取失败: {e}")
+
+    return None
+
+
+def _parse_match_datetime(match_time: str) -> Optional[datetime]:
+    """解析比赛时间，兼容 MM-DD HH:MM 与完整日期格式"""
+    if not match_time:
+        return None
+
+    now = datetime.now()
+    text = match_time.strip()
+    for fmt in ('%Y-%m-%d %H:%M:%S', '%Y-%m-%d %H:%M', '%m-%d %H:%M'):
+        try:
+            match_dt = datetime.strptime(text, fmt)
+            if fmt == '%m-%d %H:%M':
+                match_dt = match_dt.replace(year=now.year)
+                # 跨年：记录月份比当前月大很多，说明是去年
+                if match_dt > now + timedelta(days=2):
+                    match_dt = match_dt.replace(year=now.year - 1)
+                elif now.month == 12 and match_dt.month == 1:
+                    match_dt = match_dt.replace(year=now.year + 1)
+            return match_dt
+        except ValueError:
+            continue
+    return None
+
+
+def _live_query_dates(match_time: str) -> List[str]:
+    """
+    动态计算 live.500.com 的 ?e= 查询日期。
+
+    竞彩赛果页规则（见 https://live.500.com/?e=YYYY-MM-DD ）：
+    - e=某日 的页面展示该「开售日」对应场次的赛果
+    - 开球时间为 06-13 03:00 的比赛，出现在 e=2026-06-12 页面（开球日前一天）
+    - 因此优先查 kickoff_date - 1，再查当日及邻近日，最后兜底今天/昨天
+    """
+    today = datetime.now().date()
+    candidates = []
+
+    match_dt = _parse_match_datetime(match_time)
+    if match_dt:
+        kickoff_date = match_dt.date()
+        candidates.extend([
+            kickoff_date - timedelta(days=1),
+            kickoff_date,
+            kickoff_date - timedelta(days=2),
+            kickoff_date + timedelta(days=1),
+        ])
+
+    candidates.extend([today, today - timedelta(days=1), today - timedelta(days=2)])
+
+    seen = set()
+    dates = []
+    for day in candidates:
+        key = day.strftime('%Y-%m-%d')
+        if key not in seen:
+            seen.add(key)
+            dates.append(key)
+    return dates
+
+
+def _fetch_live_html(search_date: str) -> str:
+    from . import fetch as fetch_html
+    return fetch_html(f'https://live.500.com/?e={search_date}')
+
+
+def _parse_live_row_final_score(row: str) -> Optional[str]:
+    """
+    从 live 表格行解析全场比分。
+
+    live.500.com 列结构：
+    - <div class="pk"> 中 clt1 / clt3 = 全场比分（如 1-1）
+    - 其后 class="red" 的 td = 半场比分（如 0-1），不能当作终场
+    """
+    pk_m = re.search(
+        r'<div class="pk">.*?class="clt1"[^>]*>\s*(\d+)\s*</a>.*?class="clt3"[^>]*>\s*(\d+)\s*</a>',
+        row,
+        re.DOTALL,
+    )
+    if pk_m:
+        score = _extract_score_text(f"{pk_m.group(1)}-{pk_m.group(2)}")
+        if score:
+            return score
+    return None
+
+
+def _fetch_live_score_by_fid(match_id: str, match_time: str) -> Optional[str]:
+    """在 live.500.com 按 fid 查找赛果，日期动态推算"""
+    for search_date in _live_query_dates(match_time):
+        try:
+            html = _fetch_live_html(search_date)
+        except Exception as e:
+            log.debug(f"live 页面抓取失败 e={search_date}: {e}")
+            continue
+
+        row_m = re.search(
+            rf'<tr[^>]*\bfid="{re.escape(match_id)}"[^>]*>.*?</tr>',
+            html,
+            re.DOTALL,
+        )
+        if not row_m:
+            continue
+
+        score = _parse_live_row_final_score(row_m.group(0))
+        if score:
+            log.info(f"通过 live 页面(fid)抓取赛果: match_id={match_id}, e={search_date} -> {score}")
+            return score
+
+    return None
+
+
+def _parse_live_row_score(row: str, home: str, away: str) -> Optional[str]:
+    """从 live.500.com 单行比赛记录提取终场比分"""
+    if home not in row or away not in row:
+        return None
+
+    score = _parse_live_row_final_score(row)
+    if score:
+        return score
+
+    fid_m = re.search(r'fid="(\d+)"', row)
+    if fid_m:
+        # 行内已有 fid，直接解析比分列，避免重复请求
+        return None
+
+    home_idx = row.find(home)
+    away_idx = row.find(away)
+    if home_idx < 0 or away_idx < 0:
+        return None
+
+    start = min(home_idx, away_idx)
+    end = max(home_idx, away_idx) + max(len(home), len(away))
+    segment = row[start:end]
+
+    for pat in (
+        r'>(\d{1,2})\s*[-:：]\s*(\d{1,2})<',
+        r'(\d{1,2})\s*[-:：]\s*(\d{1,2})',
+    ):
+        m = re.search(pat, segment)
+        if m:
+            score = _extract_score_text(f"{m.group(1)}-{m.group(2)}")
+            if score:
+                return score
     return None
 
 
 def fetch_result_by_team_and_date(home: str, away: str, match_time: str) -> Optional[Dict]:
     """
-    第二优先：通过球队名和日期模糊匹配抓取赛果
+    第二优先：通过球队名和比赛时间在 live.500.com 模糊匹配抓取赛果
     """
     try:
-        import urllib.request
-        import re
-        from datetime import datetime
-        
-        # 提取日期
-        date_match = re.search(r'(\d{2}-\d{2})', match_time)
-        if not date_match:
-            return None
-        
-        search_date_short = date_match.group(1)
-        
-        # 构建完整日期格式 2026-06-12
-        year = datetime.now().year
-        search_date = f"{year}-{search_date_short}"
-        
-        # 尝试多个可能的URL（使用正确的参数 e= 而不是 date=）
-        urls = [
-            f"https://live.500.com/?e={search_date}",
-            f"https://live.500.com/index.php?e={search_date}",
-        ]
-        
-        for url in urls:
+        for search_date in _live_query_dates(match_time):
             try:
-                req = urllib.request.Request(url, headers={
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                    'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8'
-                })
-                
-                with urllib.request.urlopen(req, timeout=10) as response:
-                    html = response.read().decode('gbk', errors='ignore')
-                    
-                    # 查找包含两队名称的比赛
-                    # 使用更精确的模式，比分通常是小数字（0-10），日期是两位数
-                    pattern = rf'{re.escape(home)}.*?<[^>]*>(\d{1,2})-(\d{1,2})</.*?>.*?{re.escape(away)}|{re.escape(away)}.*?<[^>]*>(\d{1,2})-(\d{1,2})</.*?>.*?{re.escape(home)}'
-                    match = re.search(pattern, html, re.DOTALL)
-                    
-                    if match:
-                        groups = match.groups()
-                        if groups[0] and groups[1]:
-                            home_goals = int(groups[0])
-                            away_goals = int(groups[1])
-                        elif groups[2] and groups[3]:
-                            away_goals = int(groups[2])
-                            home_goals = int(groups[3])
-                        else:
-                            continue
-                        
-                        # 验证比分合理性（通常不超过10球）
-                        if home_goals <= 10 and away_goals <= 10:
-                            score = f"{home_goals}-{away_goals}"
-                            log.info(f"成功抓取赛果: {home} vs {away} -> {score}")
-                            return _parse_score_string(score)
-                        
+                html = _fetch_live_html(search_date)
             except Exception as e:
-                log.debug(f"尝试URL {url} 失败: {e}")
+                log.debug(f"live 页面抓取失败 e={search_date}: {e}")
                 continue
-        
+
+            for row in re.finditer(r'<tr[^>]*>.*?</tr>', html, re.DOTALL):
+                score = _parse_live_row_score(row.group(0), home, away)
+                if score:
+                    log.info(f"通过 live 页面(球队)抓取赛果: {home} vs {away}, e={search_date} -> {score}")
+                    return _parse_score_string(score)
+
     except Exception as e:
         log.debug(f"通过球队名+日期抓取失败: {e}")
-    
+
     return None
 
 
