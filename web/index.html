@@ -1005,6 +1005,16 @@ function probBar(segs) {
 
 const heatLabel = h => ({ cold: '❄冷', hot: '🔥热', neutral: '' }[h] || '');
 
+function kellyCellsNeutral(k) {
+  const items = [
+    ['主胜', 'home'], ['平', 'draw'], ['客胜', 'away'],
+  ];
+  return items.map(([lbl, key]) => {
+    const v = k[key] != null ? k[key] : 0;
+    return `<div class="kelly-cell"><div class="lbl">${lbl}</div><div class="val" style="color:var(--muted)">${v.toFixed(1)}</div></div>`;
+  }).join('');
+}
+
 function kellyCells(k, rr) {
   const items = [
     ['主胜', 'home', 'home'], ['平', 'draw', 'draw'], ['客胜', 'away', 'away'],
@@ -1125,15 +1135,24 @@ function renderResult(r) {
     const k = e.kelly;
     const rrOpen = k.return_rate.open != null ? k.return_rate.open : 0;
     const rrClose = k.return_rate.close != null ? k.return_rate.close : 0;
-    html += `<div class="card"><h3>📐 凯利指数</h3>
-      <div class="row"><span class="k">理论返还率</span><span class="v">初 ${rrOpen.toFixed(1)}% → 终 ${rrClose.toFixed(1)}%</span></div>
-      <div style="font-size:12px;color:var(--muted);margin:6px 0 2px">初盘</div>
-      <div class="kelly-grid">${k.open ? kellyCells(k.open, rrOpen) : ''}</div>
-      <div style="font-size:12px;color:var(--muted);margin:6px 0 2px">终盘 <span style="color:var(--warn)">高=难出 · 低=看好</span></div>
-      <div class="kelly-grid">${k.close ? kellyCells(k.close, rrClose) : ''}</div>
-      ${k.kelly_changes && k.kelly_changes.length ? `<div class="row"><span class="k">凯利变化</span><span class="v">${esc(k.kelly_changes.join('，'))}</span></div>` : ''}
-      ${k.trend && k.trend.slope != null ? `<div class="row"><span class="k">凯利斜率</span><span class="v">${k.trend.slope > 0 ? '↑' : '↓'} ${Math.abs(k.trend.slope).toFixed(3)}</span></div>` : ''}
-      ${k.trend && k.trend.crossing ? `<div class="row"><span class="k" style="color:var(--warn)">交叉预警</span><span class="v" style="color:var(--warn)">${esc(k.trend.crossing)}</span></div>` : ''}
+    const rrDelta = k.return_rate.delta != null ? k.return_rate.delta : 0;
+    const spread = k.spread != null ? k.spread : 0;
+    const isNeutral = spread < 1.0;
+    
+    const rrChangeText = rrDelta > 0.1 ? `整体返还率上升 +${rrDelta.toFixed(1)}` : 
+                        rrDelta < -0.1 ? `整体返还率下降 ${rrDelta.toFixed(1)}` : '返还率基本稳定';
+    
+    html += `<div class="card"><h3>📐 理论返还率变化</h3>
+      <div class="row"><span class="k">理论返还率</span><span class="v">初盘 ${rrOpen.toFixed(1)}% → 终盘 ${rrClose.toFixed(1)}%</span></div>
+      <div class="row"><span class="k">变化</span><span class="v">${esc(rrChangeText)}</span></div>
+      <div style="font-size:12px;color:var(--muted);margin:6px 0 2px">初盘${isNeutral ? '' : ' <span style="color:var(--warn)">高=难出 · 低=看好</span>'}</div>
+      <div class="kelly-grid">${k.open ? isNeutral ? kellyCellsNeutral(k.open) : kellyCells(k.open, rrOpen) : ''}</div>
+      <div style="font-size:12px;color:var(--muted);margin:6px 0 2px">终盘${isNeutral ? ' <span style="color:var(--muted)">三项均衡</span>' : ' <span style="color:var(--warn)">高=难出 · 低=看好</span>'}</div>
+      <div class="kelly-grid">${k.close ? isNeutral ? kellyCellsNeutral(k.close) : kellyCells(k.close, rrClose) : ''}</div>
+      ${isNeutral ? `<div class="row"><span class="k">凯利分化</span><span class="v">离散度 ${spread.toFixed(1)}，三项完全均衡，暂无明显高低项，不产生难易判断</span></div>` : ''}
+      ${!isNeutral && k.kelly_changes && k.kelly_changes.length ? `<div class="row"><span class="k">凯利变化</span><span class="v">${esc(k.kelly_changes.join('，'))}</span></div>` : ''}
+      ${!isNeutral && k.trend && k.trend.slope != null ? `<div class="row"><span class="k">凯利斜率</span><span class="v">${k.trend.slope > 0 ? '↑' : '↓'} ${Math.abs(k.trend.slope).toFixed(3)}</span></div>` : ''}
+      ${!isNeutral && k.trend && k.trend.crossing ? `<div class="row"><span class="k" style="color:var(--warn)">交叉预警</span><span class="v" style="color:var(--warn)">${esc(k.trend.crossing)}</span></div>` : ''}
       <div class="row"><span class="k">综合</span><span class="v">${esc(k.summary || '')}</span></div></div>`;
   }
 

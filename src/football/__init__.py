@@ -1504,8 +1504,10 @@ def analyze_kelly(ouzhi_data, probs_open, probs_close):
         summary_parts.append(favors[0])
     summary = '；'.join(summary_parts)
 
+    rr_delta = rr_c - rr_o
+    
     return {
-        'return_rate': {'open': rr_o, 'close': rr_c},
+        'return_rate': {'open': rr_o, 'close': rr_c, 'delta': rr_delta},
         'open': k_open,
         'close': k_close,
         'delta': delta,
