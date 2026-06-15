@@ -1249,7 +1249,9 @@ function renderResult(r) {
   const recommendRank = r.recommend_rank || md.recommend || [];
   const recTitle = cf && cf.level === 'low'
     ? '⭐ 最终策略推荐：低置信仅 1 个比分'
-    : `⭐ 最终策略推荐：${recommendRank.length} 个比分`;
+    : !recommendRank || recommendRank.length === 0
+      ? '⭐ 最终策略推荐：不推荐比分'
+      : `⭐ 最终策略推荐：${recommendRank.length} 个比分`;
   html += `<h3 style="color:var(--accent2);font-size:15px;margin:18px 0 10px">${recTitle}</h3>`;
   if (cf && cf.notes && cf.notes.length) {
     html += `<div class="status" style="padding:0 0 12px;font-size:13px;text-align:left">${cf.notes.map(esc).join('；')}</div>`;

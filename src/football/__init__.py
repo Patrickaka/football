@@ -3198,9 +3198,10 @@ def _evaluate_risk_level(asian: Dict, euro: Dict, total: Dict,
     评估比赛预测的风险等级
     
     风险等级定义：
-    - A级：盘口、欧赔、大小球、相似盘口一致 → 推荐3个比分
-    - B级：有一个方向冲突 → 推荐2个比分
-    - C级：欧亚分歧/盘口剧烈反转/样本不足 → 只给倾向，不给比分
+    - A级：各指标一致 → 推荐3个比分
+    - B级：存在冲突因素 → 推荐2个比分
+    - C级：风险较高 → 推荐1个比分
+    - D级：风险极高 → 不推荐比分
     
     参数：
         asian: 亚盘分析结果
@@ -3287,19 +3288,32 @@ def _evaluate_risk_level(asian: Dict, euro: Dict, total: Dict,
     except Exception:
         pass
     
-    # 确定风险等级
-    if conflict_count == 0 and risk_score < 0.1:
+    # 因素7：凯利指数离散度（仅当离散度较高且有明显最难项时）
+    kelly = euro.get('kelly', {})
+    kelly_spread = kelly.get('spread', 0)
+    kelly_hardest = kelly.get('hardest')
+    if kelly_spread >= 4.0 and kelly_hardest != 'neutral':
+        conflict_count += 1
+        risk_factors.append('凯利离散度较高，存在明显分化')
+        risk_score += 0.15
+    
+    # 确定风险等级和推荐数量
+    if risk_score < 0.35:
         level = 'A'
         recommend_count = 3
         description = '各指标一致，预测置信度高'
-    elif conflict_count <= 2 and risk_score < 0.4:
+    elif risk_score < 0.55:
         level = 'B'
         recommend_count = 2
         description = f'存在{conflict_count}个冲突因素，需要谨慎'
-    else:
+    elif risk_score < 0.75:
         level = 'C'
-        recommend_count = 0  # 不给具体比分
-        description = f'冲突因素较多({conflict_count}个)，建议观望'
+        recommend_count = 1
+        description = f'冲突因素较多({conflict_count}个)，建议精简投注'
+    else:
+        level = 'D'
+        recommend_count = 0  # 不推荐比分
+        description = f'风险较高({conflict_count}个因素)，建议观望'
     
     return {
         'level': level,
@@ -3307,7 +3321,7 @@ def _evaluate_risk_level(asian: Dict, euro: Dict, total: Dict,
         'description': description,
         'risk_factors': risk_factors,
         'risk_score': risk_score,
-        'recommend': '正常推荐' if level == 'A' else ('精简推荐' if level == 'B' else '不建议投注比分'),
+        'recommend': '正常推荐' if level == 'A' else ('精简推荐' if level == 'B' else ('谨慎推荐' if level == 'C' else '不建议投注比分')),
     }
 
 
