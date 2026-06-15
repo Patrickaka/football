@@ -1463,8 +1463,16 @@ def analyze_kelly(ouzhi_data, probs_open, probs_close):
 
     labels = ('home', 'draw', 'away')
     spread = max(k_close.values()) - min(k_close.values())
-    hardest = max(labels, key=lambda k: k_close[k] - rr_c)
-    favored = min(labels, key=lambda k: k_close[k] - rr_c)
+    
+    KELLY_NEUTRAL_SPREAD = 1.0
+    
+    # 根据离散度判断是否有明显最难项
+    if spread < KELLY_NEUTRAL_SPREAD:
+        hardest = 'neutral'
+        favored = 'neutral'
+    else:
+        hardest = max(labels, key=lambda k: k_close[k] - rr_c)
+        favored = min(labels, key=lambda k: k_close[k] - rr_c)
 
     risks, favors, kelly_changes = [], [], []
     for k in labels:
@@ -1478,12 +1486,20 @@ def analyze_kelly(ouzhi_data, probs_open, probs_close):
             arrow = '↑' if delta[k] > 0 else '↓'
             kelly_changes.append(f"{name}凯利{arrow}{abs(delta[k]):.1f}")
 
+    # 构建摘要
+    summary_parts = []
     if spread >= 4.0:
         bias_desc = f"凯利离散度{spread:.1f}，庄家态度分化明显"
+        summary_parts.append(bias_desc)
+    elif spread < KELLY_NEUTRAL_SPREAD:
+        bias_desc = f"凯利离散度{spread:.1f}，三项较为均衡"
+        summary_parts.append(bias_desc)
+        summary_parts.append("暂无明显最难项")
     else:
         bias_desc = f"凯利离散度{spread:.1f}，三项较为均衡"
-
-    summary_parts = [bias_desc, f"最难项倾向{_kelly_outcome_label(hardest)}"]
+        summary_parts.append(bias_desc)
+        summary_parts.append(f"最难项倾向{_kelly_outcome_label(hardest)}")
+    
     if favors:
         summary_parts.append(favors[0])
     summary = '；'.join(summary_parts)
@@ -4852,16 +4868,19 @@ def _recommend_reasons(h, a, asian, euro, total, team=None, heat=None):
     if kelly:
         fav = kelly.get('favored')
         hard = kelly.get('hardest')
-        if fav == 'home' and diff > 0:
-            reasons.append("凯利指数相对看好主胜")
-        elif fav == 'away' and diff < 0:
-            reasons.append("凯利指数相对看好客胜")
-        elif fav == 'draw' and diff == 0:
-            reasons.append("凯利指数相对看好平局")
-        if hard == 'home' and diff > 0:
-            reasons.append("凯利提示主胜打出难度偏大")
-        elif hard == 'away' and diff < 0:
-            reasons.append("凯利提示客胜打出难度偏大")
+        # 只有当不是中性时才进行判断
+        if fav != 'neutral':
+            if fav == 'home' and diff > 0:
+                reasons.append("凯利指数相对看好主胜")
+            elif fav == 'away' and diff < 0:
+                reasons.append("凯利指数相对看好客胜")
+            elif fav == 'draw' and diff == 0:
+                reasons.append("凯利指数相对看好平局")
+        if hard != 'neutral':
+            if hard == 'home' and diff > 0:
+                reasons.append("凯利提示主胜打出难度偏大")
+            elif hard == 'away' and diff < 0:
+                reasons.append("凯利提示客胜打出难度偏大")
     return reasons or ["综合赔率推断"]
 
 
@@ -4895,11 +4914,14 @@ def _evaluate_upset_risk(asian, euro, team=None):
     # 2. 凯利指数分析
     kelly = euro.get('kelly')
     if kelly:
-        # 客胜凯利偏低可能意味着资金不看好热门方
-        if kelly.get('hardest') == 'home':
+        # 客胜凯利偏低可能意味着资金不看好热门方（只有当不是中性时才进行判断）
+        kelly_hardest = kelly.get('hardest')
+        kelly_favored = kelly.get('favored')
+        
+        if kelly_hardest != 'neutral' and kelly_hardest == 'home':
             risk_score += 0.15
             factors.append("凯利提示主胜打出难度大")
-        if kelly.get('favored') == 'away':
+        if kelly_favored != 'neutral' and kelly_favored == 'away':
             risk_score += 0.1
             factors.append("凯利相对看好客胜")
     
