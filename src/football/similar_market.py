@@ -552,7 +552,7 @@ class SimilarMarketDB:
         return {
             'count': len(similar),
             'avg_distance': round(avg_distance, 4),
-            'result_dist': {k: round(v, 2) for k, v in dict(result_counts).items()},
+            'result_dist': {k: round(v / total_weight, 4) if total_weight > 0 else 0.0 for k, v in dict(result_counts).items()},
             'probabilities': {k: round(v, 4) for k, v in probabilities.items()},
             'goals_dist': goals_prob,
             'confidence': round(confidence, 4),
