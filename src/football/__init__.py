@@ -4886,6 +4886,73 @@ def _recommend_reasons(h, a, asian, euro, total, team=None, heat=None):
     return reasons or ["综合赔率推断"]
 
 
+def apply_market_change_prior(score_probs: Dict[str, float], asian: Dict, total: Dict,
+                              weight: float = 0.08) -> Tuple[Dict[str, float], Dict]:
+    """
+    用盘口变化历史先验修正比分概率
+    """
+    try:
+        from .market_db import MarketChangeDB, normalize_asian, normalize_ou
+
+        asian_from = asian.get('open_handicap')
+        asian_to = asian.get('handicap')
+
+        ou_from = total.get('open_line')
+        ou_to = total.get('close_line') or total.get('line')
+
+        asian_from = normalize_asian(asian_from)
+        asian_to = normalize_asian(asian_to)
+        ou_from = normalize_ou(ou_from)
+        ou_to = normalize_ou(ou_to)
+
+        if asian_from is None or asian_to is None or ou_from is None or ou_to is None:
+            return score_probs, {'available': False, 'reason': '缺少开终盘'}
+
+        db = MarketChangeDB()
+        stats = db.get_change_stats(asian_from, asian_to, ou_from, ou_to)
+
+        if not stats:
+            return score_probs, {'available': False, 'reason': '无历史样本'}
+
+        sample_count = stats.get('sample_count', 0)
+        prior = stats.get('probabilities', {})
+
+        # 样本不足只展示，不参与融合
+        if sample_count < 30:
+            return score_probs, {
+                'available': True,
+                'used': False,
+                'sample_count': sample_count,
+                'reason': '样本不足，仅展示',
+                'top_scores': list(prior.items())[:5],
+            }
+
+        fused = {}
+        all_scores = set(score_probs.keys()) | set(prior.keys())
+
+        for score in all_scores:
+            model_prob = score_probs.get(score, 0.0)
+            prior_prob = prior.get(score, 0.0)
+            fused[score] = (1 - weight) * model_prob + weight * prior_prob
+
+        total_prob = sum(fused.values())
+        if total_prob > 0:
+            fused = {k: v / total_prob for k, v in fused.items()}
+
+        return fused, {
+            'available': True,
+            'used': True,
+            'sample_count': sample_count,
+            'weight': weight,
+            'top_scores': list(prior.items())[:5],
+            'key': stats.get('key'),
+        }
+
+    except Exception as e:
+        log.debug(f"盘口变化先验融合失败: {e}")
+        return score_probs, {'available': False, 'reason': str(e)}
+
+
 def _evaluate_upset_risk(asian, euro, team=None):
     """
     动态评估爆冷可能性（0~1），基于盘口走势和球队状态分析
@@ -5517,6 +5584,34 @@ def analyze_match(match, force_refresh=False):
         ensemble_size=5,
     )
 
+    # 盘口变化先验融合
+    market_change_result = None
+    try:
+        # 将 candidates 转换为 score_probs 字典
+        score_probs = {
+            f"{h}-{a}": prob
+            for (h, a), prob in candidates
+        }
+        
+        score_probs, market_change_result = apply_market_change_prior(
+            score_probs,
+            asian,
+            total,
+            weight=0.08
+        )
+        
+        # 转换回 candidates 格式
+        candidates = [
+            (tuple(map(int, score.split('-'))), prob)
+            for score, prob in score_probs.items()
+        ]
+        candidates.sort(key=lambda x: -x[1])
+        
+        if market_change_result.get('used'):
+            log.info(f"盘口变化先验融合完成: sample={market_change_result['sample_count']}, weight={market_change_result['weight']}")
+    except Exception as e:
+        log.warning(f"盘口变化先验融合失败: {e}")
+
     # 新增：Dixon-Coles 模型预测（依赖 predict_scores 产出的 lam_home/lam_away）
     dixon_coles_result = None
     try:
@@ -5883,6 +5978,7 @@ def analyze_match(match, force_refresh=False):
         },
         'similar_market': similar_market_result,
         'steam_move': steam_result,
+        'market_change': market_change_result,
         
         # ========== 新增字段 ==========
         'model_status': model_status,

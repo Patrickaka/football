@@ -171,6 +171,12 @@ class PredictionHistory:
                 if record['time_layers'].get(layer) is None:
                     record['time_layers'][layer] = predicted_scores
                 
+                # 更新赔率分层记录
+                if 'odds_layers' not in record:
+                    record['odds_layers'] = {}
+                record['odds_layers'][layer] = odds_data
+                record['odds_layers']['final'] = odds_data
+                
                 self._save()
                 return
         
@@ -184,6 +190,17 @@ class PredictionHistory:
             'final': predicted_scores,  # 最终预测
         }
         
+        # 赔率分层记录
+        layer = infer_time_layer(match_time)
+        odds_layers = {
+            'T-24h': None,
+            'T-6h': None,
+            'T-1h': None,
+            'T-15min': None,
+            'final': odds_data,
+        }
+        odds_layers[layer] = odds_data
+        
         self.records.append({
             'match_id': match_id,
             'league': league,
@@ -195,6 +212,7 @@ class PredictionHistory:
             'predicted_scores': predicted_scores,
             'predicted_1x2': predicted_1x2,
             'time_layers': time_layers,  # 新增：时间分层预测记录
+            'odds_layers': odds_layers,  # 新增：赔率分层记录
             'actual_score': None,
             'actual_result': None,
             'settled': False,
@@ -490,6 +508,9 @@ class PredictionHistory:
                     self._update_market_db(record)
                     self._update_score_frequency_db(record)
                     self._update_elo_ratings(record)
+
+                    # 最后写入盘口变化库
+                    self._update_market_change_db(record)
                     
                     log.info(f"结算比赛: {record['home']} vs {record['away']} -> {actual_score} ({actual_result})")
                 else:
@@ -704,6 +725,96 @@ class PredictionHistory:
                     log.debug(f"已更新ELO评分: {record['home']} vs {record['away']}")
         except Exception as e:
             log.debug(f"更新ELO评分失败: {e}")
+
+    def _first_not_none(self, *values):
+        for v in values:
+            if v is not None:
+                return v
+        return None
+
+    def _update_market_change_db(self, record: Dict):
+        """赛后回填成功后，写入盘口变化数据库"""
+        try:
+            # 防止同一场重复结算导致重复写入
+            if record.get('market_change_updated'):
+                return
+
+            from .market_db import MarketChangeDB, normalize_asian, normalize_ou
+
+            odds = record.get('odds_snapshot') or {}
+            asian_data = odds.get('asian') or {}
+            total_data = odds.get('total') or {}
+
+            # 兼容 analyze_asian 后结构
+            asian_from = self._first_not_none(
+                asian_data.get('open_handicap'),
+                asian_data.get('open', {}).get('handicap')
+            )
+
+            asian_to = self._first_not_none(
+                asian_data.get('handicap'),
+                asian_data.get('close', {}).get('handicap'),
+                record.get('asian')
+            )
+
+            # 兼容 analyze_total 后结构
+            ou_from = self._first_not_none(
+                total_data.get('open_line'),
+                total_data.get('open', {}).get('line')
+            )
+
+            ou_to = self._first_not_none(
+                total_data.get('close_line'),
+                total_data.get('line'),
+                total_data.get('close', {}).get('line'),
+                record.get('total_line')
+            )
+
+            actual_score = record.get('actual_score')
+
+            if asian_from is None or asian_to is None:
+                log.debug(f"盘口变化库跳过：缺少亚盘开终盘 match_id={record.get('match_id')}")
+                return
+
+            if ou_from is None or ou_to is None:
+                log.debug(f"盘口变化库跳过：缺少大小球开终盘 match_id={record.get('match_id')}")
+                return
+
+            if not actual_score:
+                return
+
+            asian_from_n = normalize_asian(asian_from)
+            asian_to_n = normalize_asian(asian_to)
+            ou_from_n = normalize_ou(ou_from)
+            ou_to_n = normalize_ou(ou_to)
+
+            if asian_from_n is None or asian_to_n is None or ou_from_n is None or ou_to_n is None:
+                return
+
+            db = MarketChangeDB()
+            db.add_record(
+                asian_from_n,
+                asian_to_n,
+                ou_from_n,
+                ou_to_n,
+                actual_score
+            )
+            db.save()
+
+            record['market_change_updated'] = True
+            record['market_change_updated_at'] = datetime.now().isoformat()
+            record['market_change_key'] = f"{asian_from_n:.2f}→{asian_to_n:.2f}_{ou_from_n:.2f}→{ou_to_n:.2f}"
+
+            log.info(
+                f"盘口变化库已更新: "
+                f"{record.get('home')} vs {record.get('away')} | "
+                f"亚盘 {asian_from_n}->{asian_to_n}, "
+                f"大小球 {ou_from_n}->{ou_to_n}, "
+                f"比分 {actual_score}"
+            )
+
+        except Exception as e:
+            log.debug(f"更新盘口变化数据库失败: {e}")
     
     def get_stats(self) -> Dict:
         """获取统计信息（包含时间分层统计）"""
@@ -1300,6 +1411,11 @@ def scan_and_predict_time_layers() -> Dict[str, int]:
         log.error(f"时间分层扫描异常: {e}")
     
     return result
+
+
+def get_history() -> PredictionHistory:
+    """获取全局预测历史管理器实例"""
+    return _global_history
 
 
 def start_background_sync(interval_seconds: int = 7200):

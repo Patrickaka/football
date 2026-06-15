@@ -1088,6 +1088,29 @@ function renderResult(r) {
     ${a.lambda_adjust && a.lambda_adjust.home != null && a.lambda_adjust.away != null && (a.lambda_adjust.home != 0 || a.lambda_adjust.away != 0) ? `<div class="row"><span class="k">λ 调整</span><span class="v">主队 ${a.lambda_adjust.home > 0 ? '+' : ''}${a.lambda_adjust.home.toFixed(3)} / 客队 ${a.lambda_adjust.away > 0 ? '+' : ''}${a.lambda_adjust.away.toFixed(3)}</span></div>` : ''}
     ${a.implied_supremacy != null ? `<div class="row"><span class="k">反推净胜球</span><span class="v">${a.implied_supremacy >= 0 ? '+' : ''}${a.implied_supremacy.toFixed(2)}（非盘口 ${a.handicap}）</span></div>` : ''}</div>`;
 
+  // 盘口变化历史
+  const mc = r.market_change;
+  if (mc && mc.available) {
+    html += `<div class="card"><h3>📈 盘口变化历史</h3>`;
+    if (mc.key) {
+      const keyParts = mc.key.split('_');
+      const asianChange = keyParts[0];
+      const ouChange = keyParts[1];
+      html += `<div class="row"><span class="k">亚盘变化</span><span class="v">${esc(asianChange)}</span></div>`;
+      html += `<div class="row"><span class="k">大小球变化</span><span class="v">${esc(ouChange)}</span></div>`;
+    }
+    html += `<div class="row"><span class="k">历史样本</span><span class="v">${mc.sample_count || 0} 场</span></div>`;
+    if (mc.top_scores && mc.top_scores.length) {
+      html += `<div class="row"><span class="k">常见比分</span><span class="v">${mc.top_scores.slice(0, 3).map(s => s[0]).join(' / ')}</span></div>`;
+    }
+    if (mc.used) {
+      html += `<div class="row"><span class="k">状态</span><span class="v" style="color:var(--accent2)">已参与融合，权重 ${(mc.weight * 100).toFixed(0)}%</span></div>`;
+    } else {
+      html += `<div class="row"><span class="k">状态</span><span class="v" style="color:var(--warn)">${esc(mc.reason || '未参与融合')}</span></div>`;
+    }
+    html += `</div>`;
+  }
+
   // 独赔分析
   const singleOdds = r.single_odds;
   html += `<div class="card"><h3>⭐ 独赔分析</h3>`;

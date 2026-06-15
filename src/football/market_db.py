@@ -747,39 +747,51 @@ class MarketChangeDB:
     def add_record(self, asian_from: float, asian_to: float, ou_from: float, ou_to: float, score: str):
         """
         添加一条盘口变化记录
-        
-        参数：
-            asian_from: 开盘亚盘
-            asian_to: 收盘亚盘
-            ou_from: 开盘大小球
-            ou_to: 收盘大小球
-            score: 最终比分
+
+        asian_from: 开盘亚盘
+        asian_to: 收盘亚盘
+        ou_from: 开盘大小球
+        ou_to: 收盘大小球
+        score: 最终比分
         """
+        if asian_from is None or asian_to is None or ou_from is None or ou_to is None or not score:
+            return
+
         key = self._get_key(asian_from, asian_to, ou_from, ou_to)
-        
+
         if key not in self.db:
-            self.db[key] = defaultdict(int)
-        
-        self.db[key][score] += 1
+            self.db[key] = {}
+
+        self.db[key][score] = self.db[key].get(score, 0) + 1
     
     def get_change_stats(self, asian_from: float, asian_to: float, 
-                        ou_from: float, ou_to: float) -> Optional[Dict[str, float]]:
+                        ou_from: float, ou_to: float) -> Optional[Dict]:
         """
         获取盘口变化后的比分统计
-        
-        返回：
-            归一化的比分概率字典
         """
+        if asian_from is None or asian_to is None or ou_from is None or ou_to is None:
+            return None
+
         key = self._get_key(asian_from, asian_to, ou_from, ou_to)
         counts = self.db.get(key)
-        
+
         if not counts:
             return None
-        
+
         total = sum(counts.values())
-        return {score: count / total for score, count in sorted(
-            counts.items(), key=lambda x: -x[1]
-        )}
+        if total <= 0:
+            return None
+
+        probabilities = {
+            score: count / total
+            for score, count in sorted(counts.items(), key=lambda x: -x[1])
+        }
+
+        return {
+            'key': key,
+            'sample_count': total,
+            'probabilities': probabilities,
+        }
 
 
 # ==================== 查询接口 ====================
