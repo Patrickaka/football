@@ -344,9 +344,14 @@ class Handler(BaseHTTPRequestHandler):
         }
         try:
             return {'result': analyze_match(match, force_refresh=force_refresh)}
-        except Exception:
+        except ValueError as e:
+            error_msg = str(e)
+            self._log.error('赔率分析失败 match_id=%s: %s', match_id, error_msg)
+            return {'error': error_msg}
+        except Exception as e:
+            error_msg = f'赔率分析失败: {str(e)}'
             self._log.error('赔率分析失败 match_id=%s', match_id, exc_info=True)
-            return {'error': '赔率分析失败'}
+            return {'error': error_msg}
 
     def _football_clear_cache_payload(self):
         """清除足球模块缓存"""

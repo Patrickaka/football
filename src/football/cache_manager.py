@@ -20,6 +20,10 @@ import os
 import json
 import pickle
 import hashlib
+import logging
+
+_log = logging.getLogger('football')
+
 from datetime import datetime, date, timedelta
 from typing import Optional, Dict, Any
 
@@ -165,9 +169,7 @@ class FootballCacheManager:
             with open(file_path, 'rb') as f:
                 return pickle.load(f)
         except Exception as e:
-            import logging
-            log = logging.getLogger('football')
-            log.debug(f"读取缓存失败: {e}")
+            _log.debug(f"读取缓存失败: {e}")
             return None
     
     def set(self, cache_type: str, key: str, data: Any, match_time_str: str = None):
@@ -187,9 +189,7 @@ class FootballCacheManager:
             with open(file_path, 'wb') as f:
                 pickle.dump(data, f)
         except Exception as e:
-            import logging
-            log = logging.getLogger('football')
-            log.debug(f"写入缓存失败: {e}")
+            _log.debug(f"写入缓存失败: {e}")
         
         # 如果提供了比赛时间，同时保存时间分层缓存
         if match_time_str:
@@ -200,11 +200,9 @@ class FootballCacheManager:
                 with open(layer_file_path, 'wb') as f:
                     pickle.dump(data, f)
                 
-                log = logging.getLogger('football')
-                log.debug(f"保存时间分层缓存: {time_layer}")
+                _log.debug(f"保存时间分层缓存: {time_layer}")
             except Exception as e:
-                log = logging.getLogger('football')
-                log.debug(f"写入时间分层缓存失败: {e}")
+                _log.debug(f"写入时间分层缓存失败: {e}")
     
     def get_time_layer_cache(self, cache_type: str, key: str, time_layer: str) -> Optional[Any]:
         """
@@ -227,9 +225,7 @@ class FootballCacheManager:
             with open(file_path, 'rb') as f:
                 return pickle.load(f)
         except Exception as e:
-            import logging
-            log = logging.getLogger('football')
-            log.debug(f"读取时间分层缓存失败: {e}")
+            _log.debug(f"读取时间分层缓存失败: {e}")
             return None
     
     def invalidate(self, cache_type: str = None, key: str = None):
@@ -258,9 +254,7 @@ class FootballCacheManager:
             try:
                 os.remove(file_path)
             except Exception as e:
-                import logging
-                log = logging.getLogger('football')
-                log.debug(f"删除缓存文件失败: {e}")
+                _log.debug(f"删除缓存文件失败: {e}")
     
     def clear_all(self):
         """清除所有缓存"""
@@ -269,9 +263,7 @@ class FootballCacheManager:
             try:
                 os.remove(file_path)
             except Exception as e:
-                import logging
-                log = logging.getLogger('football')
-                log.debug(f"删除缓存文件失败: {e}")
+                _log.debug(f"删除缓存文件失败: {e}")
     
     def clear_expired(self):
         """清除过期缓存（昨天及更早的）"""
@@ -283,9 +275,7 @@ class FootballCacheManager:
                 try:
                     os.remove(file_path)
                 except Exception as e:
-                    import logging
-                    log = logging.getLogger('football')
-                    log.debug(f"删除过期缓存失败: {e}")
+                    _log.debug(f"删除过期缓存失败: {e}")
 
 
 # 全局缓存管理器实例
@@ -339,9 +329,7 @@ def invalidate_cache(cache_type: str = None, key: str = None):
 def clear_all_cache():
     """清除所有缓存"""
     _global_cache_manager.clear_all()
-    import logging
-    log = logging.getLogger('football')
-    log.info("已清除所有足球模块缓存")
+    _log.info("已清除所有足球模块缓存")
     return {'status': 'success', 'message': '所有缓存已清空'}
 
 
@@ -370,9 +358,7 @@ def cached(cache_type: str, ttl_days: int = 1):
             # 尝试获取缓存
             cached_data = get_cache(cache_type, cache_key)
             if cached_data is not None:
-                import logging
-                log = logging.getLogger('football')
-                log.debug(f"使用缓存: {cache_type} - {func.__name__}")
+                _log.debug(f"使用缓存: {cache_type} - {func.__name__}")
                 return cached_data
             
             # 执行函数
