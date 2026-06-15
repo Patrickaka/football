@@ -285,7 +285,7 @@ class PredictionHistory:
         return False
     
     def _calculate_hit_flags(self, record: Dict) -> Dict:
-        """计算命中标志"""
+        """计算命中标志和失败原因"""
         actual_score = record.get('actual_score')
         actual_result = record.get('actual_result')
         predicted_scores = record.get('predicted_scores', {})
@@ -298,12 +298,149 @@ class PredictionHistory:
         
         pred_result = max(predicted_1x2.items(), key=lambda x: x[1])[0] if predicted_1x2 else None
         
+        hit_top1 = actual_score == top1
+        hit_top3 = actual_score in top3
+        hit_top5 = actual_score in top5
+        hit_1x2 = pred_result == actual_result
+        
+        fail_reasons = []
+        if not hit_top3:
+            fail_reasons = self._analyze_fail_reasons(record, sorted_scores, predicted_1x2)
+        
         return {
-            'hit_top1': actual_score == top1,
-            'hit_top3': actual_score in top3,
-            'hit_top5': actual_score in top5,
-            'hit_1x2': pred_result == actual_result,
+            'hit_top1': hit_top1,
+            'hit_top3': hit_top3,
+            'hit_top5': hit_top5,
+            'hit_1x2': hit_1x2,
+            'fail_reasons': fail_reasons,
         }
+    
+    def _analyze_fail_reasons(self, record: Dict, sorted_scores: List[Tuple[str, float]], 
+                             predicted_1x2: Dict[str, float]) -> List[str]:
+        """分析失败原因"""
+        reasons = []
+        actual_score = record.get('actual_score', '')
+        actual_result = record.get('actual_result', '')
+        
+        if not actual_score or not actual_result:
+            return reasons
+        
+        try:
+            parts = actual_score.split('-')
+            home_goals = int(parts[0])
+            away_goals = int(parts[1])
+            actual_goals = home_goals + away_goals
+        except:
+            return reasons
+        
+        pred_total = 0.0
+        for score, prob in sorted_scores:
+            try:
+                h, a = map(int, score.split('-'))
+                pred_total += (h + a) * prob
+            except:
+                pass
+        
+        pred_max = max(predicted_1x2.items(), key=lambda x: x[1])[0] if predicted_1x2 else None
+        
+        if pred_total < 2.5 and actual_goals >= 3:
+            reasons.append('lambda_error_high')
+        elif pred_total >= 2.5 and actual_goals <= 1:
+            reasons.append('lambda_error_low')
+        
+        if pred_max == 'H' and actual_result == 'A':
+            reasons.append('supremacy_error')
+        elif pred_max == 'A' and actual_result == 'H':
+            reasons.append('supremacy_error')
+        
+        draw_prob = predicted_1x2.get('D', 0)
+        if actual_result == 'D' and draw_prob < 0.25:
+            reasons.append('draw_underestimated')
+        
+        away_prob = predicted_1x2.get('A', 0)
+        if actual_result == 'A' and away_prob < 0.2:
+            reasons.append('away_underestimated')
+        
+        if actual_goals >= 4:
+            has_high_score = False
+            for score, prob in sorted_scores[:3]:
+                try:
+                    h, a = map(int, score.split('-'))
+                    if h + a >= 4:
+                        has_high_score = True
+                        break
+                except:
+                    pass
+            if not has_high_score:
+                reasons.append('high_score_missed')
+        
+        market_weight = record.get('model_params', {}).get('market_weight', 0)
+        if market_weight > 0.3 and actual_score not in [s for s, _ in sorted_scores[:5]]:
+            reasons.append('market_prior_error')
+        
+        top3_list = [s for s, _ in sorted_scores[:3]]
+        if sorted_scores and sorted_scores[0][1] > 0.4 and actual_score not in top3_list:
+            reasons.append('bayes_overcorrect')
+        
+        steam_signals = record.get('steam_signals', [])
+        if steam_signals:
+            steam_bias = sum(s.get('bias', 0) for s in steam_signals)
+            if steam_bias > 0.5 and actual_result == 'A':
+                reasons.append('steam_misread')
+            elif steam_bias < -0.5 and actual_result == 'H':
+                reasons.append('steam_misread')
+        
+        return reasons
+    
+    def get_fail_reason_statistics(self, limit: int = 100) -> Dict[str, int]:
+        """获取失败原因统计"""
+        statistics = {}
+        recent_records = self.get_settled(limit)
+        
+        for record in recent_records:
+            fail_reasons = record.get('fail_reasons', [])
+            for reason in fail_reasons:
+                statistics[reason] = statistics.get(reason, 0) + 1
+        
+        return dict(sorted(statistics.items(), key=lambda x: -x[1]))
+    
+    def print_fail_reason_report(self, limit: int = 100) -> Dict[str, int]:
+        """打印失败原因报告"""
+        statistics = self.get_fail_reason_statistics(limit)
+        
+        print(f"\n{'='*60}")
+        print(f"最近 {limit} 场失败原因统计")
+        print(f"{'='*60}")
+        
+        if not statistics:
+            print("  暂无失败记录")
+            return statistics
+        
+        total_failures = sum(statistics.values())
+        print(f"  总失败场次: {total_failures}")
+        print(f"{'原因':<25} | {'场次':^8} | {'占比':^10}")
+        print(f"{'-'*60}")
+        
+        reason_descriptions = {
+            'lambda_error_high': '总进球高估',
+            'lambda_error_low': '总进球低估',
+            'supremacy_error': '强弱方向错',
+            'draw_underestimated': '平局低估',
+            'away_underestimated': '客队低估',
+            'high_score_missed': '高比分漏掉',
+            'market_prior_error': '盘口先验拉偏',
+            'bayes_overcorrect': '贝叶斯校准过度',
+            'steam_misread': '资金流误判',
+        }
+        
+        for reason, count in statistics.items():
+            desc = reason_descriptions.get(reason, reason)
+            percentage = (count / total_failures) * 100
+            print(f"  {desc:<25} | {count:^8} | {percentage:^10.1f}%")
+        
+        print(f"{'='*60}\n")
+        
+        return statistics
     
     def update_result(self, match_id: str, actual_score: str, actual_result: str, error: str = None):
         """
@@ -332,6 +469,7 @@ class PredictionHistory:
                     self._update_calibrator(record)
                     self._update_market_db(record)
                     self._update_score_frequency_db(record)
+                    self._update_elo_ratings(record)
                     
                     log.info(f"结算比赛: {record['home']} vs {record['away']} -> {actual_score} ({actual_result})")
                 else:
@@ -523,6 +661,29 @@ class PredictionHistory:
                 log.debug(f"已更新盘口比分频率库")
         except Exception as e:
             log.debug(f"更新盘口比分频率库失败: {e}")
+    
+    def _update_elo_ratings(self, record: Dict):
+        """更新ELO评分"""
+        try:
+            from .elo import get_elo_system
+            
+            elo = get_elo_system()
+            actual_score = record.get('actual_score', '')
+            
+            if actual_score:
+                parts = actual_score.split('-')
+                if len(parts) == 2:
+                    home_goals, away_goals = map(int, parts)
+                    elo.update_ratings(
+                        home_team=record['home'],
+                        away_team=record['away'],
+                        home_score=home_goals,
+                        away_score=away_goals,
+                        league_type=record.get('league', '联赛')
+                    )
+                    log.debug(f"已更新ELO评分: {record['home']} vs {record['away']}")
+        except Exception as e:
+            log.debug(f"更新ELO评分失败: {e}")
     
     def get_stats(self) -> Dict:
         """获取统计信息（包含时间分层统计）"""

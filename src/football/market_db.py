@@ -477,7 +477,7 @@ class MarketScoreDB:
         key = self._get_key(normalize_asian(asian), normalize_ou(ou))
         return self.db.get(key)
     
-    def get_prob_with_nearest(self, asian: float, ou: float) -> Dict[str, float]:
+    def get_prob_with_nearest(self, asian: float, ou: float) -> Dict[str, Any]:
         """
         获取盘口组合的比分概率，支持模糊匹配
         
@@ -488,7 +488,7 @@ class MarketScoreDB:
             ou: 大小球线
         
         返回：
-            比分概率字典
+            包含比分概率和距离信息的字典
         """
         target_asian = normalize_asian(asian)
         target_ou = normalize_ou(ou)
@@ -496,17 +496,30 @@ class MarketScoreDB:
         
         # 精确匹配
         if key in self.db:
-            return self.db[key]
+            return {
+                'probabilities': self.db[key],
+                'distance': 0.0,
+                'exact_match': True
+            }
         
         # 查找最近邻
-        nearest_key = self._find_nearest_key(target_asian, target_ou)
-        if nearest_key:
-            print(f"未找到精确匹配 {key}，使用最近邻 {nearest_key}")
-            return self.db[nearest_key]
+        nearest_result = self._find_nearest_key(target_asian, target_ou)
+        if nearest_result:
+            nearest_key, distance = nearest_result
+            print(f"未找到精确匹配 {key}，使用最近邻 {nearest_key} (距离={distance})")
+            return {
+                'probabilities': self.db[nearest_key],
+                'distance': distance,
+                'exact_match': False
+            }
         
-        return {}
+        return {
+            'probabilities': {},
+            'distance': float('inf'),
+            'exact_match': False
+        }
     
-    def _find_nearest_key(self, asian: float, ou: float) -> Optional[str]:
+    def _find_nearest_key(self, asian: float, ou: float) -> Optional[Tuple[str, float]]:
         """查找最近的盘口组合键"""
         min_distance = float('inf')
         nearest = None
@@ -525,7 +538,9 @@ class MarketScoreDB:
             except ValueError:
                 continue
         
-        return nearest
+        if nearest is not None:
+            return nearest, min_distance
+        return None
     
     def get_sample_count(self, asian: float, ou: float) -> int:
         """获取指定盘口组合的样本数量"""
@@ -748,12 +763,16 @@ def get_market_score_prob(asian_handicap: float, over_under: float,
         top_n: 返回前N个比分
     
     返回：
-        包含比分概率、样本数等信息的字典
+        包含比分概率、样本数、距离等信息的字典
     """
     db = MarketScoreDB()
     
-    # 获取比分概率
-    prob = db.get_prob_with_nearest(asian_handicap, over_under)
+    # 获取比分概率和距离信息
+    prob_result = db.get_prob_with_nearest(asian_handicap, over_under)
+    prob = prob_result.get('probabilities', {})
+    distance = prob_result.get('distance', float('inf'))
+    exact_match = prob_result.get('exact_match', False)
+    
     top_scores = sorted(prob.items(), key=lambda x: -x[1])[:top_n]
     
     # 获取样本数
@@ -765,6 +784,8 @@ def get_market_score_prob(asian_handicap: float, over_under: float,
         'top_scores': top_scores,
         'sample_count': sample_count,
         'probabilities': prob,
+        'distance': distance,
+        'exact_match': exact_match,
     }
 
 

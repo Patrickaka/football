@@ -947,11 +947,29 @@ def _extract_handicap_from_segment(segment, before_val, after_val):
     return 0
 
 
+def _parse_odds_value(value, field_name, match_id):
+    """解析赔率值，确保为有效正数"""
+    if value is None:
+        raise ValueError(f"赔率值为空: {field_name} (match_id={match_id})")
+    
+    try:
+        val = float(value)
+        if val <= 0:
+            raise ValueError(f"赔率值必须为正数: {field_name} = {val} (match_id={match_id})")
+        return val
+    except (ValueError, TypeError):
+        raise ValueError(f"赔率值解析失败: {field_name} = {repr(value)} (match_id={match_id})")
+
+
 def fetch_ouzhi(match_id):
     """抓取欧赔平均值（JSON 时间序列）。每条为 [主, 平, 客, 返还率, 时间, ...]"""
     url = f'{OUZHI_JSON_URL}?fid={match_id}&cid=0&type=europe&r=1'
     referer = f'{BASE}/fenxi/ouzhi-{match_id}.shtml'
-    series = fetch_json(url, referer=referer)
+    
+    try:
+        series = fetch_json(url, referer=referer)
+    except Exception as e:
+        raise ValueError(f"抓取欧赔数据失败: {e} (match_id={match_id})")
     
     # 数据有效性检查
     if not isinstance(series, list):
@@ -970,17 +988,24 @@ def fetch_ouzhi(match_id):
     if not isinstance(open_, (list, tuple)) or len(open_) < 3:
         raise ValueError(f"初盘数据格式错误: {open_} (match_id={match_id})")
 
-    return {
-        'open': {
-            'home': open_[0], 'draw': open_[1], 'away': open_[2],
-            'return_rate': float(open_[3]) if len(open_) > 3 else None,
-        },
-        'close': {
-            'home': close[0], 'draw': close[1], 'away': close[2],
-            'return_rate': float(close[3]) if len(close) > 3 else None,
-        },
-        'series': series,
-    }
+    try:
+        return {
+            'open': {
+                'home': _parse_odds_value(open_[0], 'open_home', match_id),
+                'draw': _parse_odds_value(open_[1], 'open_draw', match_id),
+                'away': _parse_odds_value(open_[2], 'open_away', match_id),
+                'return_rate': float(open_[3]) if len(open_) > 3 and open_[3] else None,
+            },
+            'close': {
+                'home': _parse_odds_value(close[0], 'close_home', match_id),
+                'draw': _parse_odds_value(close[1], 'close_draw', match_id),
+                'away': _parse_odds_value(close[2], 'close_away', match_id),
+                'return_rate': float(close[3]) if len(close) > 3 and close[3] else None,
+            },
+            'series': series,
+        }
+    except ValueError as e:
+        raise ValueError(f"欧赔数据解析失败: {e} (match_id={match_id})")
 
 
 def fetch_daxiao(match_id):
@@ -1602,30 +1627,65 @@ def compute_euro_asian_deviation(euro_probs, asian_handicap, k=1.8):
 
 def analyze_euro(data):
     """解析欧赔，返回初终盘 1X2 真实概率、凯利、走势与变化趋势"""
-    op, cl = data['open'], data['close']
+    try:
+        op = data.get('open')
+        cl = data.get('close')
+        
+        if not op or not cl:
+            raise ValueError("欧赔数据缺少 open 或 close 字段")
+        
+        # 验证必需字段
+        required_fields = ['home', 'draw', 'away']
+        for field in required_fields:
+            if field not in op:
+                raise ValueError(f"初盘数据缺少 {field} 字段")
+            if field not in cl:
+                raise ValueError(f"终盘数据缺少 {field} 字段")
+        
+        # 验证赔率值是否为有效正数
+        for field in required_fields:
+            if not isinstance(op[field], (int, float)) or op[field] <= 0:
+                raise ValueError(f"初盘{field}赔率无效: {op[field]}")
+            if not isinstance(cl[field], (int, float)) or cl[field] <= 0:
+                raise ValueError(f"终盘{field}赔率无效: {cl[field]}")
 
-    ph_o, pd_o, pa_o = remove_vig(op['home'], op['draw'], op['away'])
-    ph_c, pd_c, pa_c = remove_vig(cl['home'], cl['draw'], cl['away'])
+        ph_o, pd_o, pa_o = remove_vig(op['home'], op['draw'], op['away'])
+        ph_c, pd_c, pa_c = remove_vig(cl['home'], cl['draw'], cl['away'])
 
-    changes = []
-    if ph_c - ph_o > EURO_PROB_TREND_EPS: changes.append(f"主胜概率↑{(ph_c-ph_o)*100:.1f}%")
-    elif ph_c - ph_o < -EURO_PROB_TREND_EPS: changes.append(f"主胜概率↓{(ph_o-ph_c)*100:.1f}%")
-    if pa_c - pa_o > EURO_PROB_TREND_EPS: changes.append(f"客胜概率↑{(pa_c-pa_o)*100:.1f}%")
-    elif pa_c - pa_o < -EURO_PROB_TREND_EPS: changes.append(f"客胜概率↓{(pa_o-pa_c)*100:.1f}%")
-    if pd_c - pd_o > EURO_PROB_TREND_EPS: changes.append(f"平局概率↑{(pd_c-pd_o)*100:.1f}%")
-    elif pd_c - pd_o < -EURO_PROB_TREND_EPS: changes.append(f"平局概率↓{(pd_o-pd_c)*100:.1f}%")
+        # 验证概率值
+        for p, name in [(ph_o, '主胜初盘概率'), (pd_o, '平局初盘概率'), (pa_o, '客胜初盘概率'),
+                        (ph_c, '主胜终盘概率'), (pd_c, '平局终盘概率'), (pa_c, '客胜终盘概率')]:
+            if not (0 <= p <= 1):
+                raise ValueError(f"{name}超出范围: {p}")
 
-    kelly = analyze_kelly(data, (ph_o, pd_o, pa_o), (ph_c, pd_c, pa_c))
-    momentum = analyze_euro_momentum(data.get('series', []))
+        changes = []
+        if ph_c - ph_o > EURO_PROB_TREND_EPS: 
+            changes.append(f"主胜概率↑{(ph_c-ph_o)*100:.1f}%")
+        elif ph_c - ph_o < -EURO_PROB_TREND_EPS: 
+            changes.append(f"主胜概率↓{(ph_o-ph_c)*100:.1f}%")
+        if pa_c - pa_o > EURO_PROB_TREND_EPS: 
+            changes.append(f"客胜概率↑{(pa_c-pa_o)*100:.1f}%")
+        elif pa_c - pa_o < -EURO_PROB_TREND_EPS: 
+            changes.append(f"客胜概率↓{(pa_o-pa_c)*100:.1f}%")
+        if pd_c - pd_o > EURO_PROB_TREND_EPS: 
+            changes.append(f"平局概率↑{(pd_c-pd_o)*100:.1f}%")
+        elif pd_c - pd_o < -EURO_PROB_TREND_EPS: 
+            changes.append(f"平局概率↓{(pd_o-pd_c)*100:.1f}%")
 
-    return {
-        'open': {'home': ph_o, 'draw': pd_o, 'away': pa_o},
-        'close': {'home': ph_c, 'draw': pd_c, 'away': pa_c},
-        'raw_odds': {'open': dict(op), 'close': dict(cl)},
-        'kelly': kelly,
-        'momentum': momentum,
-        'changes': changes,
-    }
+        kelly = analyze_kelly(data, (ph_o, pd_o, pa_o), (ph_c, pd_c, pa_c))
+        momentum = analyze_euro_momentum(data.get('series', []))
+
+        return {
+            'open': {'home': ph_o, 'draw': pd_o, 'away': pa_o},
+            'close': {'home': ph_c, 'draw': pd_c, 'away': pa_c},
+            'raw_odds': {'open': dict(op), 'close': dict(cl)},
+            'kelly': kelly,
+            'momentum': momentum,
+            'changes': changes,
+        }
+    
+    except Exception as e:
+        raise ValueError(f"欧赔分析失败: {e}")
 
 
 def analyze_total(data):
@@ -4455,16 +4515,22 @@ def predict_scores(asian, euro, total, team_strength=None, league_profile=None,
         market_result = get_market_score_prob(handicap, close_line)
         market_probs = market_result.get('probabilities', {})
         sample_count = market_result.get('sample_count', 0)
+        distance = market_result.get('distance', float('inf'))
         
-        log.info(f"历史盘口数据: 样本数={sample_count}, 比分种类={len(market_probs)}")
+        log.info(f"历史盘口数据: 样本数={sample_count}, 比分种类={len(market_probs)}, 距离={distance:.3f}")
         
-        if market_probs and len(market_probs) >= 3:
+        # 添加样本门槛和距离门槛
+        if sample_count >= 30 and distance <= 0.5 and market_probs and len(market_probs) >= 3:
+            # 计算历史权重：样本越多、盘口越接近，权重越高
+            prior_weight = min(0.4, sample_count / 300 * 0.4)
+            model_weight = 1 - prior_weight
+            
             # 将矩阵转换为字典格式
             model_probs = {f"{h}-{a}": prob for (h, a), prob in matrix.items()}
             
             # 融合预测：模型概率 + 历史盘口概率
             blended_probs = blend_predictions(model_probs, market_probs, 
-                                             weights={'poisson': 0.6, 'market': 0.4})
+                                             weights={'poisson': model_weight, 'market': prior_weight})
             
             # 更新矩阵
             matrix = {}
@@ -4473,9 +4539,14 @@ def predict_scores(asian, euro, total, team_strength=None, league_profile=None,
                 matrix[(h, a)] = prob
             
             market_db_used = True
-            log.info(f"历史盘口比分库融合成功，权重: 泊松70% + 历史30%")
+            log.info(f"历史盘口比分库融合成功，权重: 模型{model_weight:.0%} + 历史{prior_weight:.0%}")
         else:
-            log.info(f"历史盘口数据不足，跳过融合")
+            if sample_count < 30:
+                log.info(f"历史盘口样本不足({sample_count}<30)，跳过融合")
+            elif distance > 0.5:
+                log.info(f"盘口距离过远({distance:.3f}>0.5)，跳过融合")
+            else:
+                log.info(f"历史盘口数据不足，跳过融合")
     except Exception as e:
         log.debug(f"无法加载历史盘口比分库进行融合: {e}")
 
@@ -5025,8 +5096,10 @@ def analyze_match(match, force_refresh=False):
     
     # 尝试从缓存获取结果
     cache_key = f"{mid}_{home}_{away}"
+    match_time = match.get('time', '')
+    
     if not force_refresh and CACHE_AVAILABLE:
-        cached_result = get_cache('match_analysis', cache_key)
+        cached_result = get_cache('match_analysis', cache_key, match_time)
         if cached_result is not None:
             log.info(f"使用缓存的比赛分析结果: {home} vs {away}")
             # 即使使用缓存，也要确保预测记录被保存
@@ -5035,18 +5108,17 @@ def analyze_match(match, force_refresh=False):
                 
                 model = cached_result.get('model', {})
                 top_scores = model.get('top_scores', [])
-                result_probs = model.get('result_probs', {})
+                candidates = model.get('candidates', [])
                 
                 predicted_scores = {
-                    f"{item['home']}-{item['away']}": item['prob']
-                    for item in top_scores
+                    f"{h}-{a}": prob
+                    for (h, a), prob in candidates[:30]
                 }
                 
-                # 处理 result_probs 为 None 的情况
                 predicted_1x2 = {
-                    'H': result_probs.get('home', 0.33),
-                    'D': result_probs.get('draw', 0.34),
-                    'A': result_probs.get('away', 0.33),
+                    'H': sum(prob for (h, a), prob in candidates if h > a),
+                    'D': sum(prob for (h, a), prob in candidates if h == a),
+                    'A': sum(prob for (h, a), prob in candidates if h < a),
                 }
                 
                 save_prediction(
@@ -5070,7 +5142,7 @@ def analyze_match(match, force_refresh=False):
                     cached_result['model_status']['prediction_saved'] = True
                     log.info(f"更新缓存结果的 model_status['prediction_saved'] 为 True")
                     # 将更新后的缓存重新保存
-                    set_cache('match_analysis', cache_key, cached_result)
+                    set_cache('match_analysis', cache_key, cached_result, match_time)
                     log.info(f"已将更新后的缓存重新保存")
             except Exception as e:
                 log.error(f"保存缓存结果的预测记录失败: {e}")
@@ -5449,7 +5521,18 @@ def analyze_match(match, force_refresh=False):
     }
     try:
         if DYNAMIC_WEIGHTS_AVAILABLE:
-            market_w, team_w, elo_w, ml_w = get_dynamic_weights(confidence.get('score', 0.5))
+            match_data = {
+                'league': match.get('league', '其他'),
+                'handicap': asian.get('handicap', 0),
+                'euro_std': euro.get('kelly', {}).get('spread', 0.05),
+                'kelly_std': euro.get('kelly', {}).get('spread', 0.02),
+                'odds_changes': len(euro_raw.get('series', [])),
+                'elo_diff': abs(team.get('elo_home', 1500) - team.get('elo_away', 1500)) if team else 0,
+                'total_line': total.get('close_line', 2.5),
+            }
+            log.debug(f"构建动态权重特征: {match_data}")
+            
+            market_w, team_w, elo_w, ml_w = get_dynamic_weights(confidence.get('score', 0.5), match_data)
             model_weights = {
                 'market': market_w,
                 'team': team_w,
@@ -5457,6 +5540,7 @@ def analyze_match(match, force_refresh=False):
                 'similar': 0.10,
                 'ml': ml_w
             }
+            log.info(f"动态权重获取成功: market={market_w:.3f}, team={team_w:.3f}, elo={elo_w:.3f}, ml={ml_w:.3f}")
     except Exception as e:
         log.warning(f"获取动态权重失败: {e}")
     
@@ -5665,13 +5749,14 @@ def analyze_match(match, force_refresh=False):
             'dixon_coles': dixon_coles_result,
             'ml': ml_result,
             'risk_level': risk_level,
+            'candidates': candidates,
             **meta,
         },
     }
     
     # 保存结果到缓存
     if CACHE_AVAILABLE:
-        set_cache('match_analysis', cache_key, result)
+        set_cache('match_analysis', cache_key, result, match_time)
         log.debug(f"比赛分析结果已缓存: {home} vs {away}")
     
     # 保存预测记录用于赛后回填
@@ -5682,20 +5767,19 @@ def analyze_match(match, force_refresh=False):
 
         model = result.get('model', {})
         top_scores = model.get('top_scores', [])
-        result_probs = model.get('result_probs', {})
-        log.info(f"获取模型数据: top_scores={len(top_scores)}, result_probs={result_probs}")
+        candidates = model.get('candidates', [])
+        log.info(f"获取模型数据: top_scores={len(top_scores)}, candidates={len(candidates)}")
 
         predicted_scores = {
-            f"{item['home']}-{item['away']}": item['prob']
-            for item in top_scores
+            f"{h}-{a}": prob
+            for (h, a), prob in candidates[:30]
         }
         log.info(f"构建 predicted_scores: {len(predicted_scores)} 条")
 
-        # 处理 result_probs 为 None 的情况
         predicted_1x2 = {
-            'H': result_probs.get('home', 0.33),
-            'D': result_probs.get('draw', 0.34),
-            'A': result_probs.get('away', 0.33),
+            'H': sum(prob for (h, a), prob in candidates if h > a),
+            'D': sum(prob for (h, a), prob in candidates if h == a),
+            'A': sum(prob for (h, a), prob in candidates if h < a),
         }
         log.info(f"构建 predicted_1x2: {predicted_1x2}")
 
@@ -5723,7 +5807,7 @@ def analyze_match(match, force_refresh=False):
             log.info(f"更新 model_status['prediction_saved'] 为 True")
             # 更新缓存以包含最新的 prediction_saved 状态
             if CACHE_AVAILABLE:
-                set_cache('match_analysis', cache_key, result)
+                set_cache('match_analysis', cache_key, result, match_time)
                 log.info(f"已更新缓存中的 prediction_saved 状态")
     except Exception as e:
         log.error(f"保存预测记录失败: {e}", exc_info=True)

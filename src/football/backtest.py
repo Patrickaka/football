@@ -363,13 +363,15 @@ def backtest_from_history(league: str = None, limit: int = None) -> Dict:
 
 def compare_parameters(records: List[Dict], 
                      param_sets: List[Dict],
+                     predict_func: Optional[Callable] = None,
                      param_name: str = 'params') -> Dict:
     """
-    对比不同参数集的回测效果
+    对比不同参数集的回测效果（真正的参数回测）
     
     参数：
-        records: 历史记录
-        param_sets: 参数集列表，如 [{'heat_threshold': 0.1}, {'heat_threshold': 0.2}]
+        records: 历史记录，每条记录需要包含进行预测所需的特征数据
+        param_sets: 参数集列表，如 [{'market_weight': 0.1}, {'market_weight': 0.2}]
+        predict_func: 预测函数，签名为 predict_func(record, **params) -> prediction
         param_name: 参数名称
     
     返回：
@@ -378,14 +380,156 @@ def compare_parameters(records: List[Dict],
     results = {}
     
     for i, params in enumerate(param_sets):
-        # 这里简化处理，实际应用中应该用不同的参数重新预测
-        summary = run_backtest(records, verbose=False)
+        runner = BacktestRunner()
+        params_str = ', '.join(f'{k}={v}' for k, v in params.items())
+        
+        log.info(f"正在回测参数集 {i+1}/{len(param_sets)}: {params_str}")
+        
+        for record in records:
+            actual_score = record.get('actual_score')
+            if not actual_score:
+                continue
+            
+            actual_result = record.get('actual_result')
+            if not actual_result:
+                try:
+                    parts = actual_score.split('-')
+                    home_g = int(parts[0])
+                    away_g = int(parts[1])
+                    if home_g > away_g:
+                        actual_result = 'H'
+                    elif home_g < away_g:
+                        actual_result = 'A'
+                    else:
+                        actual_result = 'D'
+                except:
+                    continue
+            
+            actual = {
+                'score': actual_score,
+                'result': actual_result,
+            }
+            
+            if predict_func:
+                try:
+                    prediction = predict_func(record, **params)
+                    runner.add_result(record, prediction, actual)
+                except Exception as e:
+                    log.warning(f"预测失败: {e}")
+                    continue
+            else:
+                runner.add_result(record, {}, actual)
+        
+        summary = runner.get_summary()
         results[f'{param_name}_{i}'] = {
             'params': params,
+            'params_str': params_str,
             'summary': summary
         }
+        
+        log.info(f"参数集 {i+1} 回测完成: Top1命中率={summary['top1_accuracy']:.2%}, "
+                f"Top3命中率={summary['top3_accuracy']:.2%}, "
+                f"Brier={summary['brier_score']:.4f}")
     
     return results
+
+
+def compare_key_parameters(records: List[Dict], 
+                          predict_func: Callable) -> Dict:
+    """
+    对比关键参数的回测效果（预设参数集）
+    
+    参数：
+        records: 历史记录
+        predict_func: 预测函数
+    
+    返回：
+        参数对比结果
+    """
+    comparisons = {}
+    
+    # 1. market_db 融合权重对比
+    log.info("=== 对比 market_db 融合权重 ===")
+    market_weights = [
+        {'market_db_weight': 0.1},
+        {'market_db_weight': 0.2},
+        {'market_db_weight': 0.3},
+        {'market_db_weight': 0.4},
+    ]
+    comparisons['market_db_weight'] = compare_parameters(
+        records, market_weights, predict_func, 'market_db_weight'
+    )
+    
+    # 2. 欧赔融合权重对比
+    log.info("=== 对比 CLOSE_BLEND_WEIGHT ===")
+    blend_weights = [
+        {'close_blend_weight': 0.65},
+        {'close_blend_weight': 0.72},
+        {'close_blend_weight': 0.80},
+    ]
+    comparisons['close_blend_weight'] = compare_parameters(
+        records, blend_weights, predict_func, 'close_blend_weight'
+    )
+    
+    # 3. 热门比分过滤惩罚对比
+    log.info("=== 对比 HEAT_FILTER_PENALTY ===")
+    heat_penalties = [
+        {'heat_filter_penalty': 0.0},
+        {'heat_filter_penalty': 0.1},
+        {'heat_filter_penalty': 0.2},
+        {'heat_filter_penalty': 0.3},
+    ]
+    comparisons['heat_filter_penalty'] = compare_parameters(
+        records, heat_penalties, predict_func, 'heat_filter_penalty'
+    )
+    
+    # 4. 冷门比分奖励对比
+    log.info("=== 对比 COLD_FILTER_BONUS ===")
+    cold_bonuses = [
+        {'cold_filter_bonus': 0.0},
+        {'cold_filter_bonus': 0.05},
+        {'cold_filter_bonus': 0.1},
+        {'cold_filter_bonus': 0.15},
+    ]
+    comparisons['cold_filter_bonus'] = compare_parameters(
+        records, cold_bonuses, predict_func, 'cold_filter_bonus'
+    )
+    
+    # 5. 置信度阈值对比
+    log.info("=== 对比 CONFIDENCE_LOW_THRESHOLD ===")
+    confidence_thresholds = [
+        {'confidence_low_threshold': 0.3},
+        {'confidence_low_threshold': 0.4},
+        {'confidence_low_threshold': 0.5},
+        {'confidence_low_threshold': 0.6},
+    ]
+    comparisons['confidence_low_threshold'] = compare_parameters(
+        records, confidence_thresholds, predict_func, 'confidence_low_threshold'
+    )
+    
+    # 6. 先验奖励系数对比
+    log.info("=== 对比 prior_bonus ===")
+    prior_bonuses = [
+        {'prior_bonus': 0.5},
+        {'prior_bonus': 1.0},
+        {'prior_bonus': 1.5},
+        {'prior_bonus': 2.0},
+    ]
+    comparisons['prior_bonus'] = compare_parameters(
+        records, prior_bonuses, predict_func, 'prior_bonus'
+    )
+    
+    # 7. 强弱分明比赛过滤冷门比分
+    log.info("=== 对比 强弱分明比赛过滤冷门 ===")
+    upset_filters = [
+        {'filter_upset_in_imbalanced': False},
+        {'filter_upset_in_imbalanced': True},
+    ]
+    comparisons['filter_upset'] = compare_parameters(
+        records, upset_filters, predict_func, 'filter_upset'
+    )
+    
+    return comparisons
 
 
 # ==================== 测试 ====================
