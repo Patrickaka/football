@@ -814,15 +814,7 @@ class MarketTimingPredictor:
             import logging
             log = logging.getLogger('football')
             log.error(f"盘口时序预测失败: {e}")
-            return self._default_prediction()
-    
-    def _default_prediction(self) -> Dict:
-        """默认预测（均匀分布）"""
-        result = {}
-        prob = 1.0 / len(self.SCORE_LABELS)
-        for h, a in self.SCORE_LABELS:
-            result[(h, a)] = prob
-        return result
+            return None
     
     def save_model(self, filepath: str):
         """保存模型"""

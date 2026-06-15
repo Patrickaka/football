@@ -240,12 +240,39 @@ def parse_odds_value(value: str) -> Optional[float]:
 
 # ==================== 盘口标准化模块 ====================
 
+def to_internal_asian(raw_asian: float, source: str = 'football_data') -> float:
+    """
+    将外部数据源的亚盘值转换为内部统一格式
+    
+    内部约定：
+    - asian > 0: 主队让球
+    - asian < 0: 客队让球
+    
+    参数：
+        raw_asian: 原始让球值
+        source: 数据源名称
+    
+    返回：
+        转换后的内部格式让球值
+    """
+    if raw_asian is None:
+        return None
+    
+    # Football-Data 的 AHh 字段符号与内部约定相反
+    # AHh 为正数表示客队让球（负数为主队让球）
+    # 转换为内部格式：正数为主队让球，负数为客队让球
+    if source == 'football_data':
+        return -raw_asian
+    
+    return raw_asian
+
+
 def normalize_asian(handicap: float) -> float:
     """
     将亚盘值标准化到标准值列表
     
     参数：
-        handicap: 原始让球值
+        handicap: 原始让球值（已转换为内部格式）
     
     返回：
         标准化后的让球值
@@ -285,15 +312,16 @@ def normalize_handicap_from_odds(home_odds: float, away_odds: float) -> float:
         away_odds: 客队赔率
     
     返回：
-        反推的让球值
+        反推的让球值（内部格式：正数为主队让球）
     """
     if home_odds is None or away_odds is None:
         return 0.0
     
     # 简化的让球反推公式
     odds_ratio = away_odds / home_odds
-    # 粗略转换：赔率比与让球的关系
-    handicap = (1 - odds_ratio) * 0.5
+    # 赔率比 > 1 表示主队赔率低（更被看好），应该主队让球（正数）
+    # 赔率比 < 1 表示客队赔率低（更被看好），应该客队让球（负数）
+    handicap = (odds_ratio - 1) * 0.5
     return normalize_asian(handicap)
 
 
@@ -412,12 +440,16 @@ class MarketScoreDB:
                 
                 for record in records:
                     # 标准化盘口
-                    asian = record.get('AHh')
+                    # 先转换符号：Football-Data 的 AHh 符号与内部约定相反
+                    raw_asian = record.get('AHh')
+                    asian = to_internal_asian(raw_asian, 'football_data')
+                    
                     if asian is None:
-                        # 尝试从赔率反推
+                        # 尝试从赔率反推（反推结果已经是内部格式）
                         asian = normalize_handicap_from_odds(
                             record.get('AvgAHH'), record.get('AvgAHA')
                         )
+                    
                     asian = normalize_asian(asian)
                     
                     # 计算大小球（从赔率反推）

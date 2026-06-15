@@ -1047,17 +1047,100 @@ def _team_in_context(ctx, name):
     return False
 
 
+def get_live_league_profile(league_name: str, recent_matches: int = 200) -> Dict:
+    """
+    从最近比赛数据计算实时联赛画像
+    
+    参数：
+        league_name: 联赛名称
+        recent_matches: 最近比赛数量
+    
+    返回：
+        实时画像字典
+    """
+    try:
+        from .data_loader import fetch_league_matches
+        
+        matches = fetch_league_matches(league_name, limit=recent_matches)
+        
+        if not matches:
+            return None
+        
+        total_matches = 0
+        total_goals = 0
+        draw_count = 0
+        home_win_count = 0
+        btts_count = 0
+        over25_count = 0
+        
+        for match in matches:
+            score = match.get('score')
+            if score:
+                parts = score.split('-')
+                if len(parts) == 2:
+                    try:
+                        h, a = map(int, parts)
+                        total_matches += 1
+                        total_goals += h + a
+                        if h == a:
+                            draw_count += 1
+                        if h > a:
+                            home_win_count += 1
+                        if h > 0 and a > 0:
+                            btts_count += 1
+                        if h + a >= 3:
+                            over25_count += 1
+                    except:
+                        pass
+        
+        if total_matches == 0:
+            return None
+        
+        return {
+            'avg_goal': total_goals / (total_matches * 2),  # 场均进球（单队）
+            'draw_rate': draw_count / total_matches,
+            'home_win_rate': home_win_count / total_matches,
+            'btts_rate': btts_count / total_matches,
+            'over25_rate': over25_count / total_matches,
+            'sample_size': total_matches,
+            'source': 'live'
+        }
+        
+    except Exception as e:
+        log.debug(f"计算实时联赛画像失败: {e}")
+        return None
+
+
 def resolve_league_profile(league_name):
-    """按联赛名称匹配画像，用于场均进球与比分先验"""
+    """按联赛名称匹配画像，用于场均进球与比分先验（融合静态+实时）"""
     name = (league_name or '').strip()
-    profile = dict(LEAGUE_PROFILES['default'])
+    
+    # 获取静态画像
+    static_profile = dict(LEAGUE_PROFILES['default'])
     for key in sorted(LEAGUE_PROFILES, key=len, reverse=True):
         if key != 'default' and key in name:
-            profile.update(LEAGUE_PROFILES[key])
-            profile['name'] = key
-            return profile
-    profile['name'] = 'default'
-    return profile
+            static_profile.update(LEAGUE_PROFILES[key])
+            break
+    
+    # 获取实时画像
+    live_profile = get_live_league_profile(name)
+    
+    if live_profile and live_profile.get('sample_size', 0) >= 50:
+        # 融合静态和实时画像：70% 静态 + 30% 实时
+        blended_profile = {
+            'avg_goal': 0.7 * static_profile.get('avg_goal', 1.42) + 0.3 * live_profile.get('avg_goal', 1.42),
+            'home_boost': static_profile.get('home_boost', 1.0),
+            'low_score': static_profile.get('low_score', 1.0),
+            'draw_mult': 0.7 * static_profile.get('draw_mult', 1.0) + 0.3 * (live_profile.get('draw_rate', 0.25) / 0.25),
+            'name': name or 'default',
+            'live_sample': live_profile.get('sample_size', 0),
+            'source': 'blended'
+        }
+        return blended_profile
+    
+    static_profile['name'] = name or 'default'
+    static_profile['source'] = 'static'
+    return static_profile
 
 
 def _parse_recent_form(groups):
@@ -4504,8 +4587,9 @@ def predict_scores(asian, euro, total, team_strength=None, league_profile=None,
 
     # ========== 新增：结合历史盘口比分库进行融合 ==========
     market_db_used = False
+    change_db_used = False
     try:
-        from .market_db import get_market_score_prob, blend_predictions
+        from .market_db import get_market_score_prob, blend_predictions, MarketChangeDB, normalize_asian, normalize_ou
         
         # 获取历史盘口比分概率
         handicap = asian.get('handicap', 0)
@@ -4519,34 +4603,77 @@ def predict_scores(asian, euro, total, team_strength=None, league_profile=None,
         
         log.info(f"历史盘口数据: 样本数={sample_count}, 比分种类={len(market_probs)}, 距离={distance:.3f}")
         
-        # 添加样本门槛和距离门槛
+        # 将矩阵转换为字典格式
+        model_probs = {f"{h}-{a}": prob for (h, a), prob in matrix.items()}
+        
+        # 融合权重初始化
+        model_weight = 0.75
+        static_market_weight = 0.15
+        change_market_weight = 0.10
+        
+        # ========== 静态盘口先验 ==========
         if sample_count >= 30 and distance <= 0.5 and market_probs and len(market_probs) >= 3:
             # 计算历史权重：样本越多、盘口越接近，权重越高
-            prior_weight = min(0.4, sample_count / 300 * 0.4)
-            model_weight = 1 - prior_weight
+            static_weight = min(0.15, sample_count / 300 * 0.15)
+            static_market_weight = static_weight
             
-            # 将矩阵转换为字典格式
-            model_probs = {f"{h}-{a}": prob for (h, a), prob in matrix.items()}
-            
-            # 融合预测：模型概率 + 历史盘口概率
+            # 融合预测：模型概率 + 静态历史盘口概率
             blended_probs = blend_predictions(model_probs, market_probs, 
-                                             weights={'poisson': model_weight, 'market': prior_weight})
-            
-            # 更新矩阵
-            matrix = {}
-            for score, prob in blended_probs.items():
-                h, a = map(int, score.split('-'))
-                matrix[(h, a)] = prob
-            
+                                             weights={'model': model_weight + (0.15 - static_weight), 'market': static_weight})
+            model_probs = blended_probs
             market_db_used = True
-            log.info(f"历史盘口比分库融合成功，权重: 模型{model_weight:.0%} + 历史{prior_weight:.0%}")
+            log.info(f"静态盘口比分库融合成功，权重: 模型{(model_weight + (0.15 - static_weight)):.0%} + 静态历史{static_weight:.0%}")
         else:
+            static_market_weight = 0
             if sample_count < 30:
-                log.info(f"历史盘口样本不足({sample_count}<30)，跳过融合")
+                log.info(f"静态盘口样本不足({sample_count}<30)，跳过融合")
             elif distance > 0.5:
                 log.info(f"盘口距离过远({distance:.3f}>0.5)，跳过融合")
+        
+        # ========== 盘口变化先验 ==========
+        # 获取开盘盘口数据
+        open_handicap = asian.get('open_handicap')
+        open_line = total.get('open_line')
+        
+        if open_handicap is not None and open_line is not None:
+            # 标准化盘口
+            asian_open = normalize_asian(open_handicap)
+            asian_close = normalize_asian(handicap)
+            ou_open = normalize_ou(open_line)
+            ou_close = normalize_ou(close_line)
+            
+            # 查询盘口变化统计
+            change_db = MarketChangeDB()
+            change_stats = change_db.get_change_stats(asian_open, asian_close, ou_open, ou_close)
+            
+            if change_stats:
+                # 估算样本数：假设最大概率对应的实际样本数
+                max_prob = max(change_stats.values()) if change_stats else 0
+                change_sample_count = int(round(1 / max_prob)) if max_prob > 0 else 0
+                
+                # 样本门槛
+                if change_sample_count >= 30:
+                    # 计算变化权重：5%～15%
+                    change_weight = min(0.15, change_sample_count / 300 * 0.15)
+                    change_market_weight = change_weight
+                    
+                    # 融合预测：当前概率 + 变化历史概率
+                    blended_probs = blend_predictions(model_probs, change_stats,
+                                                     weights={'current': 1 - change_weight, 'change': change_weight})
+                    model_probs = blended_probs
+                    change_db_used = True
+                    log.info(f"盘口变化数据库融合成功，权重: 当前{(1 - change_weight):.0%} + 变化历史{change_weight:.0%}")
+                else:
+                    log.info(f"盘口变化样本不足({change_sample_count}<30)，跳过融合")
             else:
-                log.info(f"历史盘口数据不足，跳过融合")
+                log.info(f"未找到盘口变化记录: {asian_open}→{asian_close}, {ou_open}→{ou_close}")
+        
+        # 更新矩阵
+        if market_db_used or change_db_used:
+            matrix = {}
+            for score, prob in model_probs.items():
+                h, a = map(int, score.split('-'))
+                matrix[(h, a)] = prob
     except Exception as e:
         log.debug(f"无法加载历史盘口比分库进行融合: {e}")
 
@@ -4871,6 +4998,30 @@ def _get_cluster_name(cluster):
     return cluster_names.get(cluster, cluster)
 
 
+def score_pattern(h: int, a: int) -> str:
+    """
+    判断比分属于哪种剧本模式
+    
+    参数：
+        h: 主队进球数
+        a: 客队进球数
+    
+    返回：
+        剧本模式标识
+    """
+    total = h + a
+    
+    if h > a and total <= 2:
+        return 'home_low'      # 主胜小比分
+    if h > a and total >= 3:
+        return 'home_high'     # 主胜大比分
+    if h == a:
+        return 'draw'          # 平局
+    if h < a and total <= 2:
+        return 'away_low'      # 客胜小比分
+    return 'away_high'         # 客胜大比分
+
+
 def _pick_recommendations(candidates, asian, euro, total, n=2, pool=12, confidence=None, league_profile=None, team=None, similar_market=None):
     """Top 池内按 概率×一致性×冷热×置信度×相似盘口 选取（基于比分簇）"""
     if confidence:
@@ -5007,16 +5158,23 @@ def _pick_recommendations(candidates, asian, euro, total, n=2, pool=12, confiden
     # 阶段1：选择核心比分（概率最高的）
     if scored:
         (h, a), prob, _, _, cluster, _ = scored[0]
-        picked.append((h, a, prob, cluster, 'core'))
+        pattern = score_pattern(h, a)
+        picked.append((h, a, prob, cluster, pattern, 'core'))
         seen.add((h, a))
         picked_clusters.add(cluster)
+        picked_patterns = {pattern}
+    else:
+        picked_patterns = set()
 
-    # 阶段2：选择保护比分（同簇或邻近簇）
+    # 阶段2：选择保护比分（优先覆盖不同剧本模式）
     for (h, a), prob, _, _, cluster, _ in scored[1:]:
         if (h, a) in seen:
             continue
         if len(picked) >= n:
             break
+
+        # 获取当前比分的剧本模式
+        pattern = score_pattern(h, a)
 
         # 检查是否是冷门
         diff = h - a
@@ -5031,20 +5189,28 @@ def _pick_recommendations(candidates, asian, euro, total, n=2, pool=12, confiden
             if upset_count >= max_upsets:
                 continue
             upset_count += 1
-            picked.append((h, a, prob, cluster, 'upset'))
+            picked.append((h, a, prob, cluster, pattern, 'upset'))
             seen.add((h, a))
             picked_clusters.add(cluster)
+            picked_patterns.add(pattern)
             continue
 
-        # 优先选择同簇或邻近簇的比分作为保护
-        if cluster in picked_clusters:
-            picked.append((h, a, prob, cluster, 'protection'))
+        # 优先选择不同剧本模式的比分
+        if pattern not in picked_patterns:
+            picked.append((h, a, prob, cluster, pattern, 'protection'))
+            seen.add((h, a))
+            picked_clusters.add(cluster)
+            picked_patterns.add(pattern)
+        elif cluster in picked_clusters:
+            # 同簇的高概率比分作为保护
+            picked.append((h, a, prob, cluster, pattern, 'protection'))
             seen.add((h, a))
         elif len(picked) < n and cluster not in picked_clusters:
             # 添加邻近簇作为分散保护
-            picked.append((h, a, prob, cluster, 'protection'))
+            picked.append((h, a, prob, cluster, pattern, 'protection'))
             seen.add((h, a))
             picked_clusters.add(cluster)
+            picked_patterns.add(pattern)
 
     # 阶段3：补充剩余推荐（如果还不够）
     if len(picked) < n:
@@ -5054,6 +5220,8 @@ def _pick_recommendations(candidates, asian, euro, total, n=2, pool=12, confiden
             if len(picked) >= n:
                 break
 
+            pattern = score_pattern(h, a)
+            
             diff = h - a
             is_upset_pick = False
             if favor == 'home' and diff < 0:
@@ -5066,14 +5234,15 @@ def _pick_recommendations(candidates, asian, euro, total, n=2, pool=12, confiden
 
             if is_upset_pick:
                 upset_count += 1
-                picked.append((h, a, prob, cluster, 'upset'))
+                picked.append((h, a, prob, cluster, pattern, 'upset'))
             else:
-                picked.append((h, a, prob, cluster, 'protection'))
+                picked.append((h, a, prob, cluster, pattern, 'protection'))
             seen.add((h, a))
+            picked_patterns.add(pattern)
 
     # 转换为原有格式 (h, a, prob)
     # 返回推荐列表和价值投注列表（分开输出）
-    recommendations = [(h, a, prob) for h, a, prob, _, _ in picked]
+    recommendations = [(h, a, prob) for h, a, prob, _, _, _ in picked]
     
     # 对价值投注按 EV 排序
     value_bets.sort(key=lambda x: -x.get('ev', 0))
@@ -5197,56 +5366,22 @@ def analyze_match(match, force_refresh=False):
         )
         log.info(f"博彩公司分歧指数计算完成: 可用={bookmaker_consensus['available']}, Sharp方向={bookmaker_consensus['sharp_bias']}, 调整={bookmaker_consensus['adjustment']:.3f}")
 
-    # ========== 使用独赔数据替换平均赔率 ==========
-    # 优先使用 Bet365，其次是 Pinnacle
-    selected_odds = None
-    if single_odds and single_odds['bet365']:
-        selected_odds = single_odds['bet365']
-        log.info("使用 Bet365 独赔数据进行分析")
-    elif single_odds and single_odds['pinnacle']:
-        selected_odds = single_odds['pinnacle']
-        log.info("使用 Pinnacle 独赔数据进行分析")
-    
-    if selected_odds:
-        # 替换亚盘数据
-        if selected_odds['asian']:
-            asian['handicap'] = selected_odds['asian']['close']['handicap']
-            asian['open_handicap'] = selected_odds['asian']['open']['handicap']
-            asian['handicap_change'] = asian['handicap'] - asian['open_handicap']
-            asian['close_water'] = {
-                'home': selected_odds['asian']['close']['home_odds'],
-                'away': selected_odds['asian']['close']['away_odds']
-            }
-            asian['open_water'] = {
-                'home': selected_odds['asian']['open']['home_odds'],
-                'away': selected_odds['asian']['open']['away_odds']
-            }
-            # 保存时间数据用于盘口变化分析
-            asian['close_time'] = selected_odds['asian']['close'].get('time')
-            asian['open_time'] = selected_odds['asian']['open'].get('time')
-            # 重新计算让球走势
-            asian['handicap_trend'] = _analyze_handicap_trend(asian['open_handicap'], asian['handicap'])
+    # ========== 保存独赔数据（用于分析，不直接替换平均盘）==========
+    # 平均盘作为主模型基准
+    # Pinnacle 用于方向修正（Sharp Money）
+    # Bet365 用于大众热度参考
+    if single_odds:
+        if single_odds.get('bet365'):
+            # 保存 Bet365 数据作为大众盘参考
+            asian['bet365'] = single_odds['bet365'].get('asian')
+            total['bet365'] = single_odds['bet365'].get('total')
+            log.info("保存 Bet365 数据作为大众盘参考")
         
-        # 替换大小球数据
-        if selected_odds['total']:
-            total['close_line'] = selected_odds['total']['close']['line']
-            total['open_line'] = selected_odds['total']['open']['line']
-            total['line_change'] = total['close_line'] - total['open_line']
-            total['close_water'] = {
-                'over': selected_odds['total']['close']['over_odds'],
-                'under': selected_odds['total']['close']['under_odds']
-            }
-            total['open_water'] = {
-                'over': selected_odds['total']['open']['over_odds'],
-                'under': selected_odds['total']['open']['under_odds']
-            }
-            # 保存时间数据
-            total['close_time'] = selected_odds['total']['close'].get('time')
-            total['open_time'] = selected_odds['total']['open'].get('time')
-            # 重新计算 implied_total
-            total['implied_total'] = calculate_implied_total(total['close_line'], 
-                                                              total['close_water']['over'], 
-                                                              total['close_water']['under'])
+        if single_odds.get('pinnacle'):
+            # 保存 Pinnacle 数据作为 Sharp 信号
+            asian['pinnacle'] = single_odds['pinnacle'].get('asian')
+            total['pinnacle'] = single_odds['pinnacle'].get('total')
+            log.info("保存 Pinnacle 数据作为 Sharp 信号")
     
     # 确保时间字段始终存在（用于盘口变化速度分析）
     if 'close_time' not in asian:
@@ -5258,16 +5393,9 @@ def analyze_match(match, force_refresh=False):
     if 'open_time' not in total:
         total['open_time'] = None
 
-    # ========== 新增：计算博彩公司分歧指数 ==========
-    bookmaker_consensus = None
-    if single_odds and single_odds.get('bet365') and single_odds.get('pinnacle'):
-        bookmaker_consensus = calculate_bookmaker_consensus(
-            single_odds['bet365'],
-            single_odds['pinnacle'],
-            asian.get('handicap', 0)
-        )
-        log.info(f"博彩公司分歧指数: 可用={bookmaker_consensus['available']}, Sharp方向={bookmaker_consensus['sharp_bias']}, 调整={bookmaker_consensus['adjustment']:.3f}")
-    asian['bookmaker_consensus'] = bookmaker_consensus
+    # 保存博彩公司分歧指数到 asian 字典（已在前面计算）
+    if 'bookmaker_consensus' not in asian and bookmaker_consensus:
+        asian['bookmaker_consensus'] = bookmaker_consensus
 
     # 注入 ELO xG 数据到 total 字典，供后续 xG 一致性校验使用
     if team and 'elo_xg_home' in team and 'elo_xg_away' in team:
@@ -5457,18 +5585,6 @@ def analyze_match(match, force_refresh=False):
     recommend = []
     value_bets = []
     
-    # 获取推荐比分和价值投注（分开处理）
-    rec_list, value_bets = _pick_recommendations(
-        candidates, asian, euro, total, confidence=confidence, league_profile=league_profile, team=team, similar_market=similar_market_result,
-    )
-    
-    for h, a, prob in rec_list:
-        heat, _ = score_heat_label(h, a, prob, league_profile, euro_odds_for_heat)
-        recommend.append({
-            **_score_entry(h, a, prob, (heat, _)),
-            'reasons': _recommend_reasons(h, a, asian, euro, total, team, heat=heat),
-        })
-
     # 计算半全场概率（集成动态ELO）
     half_full_time = calculate_half_full_time_probs(candidates, team, asian, total, home_team=home, away_team=away)
 
@@ -5490,8 +5606,25 @@ def analyze_match(match, force_refresh=False):
         except Exception as e:
             log.warning(f"资金流检测失败: {e}")
 
-    # ========== 风险等级评估 ==========
-    risk_level = _evaluate_risk_level(asian, euro, total, steam_result, confidence, similar_market_result)
+    # ========== 风险等级评估（提前到推荐之前）==========
+    risk = _evaluate_risk_level(asian, euro, total, steam_result, confidence, similar_market_result)
+    recommend_count = risk.get('recommend_count', 2)
+    
+    # ========== 根据风险等级获取推荐比分和价值投注 ==========
+    if recommend_count > 0:
+        rec_list, value_bets = _pick_recommendations(
+            candidates, asian, euro, total, n=recommend_count,
+            confidence=confidence, league_profile=league_profile, team=team, similar_market=similar_market_result,
+        )
+        
+        for h, a, prob in rec_list:
+            heat, _ = score_heat_label(h, a, prob, league_profile, euro_odds_for_heat)
+            recommend.append({
+                **_score_entry(h, a, prob, (heat, _)),
+                'reasons': _recommend_reasons(h, a, asian, euro, total, team, heat=heat),
+            })
+    else:
+        log.info(f"风险等级 {risk['level']}，不推荐具体比分")
     
     # ========== 构建概率排序（纯模型概率）==========
     probability_rank = []
@@ -5562,6 +5695,8 @@ def analyze_match(match, force_refresh=False):
                     'delta': delta,
                     'sample_count': record.get('count', 0)
                 })
+        except ImportError as e:
+            log.warning(f"贝叶斯校准模块导入失败: {e}")
         except Exception as e:
             log.warning(f"计算贝叶斯校准影响失败: {e}")
     
@@ -5649,9 +5784,9 @@ def analyze_match(match, force_refresh=False):
         log.debug(f"获取历史统计失败: {e}")
     
     try:
-        from .bayesian_calibration import get_calibrator
-        calibrator = get_calibrator()
-        calib_sample_count = sum(v.get('count', 0) for v in calibrator.history.values())
+        if BAYESIAN_CALIBRATION_AVAILABLE:
+            calibrator = get_calibrator()
+            calib_sample_count = sum(v.get('count', 0) for v in calibrator.history.values())
     except Exception as e:
         log.debug(f"获取校准器统计失败: {e}")
     
@@ -5733,10 +5868,11 @@ def analyze_match(match, force_refresh=False):
         'calibration_effect': calibration_effect,
         'similar_market_detail': similar_market_detail,
         'risk_level': {
-            'level': risk_level,
-            'score': confidence.get('score', 0.5),
-            'reasons': confidence.get('notes', []),
-            'recommend_count': len(recommend)
+            'level': risk['level'],
+            'description': risk['description'],
+            'risk_score': risk['risk_score'],
+            'risk_factors': risk['risk_factors'],
+            'recommend_count': risk['recommend_count'],
         },
         'settlement': settlement,
         
@@ -5748,7 +5884,13 @@ def analyze_match(match, force_refresh=False):
             'goal_count': goal_count_result,
             'dixon_coles': dixon_coles_result,
             'ml': ml_result,
-            'risk_level': risk_level,
+            'risk_level': {
+                'level': risk['level'],
+                'description': risk['description'],
+                'risk_score': risk['risk_score'],
+                'risk_factors': risk['risk_factors'],
+                'recommend_count': risk['recommend_count'],
+            },
             'candidates': candidates,
             **meta,
         },

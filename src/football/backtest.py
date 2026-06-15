@@ -160,8 +160,8 @@ class BacktestRunner:
         if hit_1x2: stats['correct_1x2'] += 1
         if hit_total: stats['correct_total'] += 1
         if hit_handicap: stats['correct_handicap'] += 1
-        stats['brier_scores'].append(brier_score)
-        stats['log_losses'].append(log_loss)
+        stats['brier_scores'].append(score_brier)
+        stats['log_losses'].append(score_logloss)
         
         return result
     
@@ -180,8 +180,11 @@ class BacktestRunner:
         hits_total = sum(1 for r in self.results if r['hit_total'])
         hits_handicap = sum(1 for r in self.results if r['hit_handicap'])
         
-        brier_scores = [r['brier_score'] for r in self.results]
-        log_losses = [r['log_loss'] for r in self.results]
+        brier_scores = [r['score_brier'] for r in self.results]
+        log_losses = [r['score_logloss'] for r in self.results]
+        
+        result_brier_scores = [r['result_brier'] for r in self.results]
+        result_log_losses = [r['result_logloss'] for r in self.results]
         
         summary = {
             'total_matches': total,
@@ -191,8 +194,10 @@ class BacktestRunner:
             'hit_rate_1x2': hits_1x2 / total,
             'hit_rate_total': hits_total / total,
             'hit_rate_handicap': hits_handicap / total,
-            'brier_score': sum(brier_scores) / total,
-            'log_loss': sum(log_losses) / total,
+            'score_brier': sum(brier_scores) / total,
+            'score_logloss': sum(log_losses) / total,
+            'result_brier': sum(result_brier_scores) / total,
+            'result_logloss': sum(result_log_losses) / total,
             'by_league': {},
         }
         
@@ -206,8 +211,8 @@ class BacktestRunner:
                     'top3_hit_rate': stats['top3'] / t,
                     'top5_hit_rate': stats['top5'] / t,
                     'hit_rate_1x2': stats['correct_1x2'] / t,
-                    'brier_score': sum(stats['brier_scores']) / t,
-                    'log_loss': sum(stats['log_losses']) / t,
+                    'score_brier': sum(stats['brier_scores']) / t,
+                    'score_logloss': sum(stats['log_losses']) / t,
                 }
         
         return summary
@@ -232,8 +237,10 @@ class BacktestRunner:
         print(f"总进球 Top2:     {summary['hit_rate_total']:.2%}")
         print(f"让球方向命中率:  {summary['hit_rate_handicap']:.2%}")
         print("-" * 60)
-        print(f"Brier Score:     {summary['brier_score']:.4f}")
-        print(f"LogLoss:         {summary['log_loss']:.4f}")
+        print(f"比分 Brier Score:     {summary['score_brier']:.4f}")
+        print(f"比分 LogLoss:         {summary['score_logloss']:.4f}")
+        print(f"胜平负 Brier Score:   {summary['result_brier']:.4f}")
+        print(f"胜平负 LogLoss:       {summary['result_logloss']:.4f}")
         
         if summary['by_league']:
             print("-" * 60)

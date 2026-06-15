@@ -295,12 +295,27 @@ class PredictionHistory:
         top1 = sorted_scores[0][0] if sorted_scores else None
         top3 = [s for s, _ in sorted_scores[:3]]
         top5 = [s for s, _ in sorted_scores[:5]]
+        top10 = [s for s, _ in sorted_scores[:10]]
+        top20 = [s for s, _ in sorted_scores[:20]]
+        top30 = [s for s, _ in sorted_scores[:30]]
+        
+        # 计算真实比分的排名和概率
+        actual_score_rank = None
+        actual_score_prob = predicted_scores.get(actual_score, 0)
+        
+        for i, (score, prob) in enumerate(sorted_scores):
+            if score == actual_score:
+                actual_score_rank = i + 1  # 排名从1开始
+                break
         
         pred_result = max(predicted_1x2.items(), key=lambda x: x[1])[0] if predicted_1x2 else None
         
         hit_top1 = actual_score == top1
         hit_top3 = actual_score in top3
         hit_top5 = actual_score in top5
+        hit_top10 = actual_score in top10
+        hit_top20 = actual_score in top20
+        hit_top30 = actual_score in top30
         hit_1x2 = pred_result == actual_result
         
         fail_reasons = []
@@ -311,7 +326,12 @@ class PredictionHistory:
             'hit_top1': hit_top1,
             'hit_top3': hit_top3,
             'hit_top5': hit_top5,
+            'hit_top10': hit_top10,
+            'hit_top20': hit_top20,
+            'hit_top30': hit_top30,
             'hit_1x2': hit_1x2,
+            'actual_score_rank': actual_score_rank,
+            'actual_score_prob': actual_score_prob,
             'fail_reasons': fail_reasons,
         }
     
@@ -1203,6 +1223,85 @@ def hide_failed_records():
     log.info("已隐藏所有失败记录")
 
 
+def predict_at_time_layer(match_id: str, time_layer: str) -> bool:
+    """
+    在指定时间层对比赛进行预测
+    
+    参数：
+        match_id: 比赛ID
+        time_layer: 时间层标识
+        
+    返回：
+        是否成功
+    """
+    try:
+        from . import analyze_match
+        
+        log.info(f"正在进行时间分层预测: match_id={match_id}, time_layer={time_layer}")
+        
+        # 调用预测（强制刷新，不使用缓存）
+        result = analyze_match({'mid': match_id}, force_refresh=True)
+        
+        if result and result.get('success'):
+            log.info(f"时间分层预测成功: match_id={match_id}, time_layer={time_layer}")
+            return True
+        else:
+            log.warning(f"时间分层预测失败: match_id={match_id}, time_layer={time_layer}")
+            return False
+            
+    except Exception as e:
+        log.error(f"时间分层预测异常: match_id={match_id}, time_layer={time_layer}, error={e}")
+        return False
+
+
+def scan_and_predict_time_layers() -> Dict[str, int]:
+    """
+    扫描未来比赛并在时间分层点进行预测
+    
+    返回：
+        统计结果 {'T-24h': 数量, 'T-6h': 数量, 'T-1h': 数量, 'T-15min': 数量}
+    """
+    result = {'T-24h': 0, 'T-6h': 0, 'T-1h': 0, 'T-15min': 0}
+    
+    try:
+        from .data_loader import fetch_future_matches
+        
+        matches = fetch_future_matches()
+        
+        for match in matches:
+            match_id = match.get('mid', match.get('match_id'))
+            match_time_str = match.get('time', match.get('match_time', ''))
+            
+            if not match_id or not match_time_str:
+                continue
+            
+            # 推断当前应该属于哪个时间层
+            time_layer = infer_time_layer(match_time_str)
+            
+            # 检查是否需要在这个时间层进行预测
+            if time_layer in result:
+                # 检查是否已经在这个时间层预测过（避免重复）
+                history = PredictionHistory()
+                existing = history.get_record(match_id)
+                
+                if existing:
+                    predictions = existing.get('predictions', {})
+                    if time_layer in predictions:
+                        log.debug(f"已在 {time_layer} 层预测过: {match_id}")
+                        continue
+                
+                # 执行预测
+                if predict_at_time_layer(match_id, time_layer):
+                    result[time_layer] += 1
+        
+        log.info(f"时间分层扫描完成: T-24h={result['T-24h']}, T-6h={result['T-6h']}, T-1h={result['T-1h']}, T-15min={result['T-15min']}")
+        
+    except Exception as e:
+        log.error(f"时间分层扫描异常: {e}")
+    
+    return result
+
+
 def start_background_sync(interval_seconds: int = 7200):
     """
     启动后台定时同步线程（使用 APScheduler）
@@ -1216,7 +1315,7 @@ def start_background_sync(interval_seconds: int = 7200):
         
         scheduler = BlockingScheduler(timezone="Asia/Shanghai")
         
-        # 每2小时同步一次
+        # 每2小时同步一次（赛后回填）
         scheduler.add_job(
             auto_sync_results,
             'interval',
@@ -1225,8 +1324,17 @@ def start_background_sync(interval_seconds: int = 7200):
             replace_existing=True
         )
         
+        # 每10分钟扫描时间分层预测
+        scheduler.add_job(
+            scan_and_predict_time_layers,
+            'interval',
+            seconds=600,  # 10分钟
+            id='football_time_layer_scan',
+            replace_existing=True
+        )
+        
         scheduler.start()
-        log.info(f"已启动后台同步调度器，间隔 {interval_seconds} 秒")
+        log.info(f"已启动后台同步调度器，同步间隔 {interval_seconds} 秒，时间分层扫描间隔 600 秒")
         return scheduler
         
     except ImportError:
@@ -1236,9 +1344,16 @@ def start_background_sync(interval_seconds: int = 7200):
         def sync_loop():
             while True:
                 try:
+                    # 赛后回填
                     result = auto_sync_results()
                     if result['synced'] > 0 or result['failed'] > 0:
                         log.info(f"后台同步: {result['message']}")
+                    
+                    # 时间分层扫描（每10分钟）
+                    layer_result = scan_and_predict_time_layers()
+                    if sum(layer_result.values()) > 0:
+                        log.info(f"时间分层预测: {layer_result}")
+                        
                 except Exception as e:
                     log.error(f"后台同步异常: {e}")
                 
