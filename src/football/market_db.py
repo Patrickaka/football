@@ -609,7 +609,8 @@ class MarketScoreDB:
         返回：
             半全场概率字典
         """
-        prob = self.get_prob_with_nearest(asian, ou)
+        result = self.get_prob_with_nearest(asian, ou)
+        prob = result.get('probabilities', {}) if isinstance(result, dict) else {}
         if not prob:
             return {}
         
@@ -632,7 +633,11 @@ class MarketScoreDB:
                 return 'D'
         
         for score, score_prob in prob.items():
-            h, a = map(int, score.split('-'))
+            try:
+                h, a = map(int, score.split('-'))
+            except Exception:
+                continue
+            
             # 简单假设半场进球是全场的40%
             half_h = int(h * 0.4)
             half_a = int(a * 0.4)
@@ -652,6 +657,28 @@ class MarketScoreDB:
         
         return htf_probs
     
+    def get_htf_probs_with_meta(self, asian: float, ou: float) -> Dict:
+        """
+        获取指定盘口组合的半全场概率分布及元数据
+        
+        参数：
+            asian: 亚盘让球
+            ou: 大小球线
+        
+        返回：
+            包含概率、样本数、距离等信息的字典
+        """
+        score_result = self.get_prob_with_nearest(asian, ou)
+        sample_count = self.get_sample_count(asian, ou)
+        htf_probs = self.get_htf_probs(asian, ou)
+        
+        return {
+            'probabilities': htf_probs,
+            'sample_count': sample_count,
+            'distance': score_result.get('distance', float('inf')) if isinstance(score_result, dict) else float('inf'),
+            'exact_match': score_result.get('exact_match', False) if isinstance(score_result, dict) else False,
+        }
+    
     def get_goal_count_dist(self, asian: float, ou: float) -> Dict[int, float]:
         """
         获取指定盘口组合的进球数分布
@@ -663,13 +690,18 @@ class MarketScoreDB:
         返回：
             进球数概率字典
         """
-        prob = self.get_prob_with_nearest(asian, ou)
+        result = self.get_prob_with_nearest(asian, ou)
+        prob = result.get('probabilities', {}) if isinstance(result, dict) else {}
         if not prob:
             return {}
         
         goal_dist = {}
         for score, score_prob in prob.items():
-            h, a = map(int, score.split('-'))
+            try:
+                h, a = map(int, score.split('-'))
+            except Exception:
+                continue
+            
             total_goals = h + a
             
             if total_goals not in goal_dist:

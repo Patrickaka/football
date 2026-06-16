@@ -1266,26 +1266,85 @@ function renderResult(r) {
   });
 
   // 半全场分析
-  const halfFullTime = md && md.half_full_time ? md.half_full_time : [];
-  if (halfFullTime.length > 0) {
-    html += `<h3 style="color:var(--accent2);font-size:15px;margin:18px 0 10px">⚡ 半全场概率分析</h3>`;
+  const halfFullTime = md && md.half_full_time ? md.half_full_time : null;
+  const htfProbs = halfFullTime && halfFullTime.probs ? halfFullTime.probs : [];
+  const htfSampleInfo = halfFullTime && halfFullTime.sample_info ? halfFullTime.sample_info : null;
+  
+  if (htfProbs.length > 0) {
+    html += `<h3 style="color:var(--accent2);font-size:15px;margin:18px 0 10px">⚡ 半全场推荐</h3>`;
     html += `<div class="card">`;
-    html += `<div class="htf-grid">`;
-    halfFullTime.forEach(item => {
+    
+    // 显示 Top3 推荐
+    const top3 = htfProbs.slice(0, 3);
+    html += `<div style="margin-bottom:12px">`;
+    top3.forEach((item, index) => {
       const prob = item.probability || 0;
-      const isHigh = prob >= 15;
-      const isMedium = prob >= 8 && prob < 15;
-      html += `<div class="htf-item ${isHigh ? 'high' : isMedium ? 'medium' : ''}">
-        <div class="htf-code">${esc(item.code)}</div>
-        <div class="htf-name">${esc(item.name)}</div>
-        <div class="htf-bar">
-          <i style="width:${Math.min(prob * 3, 100)}%"></i>
-        </div>
-        <div class="htf-pct">${prob}%</div>
+      html += `<div style="display:flex;align-items:center;margin-bottom:6px">
+        <span style="width:24px;font-size:13px;color:var(--muted)">${index + 1}.</span>
+        <span style="width:60px;font-weight:600;color:var(--text)">${esc(item.code)}</span>
+        <span style="flex:1;font-size:13px;color:var(--muted)">${esc(item.name)}</span>
+        <span style="width:60px;text-align:right;font-weight:600;color:var(--accent2)">${prob}%</span>
       </div>`;
     });
     html += `</div>`;
-    html += `<div style="font-size:12px;color:var(--muted);margin-top:12px;padding-top:8px;border-top:1px solid var(--line)">
+    
+    // 半场/全场倾向统计
+    const halfProbs = { H: 0, D: 0, A: 0 };
+    const fullProbs = { H: 0, D: 0, A: 0 };
+    
+    htfProbs.forEach(item => {
+      const prob = item.probability || 0;
+      const half = item.code[0];
+      const full = item.code[1];
+      halfProbs[half] += prob;
+      fullProbs[full] += prob;
+    });
+    
+    const halfMax = Math.max(...Object.values(halfProbs));
+    const fullMax = Math.max(...Object.values(fullProbs));
+    const halfLabel = Object.keys(halfProbs).find(k => halfProbs[k] === halfMax);
+    const fullLabel = Object.keys(fullProbs).find(k => fullProbs[k] === fullMax);
+    
+    const halfLabels = { H: '主胜', D: '平局', A: '客胜' };
+    
+    html += `<div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--line)">`;
+    html += `<div class="row"><span class="k">半场倾向</span><span class="v">${esc(halfLabels[halfLabel])} ${halfProbs[halfLabel].toFixed(1)}%</span></div>`;
+    html += `<div class="row"><span class="k">全场倾向</span><span class="v">${esc(halfLabels[fullLabel])} ${fullProbs[fullLabel].toFixed(1)}%</span></div>`;
+    html += `</div>`;
+    
+    // 样本质量信息
+    if (htfSampleInfo) {
+      const si = htfSampleInfo;
+      const qualityColors = { high: '#2ea043', medium: '#d29922', low: '#db6161', none: '#6e7681' };
+      const qualityLabels = { high: '高', medium: '中', low: '低', none: '无' };
+      
+      html += `<div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--line)">`;
+      html += `<div style="font-size:13px;color:var(--muted);margin-bottom:8px">历史盘口参考</div>`;
+      html += `<div style="display:grid;grid-template-columns:repeat(2,1fr);gap:8px;">`;
+      html += `<div class="row"><span class="k">样本数</span><span class="v">${si.sample_count}场</span></div>`;
+      html += `<div class="row"><span class="k">盘口距离</span><span class="v">${si.distance}</span></div>`;
+      html += `<div class="row"><span class="k">融合权重</span><span class="v">${(si.blend_weight * 100).toFixed(0)}%</span></div>`;
+      html += `<div class="row"><span class="k">样本质量</span><span class="v" style="color:${qualityColors[si.quality]}">${qualityLabels[si.quality]}</span></div>`;
+      html += `</div>`;
+      
+      // 异常提示
+      if (si.warnings && si.warnings.length > 0) {
+        html += `<div style="margin-top:8px;padding:8px;background:#fef08a;border-radius:6px;">`;
+        html += `<div style="font-size:12px;color:#92400e;font-weight:600;margin-bottom:4px">⚠️ 注意</div>`;
+        si.warnings.forEach(w => {
+          html += `<div style="font-size:12px;color:#b45309">• ${esc(w)}</div>`;
+        });
+        html += `</div>`;
+      }
+      html += `</div>`;
+    }
+    
+    // 风险提示
+    html += `<div style="font-size:12px;color:var(--warn);margin-top:12px;padding-top:8px;border-top:1px solid var(--line)">
+      ⚠️ 半全场波动较大，仅作辅助判断
+    </div>`;
+    
+    html += `<div style="font-size:11px;color:var(--muted);margin-top:8px">
       注：H=主胜, D=平, A=客胜。如 HH 表示半场主队领先且全场主队获胜
     </div>`;
     html += `</div>`;
@@ -1310,6 +1369,52 @@ function renderResult(r) {
       </div>`;
     });
     html += `</div>`;
+    
+    // 进球区间和大/小方向
+    if (goalCount.recommendations.length >= 2) {
+      const firstGoals = parseInt(goalCount.recommendations[0].label);
+      const secondGoals = parseInt(goalCount.recommendations[1].label);
+      const minGoals = Math.min(firstGoals, secondGoals);
+      const maxGoals = Math.max(firstGoals, secondGoals);
+      const rangeProb = (goalCount.recommendations[0].probability + goalCount.recommendations[1].probability) * 100;
+      
+      html += `<div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--line)">`;
+      html += `<div class="row"><span class="k">进球区间</span><span class="v">${minGoals}-${maxGoals}球 约 ${rangeProb.toFixed(1)}%</span></div>`;
+      
+      if (goalCount.over_under) {
+        const overProb = (goalCount.over_under.over * 100).toFixed(1);
+        const underProb = (goalCount.over_under.under * 100).toFixed(1);
+        html += `<div class="row"><span class="k">大/小方向</span><span class="v">≥3球 ${overProb}% / ≤2球 ${underProb}%</span></div>`;
+      }
+      html += `</div>`;
+    }
+    
+    // 样本质量信息
+    if (goalCount.sample_info) {
+      const si = goalCount.sample_info;
+      const qualityColors = { high: '#2ea043', medium: '#d29922', low: '#db6161', none: '#6e7681' };
+      const qualityLabels = { high: '高', medium: '中', low: '低', none: '无' };
+      
+      html += `<div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--line)">`;
+      html += `<div style="font-size:13px;color:var(--muted);margin-bottom:8px">历史盘口参考</div>`;
+      html += `<div style="display:grid;grid-template-columns:repeat(2,1fr);gap:8px;">`;
+      html += `<div class="row"><span class="k">样本数</span><span class="v">${si.sample_count}场</span></div>`;
+      html += `<div class="row"><span class="k">盘口距离</span><span class="v">${si.distance}</span></div>`;
+      html += `<div class="row"><span class="k">融合权重</span><span class="v">${(si.blend_weight * 100).toFixed(0)}%</span></div>`;
+      html += `<div class="row"><span class="k">样本质量</span><span class="v" style="color:${qualityColors[si.quality]}">${qualityLabels[si.quality]}</span></div>`;
+      html += `</div>`;
+      
+      // 异常提示
+      if (si.warnings && si.warnings.length > 0) {
+        html += `<div style="margin-top:8px;padding:8px;background:#fef08a;border-radius:6px;">`;
+        html += `<div style="font-size:12px;color:#92400e;font-weight:600;margin-bottom:4px">⚠️ 注意</div>`;
+        si.warnings.forEach(w => {
+          html += `<div style="font-size:12px;color:#b45309">• ${esc(w)}</div>`;
+        });
+        html += `</div>`;
+      }
+      html += `</div>`;
+    }
     
     // 完整分布（只显示到7球+）
     if (goalCount.distribution && goalCount.distribution.length > 0) {

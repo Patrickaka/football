@@ -234,41 +234,64 @@ def predict_goal_counts_from_candidates(candidates: List[Tuple], max_goals: int 
     # 获取进球数分布（字典格式）
     goal_dist = calculate_goal_counts(prob_matrix)
     
+    # 初始化样本信息
+    sample_count = 0
+    distance = float('inf')
+    history_weight = 0.0
+    sample_warnings = []
+    
     # ========== 新增：结合历史盘口数据调整进球数分布 ==========
     if asian and total:
         try:
             from .market_db import MarketScoreDB
             
             handicap = asian.get('handicap', 0)
-            close_line = total.get('close_line', 2.5)
+            close_line = total.get('close_line') or total.get('line') or 2.5
             
             db = MarketScoreDB()
             db.load()
             
+            # 获取带元数据的结果
+            result = db.get_prob_with_nearest(handicap, close_line)
             market_goal_dist = db.get_goal_count_dist(handicap, close_line)
+            sample_count = db.get_sample_count(handicap, close_line)
+            distance = result.get('distance', float('inf')) if isinstance(result, dict) else float('inf')
             
             if market_goal_dist and len(market_goal_dist) >= 3:
-                # 融合模型分布和历史盘口分布（60%模型 + 40%历史）
-                blended_dist = {}
-                all_keys = set(goal_dist.keys()).union(set(market_goal_dist.keys()))
-                
-                for key in all_keys:
-                    model_prob = goal_dist.get(key, 0.001)
-                    market_prob = market_goal_dist.get(key, 0.001)
-                    blended_dist[key] = 0.6 * model_prob + 0.4 * market_prob
-                
-                # 归一化
-                blended_total = sum(blended_dist.values())
-                if blended_total > 0:
-                    goal_dist = {k: v / blended_total for k, v in sorted(blended_dist.items())}
+                # 添加样本质量检查
+                if sample_count < 30:
+                    sample_warnings.append('历史样本不足，不启用历史融合')
+                elif distance > 0.5:
+                    sample_warnings.append('盘口距离过远，不启用历史融合')
+                else:
+                    # 动态计算融合权重
+                    history_weight = min(0.3, sample_count / 300 * 0.3)
+                    
+                    blended_dist = {}
+                    all_keys = set(goal_dist.keys()).union(set(market_goal_dist.keys()))
+                    
+                    for key in all_keys:
+                        model_prob = goal_dist.get(key, 0.001)
+                        market_prob = market_goal_dist.get(key, 0.001)
+                        blended_dist[key] = (1 - history_weight) * model_prob + history_weight * market_prob
+                    
+                    blended_total = sum(blended_dist.values())
+                    if blended_total > 0:
+                        goal_dist = {k: v / blended_total for k, v in sorted(blended_dist.items())}
                 
                 import logging
                 log = logging.getLogger('football')
-                log.info(f"进球数分布已结合历史盘口数据调整")
+                log.info(f"进球数分布已结合历史盘口数据调整 (样本:{sample_count}, 距离:{distance:.2f}, 权重:{history_weight:.3f})")
         except Exception as e:
             import logging
             log = logging.getLogger('football')
             log.debug(f"无法加载历史盘口数据调整进球数分布: {e}")
+            sample_warnings.append('加载历史盘口数据失败')
+    
+    # 判断样本质量
+    quality = 'high' if (sample_count >= 50 and distance <= 0.3) else \
+              'medium' if (sample_count >= 30 and distance <= 0.5) else \
+              'low' if (sample_count > 0) else 'none'
     
     # 基于调整后的分布重新计算推荐
     return {
@@ -276,7 +299,14 @@ def predict_goal_counts_from_candidates(candidates: List[Tuple], max_goals: int 
         'distribution': get_goal_count_distribution(prob_matrix),
         'over_under': {'over': sum(v for k, v in goal_dist.items() if k >= 3),
                        'under': sum(v for k, v in goal_dist.items() if k <= 2)},
-        'matrix': prob_matrix.tolist()
+        'matrix': prob_matrix.tolist(),
+        'sample_info': {
+            'sample_count': sample_count,
+            'distance': round(distance, 2),
+            'blend_weight': round(history_weight, 3),
+            'quality': quality,
+            'warnings': sample_warnings
+        }
     }
 
 

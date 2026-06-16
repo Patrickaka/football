@@ -4267,8 +4267,14 @@ def calculate_half_full_time_probs(candidates, team_strength=None, asian=None, t
         away_team: 客队名称（用于动态ELO查询）
     
     返回:
-        dict: 半全场概率字典
+        dict: 包含半全场概率和样本信息的字典
     """
+    # 初始化样本信息
+    sample_count = 0
+    distance = float('inf')
+    history_weight = 0.0
+    sample_warnings = []
+    
     # 处理 candidates 格式：支持 ((h, a), prob) 和 (h, a, prob) 两种格式
     formatted_candidates = []
     for item in candidates:
@@ -4293,8 +4299,36 @@ def calculate_half_full_time_probs(candidates, team_strength=None, asian=None, t
         except Exception as e:
             log.debug(f"动态ELO计算失败: {e}")
     
-    # 半场进球期望值（通常是全场的40-45%，根据ELO调整）
-    half_time_ratio = 0.42 * elo_factor
+    # 根据盘口动态调整半场进球比例
+    close_line = (
+        total.get('close_line')
+        or total.get('line')
+        or total.get('close', {}).get('line')
+        or 2.5
+    ) if total else 2.5
+    
+    handicap = asian.get('handicap', 0) if asian else 0
+    
+    half_time_ratio = 0.42
+    
+    # 低进球盘口：上半场更谨慎
+    if close_line <= 2.0:
+        half_time_ratio -= 0.03
+    elif close_line <= 2.25:
+        half_time_ratio -= 0.015
+    
+    # 高进球盘口：上半场进球概率提高
+    elif close_line >= 3.0:
+        half_time_ratio += 0.025
+    elif close_line >= 2.75:
+        half_time_ratio += 0.015
+    
+    # 深盘强弱明显时，强队上半场领先概率提高
+    if abs(handicap) >= 1.0:
+        half_time_ratio += 0.015
+    
+    half_time_ratio *= elo_factor
+    half_time_ratio = max(0.36, min(0.49, half_time_ratio))
     
     # 从比分候选计算全场进球期望
     total_goals_exp = sum((h + a) * prob for h, a, prob in candidates)
@@ -4378,29 +4412,40 @@ def calculate_half_full_time_probs(candidates, team_strength=None, asian=None, t
             from .market_db import MarketScoreDB
             
             handicap = asian.get('handicap', 0)
-            close_line = total.get('close_line', 2.5)
+            close_line = (
+                total.get('close_line')
+                or total.get('line')
+                or total.get('close', {}).get('line')
+                or 2.5
+            )
             
             db = MarketScoreDB()
             db.load()
             
-            market_htf = db.get_htf_probs(handicap, close_line)
+            market_result = db.get_htf_probs_with_meta(handicap, close_line)
+            market_htf = market_result.get('probabilities', {})
+            sample_count = market_result.get('sample_count', 0)
+            distance = market_result.get('distance', float('inf'))
             
-            if market_htf and len(market_htf) >= 5:
-                # 融合模型概率和历史盘口概率（60%模型 + 40%历史）
+            if market_htf and sample_count >= 30 and distance <= 0.5:
+                history_weight = min(0.25, sample_count / 300 * 0.25)
+                
                 blended_htf = {}
                 all_keys = set(htf_probs.keys()).union(set(market_htf.keys()))
                 
                 for key in all_keys:
-                    model_prob = htf_probs.get(key, 0.001)  # 避免0概率
+                    model_prob = htf_probs.get(key, 0.001)
                     market_prob = market_htf.get(key, 0.001)
-                    blended_htf[key] = 0.6 * model_prob + 0.4 * market_prob
+                    blended_htf[key] = (1 - history_weight) * model_prob + history_weight * market_prob
                 
-                # 归一化
-                blended_total = sum(blended_htf.values())
-                if blended_total > 0:
-                    htf_probs = {k: v / blended_total for k, v in sorted(blended_htf.items(), key=lambda x: -x[1])}
+                total_prob = sum(blended_htf.values())
+                if total_prob > 0:
+                    htf_probs = {
+                        k: v / total_prob
+                        for k, v in sorted(blended_htf.items(), key=lambda x: -x[1])
+                    }
                 
-                log.info(f"半全场概率已结合历史盘口数据调整")
+                log.info(f"半全场概率已结合历史盘口数据调整，权重={history_weight:.3f}")
         except Exception as e:
             log.debug(f"无法加载历史盘口数据调整半全场概率: {e}")
     
@@ -4430,7 +4475,21 @@ def calculate_half_full_time_probs(candidates, team_strength=None, asian=None, t
     # 按概率排序
     result.sort(key=lambda x: -x['probability'])
     
-    return result
+    # 判断样本质量
+    quality = 'high' if (sample_count >= 50 and distance <= 0.3) else \
+              'medium' if (sample_count >= 30 and distance <= 0.5) else \
+              'low' if (sample_count > 0) else 'none'
+    
+    return {
+        'probs': result,
+        'sample_info': {
+            'sample_count': sample_count,
+            'distance': round(distance, 2),
+            'blend_weight': round(history_weight, 3),
+            'quality': quality,
+            'warnings': sample_warnings
+        }
+    }
 
 
 def predict_scores(asian, euro, total, team_strength=None, league_profile=None, 
