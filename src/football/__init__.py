@@ -6178,17 +6178,38 @@ def analyze_match(match, force_refresh=False):
     # ========== 模型状态汇总 ==========
     ml_enabled = False
     ml_reason = "模型未训练，未参与融合"
+    ml_participating = False
+    
     try:
         from .ml import load_trained_ml_model
+        from .result_sync import get_history, check_ml_fusion_eligibility, get_ml_fusion_weight
         
         ml_enabled = load_trained_ml_model()
         
         if ml_enabled:
-            ml_reason = "已训练，当前处于影子评估"
+            # 检查是否满足融合条件
+            history = get_history()
+            ml_stats = history.get_ml_evaluation_stats()
+            eligibility = check_ml_fusion_eligibility(ml_stats)
+            
+            if eligibility['eligible']:
+                shadow_samples = eligibility['shadow_samples']
+                ml_weight = get_ml_fusion_weight(True, shadow_samples, 0.0)
+                if ml_weight > 0:
+                    ml_reason = f"已参与融合，权重 {ml_weight*100:.1f}%"
+                    ml_participating = True
+                else:
+                    ml_reason = "已训练，等待权重分配"
+            else:
+                shadow_samples = eligibility['shadow_samples']
+                ml_reason = f"已训练，影子评估中（样本 {shadow_samples}/45）"
         else:
             ml_reason = "模型文件不存在或加载失败"
-    except Exception:
+    except Exception as e:
         ml_reason = "ML模块不可用"
+    
+    # 将参与状态保存到状态字典中供前端显示
+    ml_enabled = ml_participating
     
     # 获取真实统计数据
     pending_count = 0
