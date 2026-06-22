@@ -228,6 +228,31 @@ OUZHI_JSON_URL = f'{BASE}/fenxi1/json/ouzhi.php'
 
 # ===================== 工具函数 =====================
 
+
+def get_close_total_line(total: dict, default: float = 2.5) -> float:
+    """
+    统一获取大小球终盘线
+    
+    支持多种数据结构：
+    - total.get('close_line') - 直接存储的终盘线
+    - total.get('line') - 直接存储的线
+    - total.get('close', {}).get('line') - 通过 close 字典获取（如 fetch_daxiao 返回的结构）
+    
+    参数：
+        total: 大小球数据字典
+        default: 默认值（当所有来源都取不到时使用）
+    
+    返回：
+        大小球终盘线
+    """
+    return (
+        total.get('close_line')
+        or total.get('line')
+        or total.get('close', {}).get('line')
+        or default
+    )
+
+
 def fetch(url, encoding='gbk', referer=None):
     """抓取网页，自动处理 gzip 压缩和编码"""
     start = time.perf_counter()
@@ -4309,6 +4334,12 @@ def calculate_half_full_time_probs(candidates, team_strength=None, asian=None, t
     
     handicap = asian.get('handicap', 0) if asian else 0
     
+    # 计算全场进球期望（主客分开计算）
+    home_goals_exp = sum(h * prob for h, a, prob in candidates)
+    away_goals_exp = sum(a * prob for h, a, prob in candidates)
+    total_goals_exp = home_goals_exp + away_goals_exp
+    
+    # 计算半场比例（可根据联赛、盘口等调整）
     half_time_ratio = 0.42
     
     # 低进球盘口：上半场更谨慎
@@ -4330,44 +4361,22 @@ def calculate_half_full_time_probs(candidates, team_strength=None, asian=None, t
     half_time_ratio *= elo_factor
     half_time_ratio = max(0.36, min(0.49, half_time_ratio))
     
-    # 从比分候选计算全场进球期望
-    total_goals_exp = sum((h + a) * prob for h, a, prob in candidates)
-    half_goals_exp = total_goals_exp * half_time_ratio
+    # ========== 两阶段模型：半场 + 下半场 ==========
+    # 上半场进球期望
+    half_home_exp = home_goals_exp * half_time_ratio
+    half_away_exp = away_goals_exp * half_time_ratio
     
-    # 计算主客进球比例
-    home_goals_exp = sum(h * prob for h, a, prob in candidates)
-    away_goals_exp = sum(a * prob for h, a, prob in candidates)
+    # 下半场进球期望（全场 - 上半场）
+    second_home_exp = home_goals_exp - half_home_exp
+    second_away_exp = away_goals_exp - half_away_exp
     
-    if home_goals_exp + away_goals_exp > 0:
-        home_ratio = home_goals_exp / (home_goals_exp + away_goals_exp)
-    else:
-        home_ratio = 0.5
+    # 确保下半场期望为非负数
+    second_home_exp = max(0.01, second_home_exp)
+    second_away_exp = max(0.01, second_away_exp)
     
-    # 半场进球期望
-    half_home_exp = half_goals_exp * home_ratio
-    half_away_exp = half_goals_exp * (1 - home_ratio)
-    
-    # 使用泊松分布计算半场各种比分的概率
+    # 使用泊松分布计算概率
     def poisson_prob(lam, k):
         return (lam ** k) * math.exp(-lam) / math.factorial(k)
-    
-    # 计算半场各种结果的概率
-    half_probs = {}
-    max_half_goals = 3  # 考虑最多3个进球
-    
-    for h in range(max_half_goals + 1):
-        for a in range(max_half_goals + 1):
-            if h + a <= max_half_goals:
-                prob = poisson_prob(half_home_exp, h) * poisson_prob(half_away_exp, a)
-                half_probs[(h, a)] = prob
-    
-    # 归一化半场概率
-    half_total = sum(half_probs.values())
-    if half_total > 0:
-        half_probs = {k: v / half_total for k, v in half_probs.items()}
-    
-    # 计算半全场组合概率
-    htf_probs = {}
     
     # 定义半场结果映射
     def get_half_result(h, a):
@@ -4387,26 +4396,56 @@ def calculate_half_full_time_probs(candidates, team_strength=None, asian=None, t
         else:
             return 'D'
     
-    # 计算每种半全场组合的概率
-    for (half_h, half_a), half_prob in half_probs.items():
-        half_res = get_half_result(half_h, half_a)
-        
-        for full_h, full_a, full_prob in candidates:
-            full_res = get_full_result(full_h, full_a)
-            key = f"{half_res}{full_res}"
+    # ========== 两阶段条件概率模型 ==========
+    # P(HT=h1:a1, FT=h2:a2) = P(HT=h1:a1) * P(2H=(h2-h1):(a2-a1))
+    # 其中 FT = HT + 2H
+    
+    htf_probs = {}
+    max_goals = 5  # 最大考虑5球
+    max_half_goals = 3  # 半场最多考虑3球
+    
+    # 遍历所有可能的半场比分和全场比分组合
+    for half_h in range(max_half_goals + 1):
+        for half_a in range(max_half_goals + 1):
+            # 计算半场概率
+            half_prob = poisson_prob(half_home_exp, half_h) * poisson_prob(half_away_exp, half_a)
             
-            # 考虑逻辑约束：半场比分应该合理地导致全场比分
-            if (full_h >= half_h) and (full_a >= half_a):
-                if key not in htf_probs:
-                    htf_probs[key] = 0
-                htf_probs[key] += half_prob * full_prob
+            if half_prob < 0.0001:
+                continue
+            
+            # 遍历所有可能的全场比分（必须大于等于半场比分）
+            for full_h in range(half_h, max_goals + 1):
+                for full_a in range(half_a, max_goals + 1):
+                    # 计算下半场进球数
+                    second_h = full_h - half_h
+                    second_a = full_a - half_a
+                    
+                    # 计算下半场概率
+                    second_prob = poisson_prob(second_home_exp, second_h) * poisson_prob(second_away_exp, second_a)
+                    
+                    if second_prob < 0.0001:
+                        continue
+                    
+                    # 组合概率
+                    total_prob = half_prob * second_prob
+                    
+                    # 获取半全场结果
+                    half_res = get_half_result(half_h, half_a)
+                    full_res = get_full_result(full_h, full_a)
+                    key = f"{half_res}{full_res}"
+                    
+                    if key not in htf_probs:
+                        htf_probs[key] = 0
+                    htf_probs[key] += total_prob
     
     # 归一化半全场概率
     htf_total = sum(htf_probs.values())
     if htf_total > 0:
         htf_probs = {k: v / htf_total for k, v in htf_probs.items()}
     
-    # ========== 新增：结合历史盘口数据调整半全场概率 ==========
+    # ========== 结合历史盘口数据调整半全场概率 ==========
+    # 注意：当前历史半全场数据是通过全场比分倒推的，不是真实半场数据
+    # 倒推逻辑会导致半场平局被严重放大，因此权重需要非常低
     if asian and total:
         try:
             from .market_db import MarketScoreDB
@@ -4427,27 +4466,37 @@ def calculate_half_full_time_probs(candidates, team_strength=None, asian=None, t
             sample_count = market_result.get('sample_count', 0)
             distance = market_result.get('distance', float('inf'))
             
-            if market_htf and sample_count >= 30 and distance <= 0.5:
-                history_weight = min(0.25, sample_count / 300 * 0.25)
+            # 当前历史数据是倒推的，权重需大幅降低
+            # 在没有真实半场数据前，权重限制在10%以内
+            if market_htf and sample_count >= 50 and distance <= 0.5:
+                # 倒推数据权重很低，最多10%
+                history_weight = min(0.10, sample_count / 500 * 0.10)
                 
-                blended_htf = {}
-                all_keys = set(htf_probs.keys()).union(set(market_htf.keys()))
+                if history_weight > 0:
+                    blended_htf = {}
+                    all_keys = set(htf_probs.keys()).union(set(market_htf.keys()))
+                    
+                    for key in all_keys:
+                        model_prob = htf_probs.get(key, 0.001)
+                        market_prob = market_htf.get(key, 0.001)
+                        blended_htf[key] = (1 - history_weight) * model_prob + history_weight * market_prob
+                    
+                    total_prob = sum(blended_htf.values())
+                    if total_prob > 0:
+                        htf_probs = {
+                            k: v / total_prob
+                            for k, v in sorted(blended_htf.items(), key=lambda x: -x[1])
+                        }
                 
-                for key in all_keys:
-                    model_prob = htf_probs.get(key, 0.001)
-                    market_prob = market_htf.get(key, 0.001)
-                    blended_htf[key] = (1 - history_weight) * model_prob + history_weight * market_prob
-                
-                total_prob = sum(blended_htf.values())
-                if total_prob > 0:
-                    htf_probs = {
-                        k: v / total_prob
-                        for k, v in sorted(blended_htf.items(), key=lambda x: -x[1])
-                    }
-                
-                log.info(f"半全场概率已结合历史盘口数据调整，权重={history_weight:.3f}")
+                log.info(f"半全场概率已结合历史盘口数据调整（倒推数据），权重={history_weight:.3f}")
+            else:
+                if sample_count < 50:
+                    sample_warnings.append('历史半场样本不足，不启用历史融合')
+                elif distance > 0.5:
+                    sample_warnings.append('盘口距离过远，不启用历史融合')
         except Exception as e:
             log.debug(f"无法加载历史盘口数据调整半全场概率: {e}")
+            sample_warnings.append('加载历史半场数据失败')
     
     # 添加友好名称
     htf_names = {
@@ -4971,7 +5020,7 @@ def apply_market_change_prior(score_probs: Dict[str, float], asian: Dict, total:
         asian_to = asian.get('handicap')
 
         ou_from = total.get('open_line')
-        ou_to = total.get('close_line') or total.get('line')
+        ou_to = get_close_total_line(total)
 
         asian_from = normalize_asian(asian_from)
         asian_to = normalize_asian(asian_to)
@@ -5199,7 +5248,7 @@ def _pick_recommendations(candidates, asian, euro, total, n=2, pool=12, confiden
     # xG 一致性校验：ELO xG 与市场总进球线偏差 >0.5 则降低置信度
     xg_penalty = 1.0
     xg_total = total.get('xg_total')
-    total_line = total.get('close_line') or total.get('line')
+    total_line = get_close_total_line(total)
     if xg_total is not None and total_line is not None:
         xg_deviation = abs(xg_total - total_line)
         if xg_deviation > 0.5:

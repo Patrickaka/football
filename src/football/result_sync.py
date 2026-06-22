@@ -133,7 +133,8 @@ class PredictionHistory:
     def add_prediction(self, match_id: str, league: str, home: str, away: str,
                        match_time: str, predicted_scores: Dict[str, float],
                        predicted_1x2: Dict[str, float], asian: float = None,
-                       total_line: float = None, odds_data: Dict = None):
+                       total_line: float = None, odds_data: Dict = None,
+                       predicted_half_full: Dict[str, float] = None):
         """
         添加预测记录
         
@@ -148,19 +149,23 @@ class PredictionHistory:
             asian: 亚盘让球
             total_line: 大小球盘口
             odds_data: 原始赔率数据（可选）
+            predicted_half_full: 预测半全场概率 {"HH": 0.24, "DH": 0.19, ...}（可选）
         """
         # 检查是否已存在
         for record in self.records:
             if record.get('match_id') == match_id:
                 # 更新现有记录
-                record.update({
+                update_data = {
                     'predicted_scores': predicted_scores,
                     'predicted_1x2': predicted_1x2,
                     'asian': asian,
                     'total_line': total_line,
                     'updated_at': datetime.now().isoformat(),
                     'odds_snapshot': odds_data,
-                })
+                }
+                if predicted_half_full:
+                    update_data['predicted_half_full'] = predicted_half_full
+                record.update(update_data)
                 
                 # 更新对应时间层的预测
                 layer = infer_time_layer(match_time)
@@ -201,7 +206,7 @@ class PredictionHistory:
         }
         odds_layers[layer] = odds_data
         
-        self.records.append({
+        record_data = {
             'match_id': match_id,
             'league': league,
             'home': home,
@@ -211,10 +216,14 @@ class PredictionHistory:
             'total_line': total_line,
             'predicted_scores': predicted_scores,
             'predicted_1x2': predicted_1x2,
+            'predicted_half_full': predicted_half_full,  # 新增：半全场预测
             'time_layers': time_layers,  # 新增：时间分层预测记录
             'odds_layers': odds_layers,  # 新增：赔率分层记录
             'actual_score': None,
             'actual_result': None,
+            'actual_half_score': None,   # 新增：实际半场比分
+            'actual_half_result': None,  # 新增：实际半场结果
+            'actual_half_full': None,    # 新增：实际半全场结果
             'settled': False,
             # 同步状态字段
             'sync_status': 'pending',
@@ -225,7 +234,8 @@ class PredictionHistory:
             'created_at': datetime.now().isoformat(),
             'updated_at': datetime.now().isoformat(),
             'odds_snapshot': odds_data,
-        })
+        }
+        self.records.append(record_data)
         self._save()
         log.info(f"添加预测记录: {home} vs {away} (match_id={match_id})")
     
@@ -309,6 +319,10 @@ class PredictionHistory:
         predicted_scores = record.get('predicted_scores', {})
         predicted_1x2 = record.get('predicted_1x2', {})
         
+        # 半全场相关
+        actual_half_full = record.get('actual_half_full')
+        predicted_half_full = record.get('predicted_half_full', {})
+        
         sorted_scores = sorted(predicted_scores.items(), key=lambda x: -x[1])
         top1 = sorted_scores[0][0] if sorted_scores else None
         top3 = [s for s, _ in sorted_scores[:3]]
@@ -336,6 +350,29 @@ class PredictionHistory:
         hit_top30 = actual_score in top30
         hit_1x2 = pred_result == actual_result
         
+        # 半全场命中计算
+        hit_half_full_top1 = False
+        hit_half_full_top3 = False
+        if predicted_half_full and actual_half_full:
+            sorted_htf = sorted(predicted_half_full.items(), key=lambda x: -x[1])
+            htf_top1 = sorted_htf[0][0] if sorted_htf else None
+            htf_top3 = [s[0] for s in sorted_htf[:3]]
+            hit_half_full_top1 = actual_half_full == htf_top1
+            hit_half_full_top3 = actual_half_full in htf_top3
+        
+        # 半场胜平负命中
+        actual_half_result = record.get('actual_half_result')
+        hit_half_1x2 = False
+        if actual_half_result and predicted_half_full:
+            # 从半全场预测中推断半场结果概率
+            half_probs = {}
+            for key, prob in predicted_half_full.items():
+                half_res = key[0]  # 取第一个字符作为半场结果
+                half_probs[half_res] = half_probs.get(half_res, 0) + prob
+            if half_probs:
+                pred_half_result = max(half_probs.items(), key=lambda x: x[1])[0]
+                hit_half_1x2 = pred_half_result == actual_half_result
+        
         fail_reasons = []
         if not hit_top3:
             fail_reasons = self._analyze_fail_reasons(record, sorted_scores, predicted_1x2)
@@ -348,6 +385,10 @@ class PredictionHistory:
             'hit_top20': hit_top20,
             'hit_top30': hit_top30,
             'hit_1x2': hit_1x2,
+            # 半全场命中指标
+            'hit_half_full_top1': hit_half_full_top1,
+            'hit_half_full_top3': hit_half_full_top3,
+            'hit_half_1x2': hit_half_1x2,
             'actual_score_rank': actual_score_rank,
             'actual_score_prob': actual_score_prob,
             'fail_reasons': fail_reasons,
@@ -480,7 +521,8 @@ class PredictionHistory:
         
         return statistics
     
-    def update_result(self, match_id: str, actual_score: str, actual_result: str, error: str = None):
+    def update_result(self, match_id: str, actual_score: str, actual_result: str, 
+                      actual_half_score: str = None, error: str = None):
         """
         更新比赛结果
         
@@ -488,6 +530,7 @@ class PredictionHistory:
             match_id: 比赛ID
             actual_score: 实际比分 "2-1"
             actual_result: 实际结果 "H"/"D"/"A"
+            actual_half_score: 实际半场比分 "1-0"（可选）
             error: 同步错误信息（可选）
         """
         for record in self.records:
@@ -500,7 +543,20 @@ class PredictionHistory:
                     record['settled_at'] = datetime.now().isoformat()
                     record['sync_status'] = 'synced'
                     
-                    # 计算命中结果
+                    # 处理半场比分
+                    if actual_half_score:
+                        record['actual_half_score'] = actual_half_score
+                        # 计算半场结果
+                        try:
+                            half_h, half_a = map(int, actual_half_score.split('-'))
+                            half_res = 'H' if half_h > half_a else 'A' if half_h < half_a else 'D'
+                            record['actual_half_result'] = half_res
+                            # 计算半全场结果
+                            record['actual_half_full'] = f"{half_res}{actual_result}"
+                        except:
+                            pass
+                    
+                    # 计算命中结果（包含半全场）
                     record.update(self._calculate_hit_flags(record))
                     
                     # 更新各模块
@@ -508,6 +564,7 @@ class PredictionHistory:
                     self._update_market_db(record)
                     self._update_score_frequency_db(record)
                     self._update_elo_ratings(record)
+                    self._update_half_time_stats(record)  # 新增：更新半场统计
 
                     # 最后写入盘口变化库
                     self._update_market_change_db(record)
@@ -725,6 +782,48 @@ class PredictionHistory:
                     log.debug(f"已更新ELO评分: {record['home']} vs {record['away']}")
         except Exception as e:
             log.debug(f"更新ELO评分失败: {e}")
+
+    def _update_half_time_stats(self, record: Dict):
+        """更新半场比分统计数据库"""
+        try:
+            from .half_time_stats import record_half_time_result
+            
+            league = record.get('league', '')
+            total_line = record.get('total_line')
+            handicap = record.get('asian')
+            actual_score = record.get('actual_score', '')
+            actual_half_score = record.get('actual_half_score', '')
+            
+            # 只有当有真实半场比分时才记录
+            if actual_half_score and actual_score and total_line is not None:
+                try:
+                    half_h, half_a = map(int, actual_half_score.split('-'))
+                    full_h, full_a = map(int, actual_score.split('-'))
+                    
+                    # 判断比赛类型
+                    match_type = 'league'
+                    if league:
+                        league_lower = league.lower()
+                        if '杯' in league or 'cup' in league_lower or 'tournament' in league_lower:
+                            match_type = 'cup'
+                        elif '友谊' in league or 'friendly' in league_lower:
+                            match_type = 'friendly'
+                    
+                    record_half_time_result(
+                        league=league,
+                        total_line=total_line,
+                        handicap=handicap or 0.0,
+                        match_type=match_type,
+                        half_home=half_h,
+                        half_away=half_a,
+                        full_home=full_h,
+                        full_away=full_a
+                    )
+                    log.debug(f"已更新半场统计数据库")
+                except Exception as e:
+                    log.debug(f"解析半场比分失败: {e}")
+        except Exception as e:
+            log.debug(f"更新半场统计数据库失败: {e}")
 
     def _first_not_none(self, *values):
         for v in values:
