@@ -6181,16 +6181,19 @@ def analyze_match(match, force_refresh=False):
     ml_participating = False
     
     try:
-        from .ml import load_trained_ml_model
         from .result_sync import get_history, check_ml_fusion_eligibility, get_ml_fusion_weight
+        import src.football.ml as ml_module
         
-        ml_enabled = load_trained_ml_model()
+        ml_enabled = ml_module.load_trained_ml_model()
         
         if ml_enabled:
+            # 获取测试集样本数
+            test_set_samples = ml_module._trained_ml_metadata.get('test_count', 0) if ml_module._trained_ml_metadata else 0
+            
             # 检查是否满足融合条件
             history = get_history()
             ml_stats = history.get_ml_evaluation_stats()
-            eligibility = check_ml_fusion_eligibility(ml_stats)
+            eligibility = check_ml_fusion_eligibility(ml_stats, test_set_samples)
             
             if eligibility['eligible']:
                 shadow_samples = eligibility['shadow_samples']

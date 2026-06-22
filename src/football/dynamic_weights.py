@@ -576,10 +576,15 @@ def get_dynamic_weights(confidence: float = 0.5, match_data: Optional[Dict] = No
     # 检查 ML 是否有资格参与融合
     try:
         from .result_sync import get_history, check_ml_fusion_eligibility, get_ml_fusion_weight
+        import src.football.ml as ml_module
+        
+        # 确保模型已加载并获取测试集样本数
+        ml_module.load_trained_ml_model()
+        test_set_samples = ml_module._trained_ml_metadata.get('test_count', 0) if ml_module._trained_ml_metadata else 0
         
         history = get_history()
         ml_stats = history.get_ml_evaluation_stats()
-        eligibility = check_ml_fusion_eligibility(ml_stats)
+        eligibility = check_ml_fusion_eligibility(ml_stats, test_set_samples)
         
         if eligibility['eligible']:
             shadow_samples = eligibility['shadow_samples']
