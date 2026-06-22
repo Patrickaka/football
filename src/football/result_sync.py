@@ -414,6 +414,10 @@ class PredictionHistory:
         self._save()
         log.info(f"添加预测记录: {home} vs {away} (match_id={match_id})")
     
+    def get_record(self, match_id: str) -> Optional[Dict]:
+        """按比赛ID获取单条记录，无则返回 None"""
+        return next((r for r in self.records if r.get('match_id') == match_id), None)
+
     def get_unsettled(self) -> List[Dict]:
         """获取未结算的记录"""
         return [r for r in self.records if not r.get('settled', False)]
@@ -2008,8 +2012,8 @@ def scan_and_predict_time_layers() -> Dict[str, int]:
                 existing = history.get_record(match_id)
                 
                 if existing:
-                    predictions = existing.get('predictions', {})
-                    if time_layer in predictions:
+                    time_layers = existing.get('time_layers', {})
+                    if time_layer in time_layers:
                         log.debug(f"已在 {time_layer} 层预测过: {match_id}")
                         continue
                 
