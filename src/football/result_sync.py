@@ -51,6 +51,7 @@ import os
 import re
 import json
 import time
+import math
 import logging
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
@@ -62,6 +63,151 @@ log = logging.getLogger('football')
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), 'data')
 HISTORY_FILE = os.path.join(DATA_DIR, 'prediction_history.json')
+
+
+# ==================== 评估指标计算函数 ====================
+
+def calculate_logloss(probs: Dict[str, float], actual_result: str) -> float:
+    """
+    计算 LogLoss（对数损失）
+    
+    参数：
+        probs: 预测概率 {'H': 0.48, 'D': 0.27, 'A': 0.25}
+        actual_result: 实际结果 'H', 'D', 或 'A'
+    
+    返回：
+        LogLoss 值，越小越好
+    """
+    if actual_result not in ['H', 'D', 'A']:
+        return float('nan')
+    
+    p = probs.get(actual_result, 0.0)
+    p = max(min(p, 1 - 1e-15), 1e-15)  # 防止 log(0)
+    return -math.log(p)
+
+
+def calculate_brier_score(probs: Dict[str, float], actual_result: str) -> float:
+    """
+    计算 Brier Score（布瑞尔分数）
+    
+    参数：
+        probs: 预测概率 {'H': 0.48, 'D': 0.27, 'A': 0.25}
+        actual_result: 实际结果 'H', 'D', 或 'A'
+    
+    返回：
+        Brier Score 值，越小越好
+    """
+    if actual_result not in ['H', 'D', 'A']:
+        return float('nan')
+    
+    # 创建真实标签向量
+    true_label = {'H': 0.0, 'D': 0.0, 'A': 0.0}
+    true_label[actual_result] = 1.0
+    
+    # 计算 Brier Score
+    score = 0.0
+    for key in ['H', 'D', 'A']:
+        score += (probs.get(key, 0.0) - true_label[key]) ** 2
+    
+    return score
+
+
+def calculate_hit(probs: Dict[str, float], actual_result: str) -> bool:
+    """
+    判断是否命中（预测概率最高的结果是否等于实际结果）
+    
+    参数：
+        probs: 预测概率 {'H': 0.48, 'D': 0.27, 'A': 0.25}
+        actual_result: 实际结果 'H', 'D', 或 'A'
+    
+    返回：
+        True 如果命中，False 否则
+    """
+    if actual_result not in ['H', 'D', 'A']:
+        return None
+    
+    # 找到概率最高的结果
+    max_prob = -1
+    predicted = None
+    for key in ['H', 'D', 'A']:
+        p = probs.get(key, 0.0)
+        if p > max_prob:
+            max_prob = p
+            predicted = key
+    
+    return predicted == actual_result
+
+
+def fuse_probabilities(base_probs: Dict[str, float], ml_probs: Dict[str, float], 
+                      ml_weight: float = 0.05) -> Dict[str, float]:
+    """
+    融合基础模型和 ML 模型的概率
+    
+    参数：
+        base_probs: 基础模型概率 {'H': 0.48, 'D': 0.27, 'A': 0.25}
+        ml_probs: ML 模型概率 {'H': 0.45, 'D': 0.29, 'A': 0.26}
+        ml_weight: ML 模型权重（默认0.05）
+    
+    返回：
+        融合后的概率（已归一化）
+    """
+    fused = {}
+    total = 0.0
+    
+    for key in ['H', 'D', 'A']:
+        fused[key] = (1 - ml_weight) * base_probs.get(key, 0.0) + ml_weight * ml_probs.get(key, 0.0)
+        total += fused[key]
+    
+    # 归一化
+    if total > 0:
+        for key in ['H', 'D', 'A']:
+            fused[key] /= total
+    
+    return fused
+
+
+def evaluate_ml_prediction(record: Dict) -> Dict:
+    """
+    评估 ML 模型预测结果
+    
+    参数：
+        record: 预测记录
+    
+    返回：
+        评估结果字典
+    """
+    evaluation = {}
+    
+    actual_result = record.get('actual_result')
+    if actual_result not in ['H', 'D', 'A']:
+        return evaluation
+    
+    # 基础模型评估
+    base_1x2 = record.get('base_1x2')
+    if base_1x2:
+        evaluation['base_1x2_logloss'] = calculate_logloss(base_1x2, actual_result)
+        evaluation['base_1x2_brier'] = calculate_brier_score(base_1x2, actual_result)
+        evaluation['base_1x2_hit'] = calculate_hit(base_1x2, actual_result)
+    
+    # ML 模型评估
+    ml_1x2 = record.get('ml_1x2')
+    if ml_1x2 and record.get('ml_available', False):
+        evaluation['ml_1x2_logloss'] = calculate_logloss(ml_1x2, actual_result)
+        evaluation['ml_1x2_brier'] = calculate_brier_score(ml_1x2, actual_result)
+        evaluation['ml_1x2_hit'] = calculate_hit(ml_1x2, actual_result)
+        
+        # 模拟融合评估（5% ML权重）
+        if base_1x2:
+            fused_5pct = fuse_probabilities(base_1x2, ml_1x2, ml_weight=0.05)
+            evaluation['fused_5pct_logloss'] = calculate_logloss(fused_5pct, actual_result)
+            evaluation['fused_5pct_brier'] = calculate_brier_score(fused_5pct, actual_result)
+            
+            # 模拟融合评估（10% ML权重）
+            fused_10pct = fuse_probabilities(base_1x2, ml_1x2, ml_weight=0.10)
+            evaluation['fused_10pct_logloss'] = calculate_logloss(fused_10pct, actual_result)
+            evaluation['fused_10pct_brier'] = calculate_brier_score(fused_10pct, actual_result)
+    
+    return evaluation
 
 
 def infer_time_layer(match_time_str: str) -> str:
@@ -134,7 +280,13 @@ class PredictionHistory:
                        match_time: str, predicted_scores: Dict[str, float],
                        predicted_1x2: Dict[str, float], asian: float = None,
                        total_line: float = None, odds_data: Dict = None,
-                       predicted_half_full: Dict[str, float] = None):
+                       predicted_half_full: Dict[str, float] = None,
+                       # 影子预测相关字段
+                       base_1x2: Dict[str, float] = None,
+                       ml_1x2: Dict[str, float] = None,
+                       ml_model_version: str = None,
+                       ml_available: bool = False,
+                       ml_feature_snapshot: Dict = None):
         """
         添加预测记录
         
@@ -150,6 +302,11 @@ class PredictionHistory:
             total_line: 大小球盘口
             odds_data: 原始赔率数据（可选）
             predicted_half_full: 预测半全场概率 {"HH": 0.24, "DH": 0.19, ...}（可选）
+            base_1x2: 基础模型胜平负预测 {"H": 0.48, "D": 0.27, "A": 0.25}
+            ml_1x2: ML模型胜平负预测 {"H": 0.45, "D": 0.29, "A": 0.26}
+            ml_model_version: ML模型版本
+            ml_available: ML模型是否可用
+            ml_feature_snapshot: ML特征快照
         """
         # 检查是否已存在
         for record in self.records:
@@ -165,6 +322,16 @@ class PredictionHistory:
                 }
                 if predicted_half_full:
                     update_data['predicted_half_full'] = predicted_half_full
+                # 添加影子预测字段
+                if base_1x2:
+                    update_data['base_1x2'] = base_1x2
+                if ml_1x2:
+                    update_data['ml_1x2'] = ml_1x2
+                if ml_model_version:
+                    update_data['ml_model_version'] = ml_model_version
+                update_data['ml_available'] = ml_available
+                if ml_feature_snapshot:
+                    update_data['ml_feature_snapshot'] = ml_feature_snapshot
                 record.update(update_data)
                 
                 # 更新对应时间层的预测
@@ -219,6 +386,14 @@ class PredictionHistory:
             'predicted_half_full': predicted_half_full,  # 新增：半全场预测
             'time_layers': time_layers,  # 新增：时间分层预测记录
             'odds_layers': odds_layers,  # 新增：赔率分层记录
+            # 影子预测字段
+            'base_1x2': base_1x2,
+            'ml_1x2': ml_1x2,
+            'ml_model_version': ml_model_version,
+            'ml_available': ml_available,
+            'ml_feature_snapshot': ml_feature_snapshot,
+            # 赛后评估字段（结算时填充）
+            'evaluation': None,
             'actual_score': None,
             'actual_result': None,
             'actual_half_score': None,   # 新增：实际半场比分
@@ -562,6 +737,9 @@ class PredictionHistory:
                     
                     # 计算命中结果（包含半全场）
                     record.update(self._calculate_hit_flags(record))
+                    
+                    # 计算 ML 评估指标
+                    record['evaluation'] = evaluate_ml_prediction(record)
                     
                     # 更新各模块
                     self._update_calibrator(record)
@@ -1037,10 +1215,326 @@ class PredictionHistory:
             'correct_top5': correct_top5,
             'correct_1x2': correct_1x2,
         }
+    
+    def get_ml_evaluation_stats(self, min_samples: int = 200) -> Dict:
+        """
+        获取 ML 模型评估统计（按维度）
+        
+        参数：
+            min_samples: 最小样本数阈值
+        
+        返回：
+            按维度统计的评估结果
+        """
+        # 五大联赛列表
+        top_leagues = ['英超', '西甲', '德甲', '意甲', '法甲']
+        
+        # 初始化统计结构
+        stats = {
+            'overall': {
+                'sample_count': 0,
+                'base_1x2_logloss': [],
+                'base_1x2_brier': [],
+                'base_1x2_hit': [],
+                'ml_1x2_logloss': [],
+                'ml_1x2_brier': [],
+                'ml_1x2_hit': [],
+                'fused_5pct_logloss': [],
+                'fused_5pct_brier': [],
+                'fused_10pct_logloss': [],
+                'fused_10pct_brier': [],
+            },
+            'by_league': {},
+            'by_handicap_type': {
+                'strong_favorite': {},  # 让球 >= 1.0
+                'balanced': {},         # -0.5 < 让球 < 0.5
+                'weak_favorite': {},    # 让球 <= -1.0
+            },
+            'by_total_line': {
+                'low': {},              # <= 2.25
+                'medium': {},           # 2.25 < x < 3.0
+                'high': {},             # >= 3.0
+            },
+            'by_result': {
+                'H': {},
+                'D': {},
+                'A': {},
+            },
+        }
+        
+        # 初始化联赛统计
+        for league in top_leagues:
+            stats['by_league'][league] = {
+                'sample_count': 0,
+                'base_1x2_logloss': [],
+                'base_1x2_brier': [],
+                'base_1x2_hit': [],
+                'ml_1x2_logloss': [],
+                'ml_1x2_brier': [],
+                'ml_1x2_hit': [],
+                'fused_5pct_logloss': [],
+                'fused_5pct_brier': [],
+                'fused_10pct_logloss': [],
+                'fused_10pct_brier': [],
+            }
+        
+        # 初始化其他维度统计
+        for dim in ['by_handicap_type', 'by_total_line', 'by_result']:
+            for key in stats[dim]:
+                stats[dim][key] = {
+                    'sample_count': 0,
+                    'base_1x2_logloss': [],
+                    'base_1x2_brier': [],
+                    'base_1x2_hit': [],
+                    'ml_1x2_logloss': [],
+                    'ml_1x2_brier': [],
+                    'ml_1x2_hit': [],
+                    'fused_5pct_logloss': [],
+                    'fused_5pct_brier': [],
+                    'fused_10pct_logloss': [],
+                    'fused_10pct_brier': [],
+                }
+        
+        # 遍历记录收集数据
+        for record in self.records:
+            if not record.get('settled', False):
+                continue
+            
+            actual_result = record.get('actual_result')
+            if actual_result not in ['H', 'D', 'A']:
+                continue
+            
+            evaluation = record.get('evaluation', {})
+            league = record.get('league', '')
+            handicap = record.get('asian', 0.0)
+            total_line = record.get('total_line', 2.5)
+            
+            # 确定维度分类
+            if league in top_leagues:
+                league_key = league
+            else:
+                league_key = None
+            
+            # 让球盘类型
+            if handicap >= 1.0:
+                handicap_key = 'strong_favorite'
+            elif handicap <= -1.0:
+                handicap_key = 'weak_favorite'
+            else:
+                handicap_key = 'balanced'
+            
+            # 大小球类型
+            if total_line <= 2.25:
+                total_key = 'low'
+            elif total_line >= 3.0:
+                total_key = 'high'
+            else:
+                total_key = 'medium'
+            
+            # 结果类型
+            result_key = actual_result
+            
+            # 收集评估数据到各维度
+            for dim_key, key in [('overall', None), 
+                                 ('by_league', league_key),
+                                 ('by_handicap_type', handicap_key),
+                                 ('by_total_line', total_key),
+                                 ('by_result', result_key)]:
+                if key is None:
+                    target = stats[dim_key]
+                elif key in stats[dim_key]:
+                    target = stats[dim_key][key]
+                else:
+                    continue
+                
+                target['sample_count'] += 1
+                
+                # 添加评估指标
+                for metric in ['base_1x2_logloss', 'base_1x2_brier', 'base_1x2_hit',
+                               'ml_1x2_logloss', 'ml_1x2_brier', 'ml_1x2_hit',
+                               'fused_5pct_logloss', 'fused_5pct_brier',
+                               'fused_10pct_logloss', 'fused_10pct_brier']:
+                    value = evaluation.get(metric)
+                    if value is not None and not math.isnan(value):
+                        target[metric].append(value)
+        
+        # 计算汇总统计
+        def summarize_dimension(dim_stats):
+            result = {}
+            for key, data in dim_stats.items():
+                if data['sample_count'] == 0:
+                    result[key] = {
+                        'sample_count': 0,
+                        'base_1x2_logloss': None,
+                        'base_1x2_brier': None,
+                        'base_1x2_hit_rate': None,
+                        'ml_1x2_logloss': None,
+                        'ml_1x2_brier': None,
+                        'ml_1x2_hit_rate': None,
+                        'fused_5pct_logloss': None,
+                        'fused_5pct_brier': None,
+                        'fused_10pct_logloss': None,
+                        'fused_10pct_brier': None,
+                        'qualified': False,
+                    }
+                    continue
+                
+                # 计算均值
+                result[key] = {
+                    'sample_count': data['sample_count'],
+                    'base_1x2_logloss': sum(data['base_1x2_logloss']) / len(data['base_1x2_logloss']) if data['base_1x2_logloss'] else None,
+                    'base_1x2_brier': sum(data['base_1x2_brier']) / len(data['base_1x2_brier']) if data['base_1x2_brier'] else None,
+                    'base_1x2_hit_rate': sum(data['base_1x2_hit']) / len(data['base_1x2_hit']) if data['base_1x2_hit'] else None,
+                    'ml_1x2_logloss': sum(data['ml_1x2_logloss']) / len(data['ml_1x2_logloss']) if data['ml_1x2_logloss'] else None,
+                    'ml_1x2_brier': sum(data['ml_1x2_brier']) / len(data['ml_1x2_brier']) if data['ml_1x2_brier'] else None,
+                    'ml_1x2_hit_rate': sum(data['ml_1x2_hit']) / len(data['ml_1x2_hit']) if data['ml_1x2_hit'] else None,
+                    'fused_5pct_logloss': sum(data['fused_5pct_logloss']) / len(data['fused_5pct_logloss']) if data['fused_5pct_logloss'] else None,
+                    'fused_5pct_brier': sum(data['fused_5pct_brier']) / len(data['fused_5pct_brier']) if data['fused_5pct_brier'] else None,
+                    'fused_10pct_logloss': sum(data['fused_10pct_logloss']) / len(data['fused_10pct_logloss']) if data['fused_10pct_logloss'] else None,
+                    'fused_10pct_brier': sum(data['fused_10pct_brier']) / len(data['fused_10pct_brier']) if data['fused_10pct_brier'] else None,
+                    'qualified': data['sample_count'] >= min_samples,
+                }
+            return result
+        
+        return {
+            'overall': summarize_dimension({'overall': stats['overall']})['overall'],
+            'by_league': summarize_dimension(stats['by_league']),
+            'by_handicap_type': summarize_dimension(stats['by_handicap_type']),
+            'by_total_line': summarize_dimension(stats['by_total_line']),
+            'by_result': summarize_dimension(stats['by_result']),
+            'min_samples_required': min_samples,
+        }
 
 
 # 全局实例
 _global_history = PredictionHistory()
+
+
+# ==================== ML 融合门槛判断 ====================
+
+def check_ml_fusion_eligibility(ml_stats: Dict, test_set_samples: int = 0) -> Dict:
+    """
+    检查 ML 模型是否满足参与正式融合的门槛
+    
+    参数：
+        ml_stats: ML 评估统计（来自 get_ml_evaluation_stats）
+        test_set_samples: 测试集样本数
+    
+    返回：
+        包含是否合格及原因的字典
+    """
+    overall = ml_stats.get('overall', {})
+    shadow_samples = overall.get('sample_count', 0)
+    
+    conditions = {
+        'test_set_samples': {
+            'passed': test_set_samples >= 200,
+            'actual': test_set_samples,
+            'required': 200,
+            'reason': '测试集样本 >= 200 场'
+        },
+        'shadow_samples': {
+            'passed': shadow_samples >= 200,
+            'actual': shadow_samples,
+            'required': 200,
+            'reason': '影子实盘样本 >= 200 场'
+        },
+        'ml_logloss_better': {
+            'passed': False,
+            'actual': None,
+            'required': None,
+            'reason': 'ML LogLoss < 基础模型 LogLoss'
+        },
+        'ml_brier_not_worse': {
+            'passed': False,
+            'actual': None,
+            'required': None,
+            'reason': 'ML Brier Score <= 基础模型 Brier Score'
+        },
+        'fused_5pct_logloss_better': {
+            'passed': False,
+            'actual': None,
+            'required': None,
+            'reason': '5% ML 融合后的 LogLoss < 基础模型 LogLoss'
+        },
+        'fused_5pct_brier_not_worse': {
+            'passed': False,
+            'actual': None,
+            'required': None,
+            'reason': '5% ML 融合后的 Brier Score 不变差'
+        },
+    }
+    
+    # 检查 LogLoss 和 Brier 条件
+    base_logloss = overall.get('base_1x2_logloss')
+    base_brier = overall.get('base_1x2_brier')
+    ml_logloss = overall.get('ml_1x2_logloss')
+    ml_brier = overall.get('ml_1x2_brier')
+    fused_5pct_logloss = overall.get('fused_5pct_logloss')
+    fused_5pct_brier = overall.get('fused_5pct_brier')
+    
+    if base_logloss is not None and ml_logloss is not None:
+        conditions['ml_logloss_better']['passed'] = ml_logloss < base_logloss
+        conditions['ml_logloss_better']['actual'] = f"{ml_logloss:.4f} vs {base_logloss:.4f}"
+    
+    if base_brier is not None and ml_brier is not None:
+        conditions['ml_brier_not_worse']['passed'] = ml_brier <= base_brier
+        conditions['ml_brier_not_worse']['actual'] = f"{ml_brier:.4f} vs {base_brier:.4f}"
+    
+    if base_logloss is not None and fused_5pct_logloss is not None:
+        conditions['fused_5pct_logloss_better']['passed'] = fused_5pct_logloss < base_logloss
+        conditions['fused_5pct_logloss_better']['actual'] = f"{fused_5pct_logloss:.4f} vs {base_logloss:.4f}"
+    
+    if base_brier is not None and fused_5pct_brier is not None:
+        conditions['fused_5pct_brier_not_worse']['passed'] = fused_5pct_brier <= base_brier
+        conditions['fused_5pct_brier_not_worse']['actual'] = f"{fused_5pct_brier:.4f} vs {base_brier:.4f}"
+    
+    # 判断是否全部通过
+    all_passed = all(cond['passed'] for cond in conditions.values())
+    
+    return {
+        'eligible': all_passed,
+        'conditions': conditions,
+        'test_set_samples': test_set_samples,
+        'shadow_samples': shadow_samples,
+        'stats': overall,
+    }
+
+
+def get_ml_fusion_weight(eligible: bool, shadow_samples: int, 
+                        current_weight: float = 0.0) -> float:
+    """
+    根据资格和样本数确定 ML 融合权重
+    
+    参数：
+        eligible: 是否满足融合门槛
+        shadow_samples: 影子实盘样本数
+        current_weight: 当前权重
+    
+    返回：
+        建议的 ML 融合权重
+    """
+    if not eligible:
+        return 0.0
+    
+    # 根据样本数逐步提升权重
+    max_weight = 0.15
+    
+    if shadow_samples >= 500:
+        # 500+ 场可以考虑更高权重，但不超过 0.15
+        if current_weight < 0.10:
+            return min(0.10, max_weight)
+        elif current_weight < 0.15:
+            return min(0.15, max_weight)
+        return current_weight
+    elif shadow_samples >= 300:
+        # 300-500 场，最高 0.10
+        return min(0.10, max_weight)
+    elif shadow_samples >= 200:
+        # 200-300 场，初始权重 0.05
+        return min(0.05, max_weight)
+    else:
+        return 0.0
 
 
 # ==================== 便捷函数 ====================
@@ -1048,11 +1542,22 @@ _global_history = PredictionHistory()
 def save_prediction(match_id: str, league: str, home: str, away: str,
                    match_time: str, predicted_scores: Dict[str, float],
                    predicted_1x2: Dict[str, float], asian: float = None,
-                   total_line: float = None, odds_data: Dict = None):
+                   total_line: float = None, odds_data: Dict = None,
+                   # 影子预测相关字段
+                   base_1x2: Dict[str, float] = None,
+                   ml_1x2: Dict[str, float] = None,
+                   ml_model_version: str = None,
+                   ml_available: bool = False,
+                   ml_feature_snapshot: Dict = None):
     """保存预测记录"""
     return _global_history.add_prediction(
         match_id, league, home, away, match_time,
-        predicted_scores, predicted_1x2, asian, total_line, odds_data
+        predicted_scores, predicted_1x2, asian, total_line, odds_data,
+        base_1x2=base_1x2,
+        ml_1x2=ml_1x2,
+        ml_model_version=ml_model_version,
+        ml_available=ml_available,
+        ml_feature_snapshot=ml_feature_snapshot
     )
 
 

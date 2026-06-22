@@ -5733,6 +5733,11 @@ def analyze_match(match, force_refresh=False):
 
     # 新增：机器学习模型预测
     ml_result = None
+    ml_1x2 = None
+    ml_model_version = "unknown"
+    ml_available = False
+    ml_feature_snapshot = {}
+    
     try:
         from .ml import MLFootballPredictor
         ml_predictor = MLFootballPredictor(model_type='auto')
@@ -5756,13 +5761,52 @@ def analyze_match(match, force_refresh=False):
             'home_form': team['home_recent']['form_pts'] / 3.0 if team else 0.5,
             'away_form': team['away_recent']['form_pts'] / 3.0 if team else 0.5
         }
+        
+        # 构建特征快照（用于后续排查）
+        elo_diff = ml_features['elo_home'] - ml_features['elo_away']
+        ml_feature_snapshot = {
+            'elo_diff': elo_diff,
+            'total_line': ml_features['total_line'],
+            'asian_handicap': ml_features['asian_handicap'],
+            'euro_home': ml_features['euro_home'],
+            'euro_draw': ml_features['euro_draw'],
+            'euro_away': ml_features['euro_away'],
+            'home_attack': ml_features['home_attack'],
+            'home_defense': ml_features['home_defense'],
+            'away_attack': ml_features['away_attack'],
+            'away_defense': ml_features['away_defense'],
+            'home_form': ml_features['home_form'],
+            'away_form': ml_features['away_form'],
+            'home_elo': ml_features['elo_home'],
+            'away_elo': ml_features['elo_away']
+        }
+        
         ml_probs = ml_predictor.predict(ml_features)
+        
+        if ml_probs and ml_predictor.is_trained:
+            ml_available = True
+            ml_model_version = f"ml-{ml_predictor.model_type}-{ml_predictor.__class__.__name__}"
+            # 转换为 H/D/A 格式
+            ml_1x2 = {
+                'H': ml_probs.get('home', 0.0),
+                'D': ml_probs.get('draw', 0.0),
+                'A': ml_probs.get('away', 0.0)
+            }
+            
         ml_result = {
             'probabilities': ml_probs,
             'model_type': ml_predictor.model_type,
-            'is_trained': ml_predictor.is_trained
+            'is_trained': ml_predictor.is_trained,
+            'ml_1x2': ml_1x2,
+            'ml_model_version': ml_model_version,
+            'ml_available': ml_available,
+            'ml_feature_snapshot': ml_feature_snapshot
         }
-        log.info(f"机器学习模型预测完成: 主胜{ml_probs['home']:.3f}, 平局{ml_probs['draw']:.3f}, 客胜{ml_probs['away']:.3f}")
+        
+        if ml_available and ml_1x2:
+            log.info(f"机器学习模型预测完成: 主胜{ml_1x2['H']:.3f}, 平局{ml_1x2['D']:.3f}, 客胜{ml_1x2['A']:.3f}, 版本={ml_model_version}")
+        else:
+            log.info(f"机器学习模型未训练或不可用")
     except Exception as e:
         log.warning(f"机器学习模型预测失败: {e}")
 
@@ -6296,6 +6340,9 @@ def analyze_match(match, force_refresh=False):
         }
         log.info(f"构建 predicted_1x2: {predicted_1x2}")
 
+        # 影子预测：base_1x2 是现有基础模型的预测结果
+        base_1x2 = predicted_1x2.copy()
+
         save_prediction(
             match_id=mid,
             league=match.get('league', ''),
@@ -6310,7 +6357,13 @@ def analyze_match(match, force_refresh=False):
                 'asian': asian,
                 'euro': euro,
                 'total': total,
-            }
+            },
+            # 影子预测相关字段
+            base_1x2=base_1x2,
+            ml_1x2=ml_1x2,
+            ml_model_version=ml_model_version,
+            ml_available=ml_available,
+            ml_feature_snapshot=ml_feature_snapshot
         )
         prediction_saved = True
         log.info(f"预测记录已保存: {home} vs {away}")

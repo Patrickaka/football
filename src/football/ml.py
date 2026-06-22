@@ -1022,3 +1022,115 @@ class MarketTimingPredictor:
         
         except FileNotFoundError:
             self.is_trained = False
+
+
+# ==================== 训练好的ML模型加载与预测接口 ====================
+
+import json
+
+# 全局变量存储加载的模型
+_trained_ml_model = None
+_trained_ml_metadata = None
+_trained_ml_feature_names = []
+
+
+def load_trained_ml_model() -> bool:
+    """
+    加载训练好的ML模型
+    
+    返回：
+        是否加载成功
+    """
+    global _trained_ml_model, _trained_ml_metadata, _trained_ml_feature_names
+    
+    data_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'data')
+    model_file = os.path.join(data_dir, 'ml_model.pkl')
+    metadata_file = os.path.join(data_dir, 'ml_metadata.json')
+    
+    # 检查模型文件是否存在
+    if not os.path.exists(model_file):
+        print(f"ML模型文件不存在: {model_file}")
+        return False
+    
+    try:
+        # 加载模型
+        with open(model_file, 'rb') as f:
+            _trained_ml_model = pickle.load(f)
+        print("ML模型加载成功")
+        
+        # 加载元数据
+        if os.path.exists(metadata_file):
+            with open(metadata_file, 'r', encoding='utf-8') as f:
+                _trained_ml_metadata = json.load(f)
+            _trained_ml_feature_names = _trained_ml_metadata.get('features', [])
+            print(f"ML元数据加载成功，特征数: {len(_trained_ml_feature_names)}")
+        
+        return True
+    except Exception as e:
+        print(f"加载ML模型失败: {e}")
+        _trained_ml_model = None
+        _trained_ml_metadata = None
+        _trained_ml_feature_names = []
+        return False
+
+
+def predict_1x2_by_ml(features: dict) -> dict:
+    """
+    使用训练好的ML模型预测胜平负概率
+    
+    参数：
+        features: 特征字典
+    
+    返回：
+        预测结果字典
+    """
+    global _trained_ml_model, _trained_ml_metadata, _trained_ml_feature_names
+    
+    # 检查模型是否加载
+    if _trained_ml_model is None:
+        # 尝试加载模型
+        if not load_trained_ml_model():
+            return {
+                'available': False,
+                'reason': 'model_not_trained'
+            }
+    
+    try:
+        # 获取特征名称列表
+        feature_names = _trained_ml_feature_names
+        
+        # 构建特征向量（按元数据中的顺序）
+        feature_vec = []
+        for name in feature_names:
+            feature_vec.append(features.get(name, 0.0))
+        
+        # 转换为numpy数组
+        X = np.array([feature_vec])
+        
+        # 预测概率
+        y_proba = _trained_ml_model.predict_proba(X)[0]
+        
+        # 归一化概率（确保和为1）
+        total = y_proba.sum()
+        if total > 0:
+            y_proba = y_proba / total
+        
+        # 确定预测标签
+        label_map = {0: 'H', 1: 'D', 2: 'A'}
+        predicted_label = label_map.get(y_proba.argmax(), 'D')
+        
+        return {
+            'H': float(y_proba[0]),
+            'D': float(y_proba[1]),
+            'A': float(y_proba[2]),
+            'predicted_label': predicted_label,
+            'model_version': _trained_ml_metadata.get('model_version', 'unknown') if _trained_ml_metadata else 'unknown',
+            'available': True
+        }
+    
+    except Exception as e:
+        print(f"ML预测失败: {e}")
+        return {
+            'available': False,
+            'reason': 'prediction_error'
+        }
