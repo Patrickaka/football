@@ -2,5 +2,5 @@
 numpy>=2.1.0
 scikit-learn>=1.5.2
 lightgbm>=4.5.0
-xgboost>=2.0.0
+xgboost-cpu>=2.0.0  # 使用 CPU 版本避免 NVIDIA 依赖
 catboost>=1.2.5
