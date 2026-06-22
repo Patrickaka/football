@@ -572,25 +572,52 @@ def get_dynamic_weights(confidence: float = 0.5, match_data: Optional[Dict] = No
     base_market, base_team, base_elo = 0.5, 0.3, 0.2
     high_market, high_team, high_elo = 0.7, 0.2, 0.1
     low_market, low_team, low_elo = 0.3, 0.4, 0.3
-    ml_weight = 0.0  # 默认无ML权重
     
+    # 检查 ML 是否有资格参与融合
+    try:
+        from .result_sync import get_history, check_ml_fusion_eligibility, get_ml_fusion_weight
+        
+        history = get_history()
+        ml_stats = history.get_ml_evaluation_stats()
+        eligibility = check_ml_fusion_eligibility(ml_stats)
+        
+        if eligibility['eligible']:
+            shadow_samples = eligibility['shadow_samples']
+            ml_weight = get_ml_fusion_weight(True, shadow_samples, 0.0)
+        else:
+            ml_weight = 0.0
+    except Exception:
+        ml_weight = 0.0  # 默认无ML权重
+    
+    # 根据置信度确定基础权重
     if confidence >= 0.7:
-        return high_market, high_team, high_elo, ml_weight
+        market_w, team_w, elo_w = high_market, high_team, high_elo
     elif confidence <= 0.3:
-        return low_market, low_team, low_elo, ml_weight
+        market_w, team_w, elo_w = low_market, low_team, low_elo
     else:
         if confidence <= 0.5:
             t = (confidence - 0.3) / 0.2
-            market = low_market + t * (base_market - low_market)
-            team = low_team + t * (base_team - low_team)
-            elo = low_elo + t * (base_elo - low_elo)
+            market_w = low_market + t * (base_market - low_market)
+            team_w = low_team + t * (base_team - low_team)
+            elo_w = low_elo + t * (base_elo - low_elo)
         else:
             t = (confidence - 0.5) / 0.2
-            market = base_market + t * (high_market - base_market)
-            team = base_team + t * (high_team - base_team)
-            elo = base_elo + t * (high_elo - base_elo)
-        
-        return market, team, elo, ml_weight
+            market_w = base_market + t * (high_market - base_market)
+            team_w = base_team + t * (high_team - base_team)
+            elo_w = base_elo + t * (high_elo - base_elo)
+    
+    # 如果有ML权重，需要从其他权重中按比例扣除
+    if ml_weight > 0 and ml_weight < 1.0:
+        # 计算其他权重的总和
+        base_total = market_w + team_w + elo_w
+        if base_total > 0:
+            # 按比例缩减其他权重，腾出ML权重空间
+            scale_factor = (1.0 - ml_weight) / base_total
+            market_w *= scale_factor
+            team_w *= scale_factor
+            elo_w *= scale_factor
+    
+    return market_w, team_w, elo_w, ml_weight
 
 
 def fuse_predictions(market_pred: Dict[str, float],

@@ -1339,11 +1339,16 @@ class PredictionHistory:
             result_key = actual_result
             
             # 收集评估数据到各维度
-            for dim_key, key in [('overall', None), 
-                                 ('by_league', league_key),
-                                 ('by_handicap_type', handicap_key),
-                                 ('by_total_line', total_key),
-                                 ('by_result', result_key)]:
+            dimensions = [('overall', None), 
+                          ('by_handicap_type', handicap_key),
+                          ('by_total_line', total_key),
+                          ('by_result', result_key)]
+            
+            # 只有当联赛在五大联赛列表中时才添加联赛维度
+            if league_key is not None:
+                dimensions.insert(1, ('by_league', league_key))
+            
+            for dim_key, key in dimensions:
                 if key is None:
                     target = stats[dim_key]
                 elif key in stats[dim_key]:
