@@ -6179,6 +6179,8 @@ def analyze_match(match, force_refresh=False):
     ml_enabled = False
     ml_reason = "模型未训练，未参与融合"
     ml_participating = False
+    ml_fusion_weight = 0.0
+    ml_eligibility = None
     
     try:
         from .result_sync import get_history, check_ml_fusion_eligibility, get_ml_fusion_weight
@@ -6194,18 +6196,29 @@ def analyze_match(match, force_refresh=False):
             history = get_history()
             ml_stats = history.get_ml_evaluation_stats()
             eligibility = check_ml_fusion_eligibility(ml_stats, test_set_samples)
+            ml_eligibility = eligibility
+            shadow_samples = eligibility['shadow_samples']
             
             if eligibility['eligible']:
-                shadow_samples = eligibility['shadow_samples']
-                ml_weight = get_ml_fusion_weight(True, shadow_samples, 0.0)
-                if ml_weight > 0:
-                    ml_reason = f"已参与融合，权重 {ml_weight*100:.1f}%"
+                ml_fusion_weight = get_ml_fusion_weight(True, shadow_samples, 0.0)
+                if ml_fusion_weight > 0:
+                    metrics_hint = '，指标已达标' if eligibility.get('metrics_passed') else '，指标待观察'
+                    ml_reason = f"已参与融合，权重 {ml_fusion_weight*100:.1f}%{metrics_hint}"
                     ml_participating = True
                 else:
                     ml_reason = "已训练，等待权重分配"
             else:
-                shadow_samples = eligibility['shadow_samples']
-                ml_reason = f"已训练，影子评估中（样本 {shadow_samples}/45）"
+                pending = []
+                conds = eligibility['conditions']
+                if not conds['test_set_samples']['passed']:
+                    pending.append(
+                        f"测试集 {conds['test_set_samples']['actual']}/{conds['test_set_samples']['required']}"
+                    )
+                if not conds['shadow_samples']['passed']:
+                    pending.append(
+                        f"影子样本 {conds['shadow_samples']['actual']}/{conds['shadow_samples']['required']}"
+                    )
+                ml_reason = f"已训练，样本收集中（{', '.join(pending)}）" if pending else "已训练，样本收集中"
         else:
             ml_reason = "模型文件不存在或加载失败"
     except Exception as e:
@@ -6285,7 +6298,9 @@ def analyze_match(match, force_refresh=False):
         },
         'ml': {
             'enabled': ml_enabled,
-            'reason': ml_reason
+            'reason': ml_reason,
+            'weight': ml_fusion_weight,
+            'metrics_passed': ml_eligibility.get('metrics_passed') if ml_eligibility else None,
         }
     }
     

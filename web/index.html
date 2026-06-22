@@ -666,10 +666,13 @@ function renderModelStatus(status) {
   }
 
   if (status.ml) {
+    const mlDesc = status.ml.enabled
+      ? (status.ml.reason || '已参与融合')
+      : (status.ml.reason || '未参与融合');
     html += item(
       status.ml.enabled,
       'ML 模型',
-      status.ml.enabled ? '已参与融合' : (status.ml.reason || '未参与融合')
+      mlDesc
     );
   }
 

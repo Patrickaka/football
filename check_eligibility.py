@@ -11,10 +11,14 @@ stats = history.get_ml_evaluation_stats()
 eligibility = check_ml_fusion_eligibility(stats, test_samples)
 
 print('合格:', eligibility['eligible'])
+print('指标参考达标:', eligibility.get('metrics_passed'))
 print('影子样本:', eligibility['shadow_samples'])
 print('测试集样本:', eligibility['test_set_samples'])
 print()
 print('各条件状态:')
 for k, v in eligibility['conditions'].items():
     status = '✅' if v['passed'] else '❌'
-    print(f'  {k}: {status} - {v["reason"]}')
+    tag = '必达' if v.get('required_for_fusion') else '参考'
+    print(f'  [{tag}] {k}: {status} - {v["reason"]}')
+    if v.get('actual') is not None:
+        print(f'         实际: {v["actual"]}')

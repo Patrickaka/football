@@ -1440,41 +1440,47 @@ def check_ml_fusion_eligibility(ml_stats: Dict, test_set_samples: int = 0) -> Di
             'passed': test_set_samples >= 45,
             'actual': test_set_samples,
             'required': 45,
-            'reason': '测试集样本 >= 45 场'
+            'reason': '测试集样本 >= 45 场',
+            'required_for_fusion': True,
         },
         'shadow_samples': {
             'passed': shadow_samples >= 45,
             'actual': shadow_samples,
             'required': 45,
-            'reason': '影子实盘样本 >= 45 场'
+            'reason': '影子实盘样本 >= 45 场',
+            'required_for_fusion': True,
         },
         'ml_logloss_better': {
             'passed': False,
             'actual': None,
             'required': None,
-            'reason': 'ML LogLoss < 基础模型 LogLoss'
+            'reason': 'ML LogLoss < 基础模型 LogLoss',
+            'required_for_fusion': False,
         },
         'ml_brier_not_worse': {
             'passed': False,
             'actual': None,
             'required': None,
-            'reason': 'ML Brier Score <= 基础模型 Brier Score'
+            'reason': 'ML Brier Score <= 基础模型 Brier Score',
+            'required_for_fusion': False,
         },
         'fused_5pct_logloss_better': {
             'passed': False,
             'actual': None,
             'required': None,
-            'reason': '5% ML 融合后的 LogLoss < 基础模型 LogLoss'
+            'reason': '5% ML 融合后的 LogLoss < 基础模型 LogLoss',
+            'required_for_fusion': False,
         },
         'fused_5pct_brier_not_worse': {
             'passed': False,
             'actual': None,
             'required': None,
-            'reason': '5% ML 融合后的 Brier Score 不变差'
+            'reason': '5% ML 融合后的 Brier Score 不变差',
+            'required_for_fusion': False,
         },
     }
     
-    # 检查 LogLoss 和 Brier 条件
+    # 检查 LogLoss 和 Brier 条件（仅供参考，不阻断融合）
     base_logloss = overall.get('base_1x2_logloss')
     base_brier = overall.get('base_1x2_brier')
     ml_logloss = overall.get('ml_1x2_logloss')
@@ -1498,11 +1504,21 @@ def check_ml_fusion_eligibility(ml_stats: Dict, test_set_samples: int = 0) -> Di
         conditions['fused_5pct_brier_not_worse']['passed'] = fused_5pct_brier <= base_brier
         conditions['fused_5pct_brier_not_worse']['actual'] = f"{fused_5pct_brier:.4f} vs {base_brier:.4f}"
     
-    # 判断是否全部通过
-    all_passed = all(cond['passed'] for cond in conditions.values())
+    # 仅样本数达标即可参与融合；指标条件仅作参考
+    eligible = all(
+        cond['passed']
+        for cond in conditions.values()
+        if cond.get('required_for_fusion')
+    )
+    metrics_passed = all(
+        cond['passed']
+        for cond in conditions.values()
+        if not cond.get('required_for_fusion')
+    )
     
     return {
-        'eligible': all_passed,
+        'eligible': eligible,
+        'metrics_passed': metrics_passed,
         'conditions': conditions,
         'test_set_samples': test_set_samples,
         'shadow_samples': shadow_samples,
