@@ -4374,9 +4374,77 @@ def calculate_half_full_time_probs(candidates, team_strength=None, asian=None, t
     second_home_exp = max(0.01, second_home_exp)
     second_away_exp = max(0.01, second_away_exp)
     
-    # 使用泊松分布计算概率
+    # ========== 下半场条件修正 ==========
+    # 根据半场状态调整下半场进球期望
+    # 先计算半场平局概率，用于判断是否需要修正
     def poisson_prob(lam, k):
         return (lam ** k) * math.exp(-lam) / math.factorial(k)
+    
+    # 计算半场平局概率
+    half_draw_prob = 0.0
+    for h in range(4):
+        for a in range(4):
+            if h == a:
+                half_draw_prob += poisson_prob(half_home_exp, h) * poisson_prob(half_away_exp, a)
+    
+    # 下半场修正因子
+    second_half_multiplier = 1.0
+    second_home_multiplier = 1.0
+    second_away_multiplier = 1.0
+    
+    # 规则1：半场平局时，下半场开放度提升
+    if half_draw_prob > 0.35:  # 半场平局概率较高
+        second_half_multiplier = 1.08
+    
+    # 规则2：深盘强队状态修正
+    if abs(handicap) >= 0.75:
+        # 判断谁是强队
+        if handicap > 0:
+            # 主队让球，主队是强队
+            favorite = 'home'
+        else:
+            # 客队让球，客队是强队
+            favorite = 'away'
+        
+        # 计算强队半场领先概率
+        if favorite == 'home':
+            favorite_lead_prob = sum(
+                poisson_prob(half_home_exp, h) * poisson_prob(half_away_exp, a)
+                for h in range(4) for a in range(4) if h > a
+            )
+            favorite_trail_prob = sum(
+                poisson_prob(half_home_exp, h) * poisson_prob(half_away_exp, a)
+                for h in range(4) for a in range(4) if h < a
+            )
+        else:
+            favorite_lead_prob = sum(
+                poisson_prob(half_home_exp, h) * poisson_prob(half_away_exp, a)
+                for h in range(4) for a in range(4) if a > h
+            )
+            favorite_trail_prob = sum(
+                poisson_prob(half_home_exp, h) * poisson_prob(half_away_exp, a)
+                for h in range(4) for a in range(4) if a < h
+            )
+        
+        # 强队落后时，下半场进攻提升
+        if favorite_trail_prob > 0.25:
+            if favorite == 'home':
+                second_home_multiplier = 1.15
+            else:
+                second_away_multiplier = 1.15
+        
+        # 强队领先时，下半场保守，落后方进攻提升
+        elif favorite_lead_prob > 0.40:
+            if favorite == 'home':
+                second_home_multiplier = 0.90
+                second_away_multiplier = 1.10
+            else:
+                second_away_multiplier = 0.90
+                second_home_multiplier = 1.10
+    
+    # 应用修正因子
+    second_home_exp *= second_half_multiplier * second_home_multiplier
+    second_away_exp *= second_half_multiplier * second_away_multiplier
     
     # 定义半场结果映射
     def get_half_result(h, a):
@@ -4826,10 +4894,12 @@ def predict_scores(asian, euro, total, team_strength=None, league_profile=None,
         # 优先使用贝叶斯校准（基于真实历史预测记录）
         if BAYESIAN_CALIBRATION_AVAILABLE:
             try:
+                # 获取联赛和盘口信息用于市场环境校准
+                league_info = team_strength.get('league', '') if team_strength else ''
                 # 转换为字典格式 {"1-1": 0.108, ...}
                 score_probs = {f"{h}-{a}": p for (h, a), p in matrix.items()}
-                # 使用贝叶斯校准
-                score_probs = calibrate_predictions(score_probs)
+                # 使用贝叶斯校准（带市场环境信息）
+                score_probs = calibrate_predictions(score_probs, league_info, line, sup_asian or 0)
                 # 转换回原始格式
                 matrix = {
                     tuple(map(int, score.split("-"))): prob

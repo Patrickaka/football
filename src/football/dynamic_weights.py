@@ -83,6 +83,12 @@ class MetaWeightModel:
     
     输出：
     [market_weight, team_weight, elo_weight, ml_weight]
+    
+    训练方式：
+    - 为每场比赛生成多个候选权重组合
+    - 用真实结果计算各组合的LogLoss/Brier
+    - 选择最优组合作为训练标签
+    - 按时间切分训练/验证集
     """
     
     def __init__(self, model_type: str = 'auto'):
@@ -100,6 +106,18 @@ class MetaWeightModel:
             'elo': 0.2,
             'ml': 0.0
         }
+        
+        # 候选权重组合生成器配置
+        self.weight_candidates = [
+            {'market': 0.6, 'team': 0.25, 'elo': 0.15, 'ml': 0.0},
+            {'market': 0.5, 'team': 0.35, 'elo': 0.15, 'ml': 0.0},
+            {'market': 0.4, 'team': 0.4, 'elo': 0.2, 'ml': 0.0},
+            {'market': 0.7, 'team': 0.2, 'elo': 0.1, 'ml': 0.0},
+            {'market': 0.3, 'team': 0.5, 'elo': 0.2, 'ml': 0.0},
+            {'market': 0.55, 'team': 0.3, 'elo': 0.15, 'ml': 0.0},
+            {'market': 0.45, 'team': 0.35, 'elo': 0.2, 'ml': 0.0},
+            {'market': 0.5, 'team': 0.3, 'elo': 0.2, 'ml': 0.0},
+        ]
     
     def _validate_model_type(self):
         """验证模型类型"""
@@ -114,6 +132,109 @@ class MetaWeightModel:
                 self.model_type = available_types[0]
             else:
                 self.model_type = 'none'
+    
+    def _calculate_logloss(self, predictions: Dict[str, float], actual_result: str) -> float:
+        """
+        计算多分类LogLoss
+        
+        参数：
+            predictions: {结果: 概率} 字典
+            actual_result: 实际结果
+        
+        返回：
+            LogLoss值（越小越好）
+        """
+        prob = predictions.get(actual_result, 1e-15)
+        return -math.log(max(prob, 1e-15))
+    
+    def _calculate_brier(self, predictions: Dict[str, float], actual_result: str) -> float:
+        """
+        计算多分类Brier Score
+        
+        参数：
+            predictions: {结果: 概率} 字典
+            actual_result: 实际结果
+        
+        返回：
+            Brier Score值（越小越好）
+        """
+        brier = 0.0
+        for result, prob in predictions.items():
+            target = 1.0 if result == actual_result else 0.0
+            brier += (prob - target) ** 2
+        return brier
+    
+    def fuse_with_weights(self, market_pred: Dict[str, float], team_pred: Dict[str, float],
+                          elo_pred: Dict[str, float], ml_pred: Dict[str, float],
+                          weights: Dict[str, float]) -> Dict[str, float]:
+        """
+        使用指定权重融合多个预测源
+        
+        参数：
+            market_pred: 市场预测
+            team_pred: 球队预测
+            elo_pred: ELO预测
+            ml_pred: ML预测
+            weights: 权重组合
+        
+        返回：
+            融合后的预测分布
+        """
+        fused = {}
+        all_keys = set(market_pred.keys()) | set(team_pred.keys()) | set(elo_pred.keys())
+        
+        if ml_pred:
+            all_keys |= set(ml_pred.keys())
+        
+        for key in all_keys:
+            fused[key] = (
+                weights['market'] * market_pred.get(key, 0.0) +
+                weights['team'] * team_pred.get(key, 0.0) +
+                weights['elo'] * elo_pred.get(key, 0.0) +
+                weights['ml'] * ml_pred.get(key, 0.0) if ml_pred else 0.0
+            )
+        
+        # 归一化
+        total = sum(fused.values())
+        if total > 0:
+            fused = {k: v / total for k, v in fused.items()}
+        
+        return fused
+    
+    def find_best_weight_combination(self, market_pred: Dict[str, float],
+                                     team_pred: Dict[str, float], elo_pred: Dict[str, float],
+                                     ml_pred: Dict[str, float], actual_result: str,
+                                     metric: str = 'brier') -> Dict[str, float]:
+        """
+        为单场比赛找到最优权重组合
+        
+        参数：
+            market_pred: 市场预测分布
+            team_pred: 球队预测分布
+            elo_pred: ELO预测分布
+            ml_pred: ML预测分布
+            actual_result: 实际结果
+            metric: 'brier' 或 'logloss'
+        
+        返回：
+            最优权重组合
+        """
+        best_weights = None
+        best_score = float('inf')
+        
+        for weights in self.weight_candidates:
+            fused = self.fuse_with_weights(market_pred, team_pred, elo_pred, ml_pred, weights)
+            
+            if metric == 'logloss':
+                score = self._calculate_logloss(fused, actual_result)
+            else:
+                score = self._calculate_brier(fused, actual_result)
+            
+            if score < best_score:
+                best_score = score
+                best_weights = weights.copy()
+        
+        return best_weights or self.default_weights.copy()
     
     def _create_regressor(self):
         """创建回归模型实例"""
@@ -188,68 +309,162 @@ class MetaWeightModel:
         
         return np.array(features)
     
-    def train(self, train_data: List[Dict]):
+    def train(self, train_data: List[Dict], auto_select_weights: bool = True, 
+              train_ratio: float = 0.8, metric: str = 'brier') -> Dict:
         """
-        训练Meta模型
+        训练Meta模型（支持自动寻找最优权重）
         
         参数：
             train_data: 训练数据列表，每个元素包含：
                        {
+                           'match_time': 'YYYY-MM-DD HH:MM',  # 比赛时间（用于时间切分）
                            'features': {...},  # 比赛特征
+                           'market_pred': {...},  # 市场预测分布
+                           'team_pred': {...},    # 球队预测分布
+                           'elo_pred': {...},     # ELO预测分布
+                           'ml_pred': {...},      # ML预测分布（可选）
+                           'actual_result': str,  # 实际结果
+                           # 以下为旧格式支持（已不推荐）
                            'weights': {
                                'market': float,
                                'team': float,
                                'elo': float,
                                'ml': float
-                           },
-                           'performance': float  # 该权重下的预测准确率
+                           }
                        }
+            auto_select_weights: 是否自动为每场比赛选择最优权重组合
+            train_ratio: 训练集比例（前train_ratio用于训练，后(1-train_ratio)用于验证）
+            metric: 评估指标 'brier' 或 'logloss'
+        
+        返回：
+            训练结果统计 {'train_samples': int, 'val_samples': int, 'val_metrics': {...}}
         """
         if not train_data or not SKLEARN_AVAILABLE:
-            return
+            return {'error': '训练数据不足或SKLearn不可用'}
         
-        # 准备特征和目标
-        X = []
-        y_market = []
-        y_team = []
-        y_elo = []
-        y_ml = []
+        # 按时间排序（确保时间切分正确）
+        train_data.sort(key=lambda x: x.get('match_time', ''))
         
-        for data in train_data:
+        # 时间切分训练/验证集
+        split_idx = int(len(train_data) * train_ratio)
+        train_set = train_data[:split_idx]
+        val_set = train_data[split_idx:]
+        
+        # 准备训练数据
+        X_train = []
+        y_market_train = []
+        y_team_train = []
+        y_elo_train = []
+        y_ml_train = []
+        
+        for data in train_set:
             features = self._extract_features(data['features'])
-            weights = data['weights']
             
-            X.append(features)
-            y_market.append(weights.get('market', 0.5))
-            y_team.append(weights.get('team', 0.3))
-            y_elo.append(weights.get('elo', 0.2))
-            y_ml.append(weights.get('ml', 0.0))
+            if auto_select_weights and all(key in data for key in 
+                                          ['market_pred', 'team_pred', 'elo_pred', 'actual_result']):
+                # 自动寻找最优权重组合
+                best_weights = self.find_best_weight_combination(
+                    data['market_pred'],
+                    data['team_pred'],
+                    data['elo_pred'],
+                    data.get('ml_pred'),
+                    data['actual_result'],
+                    metric
+                )
+            else:
+                # 使用已有权重（向后兼容）
+                best_weights = data.get('weights', self.default_weights)
+            
+            X_train.append(features)
+            y_market_train.append(best_weights.get('market', 0.5))
+            y_team_train.append(best_weights.get('team', 0.3))
+            y_elo_train.append(best_weights.get('elo', 0.2))
+            y_ml_train.append(best_weights.get('ml', 0.0))
         
-        X = np.array(X)
-        y_market = np.array(y_market)
-        y_team = np.array(y_team)
-        y_elo = np.array(y_elo)
-        y_ml = np.array(y_ml)
+        X_train = np.array(X_train)
+        y_market_train = np.array(y_market_train)
+        y_team_train = np.array(y_team_train)
+        y_elo_train = np.array(y_elo_train)
+        y_ml_train = np.array(y_ml_train)
         
         # 拟合编码器和归一化器
         self.league_encoder.fit(LEAGUES)
-        X[:, 1:] = self.scaler.fit_transform(X[:, 1:])
+        X_train[:, 1:] = self.scaler.fit_transform(X_train[:, 1:])
         
         # 为每个权重输出训练一个模型
         targets = {
-            'market': y_market,
-            'team': y_team,
-            'elo': y_elo,
-            'ml': y_ml
+            'market': y_market_train,
+            'team': y_team_train,
+            'elo': y_elo_train,
+            'ml': y_ml_train
         }
         
         for weight_type, y in targets.items():
             model = self._create_regressor()
             if model:
-                model.fit(X, y)
+                model.fit(X_train, y)
                 self.models[weight_type] = model
         
         self.is_trained = True
+        
+        # 验证集评估
+        val_results = self._evaluate(val_set, metric)
+        
+        return {
+            'train_samples': len(train_set),
+            'val_samples': len(val_set),
+            'val_metrics': val_results
+        }
+    
+    def _evaluate(self, val_data: List[Dict], metric: str = 'brier') -> Dict:
+        """
+        在验证集上评估模型
+        
+        参数：
+            val_data: 验证数据列表
+            metric: 'brier' 或 'logloss'
+        
+        返回：
+            评估指标字典
+        """
+        if not val_data or not self.is_trained:
+            return {}
+        
+        total_score = 0.0
+        correct_count = 0
+        
+        for data in val_data:
+            # 预测权重
+            weights = self.predict(data['features'])
+            
+            # 融合预测
+            fused = self.fuse_with_weights(
+                data['market_pred'],
+                data['team_pred'],
+                data['elo_pred'],
+                data.get('ml_pred'),
+                weights
+            )
+            
+            # 计算指标
+            actual = data['actual_result']
+            if metric == 'logloss':
+                score = self._calculate_logloss(fused, actual)
+            else:
+                score = self._calculate_brier(fused, actual)
+            
+            total_score += score
+            
+            # 判断是否命中Top1
+            if fused:
+                pred_top1 = max(fused.items(), key=lambda x: x[1])[0]
+                if pred_top1 == actual:
+                    correct_count += 1
+        
+        return {
+            'avg_score': total_score / len(val_data) if val_data else 0,
+            'accuracy': correct_count / len(val_data) if val_data else 0
+        }
     
     def predict(self, match_data: Dict) -> Dict[str, float]:
         """

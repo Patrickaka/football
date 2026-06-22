@@ -30,6 +30,18 @@ SIMILAR_DB_FILE = os.path.join(DATA_DIR, 'similar_market_db.json')
 DEFAULT_K = 1000  # 默认取最近1000场
 MIN_SAMPLE_SIZE = 50  # 最小样本数
 
+# 距离阈值配置（按相似度分级）
+DISTANCE_THRESHOLDS = [
+    0.5,   # 非常相似
+    0.8,   # 相似
+    1.2,   # 一般相似
+    1.8,   # 不太相似
+    float('inf')  # 放宽限制
+]
+
+# 距离权重系数
+DISTANCE_WEIGHT_FACTOR = 2.5
+
 # 联赛分层配置
 LEAGUE_TIERS = {
     'tier1': ['英超', '英超联赛', 'English Premier League'],
@@ -411,7 +423,7 @@ class SimilarMarketDB:
     
     def find_similar(self, query: MatchRecord, k: int = DEFAULT_K, league: str = '') -> List[Tuple[float, MatchRecord]]:
         """
-        KNN查找相似比赛（支持联赛分层）
+        KNN查找相似比赛（支持联赛分层 + 距离阈值动态放宽）
         
         参数：
             query: 查询记录（待预测的比赛）
@@ -425,24 +437,69 @@ class SimilarMarketDB:
         dynamic_k = self._get_dynamic_k(query.asian)
         actual_k = min(k, dynamic_k)
         
-        # 1. 先找同联赛
-        if league:
-            same_league = [league]
-            results = self._find_similar_with_league_filter(query, actual_k, same_league)
-            if len(results) >= actual_k * 0.8:
-                return results
+        # 按距离阈值逐步放宽搜索
+        for threshold in DISTANCE_THRESHOLDS:
+            # 1. 先找同联赛
+            if league:
+                same_league = [league]
+                results = self._find_similar_with_threshold(query, actual_k, same_league, threshold)
+                if len(results) >= MIN_SAMPLE_SIZE:
+                    return results
             
             # 2. 找同级别联赛
-            tier = self._get_league_tier(league)
-            if tier:
-                tier_leagues = LEAGUE_TIERS.get(tier, [])
-                if tier_leagues:
-                    results = self._find_similar_with_league_filter(query, actual_k, tier_leagues)
-                    if len(results) >= actual_k * 0.8:
-                        return results
+            if league:
+                tier = self._get_league_tier(league)
+                if tier:
+                    tier_leagues = LEAGUE_TIERS.get(tier, [])
+                    if tier_leagues:
+                        results = self._find_similar_with_threshold(query, actual_k, tier_leagues, threshold)
+                        if len(results) >= MIN_SAMPLE_SIZE:
+                            return results
+            
+            # 3. 全库搜索
+            results = self._find_similar_with_threshold(query, actual_k, None, threshold)
+            if len(results) >= MIN_SAMPLE_SIZE:
+                return results
         
-        # 3. 全库搜索
-        return self._find_similar_with_league_filter(query, actual_k, None)
+        # 如果所有阈值都不够，返回所有可用记录
+        return self._find_similar_with_threshold(query, actual_k, None, float('inf'))
+    
+    def _find_similar_with_threshold(self, query: MatchRecord, k: int, 
+                                     league_filter: List[str] = None, 
+                                     distance_threshold: float = float('inf')) -> List[Tuple[float, MatchRecord]]:
+        """
+        根据联赛过滤和距离阈值查找相似比赛
+        
+        参数：
+            query: 查询记录
+            k: 返回数量
+            league_filter: 联赛过滤列表
+            distance_threshold: 距离阈值（超过此阈值的记录不返回）
+        
+        返回：
+            排序后的相似记录列表 [(距离, 记录), ...]
+        """
+        if not self.records:
+            return []
+        
+        distances = []
+        for record in self.records:
+            if not record.result:
+                continue
+            # 联赛过滤
+            if league_filter and record.league not in league_filter:
+                continue
+            dist = self._distance(query, record)
+            # 距离阈值过滤
+            if dist > distance_threshold:
+                continue
+            distances.append((dist, record))
+        
+        # 按距离排序
+        distances.sort(key=lambda x: x[0])
+        
+        # 返回前k条
+        return distances[:k]
     
     def get_similar_stats(self, query: MatchRecord, k: int = DEFAULT_K, league: str = '') -> Dict:
         """
@@ -488,8 +545,9 @@ class SimilarMarketDB:
         friendly_count = 0
         
         for dist, record in similar:
-            # 使用指数衰减权重: weight = exp(-distance * 3)
-            weight = math.exp(-dist * 3)
+            # 使用指数衰减权重: weight = exp(-distance * DISTANCE_WEIGHT_FACTOR)
+            # 距离越近权重越高，避免不相似样本影响结果
+            weight = math.exp(-dist * DISTANCE_WEIGHT_FACTOR)
             
             result_counts[record.result] += weight
             goals_dist[f"{record.goals_home}-{record.goals_away}"] += weight

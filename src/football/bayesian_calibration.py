@@ -27,16 +27,19 @@ CALIBRATION_DB_FILE = os.path.join(DATA_DIR, 'calibration_db.json')
 
 class BayesianCalibrator:
     """
-    贝叶斯校准器
+    贝叶斯校准器 - 市场环境校准版
     
-    使用Beta分布进行概率校准
-    Beta(alpha, beta) 其中：
-    - alpha = 成功次数 + 1（伪计数）
-    - beta = 失败次数 + 1（伪计数）
+    使用层级回退机制进行概率校准：
+    - 层级1：比分 + 联赛 + 大小球 + 让球（样本 >= 50）
+    - 层级2：比分 + 大小球 + 让球（样本 >= 100）
+    - 层级3：仅比分全局（样本 >= 200）
+    - 不足：不校准
+    
+    避免桶过细导致过拟合
     """
     
     def __init__(self):
-        self.history = {}  # {score: {'predicted': [...], 'actual': [...]}
+        self.history = {}  # {bucket_key: {'count': 0, 'success': 0, 'predicted_sum': 0.0}}
         self._load()
     
     def _load(self):
@@ -45,7 +48,7 @@ class BayesianCalibrator:
             try:
                 with open(CALIBRATION_DB_FILE, 'r', encoding='utf-8') as f:
                     self.history = json.load(f)
-                print(f"已加载贝叶斯校准数据库，{len(self.history)} 种比分")
+                print(f"已加载贝叶斯校准数据库，{len(self.history)} 个分桶")
             except Exception as e:
                 print(f"加载校准数据库失败: {e}")
                 self.history = {}
@@ -56,7 +59,36 @@ class BayesianCalibrator:
         with open(CALIBRATION_DB_FILE, 'w', encoding='utf-8') as f:
             json.dump(self.history, f, ensure_ascii=False, indent=2)
     
-    def add_record(self, score: str, predicted_prob: float, actual_outcome: bool):
+    def _get_bucket_key(self, score: str, league: str, total_line: float, asian: float, level: int) -> str:
+        """
+        生成分桶键
+        
+        参数：
+            score: 比分
+            league: 联赛名称
+            total_line: 大小球盘口
+            asian: 让球盘口
+            level: 层级（1=最细，3=最粗）
+        
+        返回：
+            分桶键字符串
+        """
+        if level == 1:
+            # 层级1：比分 + 联赛 + 大小球 + 让球
+            bucketed_line = round(total_line * 4) / 4
+            bucketed_asian = round(asian * 2) / 2
+            return f"{score}_{league}_{bucketed_line:.2f}_{bucketed_asian:+.2f}"
+        elif level == 2:
+            # 层级2：比分 + 大小球 + 让球
+            bucketed_line = round(total_line * 4) / 4
+            bucketed_asian = round(asian * 2) / 2
+            return f"{score}_all_{bucketed_line:.2f}_{bucketed_asian:+.2f}"
+        else:
+            # 层级3：仅比分
+            return f"{score}_all_all_all"
+    
+    def add_record(self, score: str, predicted_prob: float, actual_outcome: bool,
+                   league: str = '', total_line: float = 2.5, asian: float = 0.0):
         """
         添加一条校准记录
         
@@ -64,58 +96,81 @@ class BayesianCalibrator:
             score: 比分（如 "1-1"）
             predicted_prob: 模型预测概率
             actual_outcome: 实际是否发生
+            league: 联赛名称
+            total_line: 大小球盘口
+            asian: 让球盘口
         """
-        if score not in self.history:
-            self.history[score] = {'count': 0, 'success': 0, 'predicted_sum': 0.0}
-        
-        self.history[score]['count'] += 1
-        self.history[score]['predicted_sum'] += predicted_prob
-        if actual_outcome:
-            self.history[score]['success'] += 1
+        # 为所有层级添加记录
+        for level in [1, 2, 3]:
+            bucket_key = self._get_bucket_key(score, league, total_line, asian, level)
+            if bucket_key not in self.history:
+                self.history[bucket_key] = {'count': 0, 'success': 0, 'predicted_sum': 0.0}
+            
+            self.history[bucket_key]['count'] += 1
+            self.history[bucket_key]['predicted_sum'] += predicted_prob
+            if actual_outcome:
+                self.history[bucket_key]['success'] += 1
     
-    def calibrate(self, score: str, predicted_prob: float) -> float:
+    def calibrate(self, score: str, predicted_prob: float,
+                  league: str = '', total_line: float = 2.5, asian: float = 0.0) -> float:
         """
-        校准预测概率
+        校准预测概率（使用层级回退）
         
         参数：
             score: 比分
             predicted_prob: 原始预测概率
+            league: 联赛名称
+            total_line: 大小球盘口
+            asian: 让球盘口
         
         返回：
             校准后的概率
         """
-        if score not in self.history or self.history[score]['count'] < 20:
-            # 数据不足时使用原始概率
-            return predicted_prob
+        # 层级回退策略
+        level_requirements = [
+            (1, 50),  # 层级1需要50个样本
+            (2, 100), # 层级2需要100个样本
+            (3, 200)  # 层级3需要200个样本
+        ]
         
-        record = self.history[score]
-        total = record['count']
-        success = record['success']
-        avg_predicted = record['predicted_sum'] / total
+        for level, min_samples in level_requirements:
+            bucket_key = self._get_bucket_key(score, league, total_line, asian, level)
+            if bucket_key in self.history and self.history[bucket_key]['count'] >= min_samples:
+                record = self.history[bucket_key]
+                total = record['count']
+                success = record['success']
+                avg_predicted = record['predicted_sum'] / total
+                
+                if avg_predicted < 0.001:
+                    continue
+                
+                # 计算校准因子：实际命中率 / 平均预测概率
+                actual_rate = success / total
+                correction_factor = actual_rate / avg_predicted
+                
+                # 校准概率（限制在合理范围内）
+                calibrated = predicted_prob * correction_factor
+                calibrated = max(0.001, min(0.999, calibrated))
+                
+                # 加权融合：历史数据越多，权重越大
+                weight = min(total / 1000, 1.0)
+                final = (1 - weight) * predicted_prob + weight * calibrated
+                
+                return final
         
-        if avg_predicted < 0.001:
-            return predicted_prob
-        
-        # 计算校准因子：实际命中率 / 平均预测概率
-        actual_rate = success / total
-        correction_factor = actual_rate / avg_predicted
-        
-        # 校准概率（限制在合理范围内）
-        calibrated = predicted_prob * correction_factor
-        calibrated = max(0.001, min(0.999, calibrated))
-        
-        # 加权融合：历史数据越多，权重越大
-        weight = min(total / 1000, 1.0)
-        final = (1 - weight) * predicted_prob + weight * calibrated
-        
-        return final
+        # 所有层级都不满足要求，返回原始概率
+        return predicted_prob
     
-    def calibrate_all(self, predictions: Dict[str, float]) -> Dict[str, float]:
+    def calibrate_all(self, predictions: Dict[str, float],
+                   league: str = '', total_line: float = 2.5, asian: float = 0.0) -> Dict[str, float]:
         """
         校准所有预测概率
         
         参数：
             predictions: {比分: 概率}
+            league: 联赛名称
+            total_line: 大小球盘口
+            asian: 让球盘口
         
         返回：
             校准后的概率字典
@@ -124,7 +179,7 @@ class BayesianCalibrator:
         total_prob = 0.0
         
         for score, prob in predictions.items():
-            calibrated[score] = self.calibrate(score, prob)
+            calibrated[score] = self.calibrate(score, prob, league, total_line, asian)
             total_prob += calibrated[score]
         
         # 归一化
@@ -142,6 +197,7 @@ def get_calibrator() -> BayesianCalibrator:
         _calibrator = BayesianCalibrator()
     return _calibrator
 
-def calibrate_predictions(predictions: Dict[str, float]) -> Dict[str, float]:
+def calibrate_predictions(predictions: Dict[str, float],
+                           league: str = '', total_line: float = 2.5, asian: float = 0.0) -> Dict[str, float]:
     """校准预测概率的便捷接口"""
-    return get_calibrator().calibrate_all(predictions)
+    return get_calibrator().calibrate_all(predictions, league, total_line, asian)

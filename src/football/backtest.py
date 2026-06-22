@@ -83,8 +83,8 @@ class BacktestRunner:
         
         predicted_totals = prediction.get('goal_count', {})
         sorted_totals = sorted(predicted_totals.items(), key=lambda x: -x[1])
-        top2_totals = [t[0] for t in sorted_totals[:2]]
-        hit_total = str(actual_goals) in top2_totals
+        top2_totals = [int(t[0]) for t in sorted_totals[:2]]
+        hit_total = actual_goals in top2_totals
         
         # 让球方向
         asian = record.get('asian')
@@ -128,6 +128,33 @@ class BacktestRunner:
                 for res in all_results
             )
         
+        # 计算半全场指标
+        predicted_htf = record.get('predicted_half_full', {})
+        actual_htf = record.get('actual_half_full')
+        hit_htf_top1 = False
+        hit_htf_top3 = False
+        htf_logloss = 0.0
+        htf_brier = 0.0
+        
+        if predicted_htf and actual_htf:
+            sorted_htf = sorted(predicted_htf.items(), key=lambda x: -x[1])
+            htf_top1 = sorted_htf[0][0] if sorted_htf else None
+            htf_top3 = [k for k, _ in sorted_htf[:3]]
+            
+            hit_htf_top1 = (actual_htf == htf_top1)
+            hit_htf_top3 = (actual_htf in htf_top3)
+            
+            # 半全场 LogLoss
+            actual_prob_htf = predicted_htf.get(actual_htf, 1e-15)
+            htf_logloss = -math.log(max(1e-15, min(1 - 1e-15, actual_prob_htf)))
+            
+            # 半全场 Brier Score
+            all_htf = {'HH', 'HD', 'HA', 'DH', 'DD', 'DA', 'AH', 'AD', 'AA'}
+            htf_brier = sum(
+                (predicted_htf.get(res, 0.0) - (1.0 if res == actual_htf else 0.0)) ** 2
+                for res in all_htf
+            )
+        
         result = {
             'match_id': record.get('match_id'),
             'league': record.get('league'),
@@ -146,6 +173,12 @@ class BacktestRunner:
             'score_brier': score_brier,
             'result_logloss': result_logloss,
             'result_brier': result_brier,
+            # 半全场指标
+            'hit_htf_top1': hit_htf_top1,
+            'hit_htf_top3': hit_htf_top3,
+            'htf_logloss': htf_logloss,
+            'htf_brier': htf_brier,
+            'has_htf_data': bool(predicted_htf and actual_htf),
         }
         
         self.results.append(result)
@@ -163,6 +196,18 @@ class BacktestRunner:
         stats['brier_scores'].append(score_brier)
         stats['log_losses'].append(score_logloss)
         
+        # 半全场统计（只统计有真实半场数据的比赛）
+        if result['has_htf_data']:
+            if 'htf_top1' not in stats:
+                stats['htf_top1'] = 0
+                stats['htf_top3'] = 0
+                stats['htf_logloss'] = []
+                stats['htf_brier'] = []
+            if hit_htf_top1: stats['htf_top1'] += 1
+            if hit_htf_top3: stats['htf_top3'] += 1
+            stats['htf_logloss'].append(htf_logloss)
+            stats['htf_brier'].append(htf_brier)
+        
         return result
     
     def get_summary(self) -> Dict:
@@ -179,6 +224,14 @@ class BacktestRunner:
         hits_1x2 = sum(1 for r in self.results if r['hit_1x2'])
         hits_total = sum(1 for r in self.results if r['hit_total'])
         hits_handicap = sum(1 for r in self.results if r['hit_handicap'])
+        
+        # 半全场统计（只统计有真实半场数据的比赛）
+        htf_results = [r for r in self.results if r['has_htf_data']]
+        htf_total = len(htf_results)
+        htf_top1_hits = sum(1 for r in htf_results if r['hit_htf_top1'])
+        htf_top3_hits = sum(1 for r in htf_results if r['hit_htf_top3'])
+        htf_brier_scores = [r['htf_brier'] for r in htf_results]
+        htf_log_losses = [r['htf_logloss'] for r in htf_results]
         
         brier_scores = [r['score_brier'] for r in self.results]
         log_losses = [r['score_logloss'] for r in self.results]
@@ -198,6 +251,12 @@ class BacktestRunner:
             'score_logloss': sum(log_losses) / total,
             'result_brier': sum(result_brier_scores) / total,
             'result_logloss': sum(result_log_losses) / total,
+            # 半全场指标
+            'htf_total': htf_total,
+            'htf_top1_hit_rate': htf_top1_hits / htf_total if htf_total > 0 else 0,
+            'htf_top3_hit_rate': htf_top3_hits / htf_total if htf_total > 0 else 0,
+            'htf_brier': sum(htf_brier_scores) / htf_total if htf_total > 0 else 0,
+            'htf_logloss': sum(htf_log_losses) / htf_total if htf_total > 0 else 0,
             'by_league': {},
         }
         
@@ -205,7 +264,7 @@ class BacktestRunner:
         for league, stats in self.league_stats.items():
             t = stats['total']
             if t > 0:
-                summary['by_league'][league] = {
+                league_summary = {
                     'total': t,
                     'top1_hit_rate': stats['top1'] / t,
                     'top3_hit_rate': stats['top3'] / t,
@@ -214,6 +273,16 @@ class BacktestRunner:
                     'score_brier': sum(stats['brier_scores']) / t,
                     'score_logloss': sum(stats['log_losses']) / t,
                 }
+                # 半全场统计
+                if 'htf_top1' in stats:
+                    htf_t = len(stats['htf_logloss'])
+                    league_summary['htf_total'] = htf_t
+                    league_summary['htf_top1_hit_rate'] = stats['htf_top1'] / htf_t if htf_t > 0 else 0
+                    league_summary['htf_top3_hit_rate'] = stats['htf_top3'] / htf_t if htf_t > 0 else 0
+                    league_summary['htf_brier'] = sum(stats['htf_brier']) / htf_t if htf_t > 0 else 0
+                    league_summary['htf_logloss'] = sum(stats['htf_logloss']) / htf_t if htf_t > 0 else 0
+                
+                summary['by_league'][league] = league_summary
         
         return summary
     
@@ -241,13 +310,25 @@ class BacktestRunner:
         print(f"比分 LogLoss:         {summary['score_logloss']:.4f}")
         print(f"胜平负 Brier Score:   {summary['result_brier']:.4f}")
         print(f"胜平负 LogLoss:       {summary['result_logloss']:.4f}")
+        print("-" * 60)
+        if summary['htf_total'] > 0:
+            print(f"半全场统计 (有真实半场数据 {summary['htf_total']} 场):")
+            print(f"  半全场 Top1 命中率: {summary['htf_top1_hit_rate']:.2%}")
+            print(f"  半全场 Top3 命中率: {summary['htf_top3_hit_rate']:.2%}")
+            print(f"  半全场 Brier Score: {summary['htf_brier']:.4f}")
+            print(f"  半全场 LogLoss:     {summary['htf_logloss']:.4f}")
+        else:
+            print("半全场统计: 暂无真实半场数据")
         
         if summary['by_league']:
             print("-" * 60)
             print("按联赛统计:")
             for league, stats in summary['by_league'].items():
+                htf_info = ""
+                if stats.get('htf_total', 0) > 0:
+                    htf_info = f", HTF Top1={stats['htf_top1_hit_rate']:.2%}"
                 print(f"  {league} ({stats['total']}场): Top1={stats['top1_hit_rate']:.2%}, "
-                      f"Top3={stats['top3_hit_rate']:.2%}, 1x2={stats['hit_rate_1x2']:.2%}")
+                      f"Top3={stats['top3_hit_rate']:.2%}, 1x2={stats['hit_rate_1x2']:.2%}{htf_info}")
         
         print("=" * 60)
 

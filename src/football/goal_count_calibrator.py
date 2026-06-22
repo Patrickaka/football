@@ -61,9 +61,10 @@ class GoalCountCalibrator:
         """
         生成分桶键
         
-        简单版本分桶：
+        分桶维度：
         - 联赛名
         - 大小球盘口（四舍五入到0.25）
+        - 让球盘口（四舍五入到0.5，带符号）
         - 预测总进球（四舍五入到0.5）
         
         参数：
@@ -77,10 +78,12 @@ class GoalCountCalibrator:
         """
         # 大小球盘口按0.25分桶
         bucketed_line = round(total_line * 4) / 4
+        # 让球盘口按0.5分桶，带符号（+/-）
+        bucketed_asian = round(asian * 2) / 2
         # 预测总进球按0.5分桶
         bucketed_expected = round(expected_total * 2) / 2
         
-        return f"{league}_{bucketed_line:.2f}_{bucketed_expected:.2f}"
+        return f"{league}_{bucketed_line:.2f}_{bucketed_asian:+.2f}_{bucketed_expected:.2f}"
     
     def record_result(self, league: str, total_line: float, 
                       predicted_goal_dist: Dict[int, float],
@@ -104,8 +107,8 @@ class GoalCountCalibrator:
             self.db[bucket_key] = {
                 'league': league,
                 'total_line': round(total_line * 4) / 4,
+                'asian_bucket': round(asian * 2) / 2,
                 'expected_total_bucket': round(expected_total_goals * 2) / 2,
-                'asian': asian,
                 'sample_count': 0,
                 'predicted_distributions': [],  # 存储历史预测分布用于分析
                 'actual_goals': [],             # 存储实际进球数

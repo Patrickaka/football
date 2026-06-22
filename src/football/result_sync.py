@@ -553,8 +553,12 @@ class PredictionHistory:
                             record['actual_half_result'] = half_res
                             # 计算半全场结果
                             record['actual_half_full'] = f"{half_res}{actual_result}"
+                            # 标记数据质量
+                            record['half_time_data_quality'] = 'real'
                         except:
-                            pass
+                            record['half_time_data_quality'] = 'invalid'
+                    else:
+                        record['half_time_data_quality'] = 'missing'
                     
                     # 计算命中结果（包含半全场）
                     record.update(self._calculate_hit_flags(record))
@@ -714,10 +718,14 @@ class PredictionHistory:
             calibrator = get_calibrator()
             predicted_scores = record.get('predicted_scores', {})
             actual_score = record.get('actual_score', '')
+            league = record.get('league', '')
+            total_line = record.get('total_line')
+            asian = record.get('asian')
             
             for score, prob in predicted_scores.items():
                 is_correct = (score == actual_score)
-                calibrator.add_record(score, prob, is_correct)
+                # 添加市场环境信息
+                calibrator.add_record(score, prob, is_correct, league, total_line or 2.5, asian or 0.0)
             
             calibrator.save()
             log.debug(f"已更新贝叶斯校准库")
