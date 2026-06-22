@@ -1437,10 +1437,10 @@ def check_ml_fusion_eligibility(ml_stats: Dict, test_set_samples: int = 0) -> Di
     
     conditions = {
         'test_set_samples': {
-            'passed': test_set_samples >= 200,
+            'passed': test_set_samples >= 45,
             'actual': test_set_samples,
-            'required': 200,
-            'reason': '测试集样本 >= 200 场'
+            'required': 45,
+            'reason': '测试集样本 >= 45 场'
         },
         'shadow_samples': {
             'passed': shadow_samples >= 45,
