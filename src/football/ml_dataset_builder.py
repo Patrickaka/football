@@ -32,11 +32,11 @@ LEAGUE_MAP = {
 }
 
 # 赛季列表
-SEASONS = ['2024-25', '2025-26']
+SEASONS = ['2425', '2526']
 
 # 数据目录
 DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'data')
-RAW_DIR = os.path.join(DATA_DIR, 'raw_history')
+RAW_DIR = DATA_DIR
 OUTPUT_FILE = os.path.join(DATA_DIR, 'ml_training_data.jsonl')
 
 # 默认值

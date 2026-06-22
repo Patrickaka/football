@@ -5739,8 +5739,6 @@ def analyze_match(match, force_refresh=False):
     ml_feature_snapshot = {}
     
     try:
-        from .ml import MLFootballPredictor
-        ml_predictor = MLFootballPredictor(model_type='auto')
         # 准备特征
         ml_features = {
             'elo_home': team.get('elo_home', 1500) if team else 1500,
@@ -5781,22 +5779,33 @@ def analyze_match(match, force_refresh=False):
             'away_elo': ml_features['elo_away']
         }
         
-        ml_probs = ml_predictor.predict(ml_features)
+        from .ml import predict_1x2_by_ml
         
-        if ml_probs and ml_predictor.is_trained:
+        ml_response = predict_1x2_by_ml(ml_features)
+        
+        if ml_response.get('available'):
             ml_available = True
-            ml_model_version = f"ml-{ml_predictor.model_type}-{ml_predictor.__class__.__name__}"
-            # 转换为 H/D/A 格式
+            ml_model_version = ml_response.get('model_version', 'unknown')
+            
             ml_1x2 = {
-                'H': ml_probs.get('home', 0.0),
-                'D': ml_probs.get('draw', 0.0),
-                'A': ml_probs.get('away', 0.0)
+                'H': ml_response.get('H', 0.0),
+                'D': ml_response.get('D', 0.0),
+                'A': ml_response.get('A', 0.0),
             }
+            
+            ml_probs = {
+                'home': ml_1x2['H'],
+                'draw': ml_1x2['D'],
+                'away': ml_1x2['A'],
+            }
+        else:
+            ml_available = False
+            ml_probs = None
             
         ml_result = {
             'probabilities': ml_probs,
-            'model_type': ml_predictor.model_type,
-            'is_trained': ml_predictor.is_trained,
+            'model_type': ml_response.get('model_type', 'unknown'),
+            'is_trained': ml_available,
             'ml_1x2': ml_1x2,
             'ml_model_version': ml_model_version,
             'ml_available': ml_available,
@@ -6170,10 +6179,14 @@ def analyze_match(match, force_refresh=False):
     ml_enabled = False
     ml_reason = "模型未训练，未参与融合"
     try:
-        from .ml import MLFootballPredictor
-        ml_predictor = MLFootballPredictor()
-        ml_enabled = ml_predictor.is_trained
-        ml_reason = "已训练，参与融合" if ml_enabled else "模型未训练，未参与融合"
+        from .ml import load_trained_ml_model
+        
+        ml_enabled = load_trained_ml_model()
+        
+        if ml_enabled:
+            ml_reason = "已训练，当前处于影子评估"
+        else:
+            ml_reason = "模型文件不存在或加载失败"
     except Exception:
         ml_reason = "ML模块不可用"
     

@@ -16,6 +16,7 @@ import os
 import json
 import pickle
 import math
+from datetime import datetime
 from typing import Dict, List, Tuple, Any
 
 import numpy as np
@@ -452,7 +453,7 @@ def main():
         return
     
     # 获取特征名称
-    from ml_feature_schema import get_feature_names
+    from .ml_feature_schema import get_feature_names
     feature_names = get_feature_names()
     
     # 按时间切分数据集

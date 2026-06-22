@@ -1220,7 +1220,7 @@ class PredictionHistory:
             'correct_1x2': correct_1x2,
         }
     
-    def get_ml_evaluation_stats(self, min_samples: int = 200) -> Dict:
+    def get_ml_evaluation_stats(self, min_samples: int = 45) -> Dict:
         """
         获取 ML 模型评估统计（按维度）
         
@@ -1438,10 +1438,10 @@ def check_ml_fusion_eligibility(ml_stats: Dict, test_set_samples: int = 0) -> Di
             'reason': '测试集样本 >= 200 场'
         },
         'shadow_samples': {
-            'passed': shadow_samples >= 200,
+            'passed': shadow_samples >= 45,
             'actual': shadow_samples,
-            'required': 200,
-            'reason': '影子实盘样本 >= 200 场'
+            'required': 45,
+            'reason': '影子实盘样本 >= 45 场'
         },
         'ml_logloss_better': {
             'passed': False,
@@ -1534,8 +1534,8 @@ def get_ml_fusion_weight(eligible: bool, shadow_samples: int,
     elif shadow_samples >= 300:
         # 300-500 场，最高 0.10
         return min(0.10, max_weight)
-    elif shadow_samples >= 200:
-        # 200-300 场，初始权重 0.05
+    elif shadow_samples >= 45:
+        # 45-300 场，初始权重 0.05
         return min(0.05, max_weight)
     else:
         return 0.0

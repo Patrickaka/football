@@ -161,6 +161,8 @@ class Handler(BaseHTTPRequestHandler):
             self._serve_json(self._predict_payload(params))
         elif path == '/api/football/clear_cache':
             self._serve_json(self._football_clear_cache_payload())
+        elif path == '/api/football/prepare_ml_data':
+            self._serve_json(self._prepare_ml_history_data_payload())
         elif path == '/api/3d':
             self._serve_json(self._lottery_3d_payload())
         elif path == '/api/3d-ml':
@@ -362,6 +364,22 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:
             self._log.error('清除足球缓存失败', exc_info=True)
             return {'error': f'清除缓存失败: {str(e)}'}
+
+    def _prepare_ml_history_data_payload(self):
+        """下载近两赛季训练数据"""
+        try:
+            from src.football.market_db import download_recent_two_seasons
+
+            result = download_recent_two_seasons()
+
+            return {
+                'downloaded': len(result['success']),
+                'failed': result['failed'],
+                'files': result['success'],
+            }
+        except Exception as e:
+            self._log.error('下载训练数据失败', exc_info=True)
+            return {'error': f'下载失败: {str(e)}'}
 
     def _lottery_3d_payload(self):
         try:

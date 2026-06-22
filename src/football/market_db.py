@@ -117,6 +117,38 @@ def download_all_leagues(start_season: int = 15, end_season: int = 26) -> int:
     return count
 
 
+def download_recent_two_seasons(save_dir: str = DATA_DIR) -> dict:
+    """
+    下载五大联赛最近两个完整赛季训练数据。
+    
+    参数：
+        save_dir: 保存目录
+    
+    返回：
+        包含成功和失败列表的字典
+    """
+    seasons = ['2425', '2526']
+    result = {
+        'success': [],
+        'failed': [],
+    }
+
+    for league_code in LEAGUES:
+        for season in seasons:
+            ok = download_league_data(
+                league=league_code,
+                season=season,
+                save_dir=save_dir
+            )
+            item = f'{league_code}_{season}'
+            if ok:
+                result['success'].append(item)
+            else:
+                result['failed'].append(item)
+
+    return result
+
+
 # ==================== 数据解析模块 ====================
 
 def parse_csv_file(filepath: str) -> List[Dict]:
