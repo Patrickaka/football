@@ -5899,11 +5899,65 @@ def analyze_match(match, force_refresh=False):
     # 计算半全场概率（集成动态ELO）
     half_full_time = calculate_half_full_time_probs(candidates, team, asian, total, home_team=home, away_team=away)
 
-    # 新增：进球数推荐（结合历史盘口数据）
+    # 新增：进球数推荐（结合历史盘口数据 + 校准器）
     goal_count_result = None
+    goal_dist_before_calibration = None
+    goal_dist_after_calibration = None
     try:
         from .ml import predict_goal_counts_from_candidates
         goal_count_result = predict_goal_counts_from_candidates(candidates, max_goals=MAX_GOALS, asian=asian, total=total)
+        
+        # 保存校准前的分布
+        goal_dist_before_calibration = goal_count_result.get('distribution', {}).copy()
+        
+        # 使用总球数校准器校准
+        try:
+            from .goal_count_calibrator import GoalCountCalibrator
+            calibrator = GoalCountCalibrator()
+            
+            # 计算期望总进球数
+            expected_total = sum(k * v for k, v in goal_dist_before_calibration.items())
+            
+            # 获取盘口参数
+            total_line = total.get('close_line', 2.5) if total else 2.5
+            asian_handicap = asian.get('handicap', 0) if asian else 0.0
+            league_name = match.get('league', '其他')
+            
+            # 应用校准
+            calibrated_dist = calibrator.calibrate_goal_dist(
+                league=league_name,
+                total_line=total_line,
+                goal_dist=goal_dist_before_calibration,
+                expected_total=expected_total,
+                asian=asian_handicap,
+                min_samples=10
+            )
+            
+            # 保存校准后的分布
+            goal_dist_after_calibration = calibrated_dist
+            
+            # 更新结果中的分布
+            goal_count_result['distribution'] = calibrated_dist
+            
+            # 重新计算推荐（基于校准后的分布）
+            from .ml import recommend_goal_counts_from_dist, get_goal_count_distribution_from_dist
+            high_risk = goal_count_result.get('sample_info', {}).get('quality', 'none') in ['low', 'none']
+            low_quality_sample = goal_count_result.get('sample_info', {}).get('quality', 'none') in ['low', 'none']
+            
+            goal_count_result['recommendations'] = recommend_goal_counts_from_dist(
+                calibrated_dist, top_n=3, high_risk=high_risk, low_quality_sample=low_quality_sample
+            )
+            
+            # 更新大小球概率
+            goal_count_result['over_under'] = {
+                'over': sum(v for k, v in calibrated_dist.items() if k >= 3),
+                'under': sum(v for k, v in calibrated_dist.items() if k <= 2)
+            }
+            
+            log.info(f"进球数校准完成: 期望总进球{expected_total:.2f} → 校准后分布已更新")
+        except Exception as e:
+            log.warning(f"进球数校准失败: {e}，使用原始分布")
+        
         log.info(f"进球数推荐完成: {goal_count_result['recommendations']}")
     except Exception as e:
         log.warning(f"进球数推荐失败: {e}")
@@ -6194,6 +6248,11 @@ def analyze_match(match, force_refresh=False):
             'value_bets': value_bets,
             'half_full_time': half_full_time,
             'goal_count': goal_count_result,
+            'goal_calibration': {
+                'before': goal_dist_before_calibration,
+                'after': goal_dist_after_calibration,
+                'calibrated': goal_dist_after_calibration is not None
+            },
             'dixon_coles': dixon_coles_result,
             'ml': ml_result,
             'risk_level': {

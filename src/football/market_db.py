@@ -609,74 +609,46 @@ class MarketScoreDB:
         返回：
             半全场概率字典
         """
-        result = self.get_prob_with_nearest(asian, ou)
-        prob = result.get('probabilities', {}) if isinstance(result, dict) else {}
-        if not prob:
-            return {}
-        
-        htf_probs = {}
-        
-        def get_half_result(h, a):
-            if h > a:
-                return 'H'
-            elif h < a:
-                return 'A'
-            else:
-                return 'D'
-        
-        def get_full_result(h, a):
-            if h > a:
-                return 'H'
-            elif h < a:
-                return 'A'
-            else:
-                return 'D'
-        
-        for score, score_prob in prob.items():
-            try:
-                h, a = map(int, score.split('-'))
-            except Exception:
-                continue
-            
-            # 简单假设半场进球是全场的40%
-            half_h = int(h * 0.4)
-            half_a = int(a * 0.4)
-            
-            half_res = get_half_result(half_h, half_a)
-            full_res = get_full_result(h, a)
-            key = f"{half_res}{full_res}"
-            
-            if key not in htf_probs:
-                htf_probs[key] = 0.0
-            htf_probs[key] += score_prob
-        
-        # 归一化
-        total = sum(htf_probs.values())
-        if total > 0:
-            htf_probs = {k: v / total for k, v in sorted(htf_probs.items(), key=lambda x: -x[1])}
-        
-        return htf_probs
-    
-    def get_htf_probs_with_meta(self, asian: float, ou: float) -> Dict:
         """
-        获取指定盘口组合的半全场概率分布及元数据
+        获取指定盘口组合的半全场概率分布
+        
+        注意：此方法已废弃，不再生成伪半场数据。
+        半全场概率应从 HalfTimeStatsDB 获取真实半场数据。
         
         参数：
             asian: 亚盘让球
             ou: 大小球线
         
         返回：
-            包含概率、样本数、距离等信息的字典
+            空字典（半全场概率应从 HalfTimeStatsDB 获取）
+        """
+        # 返回空字典，强制使用真实半场数据
+        # 伪数据（从全场比分推算半场比分）会严重影响准确率
+        return {}
+    
+    def get_htf_probs_with_meta(self, asian: float, ou: float) -> Dict:
+        """
+        获取指定盘口组合的半全场概率分布及元数据
+        
+        注意：此方法不再提供半全场概率（概率返回空字典）。
+        半全场概率应从 HalfTimeStatsDB 获取真实半场数据。
+        
+        参数：
+            asian: 亚盘让球
+            ou: 大小球线
+        
+        返回：
+            包含概率、样本数、距离等信息的字典（probabilities为空字典）
         """
         score_result = self.get_prob_with_nearest(asian, ou)
         sample_count = self.get_sample_count(asian, ou)
-        htf_probs = self.get_htf_probs(asian, ou)
         
         return {
-            'probabilities': htf_probs,
+            'probabilities': {},  # 不再提供伪半场数据
             'sample_count': sample_count,
             'distance': score_result.get('distance', float('inf')) if isinstance(score_result, dict) else float('inf'),
             'exact_match': score_result.get('exact_match', False) if isinstance(score_result, dict) else False,
+            'warning': 'HTF probabilities not available - use HalfTimeStatsDB for real half-time data',
         }
     
     def get_goal_count_dist(self, asian: float, ou: float) -> Dict[int, float]:

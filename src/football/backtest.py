@@ -81,9 +81,15 @@ class BacktestRunner:
             except:
                 pass
         
-        predicted_totals = prediction.get('goal_count', {})
-        sorted_totals = sorted(predicted_totals.items(), key=lambda x: -x[1])
-        top2_totals = [int(t[0]) for t in sorted_totals[:2]]
+        # 从goal_count对象中获取distribution字段（统一格式）
+        goal_dist = prediction.get('goal_count', {}).get('distribution', {})
+        if not goal_dist:
+            # 兼容旧格式
+            goal_dist = prediction.get('goal_count', {})
+        
+        # 按概率排序，取Top2
+        sorted_totals = sorted(goal_dist.items(), key=lambda x: -x[1])
+        top2_totals = [int(goals) for goals, _ in sorted_totals[:2]]
         hit_total = actual_goals in top2_totals
         
         # 让球方向
