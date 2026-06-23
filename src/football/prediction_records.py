@@ -41,6 +41,8 @@ from datetime import datetime
 from typing import Dict, List, Optional
 from collections import defaultdict
 
+from ..common import repositories
+
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), 'data')
 RECORD_FILE = os.path.join(DATA_DIR, 'prediction_records.json')
@@ -54,20 +56,16 @@ class PredictionRecords:
         self._load()
     
     def _load(self):
-        """从文件加载记录"""
-        if os.path.exists(RECORD_FILE):
-            try:
-                with open(RECORD_FILE, 'r', encoding='utf-8') as f:
-                    self.records = json.load(f)
-            except Exception as e:
-                print(f"加载预测记录失败: {e}")
-                self.records = []
-    
+        """从 MySQL 加载记录"""
+        try:
+            self.records = repositories.prediction_record_load()
+        except Exception as e:
+            print(f"加载预测记录失败: {e}")
+            self.records = []
+
     def _save(self):
-        """保存记录到文件"""
-        os.makedirs(DATA_DIR, exist_ok=True)
-        with open(RECORD_FILE, 'w', encoding='utf-8') as f:
-            json.dump(self.records, f, ensure_ascii=False, indent=2)
+        """保存记录到 MySQL"""
+        repositories.prediction_record_save(self.records)
     
     def add_record(self, match_id: str, league: str, home: str, away: str,
                    predicted_scores: Dict[str, float], predicted_1x2: Dict[str, float],

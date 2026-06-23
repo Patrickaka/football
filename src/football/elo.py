@@ -28,6 +28,7 @@ logger = logging.getLogger(__name__)
 
 # ELO 配置
 from ..common.paths import data_path
+from ..common import repositories
 ELO_FILE = data_path('elo_ratings.json')
 INITIAL_ELO = 1500
 HOME_ADVANTAGE = 50
@@ -123,67 +124,21 @@ class ELORatingSystem:
         return team_name if team_name else None
     
     def _load_ratings(self):
-        """
-        从文件加载 ELO 评分（容错版本）
-        """
-        # 文件不存在时初始化空数据
-        if not os.path.exists(self.elo_file):
-            logger.info(f"ELO 文件不存在，将创建新数据: {self.elo_file}")
-            self.ratings = {}
-            self.history = {}
-            return
-        
+        """从 MySQL 加载 ELO 评分（容错版本）"""
         try:
-            with open(self.elo_file, 'r', encoding='utf-8') as f:
-                # 读取文件内容
-                content = f.read()
-                
-                # 检查内容是否为空
-                if not content.strip():
-                    logger.warning("ELO 文件为空，初始化空数据")
-                    self.ratings = {}
-                    self.history = {}
-                    return
-                
-                # 解析 JSON
-                try:
-                    data = json.loads(content)
-                except json.JSONDecodeError as e:
-                    logger.error(f"JSON 解析失败（文件损坏）: {e}")
-                    # 尝试修复或重建
-                    self._recover_from_corrupted_file(content)
-                    return
-                
-                # 验证数据结构
-                if not isinstance(data, dict):
-                    logger.error("ELO 文件数据结构错误，应为字典")
-                    self.ratings = {}
-                    self.history = {}
-                    return
-                
-                # 提取数据
-                self.ratings = data.get('ratings', {})
-                self.history = data.get('history', {})
-                
-                # 验证 ratings 格式
-                if not isinstance(self.ratings, dict):
-                    logger.error("ratings 字段格式错误，应为字典")
-                    self.ratings = {}
-                
-                # 验证 history 格式
-                if not isinstance(self.history, dict):
-                    logger.error("history 字段格式错误，应为字典")
-                    self.history = {}
-                
-                # 清理无效数据
-                self._clean_invalid_data()
-                
-                logger.info(f"已加载 {len(self.ratings)} 支球队的 ELO 评分")
-                
-        except OSError as e:
-            logger.error(f"读取 ELO 文件失败: {e}")
-            self.ratings = {}
-            self.history = {}
+            data = repositories.elo_load()
+            self.ratings = data.get('ratings', {})
+            self.history = data.get('history', {})
+
+            if not isinstance(self.ratings, dict):
+                logger.error("ratings 字段格式错误，应为字典")
+                self.ratings = {}
+            if not isinstance(self.history, dict):
+                logger.error("history 字段格式错误，应为字典")
+                self.history = {}
+
+            self._clean_invalid_data()
+            logger.info(f"已加载 {len(self.ratings)} 支球队的 ELO 评分")
         except Exception as e:
             logger.error(f"加载 ELO 评分时发生未知错误: {e}")
             self.ratings = {}
@@ -273,29 +228,15 @@ class ELORatingSystem:
             ]
     
     def _save_ratings(self):
-        """
-        保存 ELO 评分到文件（容错版本）
-        """
-        data = {
-            'ratings': self.ratings,
-            'history': self.history,
-            'updated_at': __import__('datetime').datetime.now().isoformat()
-        }
-        
+        """保存 ELO 评分到 MySQL"""
         try:
-            # 先写入临时文件
-            temp_file = self.elo_file + '.tmp'
-            with open(temp_file, 'w', encoding='utf-8') as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
-            
-            # 原子替换原文件
-            if os.path.exists(self.elo_file):
-                os.remove(self.elo_file)
-            os.rename(temp_file, self.elo_file)
-            
-            logger.debug(f"ELO 评分已保存")
-            
-        except OSError as e:
+            repositories.elo_save({
+                'ratings': self.ratings,
+                'history': self.history,
+                'updated_at': __import__('datetime').datetime.now().isoformat(),
+            })
+            logger.debug("ELO 评分已保存")
+        except Exception as e:
             logger.error(f"保存 ELO 评分失败: {e}")
             # 尝试清理临时文件
             if os.path.exists(temp_file):

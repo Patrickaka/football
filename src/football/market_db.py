@@ -25,6 +25,8 @@ import urllib.request
 from typing import Dict, List, Tuple, Optional, Any
 from collections import defaultdict
 
+from ..common import kv_store
+
 # ==================== 常量配置 ====================
 
 # 数据来源URL
@@ -378,32 +380,27 @@ class MarketScoreDB:
         self._load()
     
     def _load(self):
-        """从文件加载数据库（内部方法）"""
-        if os.path.exists(DB_FILE):
-            try:
-                with open(DB_FILE, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                    self.db = data.get('probabilities', {})
-                    self.sample_counts = data.get('sample_counts', {})
-                print(f"已加载数据库，{len(self.db)} 个盘口组合")
-            except Exception as e:
-                print(f"加载数据库失败: {e}")
-                self.db = {}
-                self.sample_counts = {}
-    
+        """从 MySQL 加载数据库（内部方法）"""
+        try:
+            data = kv_store.load('market_score_db') or {}
+            self.db = data.get('probabilities', {})
+            self.sample_counts = data.get('sample_counts', {})
+            print(f"已加载数据库，{len(self.db)} 个盘口组合")
+        except Exception as e:
+            print(f"加载数据库失败: {e}")
+            self.db = {}
+            self.sample_counts = {}
+
     def load(self):
-        """从文件加载数据库（公开方法）"""
+        """从 MySQL 加载数据库（公开方法）"""
         self._load()
-    
+
     def save(self):
-        """保存数据库到文件"""
-        os.makedirs(DATA_DIR, exist_ok=True)
-        data = {
+        """保存数据库到 MySQL"""
+        kv_store.save('market_score_db', {
             'probabilities': self.db,
             'sample_counts': self.sample_counts,
-        }
-        with open(DB_FILE, 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+        })
         print(f"数据库已保存，{len(self.db)} 个盘口组合")
     
     def _get_key(self, asian: float, ou: float) -> str:
@@ -759,21 +756,17 @@ class MarketChangeDB:
         self._load()
     
     def _load(self):
-        """从文件加载数据库"""
-        if os.path.exists(CHANGE_DB_FILE):
-            try:
-                with open(CHANGE_DB_FILE, 'r', encoding='utf-8') as f:
-                    self.db = json.load(f)
-                print(f"已加载盘口变化数据库，{len(self.db)} 个变化组合")
-            except Exception as e:
-                print(f"加载盘口变化数据库失败: {e}")
-                self.db = {}
-    
+        """从 MySQL 加载数据库"""
+        try:
+            self.db = kv_store.load('market_change_db') or {}
+            print(f"已加载盘口变化数据库，{len(self.db)} 个变化组合")
+        except Exception as e:
+            print(f"加载盘口变化数据库失败: {e}")
+            self.db = {}
+
     def save(self):
-        """保存数据库到文件"""
-        os.makedirs(DATA_DIR, exist_ok=True)
-        with open(CHANGE_DB_FILE, 'w', encoding='utf-8') as f:
-            json.dump(self.db, f, ensure_ascii=False, indent=2)
+        """保存数据库到 MySQL"""
+        kv_store.save('market_change_db', self.db)
         print(f"盘口变化数据库已保存")
     
     def _get_key(self, asian_from: float, asian_to: float, ou_from: float, ou_to: float) -> str:

@@ -21,6 +21,8 @@ import json
 from typing import Dict, List, Optional, Any
 from collections import defaultdict
 
+from ..common import kv_store
+
 
 # ==================== 常量配置 ====================
 
@@ -40,20 +42,16 @@ class GoalCountCalibrator:
         self._load()
     
     def _load(self):
-        """从文件加载校准数据库"""
-        if os.path.exists(CALIBRATION_DB_FILE):
-            try:
-                with open(CALIBRATION_DB_FILE, 'r', encoding='utf-8') as f:
-                    self.db = json.load(f)
-            except Exception as e:
-                print(f"加载总球数校准数据库失败: {e}")
-                self.db = {}
-    
+        """从 MySQL 加载校准数据库"""
+        try:
+            self.db = kv_store.load('goal_count_calibration') or {}
+        except Exception as e:
+            print(f"加载总球数校准数据库失败: {e}")
+            self.db = {}
+
     def save(self):
-        """保存校准数据库到文件"""
-        os.makedirs(DATA_DIR, exist_ok=True)
-        with open(CALIBRATION_DB_FILE, 'w', encoding='utf-8') as f:
-            json.dump(self.db, f, ensure_ascii=False, indent=2)
+        """保存校准数据库到 MySQL"""
+        kv_store.save('goal_count_calibration', self.db)
         print(f"总球数校准数据库已保存，{len(self.db)} 个分桶")
     
     def _get_bucket_key(self, league: str, total_line: float, 

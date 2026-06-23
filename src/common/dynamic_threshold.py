@@ -13,6 +13,7 @@ from typing import Dict, Any, Optional
 from datetime import datetime
 
 from src.common.paths import data_path
+from src.common import kv_store
 
 logger = logging.getLogger(__name__)
 
@@ -211,33 +212,32 @@ class DynamicThresholdManager:
             'prediction_window': list(self.prediction_window)
         }
         
-        with open(THRESHOLD_CONFIG_PATH, 'w', encoding='utf-8') as f:
-            json.dump(config, f, ensure_ascii=False, indent=2)
-    
+        kv_store.save('dynamic_threshold_config', config)
+
     def _load_config(self):
         """
-        从文件加载配置
+        从 MySQL 加载配置
         """
-        if os.path.exists(THRESHOLD_CONFIG_PATH):
-            try:
-                with open(THRESHOLD_CONFIG_PATH, 'r', encoding='utf-8') as f:
-                    config = json.load(f)
-                
-                # 恢复状态
-                self.current_low_threshold = config.get('current_low_threshold', 
-                                                       self.initial_low_threshold)
-                self.current_high_threshold = config.get('current_high_threshold', 
-                                                         self.initial_high_threshold)
-                self.threshold_history = config.get('threshold_history', [])
-                
-                # 恢复预测窗口
-                window_data = config.get('prediction_window', [])
-                for item in window_data:
-                    self.prediction_window.append(item)
-                
-                logger.info(f"已加载动态阈值配置")
-            except Exception as e:
-                logger.error(f"加载配置失败: {e}")
+        try:
+            config = kv_store.load('dynamic_threshold_config')
+            if not config:
+                return
+
+            # 恢复状态
+            self.current_low_threshold = config.get('current_low_threshold',
+                                                   self.initial_low_threshold)
+            self.current_high_threshold = config.get('current_high_threshold',
+                                                     self.initial_high_threshold)
+            self.threshold_history = config.get('threshold_history', [])
+
+            # 恢复预测窗口
+            window_data = config.get('prediction_window', [])
+            for item in window_data:
+                self.prediction_window.append(item)
+
+            logger.info(f"已加载动态阈值配置")
+        except Exception as e:
+            logger.error(f"加载配置失败: {e}")
     
     def get_statistics(self) -> Dict[str, Any]:
         """

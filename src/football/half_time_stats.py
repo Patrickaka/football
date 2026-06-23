@@ -21,6 +21,8 @@ import json
 from typing import Dict, List, Optional, Any
 from collections import defaultdict
 
+from ..common import kv_store
+
 
 # ==================== 常量配置 ====================
 
@@ -40,20 +42,16 @@ class HalfTimeStatsDB:
         self._load()
     
     def _load(self):
-        """从文件加载数据库"""
-        if os.path.exists(HALF_TIME_DB_FILE):
-            try:
-                with open(HALF_TIME_DB_FILE, 'r', encoding='utf-8') as f:
-                    self.db = json.load(f)
-            except Exception as e:
-                print(f"加载半场统计数据库失败: {e}")
-                self.db = {}
-    
+        """从 MySQL 加载数据库"""
+        try:
+            self.db = kv_store.load('half_time_stats') or {}
+        except Exception as e:
+            print(f"加载半场统计数据库失败: {e}")
+            self.db = {}
+
     def save(self):
-        """保存数据库到文件"""
-        os.makedirs(DATA_DIR, exist_ok=True)
-        with open(HALF_TIME_DB_FILE, 'w', encoding='utf-8') as f:
-            json.dump(self.db, f, ensure_ascii=False, indent=2)
+        """保存数据库到 MySQL"""
+        kv_store.save('half_time_stats', self.db)
         print(f"半场统计数据库已保存，{len(self.db)} 个分桶")
     
     def _get_bucket_key(self, league: str, total_line: float, 

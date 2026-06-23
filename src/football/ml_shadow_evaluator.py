@@ -17,6 +17,8 @@ import csv
 from typing import Dict, List, Any
 from datetime import datetime
 
+from ..common import kv_store
+
 
 # ==================== 常量配置 ====================
 
@@ -117,23 +119,16 @@ class ShadowEvaluator:
         self.records = self._load_records()
     
     def _load_records(self) -> List[Dict]:
-        """加载影子预测记录"""
-        if os.path.exists(SHADOW_RECORDS_FILE):
-            try:
-                with open(SHADOW_RECORDS_FILE, 'r', encoding='utf-8') as f:
-                    return json.load(f)
-            except Exception as e:
-                print(f"加载影子记录失败: {e}")
-                return []
-        return []
-    
+        """从 MySQL 加载影子预测记录"""
+        try:
+            return kv_store.load('ml_shadow_records') or []
+        except Exception as e:
+            print(f"加载影子记录失败: {e}")
+            return []
+
     def _save_records(self):
-        """保存影子预测记录"""
-        # 确保目录存在
-        os.makedirs(os.path.dirname(SHADOW_RECORDS_FILE), exist_ok=True)
-        
-        with open(SHADOW_RECORDS_FILE, 'w', encoding='utf-8') as f:
-            json.dump(self.records, f, ensure_ascii=False, indent=2)
+        """保存影子预测记录到 MySQL"""
+        kv_store.save('ml_shadow_records', self.records)
     
     def record_prediction(self, match_id: str, match_date: str, league: str,
                          prediction: Dict, actual_result: str = None):

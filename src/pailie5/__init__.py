@@ -32,6 +32,7 @@ import time
 
 from ..common.paths import data_path
 from ..common.data_cache import cached_fetch
+from ..common import repositories
 
 logger = logging.getLogger(__name__)
 
@@ -79,29 +80,19 @@ class Pailie5Analyzer:
         """
         加载历史数据
         """
-        if os.path.exists(DATA_FILE):
-            try:
-                with open(DATA_FILE, 'r', encoding='utf-8') as f:
-                    content = f.read().strip()
-                    if not content:
-                        self.history = []
-                        logger.info("排列五历史数据文件为空")
-                    else:
-                        self.history = json.loads(content)
-                logger.info(f"已加载 {len(self.history)} 期排列五历史数据")
-            except Exception as e:
-                logger.error(f"加载排列五历史数据失败: {e}")
-                self.history = []
-        else:
-            logger.info("排列五历史数据文件不存在，将创建新数据")
-    
+        try:
+            self.history = repositories.pailie5_load()
+            logger.info(f"已加载 {len(self.history)} 期排列五历史数据")
+        except Exception as e:
+            logger.error(f"加载排列五历史数据失败: {e}")
+            self.history = []
+
     def _save_history(self):
         """
         保存历史数据
         """
         try:
-            with open(DATA_FILE, 'w', encoding='utf-8') as f:
-                json.dump(self.history, f, ensure_ascii=False, indent=2)
+            repositories.pailie5_save(self.history)
             logger.debug("排列五历史数据已保存")
         except Exception as e:
             logger.error(f"保存排列五历史数据失败: {e}")

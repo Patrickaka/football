@@ -21,6 +21,8 @@ import math
 from typing import Dict, List, Tuple, Optional
 from collections import defaultdict
 
+from ..common import kv_store
+
 # ==================== 常量配置 ====================
 DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'data')
 CALIBRATION_DB_FILE = os.path.join(DATA_DIR, 'calibration_db.json')
@@ -44,20 +46,16 @@ class BayesianCalibrator:
     
     def _load(self):
         """加载校准数据库"""
-        if os.path.exists(CALIBRATION_DB_FILE):
-            try:
-                with open(CALIBRATION_DB_FILE, 'r', encoding='utf-8') as f:
-                    self.history = json.load(f)
-                print(f"已加载贝叶斯校准数据库，{len(self.history)} 个分桶")
-            except Exception as e:
-                print(f"加载校准数据库失败: {e}")
-                self.history = {}
-    
+        try:
+            self.history = kv_store.load('calibration_db') or {}
+            print(f"已加载贝叶斯校准数据库，{len(self.history)} 个分桶")
+        except Exception as e:
+            print(f"加载校准数据库失败: {e}")
+            self.history = {}
+
     def save(self):
         """保存校准数据库"""
-        os.makedirs(DATA_DIR, exist_ok=True)
-        with open(CALIBRATION_DB_FILE, 'w', encoding='utf-8') as f:
-            json.dump(self.history, f, ensure_ascii=False, indent=2)
+        kv_store.save('calibration_db', self.history)
     
     def _get_bucket_key(self, score: str, league: str, total_line: float, asian: float, level: int) -> str:
         """

@@ -18,6 +18,8 @@ import math
 from typing import Dict, List, Tuple, Optional
 from collections import defaultdict
 
+from ..common import kv_store
+
 # ==================== 常量配置 ====================
 DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'data')
 CLUSTER_DB_FILE = os.path.join(DATA_DIR, 'market_cluster_db.json')
@@ -42,20 +44,16 @@ class MarketCluster:
     
     def _load(self):
         """加载聚类数据库"""
-        if os.path.exists(CLUSTER_DB_FILE):
-            try:
-                with open(CLUSTER_DB_FILE, 'r', encoding='utf-8') as f:
-                    self.clusters = json.load(f)
-                print(f"已加载盘口聚类数据库，{len(self.clusters)} 个盘口组合")
-            except Exception as e:
-                print(f"加载聚类数据库失败: {e}")
-                self.clusters = {}
-    
+        try:
+            self.clusters = kv_store.load('market_cluster_db') or {}
+            print(f"已加载盘口聚类数据库，{len(self.clusters)} 个盘口组合")
+        except Exception as e:
+            print(f"加载聚类数据库失败: {e}")
+            self.clusters = {}
+
     def save(self):
         """保存聚类数据库"""
-        os.makedirs(DATA_DIR, exist_ok=True)
-        with open(CLUSTER_DB_FILE, 'w', encoding='utf-8') as f:
-            json.dump(self.clusters, f, ensure_ascii=False, indent=2)
+        kv_store.save('market_cluster_db', self.clusters)
     
     def _round_to_standard(self, handicap: float, total: float) -> Tuple[float, float]:
         """

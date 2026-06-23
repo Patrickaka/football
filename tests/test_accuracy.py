@@ -28,77 +28,23 @@ print(f"  - 回测期数：{TRIALS}")
 print(f"  - Top K: {TOP_K}")
 print(f"  - 随机基线命中率：{TOP_K/1000*100:.2f}%")
 
-# ============ 纯 Python 随机森林回测 ============
+# ============ 集成模型回测 ============
 print("\n" + "=" * 70)
-print("【纯 Python 随机森林】回测中...")
+print("【集成模型】回测中...")
 print("=" * 70)
 
-hit_top_pure = 0
-hit_top3_pure = 0
+bt = ml_pure.backtest_ml(numbers, trials=TRIALS)
+if 'error' in bt:
+    print(f"回测失败：{bt['error']}")
+    sys.exit(1)
 
-for i in range(len(numbers) - TRIALS, len(numbers)):
-    history = numbers[:i]
-    actual = numbers[i]
-    
-    # 时序划分
-    split = int(len(history) * 0.8)
-    train_nums = history[split:]
-    
-    if len(train_nums) < 30:
-        continue
-    
-    # 构建训练数据
-    X, y = ml_pure.build_training_data(train_nums, neg_samples=30)
-    if X is None or len(X) < 100:
-        continue
-    
-    # 训练模型
-    try:
-        model = ml_pure.train_model(X, y)
-    except Exception as e:
-        print(f"训练失败：{e}")
-        continue
-    
-    # 预测
-    fe = ml_pure.FeatureEngineer(train_nums)
-    all_probs = []
-    
-    for a in range(10):
-        for b in range(10):
-            for c in range(10):
-                features = fe.build_features(a, b, c)
-                all_probs.append((a, b, c, features))
-    
-    X_all = [x[3] for x in all_probs]
-    probs = model.predict(X_all)
-    
-    # 排序
-    ranked = sorted(
-        [(probs[i], all_probs[i][0], all_probs[i][1], all_probs[i][2]) 
-         for i in range(len(probs))],
-        key=lambda x: -x[0]
-    )
-    
-    # 检查命中
-    actual_str = f"{actual[0]}{actual[1]}{actual[2]}"
-    top_nums = [f"{a}{b}{c}" for _, a, b, c in ranked[:TOP_K]]
-    top3_nums = [f"{a}{b}{c}" for _, a, b, c in ranked[:3]]
-    
-    if actual_str in top_nums:
-        hit_top_pure += 1
-    if actual_str in top3_nums:
-        hit_top3_pure += 1
-    
-    # 显示进度
-    progress = (i - (len(numbers) - TRIALS) + 1) / TRIALS * 100
-    if progress % 20 == 0:
-        print(f"  进度：{progress:.0f}%")
+hit_top_pure = bt['top_hit']
+hit_top3_pure = bt['top3_hit']
+n_valid = bt['trials']
+pure_rate = bt['top_rate']
+pure_top3_rate = bt['top3_rate']
 
-n_valid = TRIALS
-pure_rate = hit_top_pure / n_valid if n_valid > 0 else 0
-pure_top3_rate = hit_top3_pure / n_valid if n_valid > 0 else 0
-
-print(f"\n纯 Python 随机森林结果:")
+print(f"\n集成模型结果 ({bt['model_type']}):")
 print(f"  Top {TOP_K} 命中：{hit_top_pure}/{n_valid} ({pure_rate*100:.2f}%)")
 print(f"  Top 3 命中：{hit_top3_pure}/{n_valid} ({pure_top3_rate*100:.2f}%)")
 

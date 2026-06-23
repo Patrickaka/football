@@ -28,7 +28,7 @@ else:
     
     print(f"\nTop 3 推荐:")
     for i, rec in enumerate(result['top3'], 1):
-        print(f"  {i}. {rec['num']} - 概率 {rec['probability']*100:.2f}%")
+        print(f"  {i}. {rec['num']} - 概率 {rec['relative_prob']*100:.2f}%")
     
     print(f"\n特征重要性 Top 5:")
     for i, (name, score) in enumerate(result['feature_importance'][:5], 1):

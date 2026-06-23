@@ -13,6 +13,7 @@ from contextlib import contextmanager
 from itertools import combinations, product
 from ..common.logger import setup_logger
 from ..common.data_cache import cached_fetch
+from ..common import kv_store
 
 log = setup_logger('lottery3d')
 
@@ -773,12 +774,8 @@ def recent_recommend_penalty(pool, recent_recommendations):
 
 def load_recent_3d_recommendations():
     """加载最近推荐历史"""
-    if not os.path.exists(RECENT_3D_RECOMMEND_FILE):
-        return []
-    
     try:
-        with open(RECENT_3D_RECOMMEND_FILE, 'r', encoding='utf-8') as f:
-            return json.load(f)
+        return kv_store.load('lottery3d_recent_recommend', [])
     except Exception as e:
         log.error(f"加载推荐历史失败: {e}")
         return []
@@ -787,20 +784,14 @@ def load_recent_3d_recommendations():
 def save_recent_3d_recommendations(recommendations):
     """保存推荐历史"""
     try:
-        # 确保目录存在
-        os.makedirs(os.path.dirname(RECENT_3D_RECOMMEND_FILE), exist_ok=True)
-        
         # 加载现有历史
         history = load_recent_3d_recommendations()
-        
+
         # 添加新推荐并保持最近 N 期
         history.append(recommendations)
         history = history[-RECENT_RECOMMEND_WINDOW:]
-        
-        # 保存
-        with open(RECENT_3D_RECOMMEND_FILE, 'w', encoding='utf-8') as f:
-            json.dump(history, f, ensure_ascii=False, indent=2)
-        
+
+        kv_store.save('lottery3d_recent_recommend', history)
         log.info("推荐历史已保存")
     except Exception as e:
         log.error(f"保存推荐历史失败: {e}")
@@ -808,12 +799,8 @@ def save_recent_3d_recommendations(recommendations):
 
 def load_online_predictions():
     """加载线上预测记录"""
-    if not os.path.exists(ONLINE_PREDICTION_FILE):
-        return []
-    
     try:
-        with open(ONLINE_PREDICTION_FILE, 'r', encoding='utf-8') as f:
-            return json.load(f)
+        return kv_store.load('lottery3d_online_predictions', [])
     except Exception as e:
         log.error(f"加载线上预测记录失败: {e}")
         return []
@@ -857,10 +844,7 @@ def save_online_prediction(period, last_draw, zhixuan_top3, zhixuan, danma, kill
         else:
             records.append(record)
         
-        # 保存
-        with open(ONLINE_PREDICTION_FILE, 'w', encoding='utf-8') as f:
-            json.dump(records, f, ensure_ascii=False, indent=2)
-        
+        kv_store.save('lottery3d_online_predictions', records)
         log.info(f"线上预测记录已保存: {period}")
     except Exception as e:
         log.error(f"保存线上预测记录失败: {e}")

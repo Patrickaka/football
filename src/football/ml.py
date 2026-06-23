@@ -17,6 +17,8 @@ import pickle
 import numpy as np
 from typing import Tuple, Dict, List, Optional, Callable
 
+from ..common import kv_store
+
 # 尝试导入机器学习库
 CATBOOST_AVAILABLE = False
 XGBOOST_AVAILABLE = False
@@ -1059,9 +1061,9 @@ def load_trained_ml_model() -> bool:
         print("ML模型加载成功")
         
         # 加载元数据
-        if os.path.exists(metadata_file):
-            with open(metadata_file, 'r', encoding='utf-8') as f:
-                _trained_ml_metadata = json.load(f)
+        _meta = kv_store.load('ml_metadata')
+        if _meta is not None:
+            _trained_ml_metadata = _meta
             _trained_ml_feature_names = _trained_ml_metadata.get('features', [])
             print(f"ML元数据加载成功，特征数: {len(_trained_ml_feature_names)}")
         

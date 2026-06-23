@@ -16,6 +16,8 @@ import os
 import json
 from typing import Dict, List, Tuple, Optional
 
+from ..common import kv_store
+
 # ==================== 常量配置 ====================
 DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'data')
 ELO_DB_FILE = os.path.join(DATA_DIR, 'dynamic_elo_db.json')
@@ -32,21 +34,17 @@ class DynamicELO:
         self._load()
     
     def _load(self):
-        """加载ELO数据库"""
-        if os.path.exists(ELO_DB_FILE):
-            try:
-                with open(ELO_DB_FILE, 'r', encoding='utf-8') as f:
-                    self.teams = json.load(f)
-                print(f"已加载动态ELO数据库，{len(self.teams)} 支球队")
-            except Exception as e:
-                print(f"加载ELO数据库失败: {e}")
-                self.teams = {}
-    
+        """从 MySQL 加载ELO数据库"""
+        try:
+            self.teams = kv_store.load('dynamic_elo_db') or {}
+            print(f"已加载动态ELO数据库，{len(self.teams)} 支球队")
+        except Exception as e:
+            print(f"加载ELO数据库失败: {e}")
+            self.teams = {}
+
     def save(self):
-        """保存ELO数据库"""
-        os.makedirs(DATA_DIR, exist_ok=True)
-        with open(ELO_DB_FILE, 'w', encoding='utf-8') as f:
-            json.dump(self.teams, f, ensure_ascii=False, indent=2)
+        """保存ELO数据库到 MySQL"""
+        kv_store.save('dynamic_elo_db', self.teams)
     
     def get_elo(self, team_name: str) -> Tuple[float, float, float]:
         """

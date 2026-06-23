@@ -57,6 +57,8 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 from threading import Thread
 
+from ..common import repositories
+
 
 log = logging.getLogger('football')
 
@@ -257,22 +259,18 @@ class PredictionHistory:
         self._load()
     
     def _load(self):
-        """从文件加载记录"""
-        if os.path.exists(HISTORY_FILE):
-            try:
-                with open(HISTORY_FILE, 'r', encoding='utf-8') as f:
-                    self.records = json.load(f)
-                log.info(f"已加载 {len(self.records)} 条预测历史记录")
-            except Exception as e:
-                log.error(f"加载预测历史失败: {e}")
-                self.records = []
-    
-    def _save(self):
-        """保存记录到文件"""
-        os.makedirs(DATA_DIR, exist_ok=True)
+        """从 MySQL 加载记录"""
         try:
-            with open(HISTORY_FILE, 'w', encoding='utf-8') as f:
-                json.dump(self.records, f, ensure_ascii=False, indent=2)
+            self.records = repositories.football_prediction_load()
+            log.info(f"已加载 {len(self.records)} 条预测历史记录")
+        except Exception as e:
+            log.error(f"加载预测历史失败: {e}")
+            self.records = []
+
+    def _save(self):
+        """保存记录到 MySQL"""
+        try:
+            repositories.football_prediction_save(self.records)
         except Exception as e:
             log.error(f"保存预测历史失败: {e}")
     

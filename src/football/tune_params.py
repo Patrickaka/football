@@ -24,6 +24,8 @@ import logging
 from datetime import datetime
 from typing import Dict, List, Tuple, Any
 
+from ..common import repositories
+
 # 设置日志
 logging.basicConfig(
     level=logging.INFO,
@@ -43,28 +45,12 @@ def load_historical_data(data_dir: str = None) -> List[Dict]:
     返回：
         历史记录列表
     """
-    if data_dir is None:
-        data_dir = os.path.join(os.path.dirname(__file__), 'data')
-    
     records = []
-    
-    if not os.path.exists(data_dir):
-        log.warning(f"数据目录不存在: {data_dir}")
-        return records
-    
-    for filename in os.listdir(data_dir):
-        if filename.endswith('.json') and 'history' in filename.lower():
-            filepath = os.path.join(data_dir, filename)
-            try:
-                with open(filepath, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                    if isinstance(data, list):
-                        records.extend(data)
-                    elif isinstance(data, dict) and 'records' in data:
-                        records.extend(data['records'])
-            except Exception as e:
-                log.warning(f"读取文件失败 {filename}: {e}")
-    
+    try:
+        records = repositories.football_prediction_load()
+    except Exception as e:
+        log.warning(f"加载历史记录失败: {e}")
+
     log.info(f"加载了 {len(records)} 条历史记录")
     return records
 

@@ -26,4 +26,4 @@ else:
     print(f"推荐数量: {len(result['recommendations'])}")
     print(f"Top 3:")
     for i, rec in enumerate(result['top3'], 1):
-        print(f"  {i}. {rec['num']} - {rec['probability']*100:.2f}%")
+        print(f"  {i}. {rec['num']} - {rec['relative_prob']*100:.2f}%")

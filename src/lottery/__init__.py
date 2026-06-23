@@ -28,6 +28,7 @@ from typing import Dict, List, Tuple, Any, Optional
 from ..common.logger import setup_logger
 from ..common.paths import data_path
 from ..common.data_cache import cached_fetch, is_cache_valid, save_cached_data
+from ..common import repositories
 
 log = setup_logger('lottery')
 
@@ -95,10 +96,9 @@ class LotteryAnalyzer:
     def _load_history(self) -> List[Dict]:
         """加载历史数据"""
         try:
-            with open(self.history_file, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-                return data.get('results', [])
-        except (FileNotFoundError, json.JSONDecodeError):
+            results = repositories.dlt_load()
+            return results if results else self._generate_simulated_data()
+        except Exception:
             return self._generate_simulated_data()
 
     def _generate_simulated_data(self) -> List[Dict]:
@@ -117,8 +117,7 @@ class LotteryAnalyzer:
 
     def save_history(self):
         """保存历史数据"""
-        with open(self.history_file, 'w', encoding='utf-8') as f:
-            json.dump({'results': self.history_data}, f, ensure_ascii=False, indent=2)
+        repositories.dlt_save(self.history_data)
 
     def add_result(self, issue: str, front: List[int], back: List[int], date: str):
         """添加新的开奖结果"""

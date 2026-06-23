@@ -21,6 +21,8 @@ from typing import Dict, List, Tuple, Any
 
 import numpy as np
 
+from ..common import kv_store
+
 
 # ==================== 常量配置 ====================
 
@@ -366,9 +368,8 @@ class MLModelTrainer:
             'metrics': test_metrics or {},
         }
         
-        with open(METADATA_FILE, 'w', encoding='utf-8') as f:
-            json.dump(self.metadata, f, ensure_ascii=False, indent=2)
-        print(f"元数据已保存到: {METADATA_FILE}")
+        kv_store.save('ml_metadata', self.metadata)
+        print("元数据已保存到 MySQL kv_store: ml_metadata")
     
     def load(self) -> bool:
         """
@@ -386,9 +387,9 @@ class MLModelTrainer:
                 self.model = pickle.load(f)
             print(f"模型加载成功")
             
-            if os.path.exists(METADATA_FILE):
-                with open(METADATA_FILE, 'r', encoding='utf-8') as f:
-                    self.metadata = json.load(f)
+            _meta = kv_store.load('ml_metadata')
+            if _meta is not None:
+                self.metadata = _meta
                 self.feature_names = self.metadata.get('features', [])
                 print(f"元数据加载成功")
             

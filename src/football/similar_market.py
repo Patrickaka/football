@@ -20,6 +20,8 @@ import math
 from typing import Dict, List, Tuple, Optional, Any
 from collections import defaultdict
 
+from ..common import repositories
+
 # ==================== 常量配置 ====================
 
 # 数据目录
@@ -222,28 +224,24 @@ class SimilarMarketDB:
         return True
     
     def _load(self):
-        """从文件加载数据库"""
-        if os.path.exists(SIMILAR_DB_FILE):
-            try:
-                with open(SIMILAR_DB_FILE, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                    for record_data in data.get('records', []):
-                        self.records.append(MatchRecord(record_data))
-                print(f"已加载相似盘口数据库，{len(self.records)} 条记录")
-            except Exception as e:
-                print(f"加载相似盘口数据库失败: {e}")
-                self.records = []
-    
+        """从 MySQL 加载数据库"""
+        try:
+            data = repositories.similar_market_load()
+            for record_data in data.get('records', []):
+                self.records.append(MatchRecord(record_data))
+            print(f"已加载相似盘口数据库，{len(self.records)} 条记录")
+        except Exception as e:
+            print(f"加载相似盘口数据库失败: {e}")
+            self.records = []
+
     def save(self):
-        """保存数据库到文件"""
-        os.makedirs(DATA_DIR, exist_ok=True)
+        """保存数据库到 MySQL"""
         data = {
             'records': [r.to_dict() for r in self.records],
             'version': '1.0',
             'count': len(self.records),
         }
-        with open(SIMILAR_DB_FILE, 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+        repositories.similar_market_save(data)
         print(f"相似盘口数据库已保存，{len(self.records)} 条记录")
     
     def add_record(self, record: MatchRecord):

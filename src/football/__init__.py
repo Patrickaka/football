@@ -3373,11 +3373,9 @@ def normalize_team_name(name: str) -> str:
         import json
         import os
         
-        alias_file = os.path.join(os.path.dirname(__file__), 'team_alias.json')
-        if os.path.exists(alias_file):
-            with open(alias_file, 'r', encoding='utf-8') as f:
-                alias_map = json.load(f)
-            
+        from ..common import kv_store
+        alias_map = kv_store.load('team_alias')
+        if alias_map:
             # 遍历映射表，找到对应的标准名称
             for standard_name, aliases in alias_map.items():
                 if name in aliases or name == standard_name:
