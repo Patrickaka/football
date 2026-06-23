@@ -11,6 +11,7 @@
 import os
 import sys
 import json
+import math
 import hmac
 import base64
 import socket
@@ -130,6 +131,23 @@ def _json_default(obj):
     if hasattr(obj, 'to_dict') and callable(getattr(obj, 'to_dict')):
         return obj.to_dict()
     raise TypeError(f'Object of type {type(obj).__name__} is not JSON serializable')
+
+
+def _sanitize_json(obj):
+    """递归把非有限浮点（inf/nan，含 numpy 标量/数组）替换为 None。
+
+    json.dumps 默认 allow_nan=True 会输出 Infinity/NaN 字面量，浏览器 JSON.parse
+    无法解析（distance=inf 等业务哨兵值即属此类），故序列化前统一清洗为 null。
+    """
+    if isinstance(obj, float):
+        return obj if math.isfinite(obj) else None
+    if isinstance(obj, dict):
+        return {k: _sanitize_json(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_sanitize_json(v) for v in obj]
+    if hasattr(obj, 'tolist') and not isinstance(obj, (str, bytes, bytearray)):
+        return _sanitize_json(obj.tolist())
+    return obj
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -303,7 +321,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def _serve_json(self, payload):
         try:
-            body = json.dumps(payload, ensure_ascii=False, default=_json_default).encode('utf-8')
+            body = json.dumps(_sanitize_json(payload), ensure_ascii=False,
+                              allow_nan=False, default=_json_default).encode('utf-8')
         except (TypeError, ValueError) as e:
             self._send_json_error(500, f'JSON 序列化失败: {e}')
             return
