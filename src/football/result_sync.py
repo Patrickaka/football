@@ -360,8 +360,13 @@ class PredictionHistory:
             'final': predicted_scores,  # 最终预测
         }
         
-        # 赔率分层记录
+        # 当前时间层也记录预测（与下方 odds_layers 对齐），
+        # 否则按值去重时同一层会被重复预测一次
         layer = infer_time_layer(match_time)
+        if layer in time_layers:
+            time_layers[layer] = predicted_scores
+
+        # 赔率分层记录
         odds_layers = {
             'T-24h': None,
             'T-6h': None,
@@ -2035,7 +2040,7 @@ def scan_and_predict_time_layers() -> Dict[str, int]:
                 
                 if existing:
                     time_layers = existing.get('time_layers', {})
-                    if time_layer in time_layers:
+                    if time_layers.get(time_layer) is not None:
                         log.debug(f"已在 {time_layer} 层预测过: {match_id}")
                         continue
                 
