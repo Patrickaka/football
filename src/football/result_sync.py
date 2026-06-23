@@ -1969,32 +1969,35 @@ def hide_failed_records():
     log.info("已隐藏所有失败记录")
 
 
-def predict_at_time_layer(match_id: str, time_layer: str) -> bool:
+def predict_at_time_layer(match: Dict, time_layer: str) -> bool:
     """
-    在指定时间层对比赛进行预测
-    
+    在指定时间层对比赛进行预测并落库
+
     参数：
-        match_id: 比赛ID
+        match: fetch_match_list 的比赛字典（含 match_id/home/away/league/time）
         time_layer: 时间层标识
-        
+
     返回：
         是否成功
     """
+    match_id = match.get('match_id') or match.get('mid')
     try:
         from . import analyze_match
-        
+
         log.info(f"正在进行时间分层预测: match_id={match_id}, time_layer={time_layer}")
-        
-        # 调用预测（强制刷新，不使用缓存）
-        result = analyze_match({'mid': match_id}, force_refresh=True)
-        
-        if result and result.get('success'):
-            log.info(f"时间分层预测成功: match_id={match_id}, time_layer={time_layer}")
-            return True
-        else:
-            log.warning(f"时间分层预测失败: match_id={match_id}, time_layer={time_layer}")
-            return False
-            
+
+        # analyze_match 内部会保存预测记录；传完整字段以便记录含队名/联赛
+        analyze_match({
+            'match_id': match_id,
+            'home': match.get('home', ''),
+            'away': match.get('away', ''),
+            'league': match.get('league', ''),
+            'time': match.get('time', match.get('match_time', '')),
+        }, force_refresh=True)
+
+        log.info(f"时间分层预测成功: match_id={match_id}, time_layer={time_layer}")
+        return True
+
     except Exception as e:
         log.error(f"时间分层预测异常: match_id={match_id}, time_layer={time_layer}, error={e}")
         return False
@@ -2037,7 +2040,7 @@ def scan_and_predict_time_layers() -> Dict[str, int]:
                         continue
                 
                 # 执行预测
-                if predict_at_time_layer(match_id, time_layer):
+                if predict_at_time_layer(match, time_layer):
                     result[time_layer] += 1
         
         log.info(f"时间分层扫描完成: T-24h={result['T-24h']}, T-6h={result['T-6h']}, T-1h={result['T-1h']}, T-15min={result['T-15min']}")
