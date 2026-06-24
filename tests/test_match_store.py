@@ -19,8 +19,8 @@ class SeasonFromDateTest(unittest.TestCase):
     def test_may_is_old_season(self):
         self.assertEqual(ms.season_from_date('31/05/2025'), '2425')
 
-    def test_july_boundary_is_new_season(self):
-        self.assertEqual(ms.season_from_date('01/07/2025'), '2526')
+    def test_july_boundary_is_old_season(self):
+        self.assertEqual(ms.season_from_date('01/07/2025'), '2425')
 
     def test_june_boundary_is_old_season(self):
         self.assertEqual(ms.season_from_date('30/06/2025'), '2425')

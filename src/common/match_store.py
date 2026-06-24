@@ -23,6 +23,7 @@ _CORE_COLS = {
     'FTHG', 'FTAG', 'FTR', 'HTHG', 'HTAG', 'HTR', 'Referee',
 }
 _STATS_INT_COLS = ['HS', 'AS', 'HST', 'AST', 'HF', 'AF', 'HC', 'AC', 'HY', 'AY', 'HR', 'AR']
+_STATS_INT_SET = frozenset(_STATS_INT_COLS)
 
 MATCHES_COLS = [
     'match_id', 'league', 'league_code', 'match_date', 'match_time',
@@ -89,7 +90,7 @@ def _clean_str(value):
 def _build_odds(row):
     odds = {}
     for key, value in row.items():
-        if not key or key in _CORE_COLS or key in _STATS_INT_COLS:
+        if not key or key in _CORE_COLS or key in _STATS_INT_SET:
             continue
         parsed = _to_float(value)
         if parsed is not None:
@@ -172,7 +173,7 @@ def record_to_csv_row(rec):
         row[key] = _num_str(value)
     for key, value in _loads(rec.get('stats')).items():
         if key == 'referee':
-            row['Referee'] = value
+            row['Referee'] = _num_str(value)
         else:
             row[key.upper()] = _num_str(value)
     return row
@@ -182,6 +183,6 @@ def season_from_date(date_str):
     """'DD/MM/YYYY' → 赛季标签（8月起算下一赛季），如 15/08/2025 → '2526'。"""
     d = datetime.strptime(date_str, '%d/%m/%Y')
     y = d.year % 100
-    if d.month >= 7:
+    if d.month >= 8:
         return f"{y:02d}{(y + 1) % 100:02d}"
     return f"{(y - 1) % 100:02d}{y:02d}"
