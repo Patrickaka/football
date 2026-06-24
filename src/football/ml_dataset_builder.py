@@ -15,7 +15,7 @@ import os
 import csv
 import json
 import math
-from typing import Dict, List, Tuple, Any
+from typing import Dict, List, Optional, Tuple, Any
 from collections import defaultdict
 from datetime import datetime
 
@@ -353,7 +353,20 @@ class DatasetBuilder:
                         self.raw_matches.append(match)
                 except Exception as e:
                     print(f"解析行失败: {e}")
-    
+
+    def load_from_matches(self):
+        """从 matches 表加载所有比赛（替代逐文件读 CSV）。赛季由日期推导。"""
+        from ..common import match_store
+
+        for row in match_store.iter_csv_rows():
+            try:
+                season = match_store.season_from_date(row['Date'])
+                match = self._parse_csv_row(row, row.get('Div', ''), season)
+                if match:
+                    self.raw_matches.append(match)
+            except Exception as e:
+                print(f"解析行失败: {e}")
+
     def _parse_csv_row(self, row: Dict[str, str], league_code: str, season: str) -> Optional[Dict]:
         """
         解析CSV行数据
@@ -664,10 +677,8 @@ def main():
     """主函数"""
     builder = DatasetBuilder()
     
-    # 加载所有联赛和赛季的数据
-    for league_code in LEAGUE_MAP.keys():
-        for season in SEASONS:
-            builder.load_raw_csv(league_code, season)
+    # 从 matches 表加载全部数据
+    builder.load_from_matches()
     
     # 构建数据集
     samples = builder.build()
