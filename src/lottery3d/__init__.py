@@ -764,7 +764,11 @@ def save_recent_3d_recommendations(period, recommendations):
         history = load_recent_3d_recommendations()
 
         # 按期号去重：如果已有相同期号，更新推荐；否则添加新记录
-        if history and history[-1].get("period") == period:
+        if (
+            history
+            and isinstance(history[-1], dict)
+            and history[-1].get("period") == period
+        ):
             # 更新当前期的推荐（覆盖）
             history[-1]["recommendations"] = recommendations
             history[-1]["updated_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
@@ -2301,7 +2305,8 @@ def triplet_weight(a, b, c, score, danma, kill, meta, features=None):
     kill_set = set(kill or [])
     dyn = meta.get("dynamic") or {}
     flags = features if features is not None else FEATURE_FLAGS
-    
+    numbers = meta.get("numbers", [])
+
     w = score[a] + score[b] + score[c]
     for x in (a, b, c):
         if x in danma:
