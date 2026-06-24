@@ -1711,15 +1711,19 @@ function renderLottery3d(r) {
 
   // ── 回测 ──
   if (bt && bt.trials) {
+    const topRate = bt.top30_rate ?? bt.top_rate ?? 0;
+    const topHit = bt.top30_hit ?? bt.top_hit ?? 0;
+    const topBaseline = bt.top30_rate_baseline ?? bt.top_rate_baseline ?? 0;
     html += `<div class="section-title">📈 滚动回测（仅供参考）</div>`;
     html += `<div class="card">
       <div class="row"><span class="k">回测期数</span><span class="v">${bt.trials}</span></div>
       <div class="row"><span class="k">直选Top3命中</span><span class="v">${pct(bt.top3_rate)} (${bt.top3_hit}/${bt.trials})</span></div>
-      <div class="row"><span class="k">直选${n}注命中</span><span class="v">${pct(bt.top_rate)} (${bt.top_hit}/${bt.trials})</span></div>
-      <div class="row"><span class="k">随机基线（${n}注）</span><span class="v">${pct(bt.top_rate_baseline)}</span></div>
+      <div class="row"><span class="k">Top${n}命中（实盘池 served）</span><span class="v">${pct(bt.served_top30_rate ?? topRate)} (${bt.served_top30_hit ?? topHit}/${bt.trials})</span></div>
+      <div class="row"><span class="k">Top${n}命中（纯模型 raw）</span><span class="v">${pct(bt.raw_top30_rate ?? 0)} (${bt.raw_top30_hit ?? 0}/${bt.trials})</span></div>
+      <div class="row"><span class="k">随机基线（${n}注）</span><span class="v">${pct(topBaseline)}</span></div>
       ${bt.significance ? `<div class="row"><span class="k">置换检验 p 值</span><span class="v" style="color:${bt.significance.significant ? 'var(--accent2)' : 'var(--muted)'}">${bt.significance.pvalue.toFixed(3)} · ${bt.significance.significant ? '显著优于随机' : '未显著优于随机（打乱均值 ' + pct(bt.significance.shuffled_mean_rate) + '）'}</span></div>` : ''}
-      <div class="row"><span class="k">推荐池至少中2个数字</span><span class="v">${pct(bt.ge2_digit_rate)}</span></div>
-      <div class="row"><span class="k">和值落在预测带±4</span><span class="v">${pct(bt.sum_band_rate)}</span></div>
+      <div class="row"><span class="k">推荐池至少一注重合2码</span><span class="v">${pct(bt.ge2_digit_rate)}</span></div>
+      ${bt.sum_band_rate != null ? `<div class="row"><span class="k">和值落在预测带±4</span><span class="v">${pct(bt.sum_band_rate)}</span></div>` : ''}
       <div class="row"><span class="k">组六四码命中</span><span class="v">${bt.zu6_draws ? pct(bt.zu6_four_rate) + ' (' + bt.zu6_four_hit + '/' + bt.zu6_draws + '，开奖为组六时)' : '—'}</span></div>
       <div class="row"><span class="k">五码组六池含开奖三码</span><span class="v">${bt.zu6_draws ? pct(bt.zu6_pool_rate) + ' (' + bt.zu6_pool_hit + '/' + bt.zu6_draws + ')' : '—'}</span></div>
     </div>`;
@@ -1738,10 +1742,10 @@ function renderLottery3d(r) {
 
     // 诊断区 4: 随机基准对照
     if (bt.random_rate != null) {
-      const lift = (bt.top_rate - bt.random_rate) * 100;
+      const lift = (topRate - bt.random_rate) * 100;
       html += `<div class="section-title">🎲 随机基准对照</div>`;
       html += `<div class="card">
-        <div class="row"><span class="k">模型 Top${n} 命中率</span><span class="v">${pct(bt.top_rate)}</span></div>
+        <div class="row"><span class="k">模型 Top${n} 命中率</span><span class="v">${pct(topRate)}</span></div>
         <div class="row"><span class="k">随机 Top${n} 命中率</span><span class="v">${pct(bt.random_rate)}</span></div>
         <div class="row"><span class="k">提升</span><span class="v" style="color:${lift > 0 ? 'var(--accent2)' : lift < 0 ? 'var(--away)' : 'var(--text)'}">${lift > 0 ? '+' : ''}${lift.toFixed(1)}%</span></div>
         <div class="note">理论随机命中率：${pct(n / 1000)}</div>
@@ -1972,9 +1976,11 @@ function renderMLResult(r) {
   html += `<div class="highlight" style="border-color:var(--warn)">`;
   top3.forEach((item, i) => {
     const model_score = typeof item.model_score === 'number' ? item.model_score : 0;
-    const relative_prob = typeof item.relative_prob === 'number' ? item.relative_prob : 0;
+    const topk_share = typeof item.topk_score_share === 'number'
+      ? item.topk_score_share
+      : (typeof item.relative_prob === 'number' ? item.relative_prob : 0);
     html += `<div class="row"><span class="k">第${i + 1}推荐</span>
-      <span class="v"><b style="font-size:22px;letter-spacing:4px;color:var(--accent2)">${esc(item.num || '---')}</b> · 模型分 ${model_score.toFixed(3)} · Top${recs.length}占比 ${(relative_prob * 100).toFixed(1)}%</span></div>`;
+      <span class="v"><b style="font-size:22px;letter-spacing:4px;color:var(--accent2)">${esc(item.num || '---')}</b> · 模型分 ${model_score.toFixed(3)} · Top${recs.length}占比 ${(topk_share * 100).toFixed(1)}%</span></div>`;
   });
   html += `</div>`;
 
