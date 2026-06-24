@@ -782,31 +782,17 @@ def estimate_total(over_odds: float, under_odds: float) -> float:
 
 # ==================== 批量构建工具 ====================
 
-def build_from_csv_directory(db: SimilarMarketDB, csv_dir: str = DATA_DIR):
-    """
-    从CSV目录批量构建数据库
-    
-    参数：
-        db: SimilarMarketDB实例
-        csv_dir: CSV文件目录
-    """
-    import re
-    
-    count = 0
-    league_pattern = re.compile(r'^([A-Za-z0-9]+)_(\d{4})\.csv$')
-    
-    for filename in os.listdir(csv_dir):
-        match = league_pattern.match(filename)
-        if match:
-            league = match.group(1)
-            filepath = os.path.join(csv_dir, filename)
-            print(f"处理文件: {filename}")
-            
-            records = parse_football_data_csv(filepath, league)
-            db.add_records(records)
-            count += len(records)
-    
-    print(f"批量导入完成，共 {count} 条记录")
+def build_from_matches(db: 'SimilarMarketDB'):
+    """从 matches 表批量构建相似盘口库（替代旧的 CSV 目录扫描）。"""
+    from ..common import match_store
+
+    records = []
+    for row in match_store.iter_csv_rows():
+        record = parse_football_data_row(row, row.get('Div', ''))
+        if record:
+            records.append(record)
+    db.add_records(records)
+    print(f"批量导入完成，共 {len(records)} 条记录")
 
 
 # ==================== 查询接口 ====================
@@ -897,7 +883,7 @@ def main():
     
     if args.build:
         db = SimilarMarketDB()
-        build_from_csv_directory(db)
+        build_from_matches(db)
         db.save()
     
     elif args.query:
