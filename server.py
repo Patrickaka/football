@@ -454,7 +454,7 @@ class Handler(BaseHTTPRequestHandler):
             # 立即重新抓取并计算
             self._log.info('3D 强制刷新：重新抓取数据...')
             start = time.time()
-            result = run_prediction(force_refresh=True, enable_backtest=False, compute_weights=False)
+            result = run_prediction(force_refresh=True, enable_backtest=False, compute_weights=True)
             elapsed = time.time() - start
             
             if 'error' in result:
@@ -529,7 +529,8 @@ class Handler(BaseHTTPRequestHandler):
                     {
                         'num': r['num'],
                         'model_score': float(r.get('model_score', r.get('probability', 0))),
-                        'relative_prob': float(r.get('relative_prob', 0)),
+                        'topk_score_share': float(r.get('topk_score_share', r.get('relative_prob', 0))),
+                        'relative_prob': float(r.get('relative_prob', r.get('topk_score_share', 0))),
                     }
                     for r in result.get('recommendations', [])
                 ],
@@ -537,7 +538,8 @@ class Handler(BaseHTTPRequestHandler):
                     {
                         'num': r['num'],
                         'model_score': float(r.get('model_score', r.get('probability', 0))),
-                        'relative_prob': float(r.get('relative_prob', 0)),
+                        'topk_score_share': float(r.get('topk_score_share', r.get('relative_prob', 0))),
+                        'relative_prob': float(r.get('relative_prob', r.get('topk_score_share', 0))),
                     }
                     for r in result.get('top3', [])
                 ],

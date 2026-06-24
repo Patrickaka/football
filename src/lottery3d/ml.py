@@ -759,75 +759,67 @@ def train_ensemble(X, y, models_to_try=None, sample_weight=None):
     """
     训练多模型集成（支持样本权重）
     
-    参数：
-        X: 特征矩阵
-        y: 标签
-        models_to_try: 尝试的模型列表
-        sample_weight: 样本权重
-    
-    返回：
-        models: 训练好的模型列表 [(model, model_name, score), ...]
-        selected_indices: 选择的特征索引
+    流程：先时序切分 → 训练集选特征 → 验证集评权重 → 全量数据重训
     """
     if models_to_try is None:
         models_to_try = ["catboost", "xgboost", "lightgbm"]
     
-    # 特征选择
     fe = FeatureEngineer([])
     feature_names = fe.get_feature_names()
-    selected_indices, _ = select_features(X, y, feature_names)
-    
-    # 筛选特征
-    X_selected = [[x[i] for i in selected_indices] for x in X]
-    
-    # 如果有样本权重，也筛选对应的权重
-    if sample_weight is not None:
-        sample_weight_selected = sample_weight
-    else:
-        sample_weight_selected = None
-    
-    # 时序尾部验证集（后 20%），避免训练集自评导致过拟合模型权重过高
-    split = max(10, int(len(X_selected) * 0.8))
-    use_valid = len(X_selected) - split >= 5
+
+    split = max(10, int(len(X) * 0.8))
+    use_valid = len(X) - split >= 5
     if use_valid:
-        X_train = X_selected[:split]
+        X_train_raw = X[:split]
         y_train = y[:split]
-        X_valid = X_selected[split:]
+        X_valid_raw = X[split:]
         y_valid = y[split:]
-        w_train = sample_weight_selected[:split] if sample_weight_selected is not None else None
+        w_train = sample_weight[:split] if sample_weight is not None else None
+        w_full = sample_weight
     else:
-        X_train = X_selected
+        X_train_raw = X
         y_train = y
-        X_valid = None
+        X_valid_raw = None
         y_valid = None
-        w_train = sample_weight_selected
-    
-    # 训练各个模型
-    trained_models = []
-    
+        w_train = sample_weight
+        w_full = sample_weight
+
+    selected_indices, _ = select_features(X_train_raw, y_train, feature_names)
+    X_train = [[x[i] for i in selected_indices] for x in X_train_raw]
+    X_valid = [[x[i] for i in selected_indices] for x in X_valid_raw] if X_valid_raw else None
+    X_full = [[x[i] for i in selected_indices] for x in X]
+
+    model_scores = {}
+
     for model_name in models_to_try:
-        model, used_name = train_single_model(X_train, y_train, model_name, sample_weight=w_train)
+        probe, used_name = train_single_model(X_train, y_train, model_name, sample_weight=w_train)
+        if not probe:
+            continue
+        try:
+            if X_valid and hasattr(probe, 'predict_proba'):
+                probs = probe.predict_proba(X_valid)[:, 1]
+                model_scores[used_name] = _validation_score(y_valid, probs)
+            elif hasattr(probe, 'predict_proba'):
+                probs = probe.predict_proba(X_train)[:, 1]
+                model_scores[used_name] = _validation_score(y_train, probs)
+            else:
+                model_scores[used_name] = 0.5
+        except Exception:
+            model_scores[used_name] = 0.5
+        log.info(f"验证 {used_name} 得分: {model_scores[used_name]:.4f}")
+
+    trained_models = []
+    for model_name in models_to_try:
+        model, used_name = train_single_model(X_full, y, model_name, sample_weight=w_full)
         if model:
-            try:
-                if X_valid and hasattr(model, 'predict_proba'):
-                    probs = model.predict_proba(X_valid)[:, 1]
-                    score = _validation_score(y_valid, probs)
-                elif hasattr(model, 'predict_proba'):
-                    probs = model.predict_proba(X_train)[:, 1]
-                    score = _validation_score(y_train, probs)
-                else:
-                    score = 0.5
-            except Exception:
-                score = 0.5
-            
+            score = model_scores.get(used_name, 0.5)
             trained_models.append((model, used_name, score))
-            log.info(f"训练 {used_name} 完成，验证得分: {score:.4f}")
-    
-    # 如果没有模型训练成功，使用纯 Python 随机森林
+            log.info(f"全量重训 {used_name} 完成，融合权重依据验证得分: {score:.4f}")
+
     if not trained_models:
         log.warning("所有 ML 模型训练失败，使用纯 Python 随机森林")
         model = SimpleRandomForest(n_trees=20, max_depth=3, min_samples_split=20)
-        model.fit(X_train, y_train)
+        model.fit(X_full, y)
         trained_models.append((model, "random_forest", 0.5))
     
     return trained_models, selected_indices
@@ -997,10 +989,15 @@ def predict_current(numbers, top_k=TOP_K, model_type="ensemble"):
     if len(numbers) < 100:
         return {"error": "历史数据不足"}
 
+    train_numbers = numbers[-TRAINING_WINDOW:]
     feature_history = numbers[-FEATURE_HISTORY_WINDOW:]
-    train_rng = random.Random(len(feature_history) * 10007)
+    train_rng = random.Random(len(train_numbers) * 10007)
 
-    result = build_training_data(feature_history, neg_samples=NEGATIVE_SAMPLES_PER_PERIOD, rng=train_rng)
+    result = build_training_data(
+        train_numbers,
+        neg_samples=NEGATIVE_SAMPLES_PER_PERIOD,
+        rng=train_rng,
+    )
     if result is None or len(result) < 3:
         return {"error": "训练数据不足"}
     X, y, sample_weights = result
@@ -1059,13 +1056,15 @@ def predict_current(numbers, top_k=TOP_K, model_type="ensemble"):
     top_probs = [item[0] for item in ranked[:top_k]]
     total_top_prob = sum(top_probs) or 1.0
     
-    # 返回 Top K（使用模型分而非概率，避免误导）
+    # 返回 Top K（model_score 为排序分，topk_score_share 为 TopK 内占比，非真实概率）
     recommendations = []
     for prob, a, b, c in ranked[:top_k]:
+        score_share = round(_native_number(prob) / total_top_prob, 4)
         recommendations.append({
             "num": f"{a}{b}{c}",
             "model_score": round(_native_number(prob), 4),
-            "relative_prob": round(_native_number(prob) / total_top_prob, 4),
+            "topk_score_share": score_share,
+            "relative_prob": score_share,  # 兼容旧字段名
         })
 
     # 特征重要性（取第一个模型的）

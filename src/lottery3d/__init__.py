@@ -153,8 +153,8 @@ RECENT_RECOMMEND_WINDOW = 5  # 最近推荐窗口大小
 RECENT_RECOMMEND_PENALTY = 2.0  # 最近推荐过的号码惩罚
 RECENT_RECOMMEND_CONSECUTIVE_PENALTY = 4.0  # 连续推荐的号码惩罚
 
-# 推荐历史文件路径
-RECENT_3D_RECOMMEND_FILE = "data/lottery3d_recent_recommend.json"
+# 窗口权重持久化键
+WINDOW_WEIGHTS_KV_KEY = "lottery3d_window_weights"
 
 # 预测版本号
 PREDICTOR_VERSION = "3d-v3.8-rank-stability-ablation"
@@ -612,26 +612,14 @@ def high_freq_pairs(numbers):
     return high_pairs
 
 
-def pair_bonus(triple, numbers):
-    """计算号码组合中的数字配对奖励
-    
-    参数：
-        triple: 三位数号码 (d1, d2, d3)
-        numbers: 历史开奖号码列表
-    
-    返回：
-        bonus: 配对奖励分数
-    """
+def pair_bonus(triple, high_pairs):
+    """计算号码组合中的数字配对奖励（使用预计算的高频对子）"""
     bonus = 0.0
-    high_pairs = high_freq_pairs(numbers)
-    
-    # 生成号码中的所有数字对
     digits = sorted(set(triple))
     for i in range(len(digits)):
         for j in range(i + 1, len(digits)):
             if (digits[i], digits[j]) in high_pairs:
                 bonus += PAIR_BONUS
-    
     return bonus
 
 
@@ -851,6 +839,17 @@ def save_online_prediction(period, last_draw, zhixuan_top3, zhixuan, danma, kill
         log.error(f"保存线上预测记录失败: {e}")
 
 
+def max_digit_overlap(actual_s, candidates):
+    """候选号码中与开奖号的最大数字重合数（ multiset 计数）"""
+    actual_counter = Counter(actual_s)
+    if not candidates:
+        return 0
+    return max(
+        sum((actual_counter & Counter(num)).values())
+        for num in candidates
+    )
+
+
 def settle_prediction(record, actual):
     """结算预测记录（赛后回填）"""
     top3 = record["zhixuan_top3"]
@@ -862,7 +861,7 @@ def settle_prediction(record, actual):
     record["settled"] = True
     record["hit_top3"] = actual_s in top3
     record["hit_top30"] = actual_s in top30
-    record["ge2_digit"] = len(set(actual_s) & set("".join(top30))) >= 2
+    record["ge2_digit"] = max_digit_overlap(actual_s, top30) >= 2
 
     return record
 
@@ -895,6 +894,12 @@ def settle_pending_online_predictions(periods, numbers):
             log.info(f"线上预测已结算 {settled_count} 条")
         except Exception as e:
             log.error(f"保存线上预测结算结果失败: {e}")
+
+    if settled_count > 0:
+        try:
+            refresh_persisted_window_weights(numbers, periods[-1] if periods else None)
+        except Exception as e:
+            log.warning(f"回填后刷新窗口权重失败: {e}")
 
     return settled_count
 
@@ -1952,38 +1957,46 @@ def ensemble_digit_scores(numbers, window_weights, dynamic=None):
 
 
 def position_digit_scores(numbers, position, window=RECENT_WINDOW, dynamic=None):
-    """单码分位评分（百/十/个）"""
+    """单码分位评分（百/十/个），与主模型共用 FEATURE_FLAGS"""
     recent = [n[position] for n in _recent_slice(numbers, window)]
     last_d = numbers[-1][position]
     sc = [0.0] * 10
     dyn = dynamic or {}
     w_last = dyn.get("w_last_appear", W_LAST_APPEAR)
     pos_mult = dyn.get("pos_mult", [1.0, 1.0, 1.0])
-    for d, _ in exp_weighted_counts(recent).most_common(4):
-        sc[d] += W_HOT_POS + 1
-    trans = build_markov(numbers, position)
-    row = trans.get(last_d, Counter())
-    for d, p in markov_prob_smoothed(row, range(10)).items():
-        markov_score = W_MARKOV * p
-        sc[d] += min(markov_score, MARKOV_MAX_SCORE)
-    # 二阶马尔可夫
-    if len(numbers) >= 2:
-        trans2 = build_markov2(numbers, position)
-        prev2_d = numbers[-2][position]
-        row2 = trans2.get((prev2_d, last_d), Counter())
-        for d, p in markov_prob_smoothed(row2, range(10)).items():
-            markov2_score = W_MARKOV2 * p
-            sc[d] += min(markov2_score, MARKOV_MAX_SCORE)
-    mv = miss_value(numbers, None, position=position)
-    for d in range(10):
-        miss_p = miss_value(numbers, d, position=position)
-        if miss_p >= 20:
-            sc[d] += W_MISS_HIGH * (1 + miss_p / 20)  # 遗漏20期加6分，30期加9分，40期加12分
-        elif miss_p >= 12:
-            sc[d] += W_MISS_MID
-    sc[last_d] += w_last * pos_mult[position]
-    for d in neighbor(last_d):
-        sc[d] += W_NEIGHBOR
+    flags = FEATURE_FLAGS
+
+    if flags.get("hot", True):
+        for d, _ in exp_weighted_counts(recent).most_common(4):
+            sc[d] += W_HOT_POS + 1
+
+    if flags.get("markov", True):
+        trans = build_markov(numbers, position)
+        row = trans.get(last_d, Counter())
+        for d, p in markov_prob_smoothed(row, range(10)).items():
+            markov_score = W_MARKOV * p
+            sc[d] += min(markov_score, MARKOV_MAX_SCORE)
+        if len(numbers) >= 2:
+            trans2 = build_markov2(numbers, position)
+            prev2_d = numbers[-2][position]
+            row2 = trans2.get((prev2_d, last_d), Counter())
+            for d, p in markov_prob_smoothed(row2, range(10)).items():
+                markov2_score = W_MARKOV2 * p
+                sc[d] += min(markov2_score, MARKOV_MAX_SCORE)
+
+    if flags.get("miss", True):
+        for d in range(10):
+            miss_p = miss_value(numbers, d, position=position)
+            if miss_p >= 20:
+                sc[d] += W_MISS_HIGH * (1 + miss_p / 20)
+            elif miss_p >= 12:
+                sc[d] += W_MISS_MID
+
+    if flags.get("neighbor", True):
+        sc[last_d] += w_last * pos_mult[position]
+        for d in neighbor(last_d):
+            sc[d] += W_NEIGHBOR
+
     return sc
 
 
@@ -2004,6 +2017,61 @@ _window_weights_cache_numbers_hash = None
 def default_window_weights():
     n = len(RECENT_WINDOWS)
     return {w: 1.0 / n for w in RECENT_WINDOWS}
+
+
+def load_persisted_window_weights():
+    """读取持久化的动态窗口权重"""
+    try:
+        data = kv_store.load(WINDOW_WEIGHTS_KV_KEY)
+        if not data or not isinstance(data.get("weights"), dict):
+            return None
+        weights = {int(k): float(v) for k, v in data["weights"].items()}
+        scores = {int(k): float(v) for k, v in (data.get("scores") or {}).items()}
+        return {"weights": weights, "scores": scores, "period": data.get("period")}
+    except Exception as e:
+        log.debug(f"读取窗口权重失败: {e}")
+        return None
+
+
+def save_persisted_window_weights(weights, scores, period=None):
+    """持久化动态窗口权重"""
+    try:
+        payload = {
+            "weights": {str(k): round(v, 6) for k, v in weights.items()},
+            "scores": {str(k): round(v, 4) for k, v in (scores or {}).items()},
+            "period": period,
+            "updated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        }
+        kv_store.save(WINDOW_WEIGHTS_KV_KEY, payload)
+        log.info(f"窗口权重已持久化: period={period}")
+    except Exception as e:
+        log.warning(f"保存窗口权重失败: {e}")
+
+
+def refresh_persisted_window_weights(numbers, period=None):
+    """重新计算并持久化窗口权重（回填后或手动刷新时调用）"""
+    weights, scores = compute_window_weights(numbers, enable_cache=False)
+    save_persisted_window_weights(weights, scores, period)
+    return weights, scores
+
+
+def resolve_window_weights(numbers, compute_weights=False, period=None):
+    """获取预测用窗口权重：优先持久化缓存，必要时重算"""
+    if compute_weights:
+        weights, scores = compute_window_weights(numbers, enable_cache=False)
+        save_persisted_window_weights(weights, scores, period)
+        return weights, scores
+
+    persisted = load_persisted_window_weights()
+    if persisted:
+        return persisted["weights"], persisted.get("scores", {})
+
+    if len(numbers) >= max(RECENT_WINDOWS) + 10:
+        weights, scores = compute_window_weights(numbers, enable_cache=True)
+        save_persisted_window_weights(weights, scores, period)
+        return weights, scores
+
+    return default_window_weights(), {}
 
 
 def compute_window_weights(numbers, trials=WINDOW_BACKTEST_TRIALS, enable_cache=True):
@@ -2282,10 +2350,10 @@ def triplet_weight(a, b, c, score, danma, kill, meta, features=None):
     if bs_freq:
         w += W_RATIO_MATCH * bs_freq.get(bs, 0) / meta.get("bs_total", 1)
     
-    # 数字配对奖励：高频数字对加分
-    numbers = meta.get("numbers", [])
-    if flags.get("pair", True) and len(numbers) >= 50:
-        w += pair_bonus((a, b, c), numbers)
+    # 数字配对奖励：使用 meta 预计算的高频对子
+    high_pairs = meta.get("high_pairs") or set()
+    if flags.get("pair", True) and high_pairs:
+        w += pair_bonus((a, b, c), high_pairs)
     
     # 组三组六切换奖励：连续同形式出现后增加切换概率
     if flags.get("form_switch", True) and len(numbers) >= 5:
@@ -2332,6 +2400,7 @@ def triplet_weight_detail(a, b, c, score, danma, kill, meta):
 
     kill_set = set(kill or [])
     dyn = meta.get("dynamic") or {}
+    flags = FEATURE_FLAGS
 
     for x in (a, b, c):
         if x in danma:
@@ -2340,17 +2409,18 @@ def triplet_weight_detail(a, b, c, score, danma, kill, meta):
             detail["kill"] -= W_KILL_PENALTY
 
     s = a + b + c
-    detail["sum_span"] += 8.0 * gaussian_score(s, meta["sum_center"], SUM_SOFT_SIGMA)
+    if flags.get("sum_span", True):
+        detail["sum_span"] += 8.0 * gaussian_score(s, meta["sum_center"], SUM_SOFT_SIGMA)
 
-    span = max(a, b, c) - min(a, b, c)
-    detail["sum_span"] += 5.0 * gaussian_score(span, meta["span_center"], SPAN_SOFT_SIGMA)
+        span = max(a, b, c) - min(a, b, c)
+        detail["sum_span"] += 5.0 * gaussian_score(span, meta["span_center"], SPAN_SOFT_SIGMA)
 
-    if s in meta["hot_sum_set"]:
-        detail["sum_span"] += 2.0
-    if span in meta["hot_span_set"]:
-        detail["sum_span"] += 1.5
-    if (s % 10) in meta["sum_tail_top"]:
-        detail["sum_span"] += 1.0
+        if s in meta["hot_sum_set"]:
+            detail["sum_span"] += 2.0
+        if span in meta["hot_span_set"]:
+            detail["sum_span"] += 1.5
+        if (s % 10) in meta["sum_tail_top"]:
+            detail["sum_span"] += 1.0
 
     if has_consecutive_digits(a, b, c):
         detail["pattern"] += dyn.get("w_consecutive", W_CONSECUTIVE)
@@ -2377,18 +2447,19 @@ def triplet_weight_detail(a, b, c, score, danma, kill, meta):
     if bs_freq:
         detail["ratio_match"] += W_RATIO_MATCH * bs_freq.get(bs, 0) / meta.get("bs_total", 1)
 
-    numbers = meta.get("numbers", [])
-    if len(numbers) >= 50:
-        detail["pair"] += pair_bonus((a, b, c), numbers)
+    high_pairs = meta.get("high_pairs") or set()
+    if flags.get("pair", True) and high_pairs:
+        detail["pair"] += pair_bonus((a, b, c), high_pairs)
 
-    if len(numbers) >= 5:
+    numbers = meta.get("numbers", [])
+    if flags.get("form_switch", True) and len(numbers) >= 5:
         form_bonus = form_switch_bonus(numbers)
         if a == b or a == c or b == c:
             detail["form_switch"] += form_bonus.get("zu3", 0.0)
         else:
             detail["form_switch"] += form_bonus.get("zu6", 0.0)
 
-    if len(numbers) >= SUM_INTERVAL_WINDOW:
+    if flags.get("sum_span", True) and len(numbers) >= SUM_INTERVAL_WINDOW:
         sum_interval_info = sum_interval_bonus(numbers)
         detail["sum_interval"] += sum_interval_info["bonus"].get(s, 0.0)
 
@@ -2576,6 +2647,7 @@ def build_ranking_meta(numbers, window_weights, sums=None, spans=None, tail_top=
     meta["dynamic"] = derive_dynamic_weights(lag1, pat["consec_rate"])
     meta["last_draw"] = numbers[-1]
     meta["numbers"] = numbers  # 用于冷热平衡模型
+    meta["high_pairs"] = high_freq_pairs(numbers) if len(numbers) >= 50 else set()
     
     # 和值趋势模型：仅在开启调整时才融合，否则保留多窗口中心
     base_sum_center = meta["sum_center"]
@@ -2734,8 +2806,7 @@ def backtest(numbers, trials=BACKTEST_TRIALS, window_weights=None):
         if act_s in top100_nums:
             hit_top100 += 1
 
-        pred_digits = {int(ch) for s in served_top30_nums for ch in s}
-        if len(pred_digits & set(actual)) >= 2:
+        if max_digit_overlap(act_s, served_top30_nums) >= 2:
             hit_ge2 += 1
 
     n = trials
@@ -2830,7 +2901,7 @@ def print_backtest_report(result):
     print("\n" + "-" * 75)
     print("【其他指标】")
     print("-" * 75)
-    print(f"  Top30 至少命中2个数字：{result.get('ge2_digit_rate', 0):.2%}")
+    print(f"  Top30 至少一注重合2码：{result.get('ge2_digit_rate', 0):.2%}")
     print(f"  随机基准命中率：{result.get('random_rate', 0):.2%}")
     admission = result.get("admission")
     if admission:
@@ -3252,11 +3323,12 @@ def run_prediction(data=None, force_refresh=False, enable_backtest=False, enable
     sums = [sum(x) for x in numbers]
     spans = [calc_span(x) for x in numbers]
 
-    # 窗口权重计算（可选择跳过以提升速度）
-    if compute_weights:
-        window_weights, window_scores = compute_window_weights(numbers)
-    else:
-        window_weights, window_scores = default_window_weights(), {}
+    # 窗口权重：优先读取持久化结果，compute_weights=True 时强制重算
+    window_weights, window_scores = resolve_window_weights(
+        numbers,
+        compute_weights=compute_weights,
+        period=periods[-1] if periods else None,
+    )
     
     meta_raw = ensemble_sum_span(sums, spans, window_weights)
     meta = build_ranking_meta(numbers, window_weights, sums, spans, tail_top=5)
@@ -3650,7 +3722,7 @@ def print_report(result):
               f"({bt['top100_hit']}/{bt['trials']})")
         print(f"  平均真实号码排名: {bt['actual_rank_avg']}")
         print(f"  中位真实号码排名: {bt['actual_rank_median']}")
-        print(f"  Top30 至少中2码: {bt['ge2_digit_rate'] * 100:.1f}%")
+        print(f"  Top30 至少一注重合2码: {bt['ge2_digit_rate'] * 100:.1f}%")
         print(f"  随机 Top30 基准: {bt['random_rate'] * 100:.1f}%")
 
     print("\n统计信息")
