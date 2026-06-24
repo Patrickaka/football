@@ -702,7 +702,12 @@ def optimize_prediction_parameters(records: List[Dict],
                                    validation_ratio: float = 0.25,
                                    min_samples: int = 30,
                                    quality_filter: bool = True,
-                                   min_quality_grade: str = 'medium') -> Dict:
+                                   min_quality_grade: str = 'medium',
+                                   save_best: bool = False,
+                                   tuning_scope: str = 'bucket',
+                                   tuning_league: str = None,
+                                   tuning_total_line: float = None,
+                                   tuning_handicap: float = None) -> Dict:
     """
     Search parameter combinations on quality-filtered historical records.
 
@@ -720,10 +725,10 @@ def optimize_prediction_parameters(records: List[Dict],
         }
 
     default_grid = {
-        'market_db_weight': [0.10, 0.15, 0.20, 0.25],
-        'bayesian_weight': [0.00, 0.05, 0.10],
-        'goal_calibration_weight': [0.10, 0.20, 0.30],
-        'half_full_history_weight': [0.10, 0.20, 0.30],
+        'static_market_cap': [0.10, 0.15, 0.20],
+        'change_market_cap': [0.10, 0.15, 0.20],
+        'half_full_real_weight': [0.20, 0.25, 0.30],
+        'draw_bias': [0.96, 1.00, 1.04],
     }
     param_sets = _expand_param_grid(param_grid or default_grid)
 
@@ -748,11 +753,35 @@ def optimize_prediction_parameters(records: List[Dict],
 
     trials.sort(key=lambda item: item['objective_score'])
     best = trials[0] if trials else None
+    save_result = None
+    if save_best and best:
+        try:
+            from .prediction_policy import save_tuning_params
+
+            context_records = validation_records or records
+            sample = context_records[-1] if context_records else {}
+            save_result = save_tuning_params(
+                best['params'],
+                league=tuning_league if tuning_league is not None else sample.get('league'),
+                total_line=tuning_total_line if tuning_total_line is not None else sample.get('total_line'),
+                handicap=tuning_handicap if tuning_handicap is not None else sample.get('asian'),
+                scope=tuning_scope,
+                metrics={
+                    'objective': objective,
+                    'best_score': best['objective_score'],
+                    'validation_count': len(validation_records),
+                    'summary': best['summary'],
+                },
+            )
+        except Exception as e:
+            save_result = {'saved': False, 'error': str(e)}
+
     return {
         'objective': objective,
         'best_params': best['params'] if best else {},
         'best_score': best['objective_score'] if best else None,
         'best_summary': best['summary'] if best else {},
+        'save_result': save_result,
         'trial_count': len(trials),
         'train_count': len(train_records),
         'validation_count': len(validation_records),

@@ -4,12 +4,48 @@
 Conservative league/market policies for football score distributions.
 """
 
+import json
+from datetime import datetime
+from pathlib import Path
 from typing import Dict, Tuple
+
+from ..common.paths import data_path
 
 
 LOW_GOAL_LEAGUE_HINTS = ('意甲', '葡超', '希腊', '阿甲', '巴乙', '日乙')
 HIGH_VARIANCE_HINTS = ('荷甲', '挪超', '瑞典', '巴甲', '美职')
 CUP_HINTS = ('杯', '欧冠', '欧联', '世俱', '世界杯', '欧洲杯')
+
+
+TUNING_KEY = 'football_prediction_tuning'
+TUNING_FILE = Path(data_path('football_prediction_tuning.json'))
+
+POLICY_PARAM_KEYS = {
+    'static_market_cap',
+    'change_market_cap',
+    'half_full_real_weight',
+    'half_full_market_cap',
+    'draw_bias',
+    'low_score_bias',
+    'high_score_bias',
+}
+
+PARAM_ALIASES = {
+    'market_db_weight': 'static_market_cap',
+    'market_change_weight': 'change_market_cap',
+    'half_full_history_weight': 'half_full_real_weight',
+    'score_draw_bias': 'draw_bias',
+}
+
+PARAM_RANGES = {
+    'static_market_cap': (0.0, 0.30),
+    'change_market_cap': (0.0, 0.30),
+    'half_full_real_weight': (0.0, 0.45),
+    'half_full_market_cap': (0.0, 0.20),
+    'draw_bias': (0.75, 1.25),
+    'low_score_bias': (0.75, 1.30),
+    'high_score_bias': (0.75, 1.30),
+}
 
 
 def _contains_any(text: str, hints: Tuple[str, ...]) -> bool:
@@ -23,6 +59,83 @@ def _league_text(league=None, league_profile=None) -> str:
     if isinstance(league_profile, dict):
         return str(league_profile.get('name') or league_profile.get('league') or '')
     return ''
+
+
+def _empty_tuning_config() -> Dict:
+    return {
+        'version': 1,
+        'updated_at': None,
+        'global': {},
+        'leagues': {},
+        'buckets': {},
+        'history': [],
+    }
+
+
+def _load_tuning_config() -> Dict:
+    config = None
+    try:
+        from ..common import kv_store
+        config = kv_store.load(TUNING_KEY)
+    except Exception:
+        config = None
+
+    if not config:
+        try:
+            if TUNING_FILE.exists():
+                config = json.loads(TUNING_FILE.read_text(encoding='utf-8'))
+        except Exception:
+            config = None
+
+    if not isinstance(config, dict):
+        config = _empty_tuning_config()
+
+    base = _empty_tuning_config()
+    base.update(config)
+    for key in ('global', 'leagues', 'buckets'):
+        if not isinstance(base.get(key), dict):
+            base[key] = {}
+    if not isinstance(base.get('history'), list):
+        base['history'] = []
+    return base
+
+
+def _save_tuning_config(config: Dict) -> bool:
+    config = dict(config or {})
+    config['version'] = config.get('version', 1)
+    config['updated_at'] = datetime.now().isoformat()
+    saved = False
+
+    try:
+        from ..common import kv_store
+        kv_store.save(TUNING_KEY, config)
+        saved = True
+    except Exception:
+        saved = False
+
+    try:
+        TUNING_FILE.parent.mkdir(parents=True, exist_ok=True)
+        TUNING_FILE.write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding='utf-8')
+        saved = True
+    except Exception:
+        pass
+
+    return saved
+
+
+def _canonical_params(params: Dict) -> Dict:
+    cleaned = {}
+    for key, value in (params or {}).items():
+        canonical = PARAM_ALIASES.get(key, key)
+        if canonical not in POLICY_PARAM_KEYS:
+            continue
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            continue
+        low, high = PARAM_RANGES[canonical]
+        cleaned[canonical] = max(low, min(high, number))
+    return cleaned
 
 
 def get_total_bucket(total_line) -> str:
@@ -51,6 +164,76 @@ def get_handicap_bucket(handicap) -> str:
     if depth < 1.0:
         return 'mid'
     return 'deep'
+
+
+def policy_bucket_key(league=None, total_line=None, handicap=None, league_profile=None) -> str:
+    league_name = _league_text(league, league_profile) or '*'
+    return f"{league_name}|{get_total_bucket(total_line)}|{get_handicap_bucket(handicap)}"
+
+
+def save_tuning_params(params: Dict,
+                       league=None,
+                       total_line=None,
+                       handicap=None,
+                       league_profile=None,
+                       scope: str = 'bucket',
+                       metrics: Dict = None) -> Dict:
+    """Persist optimized policy parameters for global, league, or bucket scope."""
+    cleaned = _canonical_params(params)
+    if not cleaned:
+        return {'saved': False, 'error': 'no supported policy params', 'params': {}}
+
+    config = _load_tuning_config()
+    league_name = _league_text(league, league_profile) or '*'
+    bucket_key = policy_bucket_key(league_name, total_line, handicap)
+
+    if scope == 'global':
+        config['global'].update(cleaned)
+        target = 'global'
+    elif scope == 'league':
+        config['leagues'].setdefault(league_name, {}).update(cleaned)
+        target = f"league:{league_name}"
+    else:
+        config['buckets'].setdefault(bucket_key, {}).update(cleaned)
+        target = f"bucket:{bucket_key}"
+
+    config.setdefault('history', []).append({
+        'saved_at': datetime.now().isoformat(),
+        'scope': scope,
+        'target': target,
+        'params': cleaned,
+        'metrics': metrics or {},
+    })
+    config['history'] = config['history'][-50:]
+
+    saved = _save_tuning_config(config)
+    return {
+        'saved': saved,
+        'scope': scope,
+        'target': target,
+        'params': cleaned,
+        'path': str(TUNING_FILE),
+    }
+
+
+def load_tuning_params(league=None, total_line=None, handicap=None, league_profile=None) -> Dict:
+    """Load merged tuning params for one league/market bucket."""
+    config = _load_tuning_config()
+    league_name = _league_text(league, league_profile) or '*'
+    bucket_key = policy_bucket_key(league_name, total_line, handicap)
+    wildcard_bucket = policy_bucket_key('*', total_line, handicap)
+
+    merged = {}
+    merged.update(_canonical_params(config.get('global', {})))
+    merged.update(_canonical_params(config.get('leagues', {}).get(league_name, {})))
+    merged.update(_canonical_params(config.get('buckets', {}).get(wildcard_bucket, {})))
+    merged.update(_canonical_params(config.get('buckets', {}).get(bucket_key, {})))
+    return {
+        'params': merged,
+        'bucket_key': bucket_key,
+        'source': TUNING_KEY,
+        'path': str(TUNING_FILE),
+    }
 
 
 def get_prediction_policy(league=None, total_line=None, handicap=None, league_profile=None) -> Dict:
@@ -98,7 +281,7 @@ def get_prediction_policy(league=None, total_line=None, handicap=None, league_pr
         change_market_cap = min(change_market_cap, 0.12)
         half_full_real_weight = min(half_full_real_weight, 0.20)
 
-    return {
+    policy = {
         'league': league_name,
         'total_bucket': total_bucket,
         'handicap_bucket': handicap_bucket,
@@ -110,6 +293,23 @@ def get_prediction_policy(league=None, total_line=None, handicap=None, league_pr
         'low_score_bias': low_score_bias,
         'high_score_bias': high_score_bias,
     }
+    tuning = load_tuning_params(
+        league=league_name,
+        total_line=total_line,
+        handicap=handicap,
+        league_profile=league_profile,
+    )
+    if tuning['params']:
+        policy.update(tuning['params'])
+        policy['tuning'] = {
+            'applied': True,
+            'bucket_key': tuning['bucket_key'],
+            'params': tuning['params'],
+            'path': tuning['path'],
+        }
+    else:
+        policy['tuning'] = {'applied': False, 'bucket_key': tuning['bucket_key']}
+    return policy
 
 
 def normalize_score_matrix(matrix: Dict[Tuple[int, int], float]) -> Dict[Tuple[int, int], float]:
