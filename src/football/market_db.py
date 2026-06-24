@@ -145,6 +145,12 @@ def download_recent_two_seasons(save_dir: str = DATA_DIR) -> dict:
             item = f'{league_code}_{season}'
             if ok:
                 result['success'].append(item)
+                try:
+                    from ..common import match_store
+                    filepath = os.path.join(save_dir, f'{league_code}_{season}.csv')
+                    match_store.upsert_csv_file(filepath, league_code)
+                except Exception as e:
+                    print(f"matches 同步失败 {item}: {e}")
             else:
                 result['failed'].append(item)
 
