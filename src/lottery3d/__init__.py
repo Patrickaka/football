@@ -111,6 +111,7 @@ FEATURE_FLAGS = {
     "miss": True,          # 遗漏加分
     "markov": True,        # 马尔可夫转移
     "neighbor": True,      # 邻号加分
+    "road": True,          # 012 路匹配
     "sum_span": True,      # 和值跨度
     "pair": True,          # 数字配对
     "form_switch": False,  # 形态切换（关闭：避免赌徒谬误）
@@ -164,6 +165,7 @@ ONLINE_PREDICTION_FILE = "data/lottery3d_online_predictions.json"
 # 推荐池多样性控制：最大化数字覆盖率
 DIVERSITY_WEIGHT = 1.5  # 多样性权重
 DIVERSITY_TARGET_COVERAGE = 0.8  # 目标数字覆盖率（0-1）
+SERVED_POOL_CANDIDATE_SIZE = 150  # 贪心选池候选范围
 
 # 回测目标调整：优化综合评分
 COMPOSITE_WEIGHT_TOP_HIT = 0.4  # top_hit 权重
@@ -1361,6 +1363,40 @@ def backtest_sum_span_interval(numbers, trials=100):
     }
 
 
+def select_diverse_pool(pool, top_n=30, candidate_size=SERVED_POOL_CANDIDATE_SIZE):
+    """贪心选池：从更大候选集中兼顾原始分、数字覆盖与去相关"""
+    candidates = sorted(pool, key=lambda x: -x[0])[:candidate_size]
+    selected = []
+    selected_sets = []
+
+    while candidates and len(selected) < top_n:
+        best_item = None
+        best_score = -float("inf")
+        union_digits = set().union(*selected_sets) if selected_sets else set()
+
+        for w, num in candidates:
+            digits = set(num)
+            overlap_penalty = sum(
+                CORRELATION_PENALTY
+                for old_digits in selected_sets
+                if len(digits & old_digits) >= CORRELATION_THRESHOLD
+            )
+            new_cover = len(digits - union_digits) if selected_sets else len(digits)
+            final_score = w + new_cover * DIVERSITY_WEIGHT - overlap_penalty
+
+            if final_score > best_score:
+                best_score = final_score
+                best_item = (w, num)
+
+        if best_item is None:
+            break
+        selected.append(best_item)
+        selected_sets.append(set(best_item[1]))
+        candidates.remove(best_item)
+
+    return selected
+
+
 def diversity_filter(pool, top_n=10):
     """推荐池多样性控制：最大化数字覆盖率
     
@@ -2012,7 +2048,16 @@ def compute_window_weights(numbers, trials=WINDOW_BACKTEST_TRIALS, enable_cache=
             meta = build_ranking_meta(train, {w: 1.0}, sums, spans, tail_top=4)
             sc, _ = digit_scores(train, window=w, dynamic=meta.get("dynamic"))
             dan, _, kill, _ = pick_dan_tuo_kill(sc, enable_danma_random=False)
-            top = rank_triplets(sc, dan, kill, meta, top_n=ZHIXUAN_TOP3, enable_exploration=False)
+            top = rank_triplets(
+                sc, dan, kill, meta,
+                top_n=ZHIXUAN_TOP3,
+                enable_exploration=False,
+                apply_noise=False,
+                enable_cold_hot_balance=False,
+                enable_diversity=False,
+                enable_correlation=False,
+                recent_recommendations=None,
+            )
             top_nums = [t[1] for t in top]
             if act_s in top_nums:
                 raw[w] += 1.0
@@ -2498,18 +2543,14 @@ def rank_triplets(score, danma, kill, meta, top_n=20, enable_exploration=True, a
             # 如果候选不足，返回全部
             return top_50
     
-    # 正常模式：返回最高分的 top_n 个
-    result = pool[:top_n]
-    
-    # 推荐池多样性控制：最大化数字覆盖率
-    if enable_diversity and len(result) >= 5:
-        result = diversity_filter(result, top_n)
-    
-    # 推荐号码去相关：减少高度相关推荐
-    if enable_correlation and len(result) >= 2:
-        result = correlation_penalty(result)
-    
-    return result
+    # 正常模式：贪心选池或纯排序
+    if enable_diversity or enable_correlation:
+        return select_diverse_pool(
+            pool,
+            top_n=top_n,
+            candidate_size=max(top_n * 5, SERVED_POOL_CANDIDATE_SIZE),
+        )
+    return pool[:top_n]
 
 
 def _meta_from_raw(meta_raw, tail_top=5):
@@ -2536,12 +2577,59 @@ def build_ranking_meta(numbers, window_weights, sums=None, spans=None, tail_top=
     meta["last_draw"] = numbers[-1]
     meta["numbers"] = numbers  # 用于冷热平衡模型
     
-    # 和值趋势模型：动态调整和值中心
+    # 和值趋势模型：仅在开启调整时才融合，否则保留多窗口中心
+    base_sum_center = meta["sum_center"]
     adjusted_sum_center, trend_direction = sum_trend_model(numbers, SUM_TREND_WINDOW)
-    meta["sum_center"] = adjusted_sum_center
+    if SUM_TREND_ADJUST != 0:
+        meta["sum_center"] = (
+            base_sum_center * 0.85
+            + adjusted_sum_center * 0.15
+        )
+    else:
+        meta["sum_center"] = base_sum_center
     meta["sum_trend"] = trend_direction
     
     return meta
+
+
+def evaluate_strategy_admission(
+    served_last100_rate,
+    raw_last100_rate,
+    actual_rank_avg,
+    random_baseline,
+    significance=None,
+):
+    """策略准入检查：仅当多项指标同时达标才建议进入实盘融合"""
+    checks = {
+        "served_top30_last100_above_random": {
+            "passed": served_last100_rate >= random_baseline,
+            "actual": round(served_last100_rate, 4),
+            "required": random_baseline,
+            "reason": "近100期 served Top30 不低于随机基准",
+        },
+        "raw_top30_last100_above_random": {
+            "passed": raw_last100_rate >= random_baseline,
+            "actual": round(raw_last100_rate, 4),
+            "required": random_baseline,
+            "reason": "近100期 raw Top30 不低于随机基准",
+        },
+        "avg_rank_below_500": {
+            "passed": actual_rank_avg < 500,
+            "actual": actual_rank_avg,
+            "required": 500,
+            "reason": "平均真实号码排名 < 500",
+        },
+    }
+    if significance is not None:
+        checks["permutation_significant"] = {
+            "passed": significance.get("pvalue", 1.0) < 0.10,
+            "actual": significance.get("pvalue"),
+            "required": 0.10,
+            "reason": "置换检验 p 值 < 0.10",
+        }
+
+    eligible = all(item["passed"] for item in checks.values())
+    return {"eligible": eligible, "checks": checks}
 
 
 def backtest(numbers, trials=BACKTEST_TRIALS, window_weights=None):
@@ -2563,9 +2651,29 @@ def backtest(numbers, trials=BACKTEST_TRIALS, window_weights=None):
         trials = max(20, len(numbers) - max_w - 5)
 
     hit_top = hit_top3 = hit_top100 = hit_ge2 = 0
+    hit_raw_top30 = hit_served_top30 = 0
+    raw_top30_hits = []
+    served_top30_hits = []
     actual_ranks = []
     start = len(numbers) - trials
     ww = window_weights or compute_window_weights(numbers[:start])[0]
+
+    rank_kw_pure = dict(
+        enable_exploration=False,
+        apply_noise=False,
+        enable_cold_hot_balance=False,
+        enable_diversity=False,
+        enable_correlation=False,
+        recent_recommendations=None,
+    )
+    rank_kw_served = dict(
+        enable_exploration=False,
+        apply_noise=False,
+        enable_cold_hot_balance=FEATURE_FLAGS.get("cold_hot_balance", False),
+        enable_diversity=True,
+        enable_correlation=True,
+        recent_recommendations=None,
+    )
 
     for i in range(start, len(numbers)):
         # 使用滚动窗口：每次只用当前可用的数据
@@ -2577,46 +2685,56 @@ def backtest(numbers, trials=BACKTEST_TRIALS, window_weights=None):
         sc, _ = ensemble_digit_scores(train, ww, dynamic=meta.get("dynamic"))
         dan, _, kill, _ = pick_dan_tuo_kill(sc, enable_danma_random=False)
         
-        # 计算真实号码排名（对所有1000个候选排序）
+        # 纯模型排名（1000 候选）
         all_ranked = rank_triplets(
             sc, dan, kill, meta,
             top_n=1000,
-            enable_exploration=False,
-            apply_noise=False,
-            enable_cold_hot_balance=False,
-            enable_diversity=False,
-            enable_correlation=False,
+            **rank_kw_pure,
         )
         rank_map = {num: idx + 1 for idx, (_, num) in enumerate(all_ranked)}
         act_s = f"{actual[0]}{actual[1]}{actual[2]}"
         actual_rank = rank_map.get(act_s, 1001)
         actual_ranks.append(actual_rank)
-        
-        # Top30 预测
-        top30 = rank_triplets(
-            sc, dan, kill, meta, 
-            top_n=RECOMMEND_GROUPS, 
-            enable_exploration=False,
-            apply_noise=False,
-            enable_cold_hot_balance=False,
-            enable_diversity=False,
-            enable_correlation=False,
+
+        # 纯模型 Top3
+        top3 = rank_triplets(sc, dan, kill, meta, top_n=ZHIXUAN_TOP3, **rank_kw_pure)
+        top3_nums = [t[1] for t in top3]
+
+        # raw Top30：纯排序能力
+        raw_top30 = rank_triplets(
+            sc, dan, kill, meta,
+            top_n=RECOMMEND_GROUPS,
+            **rank_kw_pure,
         )
-        top30_nums = [t[1] for t in top30]
-        
+        raw_top30_nums = [t[1] for t in raw_top30]
+
+        # served Top30：模拟实盘推荐池（多样性+去相关，近期惩罚关闭）
+        served_top30 = rank_triplets(
+            sc, dan, kill, meta,
+            top_n=RECOMMEND_GROUPS,
+            **rank_kw_served,
+        )
+        served_top30_nums = [t[1] for t in served_top30]
+
         # Top100（用于覆盖率统计）
         top100_nums = [t[1] for t in all_ranked[:100]]
 
-        # 统计命中
-        if act_s in top30_nums:
+        raw_hit = act_s in raw_top30_nums
+        served_hit = act_s in served_top30_nums
+        raw_top30_hits.append(1 if raw_hit else 0)
+        served_top30_hits.append(1 if served_hit else 0)
+        if raw_hit:
+            hit_raw_top30 += 1
+        if served_hit:
+            hit_served_top30 += 1
+        if served_hit:
             hit_top += 1
-        if act_s in top30_nums[:ZHIXUAN_TOP3]:
+        if act_s in top3_nums:
             hit_top3 += 1
         if act_s in top100_nums:
             hit_top100 += 1
-        
-        # Top30 至少命中两个数字
-        pred_digits = {int(ch) for s in top30_nums for ch in s}
+
+        pred_digits = {int(ch) for s in served_top30_nums for ch in s}
         if len(pred_digits & set(actual)) >= 2:
             hit_ge2 += 1
 
@@ -2631,7 +2749,12 @@ def backtest(numbers, trials=BACKTEST_TRIALS, window_weights=None):
     
     # 计算随机基准
     random_result = random_baseline_backtest(numbers, trials=trials, top_n=RECOMMEND_GROUPS)
-    
+
+    last100 = min(100, n)
+    raw_last100_rate = sum(raw_top30_hits[-last100:]) / last100 if last100 else 0.0
+    served_last100_rate = sum(served_top30_hits[-last100:]) / last100 if last100 else 0.0
+    random_baseline = round(random_result["random_rate"], 4)
+
     return {
         "trials": n,
         "strategy": "stable_baseline",
@@ -2639,12 +2762,20 @@ def backtest(numbers, trials=BACKTEST_TRIALS, window_weights=None):
         "top3_hit": hit_top3,
         "top3_rate": round(hit_top3 / n, 4) if n > 0 else 0.0,
         "top3_rate_baseline": round(ZHIXUAN_TOP3 / 1000.0, 4),
-        "top30_hit": hit_top,
-        "top30_rate": round(hit_top / n, 4) if n > 0 else 0.0,
+        # raw / served Top30
+        "raw_top30_hit": hit_raw_top30,
+        "raw_top30_rate": round(hit_raw_top30 / n, 4) if n > 0 else 0.0,
+        "served_top30_hit": hit_served_top30,
+        "served_top30_rate": round(hit_served_top30 / n, 4) if n > 0 else 0.0,
+        "raw_top30_last100_rate": round(raw_last100_rate, 4),
+        "served_top30_last100_rate": round(served_last100_rate, 4),
+        # 主展示指标 = 实盘推荐池
+        "top30_hit": hit_served_top30,
+        "top30_rate": round(hit_served_top30 / n, 4) if n > 0 else 0.0,
         "top30_rate_baseline": round(RECOMMEND_GROUPS / 1000.0, 4),
-        # 兼容旧字段名（CLI / Web / 权重搜索仍引用 top_rate）
-        "top_hit": hit_top,
-        "top_rate": round(hit_top / n, 4) if n > 0 else 0.0,
+        # 兼容旧字段名
+        "top_hit": hit_served_top30,
+        "top_rate": round(hit_served_top30 / n, 4) if n > 0 else 0.0,
         "top_rate_baseline": round(RECOMMEND_GROUPS / 1000.0, 4),
         "top100_hit": hit_top100,
         "top100_rate": round(hit_top100 / n, 4) if n > 0 else 0.0,
@@ -2656,8 +2787,14 @@ def backtest(numbers, trials=BACKTEST_TRIALS, window_weights=None):
         # 数字命中比例
         "ge2_digit_rate": round(hit_ge2 / n, 4) if n > 0 else 0.0,
         # 随机基准
-        "random_rate": round(random_result["random_rate"], 4),
+        "random_rate": random_baseline,
         "random_hit": random_result["random_hit"],
+        "admission": evaluate_strategy_admission(
+            served_last100_rate,
+            raw_last100_rate,
+            actual_rank_avg,
+            random_baseline,
+        ),
     }
 
 
@@ -2675,7 +2812,10 @@ def print_backtest_report(result):
     print("-" * 75)
     print(f"  Top3 命中：{result.get('top3_hit', 0)} 次 ({result.get('top3_rate', 0):.2%})")
     print(f"  Top3 基准：{result.get('top3_rate_baseline', 0):.2%}")
-    print(f"  Top30 命中：{result.get('top30_hit', 0)} 次 ({result.get('top30_rate', 0):.2%})")
+    print(f"  Top30 命中（实盘池 served）：{result.get('served_top30_hit', result.get('top30_hit', 0))} 次 "
+          f"({result.get('served_top30_rate', result.get('top30_rate', 0)):.2%})")
+    print(f"  Top30 命中（纯模型 raw）：{result.get('raw_top30_hit', 0)} 次 "
+          f"({result.get('raw_top30_rate', 0):.2%})")
     print(f"  Top30 基准：{result.get('top30_rate_baseline', 0):.2%}")
     print(f"  Top100 命中：{result.get('top100_hit', 0)} 次 ({result.get('top100_rate', 0):.2%})")
     
@@ -2692,6 +2832,9 @@ def print_backtest_report(result):
     print("-" * 75)
     print(f"  Top30 至少命中2个数字：{result.get('ge2_digit_rate', 0):.2%}")
     print(f"  随机基准命中率：{result.get('random_rate', 0):.2%}")
+    admission = result.get("admission")
+    if admission:
+        print(f"  策略准入：{'通过' if admission.get('eligible') else '未通过'}")
     
     print("\n" + "=" * 75)
 
@@ -3145,7 +3288,7 @@ def run_prediction(data=None, force_refresh=False, enable_backtest=False, enable
         recent_recommendations=None
     )
     
-    # Top30：用于覆盖和复式池，应用多样性、去相关和最近推荐惩罚
+    # Top30：用于覆盖和复式池（多样性+去相关；近期推荐惩罚暂关闭）
     zhixuan_top = rank_triplets(
         score, 
         danma, 
@@ -3157,7 +3300,7 @@ def run_prediction(data=None, force_refresh=False, enable_backtest=False, enable
         enable_cold_hot_balance=FEATURE_FLAGS.get("cold_hot_balance", False),
         enable_diversity=True,
         enable_correlation=True,
-        recent_recommendations=recent_recommendations
+        recent_recommendations=None,
     )
     
     zhixuan_top3_detail = build_detail_list(
@@ -3181,8 +3324,16 @@ def run_prediction(data=None, force_refresh=False, enable_backtest=False, enable
     if enable_backtest:
         bt = backtest(numbers, window_weights=window_weights)
         if enable_permutation:
-            bt["significance"] = permutation_test(
-                numbers, bt["top30_rate"], window_weights=window_weights
+            sig = permutation_test(
+                numbers, bt["raw_top30_rate"], window_weights=window_weights
+            )
+            bt["significance"] = sig
+            bt["admission"] = evaluate_strategy_admission(
+                bt["served_top30_last100_rate"],
+                bt["raw_top30_last100_rate"],
+                bt["actual_rank_avg"],
+                bt["random_rate"],
+                significance=sig,
             )
 
     last_num = numbers[-1]
@@ -3491,8 +3642,10 @@ def print_report(result):
         print(f"  回测期数: {bt['trials']}")
         print(f"  Top3 命中: {bt['top3_rate'] * 100:.1f}% "
               f"({bt['top3_hit']}/{bt['trials']})")
-        print(f"  Top30 命中: {bt['top30_rate'] * 100:.1f}% "
-              f"({bt['top30_hit']}/{bt['trials']})")
+        print(f"  Top30 命中（served）: {bt['served_top30_rate'] * 100:.1f}% "
+              f"({bt['served_top30_hit']}/{bt['trials']})")
+        print(f"  Top30 命中（raw）: {bt['raw_top30_rate'] * 100:.1f}% "
+              f"({bt['raw_top30_hit']}/{bt['trials']})")
         print(f"  Top100 覆盖: {bt['top100_rate'] * 100:.1f}% "
               f"({bt['top100_hit']}/{bt['trials']})")
         print(f"  平均真实号码排名: {bt['actual_rank_avg']}")

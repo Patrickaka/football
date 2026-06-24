@@ -1718,7 +1718,8 @@ function renderLottery3d(r) {
     html += `<div class="card">
       <div class="row"><span class="k">回测期数</span><span class="v">${bt.trials}</span></div>
       <div class="row"><span class="k">直选Top3命中</span><span class="v">${pct(bt.top3_rate)} (${bt.top3_hit}/${bt.trials})</span></div>
-      <div class="row"><span class="k">直选${n}注命中</span><span class="v">${pct(topRate)} (${topHit}/${bt.trials})</span></div>
+      <div class="row"><span class="k">Top${n}命中（实盘池 served）</span><span class="v">${pct(bt.served_top30_rate ?? topRate)} (${bt.served_top30_hit ?? topHit}/${bt.trials})</span></div>
+      <div class="row"><span class="k">Top${n}命中（纯模型 raw）</span><span class="v">${pct(bt.raw_top30_rate ?? 0)} (${bt.raw_top30_hit ?? 0}/${bt.trials})</span></div>
       <div class="row"><span class="k">随机基线（${n}注）</span><span class="v">${pct(topBaseline)}</span></div>
       ${bt.significance ? `<div class="row"><span class="k">置换检验 p 值</span><span class="v" style="color:${bt.significance.significant ? 'var(--accent2)' : 'var(--muted)'}">${bt.significance.pvalue.toFixed(3)} · ${bt.significance.significant ? '显著优于随机' : '未显著优于随机（打乱均值 ' + pct(bt.significance.shuffled_mean_rate) + '）'}</span></div>` : ''}
       <div class="row"><span class="k">推荐池至少中2个数字</span><span class="v">${pct(bt.ge2_digit_rate)}</span></div>

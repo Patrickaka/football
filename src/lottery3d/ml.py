@@ -83,7 +83,8 @@ NEGATIVE_SAMPLES_PER_PERIOD = 30  # 每期负例采样数（减少负例，提�
 TOP_K = 15  # 推荐注数
 FEATURE_SUBSET_RATIO = 0.8  # 特征选择保留比例
 MIN_VARIANCE = 0.001  # 方差过滤阈值
-TRAINING_WINDOW = 180  # 训练窗口大小（增大以获取更多训练样本）
+TRAINING_WINDOW = 180  # 滚动训练样本窗口（期数）
+FEATURE_HISTORY_WINDOW = 120  # 特征工程历史窗口（训练/回测/实盘统一）
 
 # 时间衰减训练参数
 TIME_DECAY_RECENT = 30  # 最近 30 期
@@ -591,7 +592,7 @@ def build_training_data(numbers, neg_samples=NEGATIVE_SAMPLES_PER_PERIOD, rng=No
     - 历史数据：权重 1.0
     """
     if rng is None:
-        rng = random.Random()
+        rng = random.Random(len(numbers) * 10007)
     
     X = []
     y = []
@@ -603,7 +604,7 @@ def build_training_data(numbers, neg_samples=NEGATIVE_SAMPLES_PER_PERIOD, rng=No
         return None, None, None
     
     # 使用滑动窗口，只使用最近的数据构建特征
-    window_size = 120
+    window_size = FEATURE_HISTORY_WINDOW
     
     for i in range(min_history, len(numbers)):
         # 使用滑动窗口构建特征
@@ -740,6 +741,20 @@ def train_single_model(X, y, model_name, sample_weight=None):
     return None, None
 
 
+def _validation_score(y_true, probs):
+    """验证集得分（越高越好）：基于 LogLoss 的反函数"""
+    import math
+    if not y_true:
+        return 0.5
+    eps = 1e-15
+    ll = 0.0
+    for yt, p in zip(y_true, probs):
+        p = max(eps, min(1 - eps, p))
+        ll -= yt * math.log(p) + (1 - yt) * math.log(1 - p)
+    ll /= len(y_true)
+    return 1.0 / (1.0 + ll)
+
+
 def train_ensemble(X, y, models_to_try=None, sample_weight=None):
     """
     训练多模型集成（支持样本权重）
@@ -771,33 +786,48 @@ def train_ensemble(X, y, models_to_try=None, sample_weight=None):
     else:
         sample_weight_selected = None
     
+    # 时序尾部验证集（后 20%），避免训练集自评导致过拟合模型权重过高
+    split = max(10, int(len(X_selected) * 0.8))
+    use_valid = len(X_selected) - split >= 5
+    if use_valid:
+        X_train = X_selected[:split]
+        y_train = y[:split]
+        X_valid = X_selected[split:]
+        y_valid = y[split:]
+        w_train = sample_weight_selected[:split] if sample_weight_selected is not None else None
+    else:
+        X_train = X_selected
+        y_train = y
+        X_valid = None
+        y_valid = None
+        w_train = sample_weight_selected
+    
     # 训练各个模型
     trained_models = []
     
     for model_name in models_to_try:
-        model, used_name = train_single_model(X_selected, y, model_name, sample_weight=sample_weight_selected)
+        model, used_name = train_single_model(X_train, y_train, model_name, sample_weight=w_train)
         if model:
-            # 简单评估（使用训练集，实际应用中应使用验证集）
             try:
-                if hasattr(model, 'predict_proba'):
-                    probs = model.predict_proba(X_selected)[:, 1]
-                    # 计算 AUC 近似值
-                    pos_probs = [probs[i] for i in range(len(y)) if y[i] == 1]
-                    neg_probs = [probs[i] for i in range(len(y)) if y[i] == 0]
-                    score = sum(p > n for p in pos_probs for n in neg_probs) / (len(pos_probs) * len(neg_probs))
+                if X_valid and hasattr(model, 'predict_proba'):
+                    probs = model.predict_proba(X_valid)[:, 1]
+                    score = _validation_score(y_valid, probs)
+                elif hasattr(model, 'predict_proba'):
+                    probs = model.predict_proba(X_train)[:, 1]
+                    score = _validation_score(y_train, probs)
                 else:
                     score = 0.5
             except Exception:
                 score = 0.5
             
             trained_models.append((model, used_name, score))
-            log.info(f"训练 {used_name} 完成，得分: {score:.4f}")
+            log.info(f"训练 {used_name} 完成，验证得分: {score:.4f}")
     
     # 如果没有模型训练成功，使用纯 Python 随机森林
     if not trained_models:
         log.warning("所有 ML 模型训练失败，使用纯 Python 随机森林")
         model = SimpleRandomForest(n_trees=20, max_depth=3, min_samples_split=20)
-        model.fit(X_selected, y)
+        model.fit(X_train, y_train)
         trained_models.append((model, "random_forest", 0.5))
     
     return trained_models, selected_indices
@@ -884,8 +914,9 @@ def backtest_ml(numbers, trials=BACKTEST_TRIALS, train_window=TRAINING_WINDOW):
         if len(train_nums) < 60:  # 最小训练数据量
             continue
         
+        train_rng = random.Random(len(train_nums) * 10007)
         # 构建训练数据（包含样本权重）
-        result = build_training_data(train_nums, neg_samples=NEGATIVE_SAMPLES_PER_PERIOD)
+        result = build_training_data(train_nums, neg_samples=NEGATIVE_SAMPLES_PER_PERIOD, rng=train_rng)
         if result is None or len(result) < 3:
             continue
         X, y, sample_weights = result
@@ -900,7 +931,8 @@ def backtest_ml(numbers, trials=BACKTEST_TRIALS, train_window=TRAINING_WINDOW):
             continue
         
         # 对所有 1000 个直选组合预测
-        fe = FeatureEngineer(history)
+        feature_history = history[-FEATURE_HISTORY_WINDOW:]
+        fe = FeatureEngineer(feature_history)
         all_probs = []
         
         for a in range(10):
@@ -965,10 +997,10 @@ def predict_current(numbers, top_k=TOP_K, model_type="ensemble"):
     if len(numbers) < 100:
         return {"error": "历史数据不足"}
 
-    window_size = 180
-    recent_numbers = numbers[-window_size:]
+    feature_history = numbers[-FEATURE_HISTORY_WINDOW:]
+    train_rng = random.Random(len(feature_history) * 10007)
 
-    result = build_training_data(recent_numbers, neg_samples=NEGATIVE_SAMPLES_PER_PERIOD)
+    result = build_training_data(feature_history, neg_samples=NEGATIVE_SAMPLES_PER_PERIOD, rng=train_rng)
     if result is None or len(result) < 3:
         return {"error": "训练数据不足"}
     X, y, sample_weights = result
@@ -1000,7 +1032,7 @@ def predict_current(numbers, top_k=TOP_K, model_type="ensemble"):
         return {'error': '训练失败'}
     
     # 对所有 1000 个直选组合预测（批量处理）
-    fe = FeatureEngineer(recent_numbers)
+    fe = FeatureEngineer(feature_history)
     
     # 批量构建特征
     all_probs = []
