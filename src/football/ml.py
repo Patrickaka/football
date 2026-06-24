@@ -346,7 +346,7 @@ def predict_goal_counts_from_candidates(candidates: List[Tuple], max_goals: int 
         else:
             continue
         if h <= max_goals and a <= max_goals:
-            prob_matrix[h, a] = prob
+            prob_matrix[h, a] += prob
     total_prob = prob_matrix.sum()
     if total_prob > 0:
         prob_matrix = prob_matrix / total_prob
@@ -422,6 +422,7 @@ def predict_goal_counts_from_candidates(candidates: List[Tuple], max_goals: int 
         'recommendations': recommend_goal_counts_from_dist(goal_dist, top_n=3, 
                                                            high_risk=high_risk, 
                                                            low_quality_sample=low_quality_sample),
+        'distribution_dict': goal_dist,
         'distribution': get_goal_count_distribution_from_dist(goal_dist),
         'over_under': {'over': sum(v for k, v in goal_dist.items() if k >= 3),
                        'under': sum(v for k, v in goal_dist.items() if k <= 2)},

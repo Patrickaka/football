@@ -82,10 +82,19 @@ class BacktestRunner:
                 pass
         
         # 从goal_count对象中获取distribution字段（统一格式）
-        goal_dist = prediction.get('goal_count', {}).get('distribution', {})
+        goal_count_obj = prediction.get('goal_count') or record.get('goal_count', {})
+        goal_dist = goal_count_obj.get('distribution_dict', {}) if isinstance(goal_count_obj, dict) else {}
+        if not goal_dist and isinstance(goal_count_obj, dict):
+            goal_dist = goal_count_obj.get('distribution', {})
         if not goal_dist:
             # 兼容旧格式
-            goal_dist = prediction.get('goal_count', {})
+            goal_dist = prediction.get('goal_count', {}) or record.get('goal_count', {})
+        if isinstance(goal_dist, list):
+            goal_dist = {
+                item.get('goals'): item.get('probability', 0.0)
+                for item in goal_dist
+                if isinstance(item, dict) and item.get('goals') is not None
+            }
         
         # 按概率排序，取Top2
         sorted_totals = sorted(goal_dist.items(), key=lambda x: -x[1])
@@ -393,7 +402,15 @@ def run_backtest(records: List[Dict],
         }
         
         # 添加结果
-        result = runner.add_result(record, {}, actual)
+        prediction = {}
+        if predict_func:
+            try:
+                prediction = predict_func(record)
+            except Exception as e:
+                log.warning(f"预测失败: {e}")
+                continue
+
+        result = runner.add_result(record, prediction, actual)
         
         if verbose and result['hit_top1']:
             log.info(f"命中: {record['home']} vs {record['away']} -> "
@@ -521,9 +538,9 @@ def compare_parameters(records: List[Dict],
             'summary': summary
         }
         
-        log.info(f"参数集 {i+1} 回测完成: Top1命中率={summary['top1_accuracy']:.2%}, "
-                f"Top3命中率={summary['top3_accuracy']:.2%}, "
-                f"Brier={summary['brier_score']:.4f}")
+        log.info(f"参数集 {i+1} 回测完成: Top1命中率={summary['top1_hit_rate']:.2%}, "
+                f"Top3命中率={summary['top3_hit_rate']:.2%}, "
+                f"Brier={summary['score_brier']:.4f}")
     
     return results
 

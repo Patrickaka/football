@@ -4272,7 +4272,7 @@ def _heat_filter_weight(heat):
     return 1.0
 
 
-def calculate_half_full_time_probs(candidates, team_strength=None, asian=None, total=None, home_team='', away_team=''):
+def calculate_half_full_time_probs(candidates, team_strength=None, asian=None, total=None, home_team='', away_team='', league=''):
     """
     计算半全场概率（集成动态ELO和贝叶斯校准）。
     
@@ -4508,6 +4508,46 @@ def calculate_half_full_time_probs(candidates, team_strength=None, asian=None, t
     htf_total = sum(htf_probs.values())
     if htf_total > 0:
         htf_probs = {k: v / htf_total for k, v in htf_probs.items()}
+
+    # Blend with real half-time samples when available. These are preferred over
+    # inferred half-time history because they come from actual HT scores.
+    if asian and total and league:
+        try:
+            from .half_time_stats import HalfTimeStatsDB
+
+            half_db = HalfTimeStatsDB()
+            real_stats = half_db.get_stats(
+                league=league,
+                total_line=close_line,
+                handicap=handicap,
+                match_type='league',
+                min_samples=20,
+            )
+            real_htf = real_stats.get('half_full_distribution', {}) if real_stats else {}
+
+            if real_htf:
+                real_weight = 0.25
+                blended_htf = {}
+                all_keys = set(htf_probs.keys()).union(set(real_htf.keys()))
+
+                for key in all_keys:
+                    model_prob = htf_probs.get(key, 0.001)
+                    real_prob = real_htf.get(key, 0.001)
+                    blended_htf[key] = (1 - real_weight) * model_prob + real_weight * real_prob
+
+                total_prob = sum(blended_htf.values())
+                if total_prob > 0:
+                    htf_probs = {
+                        k: v / total_prob
+                        for k, v in sorted(blended_htf.items(), key=lambda x: -x[1])
+                    }
+                    history_weight = max(history_weight, real_weight)
+                    sample_count = max(sample_count, 20)
+                    distance = min(distance, 0.0)
+                    log.info(f"半全场概率已融合真实半场统计数据，权重={real_weight:.3f}")
+        except Exception as e:
+            log.debug(f"无法加载真实半场统计数据调整半全场概率: {e}")
+            sample_warnings.append('加载真实半场统计数据失败')
     
     # ========== 结合历史盘口数据调整半全场概率 ==========
     # 注意：当前历史半全场数据是通过全场比分倒推的，不是真实半场数据
@@ -4529,23 +4569,26 @@ def calculate_half_full_time_probs(candidates, team_strength=None, asian=None, t
             
             market_result = db.get_htf_probs_with_meta(handicap, close_line)
             market_htf = market_result.get('probabilities', {})
-            sample_count = market_result.get('sample_count', 0)
-            distance = market_result.get('distance', float('inf'))
+            market_sample_count = market_result.get('sample_count', 0)
+            market_distance = market_result.get('distance', float('inf'))
             
             # 当前历史数据是倒推的，权重需大幅降低
             # 在没有真实半场数据前，权重限制在10%以内
-            if market_htf and sample_count >= 50 and distance <= 0.5:
+            if market_htf and market_sample_count >= 50 and market_distance <= 0.5:
                 # 倒推数据权重很低，最多10%
-                history_weight = min(0.10, sample_count / 500 * 0.10)
+                market_history_weight = min(0.10, market_sample_count / 500 * 0.10)
+                history_weight = max(history_weight, market_history_weight)
+                sample_count = max(sample_count, market_sample_count)
+                distance = min(distance, market_distance)
                 
-                if history_weight > 0:
+                if market_history_weight > 0:
                     blended_htf = {}
                     all_keys = set(htf_probs.keys()).union(set(market_htf.keys()))
                     
                     for key in all_keys:
                         model_prob = htf_probs.get(key, 0.001)
                         market_prob = market_htf.get(key, 0.001)
-                        blended_htf[key] = (1 - history_weight) * model_prob + history_weight * market_prob
+                        blended_htf[key] = (1 - market_history_weight) * model_prob + market_history_weight * market_prob
                     
                     total_prob = sum(blended_htf.values())
                     if total_prob > 0:
@@ -4556,9 +4599,9 @@ def calculate_half_full_time_probs(candidates, team_strength=None, asian=None, t
                 
                 log.info(f"半全场概率已结合历史盘口数据调整（倒推数据），权重={history_weight:.3f}")
             else:
-                if sample_count < 50:
+                if market_sample_count < 50:
                     sample_warnings.append('历史半场样本不足，不启用历史融合')
-                elif distance > 0.5:
+                elif market_distance > 0.5:
                     sample_warnings.append('盘口距离过远，不启用历史融合')
         except Exception as e:
             log.debug(f"无法加载历史盘口数据调整半全场概率: {e}")
@@ -4605,6 +4648,33 @@ def calculate_half_full_time_probs(candidates, team_strength=None, asian=None, t
             'warnings': sample_warnings
         }
     }
+
+
+def _half_full_probs_to_dict(half_full_time):
+    """Convert half/full-time display rows into raw probability dict for storage."""
+    if not half_full_time:
+        return None
+
+    if isinstance(half_full_time, dict):
+        if 'distribution' in half_full_time and isinstance(half_full_time['distribution'], dict):
+            return half_full_time['distribution']
+
+        probs = half_full_time.get('probs')
+        if isinstance(probs, dict):
+            return probs
+        if isinstance(probs, list):
+            result = {}
+            for item in probs:
+                code = item.get('code')
+                if not code:
+                    continue
+                if 'raw_prob' in item:
+                    result[code] = item.get('raw_prob', 0.0)
+                else:
+                    result[code] = item.get('probability', 0.0) / 100.0
+            return result or None
+
+    return None
 
 
 def predict_scores(asian, euro, total, team_strength=None, league_profile=None, 
@@ -5570,6 +5640,7 @@ def analyze_match(match, force_refresh=False):
                     'D': sum(prob for (h, a), prob in candidates if h == a),
                     'A': sum(prob for (h, a), prob in candidates if h < a),
                 }
+                predicted_half_full = _half_full_probs_to_dict(model.get('half_full_time'))
                 
                 save_prediction(
                     match_id=mid,
@@ -5581,6 +5652,7 @@ def analyze_match(match, force_refresh=False):
                     predicted_1x2=predicted_1x2,
                     asian=cached_result.get('asian', {}).get('handicap'),
                     total_line=cached_result.get('total', {}).get('close_line'),
+                    predicted_half_full=predicted_half_full,
                     odds_data={
                         'asian': cached_result.get('asian'),
                         'euro': cached_result.get('euro'),
@@ -5856,15 +5928,46 @@ def analyze_match(match, force_refresh=False):
         log.warning(f"盘口变化先验融合失败: {e}")
 
     # 新增：Dixon-Coles 模型预测（依赖 predict_scores 产出的 lam_home/lam_away）
+    # Apply Bayesian score calibration to the live candidate distribution so
+    # downstream score ranking, recommendations, and goal-count aggregation all
+    # use the calibrated probabilities.
+    if BAYESIAN_CALIBRATION_AVAILABLE:
+        try:
+            score_probs = {
+                f"{h}-{a}": prob
+                for (h, a), prob in candidates
+            }
+            score_probs = calibrate_predictions(
+                score_probs,
+                league=match.get('league', ''),
+                total_line=total.get('close_line') or total.get('line', 2.5),
+                asian=asian.get('handicap', 0.0),
+            )
+            candidates = [
+                (tuple(map(int, score.split('-'))), prob)
+                for score, prob in score_probs.items()
+            ]
+            candidates.sort(key=lambda x: -x[1])
+            meta['bayesian_candidate_calibrated'] = True
+            log.info("贝叶斯比分校准已写回候选比分排序")
+        except Exception as e:
+            meta['bayesian_candidate_calibrated'] = False
+            log.warning(f"贝叶斯比分候选校准失败: {e}")
+
     dixon_coles_result = None
     try:
-        from .ml import dixon_coles_score_matrix, dixon_coles_1x2_prob
-        dc_matrix = dixon_coles_score_matrix(lam_home, lam_away, max_goals=MAX_GOALS, rho=0.1)
-        dc_1x2 = dixon_coles_1x2_prob(lam_home, lam_away, max_goals=MAX_GOALS, rho=0.1)
+        from .ml import dixon_coles_score_matrix, dixon_coles_1x2_prob, get_dc_rho
+        dc_rho = get_dc_rho(
+            league=match.get('league', ''),
+            total_line=total.get('close_line') or total.get('line', 2.5),
+            handicap=asian.get('handicap', 0.0),
+        )
+        dc_matrix = dixon_coles_score_matrix(lam_home, lam_away, max_goals=MAX_GOALS, rho=dc_rho)
+        dc_1x2 = dixon_coles_1x2_prob(lam_home, lam_away, max_goals=MAX_GOALS, rho=dc_rho)
         dixon_coles_result = {
             'matrix': dc_matrix,
             '1x2': dc_1x2,
-            'rho': 0.1
+            'rho': dc_rho
         }
         log.info(f"Dixon-Coles 模型预测完成: 主胜{dc_1x2['home']:.3f}, 平局{dc_1x2['draw']:.3f}, 客胜{dc_1x2['away']:.3f}")
     except Exception as e:
@@ -5948,7 +6051,9 @@ def analyze_match(match, force_refresh=False):
     value_bets = []
     
     # 计算半全场概率（集成动态ELO）
-    half_full_time = calculate_half_full_time_probs(candidates, team, asian, total, home_team=home, away_team=away)
+    half_full_time = calculate_half_full_time_probs(
+        candidates, team, asian, total, home_team=home, away_team=away, league=match.get('league', '')
+    )
 
     # 新增：进球数推荐（结合历史盘口数据 + 校准器）
     goal_count_result = None
@@ -5959,7 +6064,17 @@ def analyze_match(match, force_refresh=False):
         goal_count_result = predict_goal_counts_from_candidates(candidates, max_goals=MAX_GOALS, asian=asian, total=total)
         
         # 保存校准前的分布
-        goal_dist_before_calibration = goal_count_result.get('distribution', {}).copy()
+        goal_dist_before_calibration = goal_count_result.get('distribution_dict', {}).copy()
+        if not goal_dist_before_calibration:
+            raw_distribution = goal_count_result.get('distribution', {})
+            if isinstance(raw_distribution, list):
+                goal_dist_before_calibration = {
+                    item.get('goals'): item.get('probability', 0.0)
+                    for item in raw_distribution
+                    if item.get('goals') is not None
+                }
+            elif isinstance(raw_distribution, dict):
+                goal_dist_before_calibration = raw_distribution.copy()
         
         # 使用总球数校准器校准
         try:
@@ -5988,7 +6103,7 @@ def analyze_match(match, force_refresh=False):
             goal_dist_after_calibration = calibrated_dist
             
             # 更新结果中的分布
-            goal_count_result['distribution'] = calibrated_dist
+            goal_count_result['distribution_dict'] = calibrated_dist
             
             # 重新计算推荐（基于校准后的分布）
             from .ml import recommend_goal_counts_from_dist, get_goal_count_distribution_from_dist
@@ -5998,6 +6113,7 @@ def analyze_match(match, force_refresh=False):
             goal_count_result['recommendations'] = recommend_goal_counts_from_dist(
                 calibrated_dist, top_n=3, high_risk=high_risk, low_quality_sample=low_quality_sample
             )
+            goal_count_result['distribution'] = get_goal_count_distribution_from_dist(calibrated_dist)
             
             # 更新大小球概率
             goal_count_result['over_under'] = {
@@ -6398,6 +6514,7 @@ def analyze_match(match, force_refresh=False):
         log.info(f"构建 predicted_1x2: {predicted_1x2}")
 
         # 影子预测：base_1x2 是现有基础模型的预测结果
+        predicted_half_full = _half_full_probs_to_dict(model.get('half_full_time'))
         base_1x2 = predicted_1x2.copy()
 
         save_prediction(
@@ -6410,6 +6527,7 @@ def analyze_match(match, force_refresh=False):
             predicted_1x2=predicted_1x2,
             asian=asian.get('handicap'),
             total_line=total.get('close_line'),
+            predicted_half_full=predicted_half_full,
             odds_data={
                 'asian': asian,
                 'euro': euro,
