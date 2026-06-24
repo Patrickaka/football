@@ -4526,7 +4526,16 @@ def calculate_half_full_time_probs(candidates, team_strength=None, asian=None, t
             real_htf = real_stats.get('half_full_distribution', {}) if real_stats else {}
 
             if real_htf:
-                real_weight = 0.25
+                try:
+                    from .prediction_policy import get_prediction_policy
+                    htf_policy = get_prediction_policy(
+                        league=league,
+                        total_line=close_line,
+                        handicap=handicap,
+                    )
+                    real_weight = htf_policy.get('half_full_real_weight', 0.25)
+                except Exception:
+                    real_weight = 0.25
                 blended_htf = {}
                 all_keys = set(htf_probs.keys()).union(set(real_htf.keys()))
 
@@ -4576,7 +4585,17 @@ def calculate_half_full_time_probs(candidates, team_strength=None, asian=None, t
             # 在没有真实半场数据前，权重限制在10%以内
             if market_htf and market_sample_count >= 50 and market_distance <= 0.5:
                 # 倒推数据权重很低，最多10%
-                market_history_weight = min(0.10, market_sample_count / 500 * 0.10)
+                try:
+                    from .prediction_policy import get_prediction_policy
+                    htf_policy = get_prediction_policy(
+                        league=league,
+                        total_line=close_line,
+                        handicap=handicap,
+                    )
+                    market_cap = htf_policy.get('half_full_market_cap', 0.10)
+                except Exception:
+                    market_cap = 0.10
+                market_history_weight = min(market_cap, market_sample_count / 500 * market_cap)
                 history_weight = max(history_weight, market_history_weight)
                 sample_count = max(sample_count, market_sample_count)
                 distance = min(distance, market_distance)
@@ -4763,6 +4782,17 @@ def predict_scores(asian, euro, total, team_strength=None, league_profile=None,
         matrix, credible_interval, samples = bayesian_predict_scores(
             targets, target_total_pre, supremacy, league_profile, team_strength
         )
+        policy_adjustment = {'applied': False}
+        try:
+            from .prediction_policy import apply_score_distribution_policy
+            matrix, policy_adjustment = apply_score_distribution_policy(
+                matrix,
+                asian=asian,
+                total=total,
+                league_profile=league_profile,
+            )
+        except Exception as e:
+            log.debug(f"贝叶斯比分分布策略调整失败: {e}")
         candidates = sorted(matrix.items(), key=lambda kv: -kv[1])
         
         # 从后验均值获取 lambda 值
@@ -4777,6 +4807,7 @@ def predict_scores(asian, euro, total, team_strength=None, league_profile=None,
             'target_total': target_total,
             'credible_interval': credible_interval,
             'model_type': 'bayesian',
+            'policy_adjustment': policy_adjustment,
         }
         return candidates, lam_home, lam_away, meta
 
@@ -4883,14 +4914,29 @@ def predict_scores(asian, euro, total, team_strength=None, league_profile=None,
         model_probs = {f"{h}-{a}": prob for (h, a), prob in matrix.items()}
         
         # 融合权重初始化
+        try:
+            from .prediction_policy import get_prediction_policy
+            prediction_policy = get_prediction_policy(
+                league=league_profile.get('name') if league_profile else None,
+                total_line=close_line,
+                handicap=handicap,
+                league_profile=league_profile,
+            )
+        except Exception:
+            prediction_policy = {
+                'static_market_cap': 0.15,
+                'change_market_cap': 0.15,
+            }
+
         model_weight = 0.75
-        static_market_weight = 0.15
-        change_market_weight = 0.10
+        static_market_weight = prediction_policy.get('static_market_cap', 0.15)
+        change_market_weight = min(0.10, prediction_policy.get('change_market_cap', 0.15))
         
         # ========== 静态盘口先验 ==========
         if sample_count >= 30 and distance <= 0.5 and market_probs and len(market_probs) >= 3:
             # 计算历史权重：样本越多、盘口越接近，权重越高
-            static_weight = min(0.15, sample_count / 300 * 0.15)
+            static_cap = prediction_policy.get('static_market_cap', 0.15)
+            static_weight = min(static_cap, sample_count / 300 * static_cap)
             static_market_weight = static_weight
             
             # 融合预测：模型概率 + 静态历史盘口概率
@@ -4930,7 +4976,8 @@ def predict_scores(asian, euro, total, team_strength=None, league_profile=None,
                 # 样本门槛
                 if change_sample_count >= 30:
                     # 计算变化权重：5%～15%
-                    change_weight = min(0.15, change_sample_count / 300 * 0.15)
+                    change_cap = prediction_policy.get('change_market_cap', 0.15)
+                    change_weight = min(change_cap, change_sample_count / 300 * change_cap)
                     change_market_weight = change_weight
                     
                     # 融合预测：当前概率 + 变化历史概率
@@ -4987,6 +5034,18 @@ def predict_scores(asian, euro, total, team_strength=None, league_profile=None,
             log.debug(f"使用联赛 {league_name} 的校准参数: Platt(A={calibration_data['platt_params'][0]:.4f}, B={calibration_data['platt_params'][1]:.4f})")
             matrix = calibrate_probabilities(matrix, method=calibration_method, calibration_data=calibration_data)
 
+    policy_adjustment = {'applied': False}
+    try:
+        from .prediction_policy import apply_score_distribution_policy
+        matrix, policy_adjustment = apply_score_distribution_policy(
+            matrix,
+            asian=asian,
+            total=total,
+            league_profile=league_profile,
+        )
+    except Exception as e:
+        log.debug(f"比分分布策略调整失败: {e}")
+
     candidates = sorted(matrix.items(), key=lambda kv: -kv[1])
     meta = {
         'supremacy_asian': sup_asian,
@@ -5000,6 +5059,7 @@ def predict_scores(asian, euro, total, team_strength=None, league_profile=None,
         'handicap_change': asian.get('handicap_change'),
         'line_change': total.get('line_change'),
         'market_db_used': market_db_used,
+        'policy_adjustment': policy_adjustment,
     }
     return candidates, lam_home, lam_away, meta
 
