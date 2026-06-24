@@ -35,6 +35,22 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 
+def normalize_1x2_probs(probs: Dict[str, float]) -> Dict[str, float]:
+    """Normalize 1X2 probability keys to H/D/A."""
+    if not probs:
+        return {}
+
+    normalized = {
+        'H': probs.get('H', probs.get('home', 0.0)),
+        'D': probs.get('D', probs.get('draw', 0.0)),
+        'A': probs.get('A', probs.get('away', 0.0)),
+    }
+    total = sum(normalized.values())
+    if total > 0:
+        normalized = {key: value / total for key, value in normalized.items()}
+    return normalized
+
+
 def load_historical_data(data_dir: str = None) -> List[Dict]:
     """
     加载历史回填数据
@@ -66,6 +82,7 @@ def calculate_log_loss(predicted: Dict[str, float], actual: str) -> float:
     返回：
         LogLoss 值
     """
+    predicted = normalize_1x2_probs(predicted)
     epsilon = 1e-15
     p = predicted.get(actual, epsilon)
     p = max(epsilon, min(1 - epsilon, p))
@@ -91,7 +108,7 @@ def evaluate_prediction(prediction: Dict, actual: Dict) -> Dict[str, float]:
     top_scores = sorted(predicted_scores.items(), key=lambda x: -x[1])
     
     # 获取预测的胜平负概率
-    predicted_1x2 = prediction.get('predicted_1x2', {})
+    predicted_1x2 = normalize_1x2_probs(prediction.get('predicted_1x2', {}))
     
     # Top3 命中率
     top3_hit = 0

@@ -92,6 +92,8 @@ class FootballCacheManager:
                         # 只有时间，假设是今天
                         match_time = datetime.strptime(match_time_str, fmt)
                         match_datetime = datetime.now().replace(hour=match_time.hour, minute=match_time.minute, second=0)
+                    elif fmt == '%m-%d %H:%M':
+                        match_datetime = datetime.strptime(f"{datetime.now().year}-{match_time_str}", '%Y-%m-%d %H:%M')
                     else:
                         match_datetime = datetime.strptime(match_time_str, fmt)
                     return match_datetime - datetime.now()

@@ -24,13 +24,13 @@ SKLEARN_AVAILABLE = False
 try:
     from xgboost import XGBRegressor
     XGBOOST_AVAILABLE = True
-except ImportError:
+except Exception:
     pass
 
 try:
     from lightgbm import LGBMRegressor
     LIGHTGBM_AVAILABLE = True
-except ImportError:
+except Exception:
     pass
 
 try:
@@ -38,7 +38,7 @@ try:
     from sklearn.model_selection import train_test_split
     from sklearn.metrics import mean_squared_error
     SKLEARN_AVAILABLE = True
-except ImportError:
+except Exception:
     pass
 
 

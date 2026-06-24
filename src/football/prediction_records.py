@@ -44,6 +44,22 @@ from collections import defaultdict
 from ..common import repositories
 
 
+def normalize_1x2_probs(probs: Dict[str, float]) -> Dict[str, float]:
+    """Normalize 1X2 probability keys to H/D/A."""
+    if not probs:
+        return {}
+
+    normalized = {
+        'H': probs.get('H', probs.get('home', 0.0)),
+        'D': probs.get('D', probs.get('draw', 0.0)),
+        'A': probs.get('A', probs.get('away', 0.0)),
+    }
+    total = sum(normalized.values())
+    if total > 0:
+        normalized = {key: value / total for key, value in normalized.items()}
+    return normalized
+
+
 DATA_DIR = os.path.join(os.path.dirname(__file__), 'data')
 RECORD_FILE = os.path.join(DATA_DIR, 'prediction_records.json')
 
@@ -248,7 +264,7 @@ class PredictionRecords:
                     goals_top2_hit += 1
             
             # 胜平负命中
-            predicted_1x2 = record.get('predicted_1x2', {})
+            predicted_1x2 = normalize_1x2_probs(record.get('predicted_1x2', {}))
             if predicted_1x2:
                 pred_result = max(predicted_1x2.keys(), key=lambda k: predicted_1x2[k])
                 actual_result = record.get('actual_result', '')
@@ -259,7 +275,7 @@ class PredictionRecords:
             if predicted_1x2 and record.get('actual_result'):
                 actual = record['actual_result']
                 brier = 0.0
-                for key in ['home', 'draw', 'away']:
+                for key in ['H', 'D', 'A']:
                     pred = predicted_1x2.get(key, 0.0)
                     actual_val = 1.0 if key == actual else 0.0
                     brier += (pred - actual_val) ** 2

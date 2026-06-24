@@ -31,6 +31,22 @@ from datetime import datetime
 log = logging.getLogger('football')
 
 
+def _normalize_1x2_probs(probs: Dict[str, float]) -> Dict[str, float]:
+    """Normalize 1X2 probability keys to H/D/A."""
+    if not probs:
+        return {}
+
+    normalized = {
+        'H': probs.get('H', probs.get('home', 0.0)),
+        'D': probs.get('D', probs.get('draw', 0.0)),
+        'A': probs.get('A', probs.get('away', 0.0)),
+    }
+    total = sum(normalized.values())
+    if total > 0:
+        normalized = {key: value / total for key, value in normalized.items()}
+    return normalized
+
+
 class BacktestRunner:
     """回测运行器"""
     
@@ -68,7 +84,7 @@ class BacktestRunner:
         hit_top5 = (actual_score in top5_scores)
         
         # 胜平负
-        predicted_1x2 = record.get('predicted_1x2', {})
+        predicted_1x2 = _normalize_1x2_probs(record.get('predicted_1x2', {}))
         pred_result = max(predicted_1x2.items(), key=lambda x: x[1])[0] if predicted_1x2 else None
         hit_1x2 = (pred_result == actual_result)
         
@@ -130,7 +146,7 @@ class BacktestRunner:
         )
         
         # 计算胜平负 LogLoss 和 Brier
-        predicted_1x2 = record.get('predicted_1x2', {})
+        predicted_1x2 = _normalize_1x2_probs(record.get('predicted_1x2', {}))
         result_logloss = 0.0
         result_brier = 0.0
         if actual_result and predicted_1x2:

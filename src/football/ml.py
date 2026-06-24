@@ -29,19 +29,19 @@ PYTORCH_AVAILABLE = False
 try:
     from catboost import CatBoostClassifier
     CATBOOST_AVAILABLE = True
-except ImportError:
+except Exception:
     pass
 
 try:
     from xgboost import XGBClassifier, XGBRegressor
     XGBOOST_AVAILABLE = True
-except ImportError:
+except Exception:
     pass
 
 try:
     from lightgbm import LGBMClassifier, LGBMRegressor
     LIGHTGBM_AVAILABLE = True
-except ImportError:
+except Exception:
     pass
 
 try:
@@ -50,7 +50,7 @@ try:
     from sklearn.model_selection import train_test_split
     from sklearn.metrics import accuracy_score, classification_report
     SKLEARN_AVAILABLE = True
-except ImportError:
+except Exception:
     pass
 
 try:
@@ -59,7 +59,7 @@ try:
     import torch.optim as optim
     from torch.utils.data import DataLoader, TensorDataset
     PYTORCH_AVAILABLE = True
-except ImportError:
+except Exception:
     pass
 
 

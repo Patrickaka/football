@@ -82,10 +82,28 @@ def calculate_logloss(probs: Dict[str, float], actual_result: str) -> float:
     """
     if actual_result not in ['H', 'D', 'A']:
         return float('nan')
+
+    probs = normalize_1x2_probs(probs)
     
     p = probs.get(actual_result, 0.0)
     p = max(min(p, 1 - 1e-15), 1e-15)  # 防止 log(0)
     return -math.log(p)
+
+
+def normalize_1x2_probs(probs: Dict[str, float]) -> Dict[str, float]:
+    """Normalize 1X2 probability keys to H/D/A."""
+    if not probs:
+        return {}
+
+    normalized = {
+        'H': probs.get('H', probs.get('home', 0.0)),
+        'D': probs.get('D', probs.get('draw', 0.0)),
+        'A': probs.get('A', probs.get('away', 0.0)),
+    }
+    total = sum(normalized.values())
+    if total > 0:
+        normalized = {key: value / total for key, value in normalized.items()}
+    return normalized
 
 
 def calculate_brier_score(probs: Dict[str, float], actual_result: str) -> float:
@@ -101,6 +119,8 @@ def calculate_brier_score(probs: Dict[str, float], actual_result: str) -> float:
     """
     if actual_result not in ['H', 'D', 'A']:
         return float('nan')
+
+    probs = normalize_1x2_probs(probs)
     
     # 创建真实标签向量
     true_label = {'H': 0.0, 'D': 0.0, 'A': 0.0}
@@ -127,6 +147,8 @@ def calculate_hit(probs: Dict[str, float], actual_result: str) -> bool:
     """
     if actual_result not in ['H', 'D', 'A']:
         return None
+
+    probs = normalize_1x2_probs(probs)
     
     # 找到概率最高的结果
     max_prob = -1
@@ -224,15 +246,8 @@ def infer_time_layer(match_time_str: str) -> str:
     """
     try:
         now = datetime.now()
-        for fmt in ['%m-%d %H:%M', '%Y-%m-%d %H:%M', '%Y/%m/%d %H:%M']:
-            try:
-                match_time = datetime.strptime(match_time_str, fmt)
-                if match_time.year == 1900:
-                    match_time = match_time.replace(year=now.year)
-                break
-            except ValueError:
-                continue
-        else:
+        match_time = _parse_match_datetime(match_time_str)
+        if not match_time:
             return 'final'
         
         diff_minutes = (match_time - now).total_seconds() / 60
@@ -452,15 +467,8 @@ class PredictionHistory:
             
             try:
                 # 尝试解析时间
-                for fmt in ['%Y-%m-%d %H:%M:%S', '%Y-%m-%d %H:%M', '%m-%d %H:%M']:
-                    try:
-                        match_time = datetime.strptime(match_time_str, fmt)
-                        if fmt == '%m-%d %H:%M':
-                            match_time = match_time.replace(year=now.year)
-                        break
-                    except ValueError:
-                        continue
-                else:
+                match_time = _parse_match_datetime(match_time_str)
+                if not match_time:
                     continue
                 
                 # 比赛结束时间 = 比赛开始时间 + 150分钟
@@ -499,7 +507,7 @@ class PredictionHistory:
         actual_score = record.get('actual_score')
         actual_result = record.get('actual_result')
         predicted_scores = record.get('predicted_scores', {})
-        predicted_1x2 = record.get('predicted_1x2', {})
+        predicted_1x2 = normalize_1x2_probs(record.get('predicted_1x2', {}))
         
         # 半全场相关
         actual_half_full = record.get('actual_half_full')
@@ -827,15 +835,8 @@ class PredictionHistory:
                 continue
             
             try:
-                for fmt in ['%Y-%m-%d %H:%M:%S', '%Y-%m-%d %H:%M', '%m-%d %H:%M']:
-                    try:
-                        match_time = datetime.strptime(match_time_str, fmt)
-                        if fmt == '%m-%d %H:%M':
-                            match_time = match_time.replace(year=now.year)
-                        break
-                    except ValueError:
-                        continue
-                else:
+                match_time = _parse_match_datetime(match_time_str)
+                if not match_time:
                     continue
                 
                 settle_time = match_time + timedelta(minutes=minutes)
@@ -1132,7 +1133,7 @@ class PredictionHistory:
             actual_score = record.get('actual_score', '')
             predicted_scores = record.get('predicted_scores', {})
             actual_result = record.get('actual_result', '')
-            predicted_1x2 = record.get('predicted_1x2', {})
+            predicted_1x2 = normalize_1x2_probs(record.get('predicted_1x2', {}))
             time_layers_data = record.get('time_layers', {})
             
             if not predicted_scores or not actual_score:
@@ -1733,8 +1734,8 @@ def _parse_match_datetime(match_time: str) -> Optional[datetime]:
         return None
 
     now = datetime.now()
-    text = match_time.strip()
-    for fmt in ('%Y-%m-%d %H:%M:%S', '%Y-%m-%d %H:%M', '%m-%d %H:%M'):
+    text = str(match_time).strip()
+    for fmt in ('%Y-%m-%d %H:%M:%S', '%Y-%m-%d %H:%M', '%Y/%m/%d %H:%M'):
         try:
             match_dt = datetime.strptime(text, fmt)
             if fmt == '%m-%d %H:%M':
@@ -1747,6 +1748,15 @@ def _parse_match_datetime(match_time: str) -> Optional[datetime]:
             return match_dt
         except ValueError:
             continue
+    try:
+        match_dt = datetime.strptime(f"{now.year}-{text}", '%Y-%m-%d %H:%M')
+        if match_dt > now + timedelta(days=2):
+            match_dt = match_dt.replace(year=now.year - 1)
+        elif now.month == 12 and match_dt.month == 1:
+            match_dt = match_dt.replace(year=now.year + 1)
+        return match_dt
+    except ValueError:
+        pass
     return None
 
 
