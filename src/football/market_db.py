@@ -454,47 +454,43 @@ class MarketScoreDB:
             if asian is not None and ou is not None and score:
                 self.add_record(asian, ou, score)
     
-    def build_from_csv_files(self, csv_dir: str = DATA_DIR):
-        """
-        从CSV文件批量构建数据库
-        
-        参数：
-            csv_dir: CSV文件所在目录
-        """
+    def build_from_matches(self):
+        """从 matches 表批量构建数据库（替代旧的 CSV 目录扫描）。"""
+        from ..common import match_store
+
         count = 0
-        for filename in os.listdir(csv_dir):
-            if filename.endswith('.csv') and '_' in filename:
-                filepath = os.path.join(csv_dir, filename)
-                records = parse_csv_file(filepath)
-                
-                for record in records:
-                    # 标准化盘口
-                    # 先转换符号：Football-Data 的 AHh 符号与内部约定相反
-                    raw_asian = record.get('AHh')
-                    asian = to_internal_asian(raw_asian, 'football_data')
-                    
-                    if asian is None:
-                        # 尝试从赔率反推（反推结果已经是内部格式）
-                        asian = normalize_handicap_from_odds(
-                            record.get('AvgAHH'), record.get('AvgAHA')
-                        )
-                    
-                    asian = normalize_asian(asian)
-                    
-                    # 计算大小球（从赔率反推）
-                    ou = self._implied_total_from_odds(
-                        record.get('AvgOver'), record.get('AvgUnder')
-                    )
-                    ou = normalize_ou(ou)
-                    
-                    if asian is not None and ou is not None:
-                        score = f"{record['FTHG']}-{record['FTAG']}"
-                        self.add_record(asian, ou, score)
-                        count += 1
-        
+        for row in match_store.iter_csv_rows():
+            record = parse_match_row(row)
+            if not record:
+                continue
+
+            # 标准化盘口
+            # 先转换符号：Football-Data 的 AHh 符号与内部约定相反
+            raw_asian = record.get('AHh')
+            asian = to_internal_asian(raw_asian, 'football_data')
+
+            if asian is None:
+                # 尝试从赔率反推（反推结果已经是内部格式）
+                asian = normalize_handicap_from_odds(
+                    record.get('AvgAHH'), record.get('AvgAHA')
+                )
+
+            asian = normalize_asian(asian)
+
+            # 计算大小球（从赔率反推）
+            ou = self._implied_total_from_odds(
+                record.get('AvgOver'), record.get('AvgUnder')
+            )
+            ou = normalize_ou(ou)
+
+            if asian is not None and ou is not None:
+                score = f"{record['FTHG']}-{record['FTAG']}"
+                self.add_record(asian, ou, score)
+                count += 1
+
         # 归一化所有概率
         self._normalize_all()
-        print(f"从CSV构建完成，共 {count} 条记录")
+        print(f"从 matches 构建完成，共 {count} 条记录")
     
     def _implied_total_from_odds(self, over_odds: float, under_odds: float) -> float:
         """从大小球赔率反推期望总进球"""
@@ -947,7 +943,7 @@ def build_database():
     print("="*60)
     
     db = MarketScoreDB()
-    db.build_from_csv_files()
+    db.build_from_matches()
     db.save()
     
     print(f"\n数据库构建完成！")
