@@ -49,6 +49,20 @@ FEATURE_WEIGHTS = {
 
 # 时间衰减因子 (最近一期权重1.0，20期前≈0.19，50期前≈0.016)
 TIME_DECAY_FACTOR = 0.92
+MIN_REAL_HISTORY_FOR_RANKING = 200
+LOTTERY_PREDICTOR_VERSION = "dlt-v2.1-no-leakage-quality-gated"
+
+# Accuracy-oriented conservative override: reduce hot/cold chasing and favor
+# structural constraints that are less sensitive to short-term noise.
+FEATURE_WEIGHTS.update({
+    'frequency': 0.18,
+    'gap': 0.14,
+    'position': 0.18,
+    'road': 0.14,
+    'sum': 0.14,
+    'trend': 0.10,
+    'zone': 0.12,
+})
 
 # 二阶马尔可夫权重
 MARKOV2_WEIGHT = 0.35
@@ -89,6 +103,7 @@ class LotteryAnalyzer:
 
     def __init__(self, history_file: Optional[str] = None):
         self.history_file = history_file or data_path('lottery_history.json')
+        self.using_simulated_data = False
         self.history_data = self._load_history()
         self.statistics = {}
         self.update_statistics()
@@ -97,8 +112,13 @@ class LotteryAnalyzer:
         """加载历史数据"""
         try:
             results = repositories.dlt_load()
-            return results if results else self._generate_simulated_data()
+            if results:
+                self.using_simulated_data = False
+                return results
+            self.using_simulated_data = True
+            return self._generate_simulated_data()
         except Exception:
+            self.using_simulated_data = True
             return self._generate_simulated_data()
 
     def _generate_simulated_data(self) -> List[Dict]:
@@ -132,6 +152,53 @@ class LotteryAnalyzer:
     def update_statistics(self):
         """更新统计数据"""
         self.statistics = self._calculate_statistics()
+
+    def assess_data_quality(self) -> Dict[str, Any]:
+        """Assess whether the current history is suitable for ranking/backtest use."""
+        issues = [str(x.get('issue', '')) for x in self.history_data if x.get('issue')]
+        dates = [str(x.get('date', '')) for x in self.history_data if x.get('date')]
+        duplicate_issues = len(issues) - len(set(issues))
+        issue_gaps = 0
+
+        ordered = list(reversed(issues))
+        for prev, curr in zip(ordered, ordered[1:]):
+            try:
+                prev_year, prev_seq = int(prev[:4]), int(prev[4:])
+                curr_year, curr_seq = int(curr[:4]), int(curr[4:])
+            except Exception:
+                continue
+            if curr_year == prev_year and curr_seq - prev_seq != 1:
+                issue_gaps += 1
+            elif curr_year == prev_year + 1 and curr_seq != 1:
+                issue_gaps += 1
+
+        warnings = []
+        if self.using_simulated_data:
+            warnings.append('simulated_data')
+        if len(issues) < MIN_REAL_HISTORY_FOR_RANKING:
+            warnings.append('history_too_short')
+        if duplicate_issues:
+            warnings.append('duplicate_issues')
+        if issue_gaps:
+            warnings.append('issue_gaps')
+
+        return {
+            'issues': len(issues),
+            'latest_issue': issues[0] if issues else None,
+            'oldest_issue': issues[-1] if issues else None,
+            'latest_date': dates[0] if dates else None,
+            'oldest_date': dates[-1] if dates else None,
+            'duplicate_issues': duplicate_issues,
+            'issue_gaps': issue_gaps,
+            'using_simulated_data': self.using_simulated_data,
+            'ranking_allowed': (
+                not self.using_simulated_data
+                and len(issues) >= MIN_REAL_HISTORY_FOR_RANKING
+                and duplicate_issues == 0
+                and issue_gaps == 0
+            ),
+            'warnings': warnings,
+        }
 
     def _calculate_statistics(self) -> Dict:
         """计算各项统计数据 (v2: 时间衰减+更多维度)"""
@@ -496,13 +563,13 @@ class LotteryAnalyzer:
         gap_ratio = gap / max(avg_gap, 1)
         if gap_ratio < 0.7:
             # 近期出现过的热号: 回归均值加分
-            scores['gap'] = 1.0 / (gap_ratio + 0.2)
+            scores['gap'] = 0.45
         elif gap_ratio < 1.3:
             # 接近平均遗漏: 最高分
             scores['gap'] = 0.85
         else:
             # 超过平均遗漏: 遗漏越大回补预期越强，但需打折
-            scores['gap'] = 0.85 * (1.0 - math.exp(-(gap_ratio - 1.3) * 2.0))
+            scores['gap'] = min(0.70, 0.35 + 0.35 * (1.0 - math.exp(-(gap_ratio - 1.3) * 1.2)))
 
         # 位置得分
         if is_front:
@@ -589,25 +656,29 @@ class LotteryAnalyzer:
     def rolling_backtest(self, trials: int = 50) -> Dict:
         """滚动回测 (v2: 高效版，不复建分析器)"""
         if len(self.history_data) < trials + 10:
-            trials = max(20, len(self.history_data) - 10)
+            trials = max(1, len(self.history_data) - 10)
 
-        start = len(self.history_data) - trials
+        start = 0
 
         front_hit_ge2 = front_hit_ge3 = front_hit_ge4 = 0
         back_hit_ge1 = back_hit_ge2 = 0
+        evaluated = 0
 
         # 保存当前状态
         saved_data = list(self.history_data)
         saved_stats = dict(self.statistics) if self.statistics else {}
 
-        for i in range(start, len(self.history_data)):
-            # 只用前i期数据
-            self.history_data = list(saved_data[i:])  # 从第i期倒序
+        for i in range(start, trials):
+            # Newest-first history: predict saved_data[i] using only older draws.
+            self.history_data = list(saved_data[i + 1:])
+            if len(self.history_data) < 10:
+                continue
             self.update_statistics()
 
             actual = saved_data[i]
             actual_front = actual['front']
             actual_back = actual['back']
+            evaluated += 1
 
             front_ranking = self.get_ensemble_ranking(is_front=True)
             back_ranking = self.get_ensemble_ranking(is_front=False)
@@ -633,7 +704,7 @@ class LotteryAnalyzer:
         self.history_data = saved_data
         self.statistics = saved_stats
 
-        n = trials
+        n = evaluated or 1
         return {
             'trials': n,
             'front_ge2_rate': front_hit_ge2 / n,
@@ -1411,6 +1482,7 @@ class LotteryAnalyzer:
         merged_results = sorted(fetched_results, key=lambda x: x['issue'], reverse=True) + preserved_local
 
         self.history_data = merged_results
+        self.using_simulated_data = False
         self.update_statistics()
         self.save_history()
         log.info(f'成功更新历史数据，共 {len(fetched_results)} 期来自网络')
@@ -1461,6 +1533,7 @@ def run_prediction(force_refresh=False):
         # 获取统计数据
         stats = analyzer.get_statistics()
         recent = analyzer.get_recent_results(10)
+        data_quality = analyzer.assess_data_quality()
 
         # 滚动回测
         backtest = analyzer.rolling_backtest(trials=50)
@@ -1480,6 +1553,8 @@ def run_prediction(force_refresh=False):
             'backtest': backtest,
             'voting': voting,
             'recommendations': recommendations,
+            'data_quality': data_quality,
+            'version': LOTTERY_PREDICTOR_VERSION,
         }
 
         # 保存到模块级内存缓存

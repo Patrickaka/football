@@ -215,7 +215,8 @@ class Handler(BaseHTTPRequestHandler):
         elif path == '/api/lottery':
             self._serve_json(self._lottery_payload())
         elif path == '/api/lottery-refresh':
-            self._serve_json(self._lottery_refresh_payload())
+            params = parse_qs(route.query)
+            self._serve_json(self._lottery_refresh_payload(params))
         elif path == '/api/pailie5-refresh':
             self._serve_json(self._pailie5_refresh_payload())
         elif path == '/api/3d-refresh':
@@ -628,7 +629,9 @@ class Handler(BaseHTTPRequestHandler):
                 'success': True,
                 'message': '缓存已刷新',
                 'elapsed': round(elapsed, 2),
-                'data_count': len(result)
+                'data_count': result.get('statistics', {}).get('total_issues', 0) if isinstance(result, dict) else 0,
+                'data_quality': result.get('data_quality') if isinstance(result, dict) else None,
+                'version': result.get('version') if isinstance(result, dict) else None
             }
         except Exception as e:
             self._log.error('排列五强制刷新失败: %s', str(e), exc_info=True)
@@ -918,7 +921,7 @@ class Handler(BaseHTTPRequestHandler):
 
             # server 缓存失效，调用模块级预测函数（含模块级内存缓存）
             self._log.info('大乐透分析重新计算')
-            result = lottery_run_prediction()
+            result = lottery_run_prediction(force_refresh=True)
 
             # 处理模块返回的错误
             if 'error' in result:
@@ -933,7 +936,7 @@ class Handler(BaseHTTPRequestHandler):
             self._log.error('大乐透分析失败', exc_info=True)
             return {'error': '大乐透分析失败'}
 
-    def _lottery_refresh_payload(self):
+    def _lottery_refresh_payload(self, params=None):
         """强制刷新大乐透数据缓存"""
         try:
             self._log.info('大乐透强制刷新请求到达')

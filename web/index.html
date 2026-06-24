@@ -2634,6 +2634,22 @@ function renderLottery(r) {
     <div class="row"><span class="k">后区号码范围</span><span class="v">01 - 12</span></div>
     <button type="button" style="width:100%;margin-top:10px;padding:10px;background:#4493f8;color:#fff;border:none;border-radius:8px;font-size:14px;cursor:pointer" onclick="fetchLotteryData()">🔄 抓取最新开奖号码</button>
   </div>`;
+
+  if (r.data_quality) {
+    const dq = r.data_quality;
+    const warnings = dq.warnings || [];
+    const qualityColor = dq.ranking_allowed ? 'var(--accent2)' : 'var(--warn)';
+    html += `<div class="card model-health">
+      <h3>数据质量 / 排名状态</h3>
+      <div class="row"><span class="k">历史期数</span><span class="v">${dq.issues ?? '-'} 期</span></div>
+      <div class="row"><span class="k">期号范围</span><span class="v">${esc(dq.oldest_issue || '-')} → ${esc(dq.latest_issue || '-')}</span></div>
+      <div class="row"><span class="k">日期范围</span><span class="v">${esc(dq.oldest_date || '-')} → ${esc(dq.latest_date || '-')}</span></div>
+      <div class="row"><span class="k">重复 / 断档</span><span class="v">${dq.duplicate_issues ?? 0} / ${dq.issue_gaps ?? 0}</span></div>
+      <div class="row"><span class="k">排名准入</span><span class="v" style="color:${qualityColor}">${dq.ranking_allowed ? '可用' : '谨慎'}</span></div>
+      ${dq.using_simulated_data ? `<div class="row"><span class="k">数据来源</span><span class="v" style="color:var(--warn)">模拟数据</span></div>` : ''}
+      ${warnings.length ? `<div class="note" style="margin-top:8px">警告：${esc(warnings.join(' / '))}</div>` : ''}
+    </div>`;
+  }
   
   // ── 最近开奖结果 ──
   html += `<div class="section-title">最近开奖结果</div>`;
