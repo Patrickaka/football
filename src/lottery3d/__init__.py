@@ -27,10 +27,14 @@ URL = "https://www.8300.cn/kjhhis/3/200.html"
 
 RECENT_WINDOWS = (30, 45, 60, 90)
 RECENT_WINDOW = 90  # 展示用最大窗口
-WINDOW_BACKTEST_TRIALS = 40
+# 窗口权重回测参数（保守收缩）
+WINDOW_BACKTEST_TRIALS = 100  # 增加回测期数，减少偶然因素影响
+WINDOW_WEIGHT_PRIOR = 5.0  # 增大先验权重，平滑窗口权重波动
 EXP_DECAY = 0.96
 BACKTEST_TRIALS = 80
-PERMUTATION_SHUFFLES = 20  # 置换检验打乱次数，评估命中率是否显著优于随机
+PERMUTATION_SHUFFLES = 200  # 置换检验打乱次数，评估命中率是否显著优于随机（建议线上至少200，离线验证1000）
+# 和值/跨度近期偏移参数
+RECENT_SUM_SPAN_SHIFT = 0.0  # 关闭近期5期偏移，避免追涨杀跌
 
 # 缓存配置
 _prediction_cache = None
@@ -105,17 +109,20 @@ HOT_RATIO = 0.40   # 热号比例 40%
 WARM_RATIO = 0.40  # 温号比例 40%
 
 # 特征开关：用于消融测试
-# 稳定基础版配置：关闭形态切换和冷热平衡
+# 稳定基础版配置：关闭形态切换、冷热平衡、数字配对和遗漏（待消融验证）
 FEATURE_FLAGS = {
     "hot": True,           # 热号得分
-    "miss": True,          # 遗漏加分
+    "miss": False,         # 遗漏加分（关闭：待消融回测验证有效性）
     "markov": True,        # 马尔可夫转移
-    "neighbor": True,      # 邻号加分
-    "road": True,          # 012 路匹配
+    "neighbor": False,     # 邻号加分（关闭：待消融回测验证有效性）
+    "road": False,         # 012 路匹配（关闭：待消融回测验证有效性）
     "sum_span": True,      # 和值跨度
-    "pair": True,          # 数字配对
+    "pair": False,         # 数字配对（关闭：待消融回测验证有效性）
     "form_switch": False,  # 形态切换（关闭：避免赌徒谬误）
     "cold_hot_balance": False,  # 冷热平衡（关闭：避免干扰模型排序）
+    "consecutive": True,   # 连号奖励（开启：待消融回测验证有效性）
+    "lag1_repeat": True,   # 上期同位重复、全重复、同集合惩罚（开启：待消融回测验证有效性）
+    "ratio": True,         # 奇偶比、大小比奖励（开启：待消融回测验证有效性）
 }
 COLD_RATIO = 0.20  # 冷号比例 20%
 HOT_WINDOW = 20    # 冷热判断窗口
@@ -158,6 +165,9 @@ WINDOW_WEIGHTS_KV_KEY = "lottery3d_window_weights"
 
 # 预测版本号
 PREDICTOR_VERSION = "3d-v3.8-rank-stability-ablation"
+ML_MODEL_VERSION = "ml-v6"
+MIN_DATA_PERIODS_FOR_ML_FUSION = 300
+ML_CACHE_MAX_AGE_SECONDS = 36 * 3600
 
 # 线上实盘记录文件
 ONLINE_PREDICTION_FILE = "data/lottery3d_online_predictions.json"
@@ -190,15 +200,12 @@ FEATURE_DOWNGRADE_FACTOR = 0.5  # 降权因子
 MARKOV_LAPLACE_ALPHA = 1.0
 
 # 可调评分权重（供 search_weights 搜索）
+# 精简版本：只保留已启用特征的权重，避免浪费计算在无效参数上
 TUNABLE_WEIGHTS = (
     "W_HOT_GLOBAL",
     "W_HOT_POS",
-    "W_MISS_MID",
     "W_MARKOV",
     "W_MARKOV2",
-    "W_LAST_APPEAR",
-    "W_NEIGHBOR",
-    "W_ROAD_MATCH",
     "W_DANMA_HIT",
     "W_KILL_PENALTY",
     "SUM_SOFT_SIGMA",
@@ -833,6 +840,17 @@ def save_online_prediction(period, last_draw, zhixuan_top3, zhixuan, danma, kill
                 break
         
         if existing_index is not None:
+            old_record = records[existing_index]
+            # 如果已结算，不覆盖（保留原始预测记录）
+            if old_record.get("settled"):
+                log.info(f"预测记录已结算，跳过更新: {period}")
+                return
+            # 如果未结算，只补充空字段，不覆盖 zhixuan / top3（保留首次发布）
+            record["zhixuan_top3"] = old_record["zhixuan_top3"]
+            record["zhixuan"] = old_record["zhixuan"]
+            record["danma"] = old_record["danma"]
+            record["kill"] = old_record["kill"]
+            record["created_at"] = old_record["created_at"]  # 保留首次创建时间
             records[existing_index] = record
         else:
             records.append(record)
@@ -898,6 +916,9 @@ def settle_pending_online_predictions(periods, numbers):
             log.info(f"线上预测已结算 {settled_count} 条")
         except Exception as e:
             log.error(f"保存线上预测结算结果失败: {e}")
+
+    # 结算三路策略记录
+    settle_strategy_records(periods, numbers)
 
     if settled_count > 0:
         try:
@@ -1047,19 +1068,28 @@ def form_quota_filter(pool, top_n=30):
     return sorted(result, key=lambda x: -x[0])[:top_n]
 
 
-def fuse_rule_ml(rule_list, ml_list, top_n=30):
-    """融合规则模型和ML模型的推荐结果
+def fuse_rule_ml(rule_list, ml_list, top_n=30, rule_weight=0.55, ml_weight=0.45, score=None, danma=None, kill=None, meta=None):
+    """融合规则模型和ML模型的推荐结果（支持动态权重）
     
     参数：
-        rule_list: 规则模型推荐列表 [{"num": "...", "score": ...}, ...]
+        rule_list: 规则模型推荐列表 [{"num": "...", "score": ..., "detail": {...}}, ...]
         ml_list: ML模型推荐列表 [{"num": "...", "model_score": ...}, ...]
         top_n: 最终推荐数量
+        rule_weight: 规则模型权重（基于回测表现动态计算）
+        ml_weight: ML模型权重（基于回测表现动态计算）
+        score: 数字评分数组（用于构建detail）
+        danma: 胆码列表
+        kill: 杀码列表
+        meta: 元数据
     
     返回：
-        fused: 融合后的推荐列表，包含置信度标签
+        fused: 融合后的推荐列表，包含置信度标签和detail
     """
     rule_rank = {x["num"]: i for i, x in enumerate(rule_list)}
     ml_rank = {x["num"]: i for i, x in enumerate(ml_list)}
+    
+    # 保留规则模型的detail映射
+    rule_detail = {x["num"]: x.get("detail") for x in rule_list}
 
     all_nums = set(rule_rank) | set(ml_rank)
 
@@ -1068,14 +1098,14 @@ def fuse_rule_ml(rule_list, ml_list, top_n=30):
         r = rule_rank.get(num, 999)
         m = ml_rank.get(num, 999)
 
-        score = 0.0
-        score += max(0, 100 - r) * 0.55
-        score += max(0, 100 - m) * 0.45
+        fuse_score = 0.0
+        fuse_score += max(0, 100 - r) * rule_weight
+        fuse_score += max(0, 100 - m) * ml_weight
 
         in_rule = num in rule_rank
         in_ml = num in ml_rank
         if in_rule and in_ml:
-            score += 20
+            fuse_score += 20
             tag = "high_confidence"
         elif in_rule:
             tag = "rule_preferred"
@@ -1084,23 +1114,223 @@ def fuse_rule_ml(rule_list, ml_list, top_n=30):
         else:
             tag = "other"
 
-        fused.append((score, num, tag))
+        fused.append((fuse_score, num, tag, in_rule))
 
     fused.sort(reverse=True)
     
     result = []
-    for score, num, tag in fused[:top_n]:
+    for fuse_score, num, tag, in_rule in fused[:top_n]:
+        # 获取规则模型的detail
+        detail = rule_detail.get(num)
+        
+        # 如果没有detail且提供了必要参数，尝试构建detail
+        if detail is None and score is not None and danma is not None and kill is not None and meta is not None:
+            a, b, c = int(num[0]), int(num[1]), int(num[2])
+            detail = triplet_weight_detail(a, b, c, score, danma, kill, meta)
+        
         result.append({
             "num": num,
-            "fuse_score": round(score, 2),
+            "score": round(fuse_score, 2),  # 统一字段名，兼容页面打印
+            "fuse_score": round(fuse_score, 2),
             "tag": tag,
             "in_rule": num in rule_rank,
             "in_ml": num in ml_rank,
             "rule_rank": rule_rank.get(num),
             "ml_rank": ml_rank.get(num),
+            "detail": detail,
         })
     
     return result
+
+
+def load_recent_rule_performance():
+    """加载缓存的规则模型最近表现（避免每次都跑回测）
+    
+    返回：
+        dict: 包含 top30_rate, top3_rate, top100_rate, actual_rank_avg 等指标
+    """
+    try:
+        perf = kv_store.load('lottery3d_rule_performance', {})
+        return perf
+    except Exception as e:
+        log.error(f"加载规则模型表现失败: {e}")
+        return {
+            "top30_rate": 0.03,
+            "top3_rate": 0.003,
+            "top100_rate": 0.1,
+            "actual_rank_avg": 500,
+            "actual_rank_median": 500,
+        }
+
+
+def load_latest_ml_performance():
+    """加载最近一次ML回测表现（用于融合权重计算）
+    
+    返回：
+        包含top30_rate、top3_rate、actual_rank_avg等指标的字典
+    """
+    try:
+        history = kv_store.load('lottery3d_ml_backtest_history', [])
+        return history[-1] if history else {}
+    except Exception as e:
+        log.error(f"加载ML回测表现失败: {e}")
+        return {}
+
+
+def is_ml_eligible_from_backtest(period):
+    """基于已保存的滚动回测结果判断ML是否符合准入条件
+    
+    准入条件：
+        1. 存在最近的ML回测记录
+        2. 回测记录未过期（模型版本、训练窗口、期号校验）
+        3. Top30命中率高于随机基准(3%)
+        4. 平均真实排名优于500
+    
+    参数：
+        period: 当前期号
+    
+    返回：
+        eligible: 是否符合准入条件
+    """
+    try:
+        # 读取ML回测历史记录
+        ml_backtest = kv_store.load('lottery3d_ml_backtest_history', [])
+        
+        if not ml_backtest:
+            return False
+        
+        # 检查最近的回测结果
+        recent = ml_backtest[-1] if ml_backtest else None
+        if not recent:
+            return False
+        
+        # 版本和期号校验
+        record_period = recent.get('base_period')
+        model_version = recent.get('model_version')
+        
+        # 检查回测记录是否过期（期号差异超过20期认为过期）
+        if record_period and period:
+            try:
+                period_diff = abs(int(period) - int(record_period))
+                if period_diff > 20:
+                    log.info(f"ML回测记录过期（期号差异: {period_diff}期）")
+                    return False
+            except:
+                pass
+        
+        # 检查模型版本是否匹配（当前使用ml-v6）
+        if model_version != "ml-v6":
+            log.info(f"ML模型版本不匹配（记录: {model_version}, 当前: ml-v6）")
+            return False
+        
+        # 检查命中率是否高于基准
+        top30_rate = recent.get('top30_rate', 0.0)
+        actual_rank_avg = recent.get('actual_rank_avg', 1000)
+        
+        baseline_rate = RECOMMEND_GROUPS / 1000.0  # 3%
+        
+        # 准入条件：Top30命中率高于基准，且平均排名优于500
+        if top30_rate > baseline_rate and actual_rank_avg < 500:
+            return True
+        
+        return False
+    except Exception as e:
+        log.error(f"检查ML准入条件失败: {e}")
+        return False
+
+
+def save_strategy_records(period, rule_only, ml_only, fused):
+    """保存三套策略记录（用于后续对比分析）
+    
+    参数：
+        period: 期号
+        rule_only: 规则模型推荐列表
+        ml_only: ML模型推荐列表
+        fused: 融合推荐列表
+    
+    注意：首次发布的策略记录不会被覆盖（即使未结算），确保策略对比的准确性
+    """
+    try:
+        history = kv_store.load('lottery3d_strategy_records', [])
+        
+        # 检查是否已存在同一期的记录
+        existing_record = next((h for h in history if h["period"] == period), None)
+        
+        if existing_record:
+            # 如果已存在，检查是否已结算
+            if existing_record.get("settled"):
+                # 已结算，不覆盖
+                log.info(f"策略记录已结算，跳过更新（期号: {period}）")
+                return
+            # 未结算也保留首次发布，不覆盖
+            log.info(f"策略记录已存在，保留首次发布（期号: {period}）")
+            return
+        
+        # 不存在记录，创建新记录
+        record = {
+            "period": period,
+            "rule_only": rule_only,
+            "ml_only": ml_only,
+            "fused": fused,
+            "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "settled": False,
+            "revision": 1,  # 首次发布版本
+        }
+        
+        history.append(record)
+        
+        # 只保留最近200期记录
+        history = history[-200:]
+        
+        kv_store.save('lottery3d_strategy_records', history)
+        log.info(f"策略记录已保存（期号: {period}）")
+    except Exception as e:
+        log.error(f"保存策略记录失败: {e}")
+
+
+def settle_strategy_records(periods, numbers):
+    """结算三路策略记录（规则模型/ML模型/融合模型分别统计）
+    
+    参数：
+        periods: 期号列表
+        numbers: 号码列表
+    """
+    try:
+        history = kv_store.load('lottery3d_strategy_records', [])
+        if not history:
+            return
+        
+        index_map = {period: i for i, period in enumerate(periods)}
+        changed = False
+        
+        for row in history:
+            if row.get("settled"):
+                continue
+            
+            idx = index_map.get(row["period"])
+            if idx is None or idx + 1 >= len(numbers):
+                continue
+            
+            actual = "".join(map(str, numbers[idx + 1]))
+            row["actual"] = actual
+            row["settled"] = True
+            row["draw_period"] = periods[idx + 1]
+            
+            # 分别统计三条策略的表现
+            for name in ("rule_only", "ml_only", "fused"):
+                nums = row.get(name, [])
+                row[f"{name}_hit_top3"] = actual in nums[:3]
+                row[f"{name}_hit_top30"] = actual in nums[:30]
+                row[f"{name}_hit_top100"] = actual in nums[:100]
+                row[f"{name}_rank"] = nums.index(actual) + 1 if actual in nums else 1001
+            
+            changed = True
+        
+        if changed:
+            kv_store.save('lottery3d_strategy_records', history)
+            log.info("三路策略记录已结算")
+    except Exception as e:
+        log.error(f"结算策略记录失败: {e}")
 
 
 def generate_strategy_recommendations(rule_list, ml_list, danma, kill):
@@ -1372,8 +1602,22 @@ def backtest_sum_span_interval(numbers, trials=100):
     }
 
 
-def select_diverse_pool(pool, top_n=30, candidate_size=SERVED_POOL_CANDIDATE_SIZE):
-    """贪心选池：从更大候选集中兼顾原始分、数字覆盖与去相关"""
+def select_diverse_pool(
+    pool,
+    top_n=30,
+    candidate_size=SERVED_POOL_CANDIDATE_SIZE,
+    use_diversity=True,
+    use_correlation=True,
+):
+    """贪心选池：从更大候选集中兼顾原始分、数字覆盖与去相关
+    
+    参数：
+        pool: 候选池 [(权重, 号码字符串), ...]
+        top_n: 目标推荐数量
+        candidate_size: 候选集大小
+        use_diversity: 是否启用数字覆盖奖励
+        use_correlation: 是否启用重合惩罚
+    """
     candidates = sorted(pool, key=lambda x: -x[0])[:candidate_size]
     selected = []
     selected_sets = []
@@ -1385,12 +1629,24 @@ def select_diverse_pool(pool, top_n=30, candidate_size=SERVED_POOL_CANDIDATE_SIZ
 
         for w, num in candidates:
             digits = set(num)
-            overlap_penalty = sum(
-                CORRELATION_PENALTY
-                for old_digits in selected_sets
-                if len(digits & old_digits) >= CORRELATION_THRESHOLD
+            
+            # 重合惩罚（可选）
+            overlap_penalty = (
+                sum(
+                    CORRELATION_PENALTY
+                    for old_digits in selected_sets
+                    if len(digits & old_digits) >= CORRELATION_THRESHOLD
+                )
+                if use_correlation else 0.0
             )
-            new_cover = len(digits - union_digits) if selected_sets else len(digits)
+            
+            # 数字覆盖奖励（可选）
+            new_cover = (
+                len(digits - union_digits)
+                if use_diversity and selected_sets
+                else 0.0
+            )
+            
             final_score = w + new_cover * DIVERSITY_WEIGHT - overlap_penalty
 
             if final_score > best_score:
@@ -1823,15 +2079,21 @@ def analyze_sum_span(sums, spans, window=RECENT_WINDOW):
     sum_center = sum(k * v for k, v in w_s.items()) / max(sum(w_s.values()), 1e-9)
     span_center = sum(k * v for k, v in w_p.items()) / max(sum(w_p.values()), 1e-9)
 
-    # 加入近期趋势感知：最近5期的移动均值偏移
-    if len(recent_s) >= 5:
+    # 近期趋势偏移（可配置开关）
+    # 默认关闭，避免追涨杀跌，等消融回测证明有效再开启
+    if RECENT_SUM_SPAN_SHIFT > 0 and len(recent_s) >= 5:
         recent5_s = recent_s[-5:]
         recent5_p = recent_p[-5:]
         avg5_s = sum(recent5_s) / 5
         avg5_p = sum(recent5_p) / 5
-        # 趋势偏向近期：center 以 0.35 的权重向最近5期移动
-        sum_center = sum_center * 0.65 + avg5_s * 0.35
-        span_center = span_center * 0.65 + avg5_p * 0.35
+        sum_center = (
+            sum_center * (1 - RECENT_SUM_SPAN_SHIFT)
+            + avg5_s * RECENT_SUM_SPAN_SHIFT
+        )
+        span_center = (
+            span_center * (1 - RECENT_SUM_SPAN_SHIFT)
+            + avg5_p * RECENT_SUM_SPAN_SHIFT
+        )
 
     return {
         "sum_center": sum_center,
@@ -2133,10 +2395,10 @@ def compute_window_weights(numbers, trials=WINDOW_BACKTEST_TRIALS, enable_cache=
             top_nums = [t[1] for t in top]
             if act_s in top_nums:
                 raw[w] += 1.0
-            elif len({int(c) for s in top_nums for c in s} & set(actual)) >= 2:
+            elif max_digit_overlap(act_s, top_nums) >= 2:
                 raw[w] += 0.25
 
-    prior = 1.0
+    prior = WINDOW_WEIGHT_PRIOR
     total = sum(raw[w] + prior for w in RECENT_WINDOWS)
     weights = {w: (raw[w] + prior) / total for w in RECENT_WINDOWS}
     
@@ -2330,30 +2592,35 @@ def triplet_weight(a, b, c, score, danma, kill, meta, features=None):
         if (s % 10) in meta["sum_tail_top"]:
             w += 1.0
 
-    if has_consecutive_digits(a, b, c):
+    # 连号奖励
+    if flags.get("consecutive", True) and has_consecutive_digits(a, b, c):
         w += dyn.get("w_consecutive", W_CONSECUTIVE)
 
-    last_draw = meta.get("last_draw")
-    w_pos = dyn.get("w_pos_repeat", W_POS_REPEAT)
-    pos_mult = dyn.get("pos_mult", [1.0, 1.0, 1.0])
-    if last_draw:
-        triple = (a, b, c)
-        for i in range(3):
-            if triple[i] == last_draw[i]:
-                w += w_pos * pos_mult[i]
-        if triple == tuple(last_draw):
-            w -= dyn.get("w_full_repeat_penalty", 0.0)
-        elif set(triple) == set(last_draw):
-            w -= dyn.get("w_same_set_penalty", 0.0)
+    # 上期同位重复、全重复、同集合惩罚
+    if flags.get("lag1_repeat", True):
+        last_draw = meta.get("last_draw")
+        w_pos = dyn.get("w_pos_repeat", W_POS_REPEAT)
+        pos_mult = dyn.get("pos_mult", [1.0, 1.0, 1.0])
+        if last_draw:
+            triple = (a, b, c)
+            for i in range(3):
+                if triple[i] == last_draw[i]:
+                    w += w_pos * pos_mult[i]
+            if triple == tuple(last_draw):
+                w -= dyn.get("w_full_repeat_penalty", 0.0)
+            elif set(triple) == set(last_draw):
+                w -= dyn.get("w_same_set_penalty", 0.0)
 
-    oe = odd_even_key((a, b, c))
-    bs = big_small_key((a, b, c))
-    oe_freq = meta.get("oe_freq")
-    bs_freq = meta.get("bs_freq")
-    if oe_freq:
-        w += W_RATIO_MATCH * oe_freq.get(oe, 0) / meta.get("oe_total", 1)
-    if bs_freq:
-        w += W_RATIO_MATCH * bs_freq.get(bs, 0) / meta.get("bs_total", 1)
+    # 奇偶比、大小比奖励
+    if flags.get("ratio", True):
+        oe = odd_even_key((a, b, c))
+        bs = big_small_key((a, b, c))
+        oe_freq = meta.get("oe_freq")
+        bs_freq = meta.get("bs_freq")
+        if oe_freq:
+            w += W_RATIO_MATCH * oe_freq.get(oe, 0) / meta.get("oe_total", 1)
+        if bs_freq:
+            w += W_RATIO_MATCH * bs_freq.get(bs, 0) / meta.get("bs_total", 1)
     
     # 数字配对奖励：使用 meta 预计算的高频对子
     high_pairs = meta.get("high_pairs") or set()
@@ -2427,30 +2694,35 @@ def triplet_weight_detail(a, b, c, score, danma, kill, meta):
         if (s % 10) in meta["sum_tail_top"]:
             detail["sum_span"] += 1.0
 
-    if has_consecutive_digits(a, b, c):
+    # 连号奖励
+    if flags.get("consecutive", True) and has_consecutive_digits(a, b, c):
         detail["pattern"] += dyn.get("w_consecutive", W_CONSECUTIVE)
 
-    last_draw = meta.get("last_draw")
-    w_pos = dyn.get("w_pos_repeat", W_POS_REPEAT)
-    pos_mult = dyn.get("pos_mult", [1.0, 1.0, 1.0])
-    if last_draw:
-        triple = (a, b, c)
-        for i in range(3):
-            if triple[i] == last_draw[i]:
-                detail["last_repeat"] += w_pos * pos_mult[i]
-        if triple == tuple(last_draw):
-            detail["last_repeat"] -= dyn.get("w_full_repeat_penalty", 0.0)
-        elif set(triple) == set(last_draw):
-            detail["last_repeat"] -= dyn.get("w_same_set_penalty", 0.0)
+    # 上期同位重复、全重复、同集合惩罚
+    if flags.get("lag1_repeat", True):
+        last_draw = meta.get("last_draw")
+        w_pos = dyn.get("w_pos_repeat", W_POS_REPEAT)
+        pos_mult = dyn.get("pos_mult", [1.0, 1.0, 1.0])
+        if last_draw:
+            triple = (a, b, c)
+            for i in range(3):
+                if triple[i] == last_draw[i]:
+                    detail["last_repeat"] += w_pos * pos_mult[i]
+            if triple == tuple(last_draw):
+                detail["last_repeat"] -= dyn.get("w_full_repeat_penalty", 0.0)
+            elif set(triple) == set(last_draw):
+                detail["last_repeat"] -= dyn.get("w_same_set_penalty", 0.0)
 
-    oe = odd_even_key((a, b, c))
-    bs = big_small_key((a, b, c))
-    oe_freq = meta.get("oe_freq")
-    bs_freq = meta.get("bs_freq")
-    if oe_freq:
-        detail["ratio_match"] += W_RATIO_MATCH * oe_freq.get(oe, 0) / meta.get("oe_total", 1)
-    if bs_freq:
-        detail["ratio_match"] += W_RATIO_MATCH * bs_freq.get(bs, 0) / meta.get("bs_total", 1)
+    # 奇偶比、大小比奖励
+    if flags.get("ratio", True):
+        oe = odd_even_key((a, b, c))
+        bs = big_small_key((a, b, c))
+        oe_freq = meta.get("oe_freq")
+        bs_freq = meta.get("bs_freq")
+        if oe_freq:
+            detail["ratio_match"] += W_RATIO_MATCH * oe_freq.get(oe, 0) / meta.get("oe_total", 1)
+        if bs_freq:
+            detail["ratio_match"] += W_RATIO_MATCH * bs_freq.get(bs, 0) / meta.get("bs_total", 1)
 
     high_pairs = meta.get("high_pairs") or set()
     if flags.get("pair", True) and high_pairs:
@@ -2625,6 +2897,8 @@ def rank_triplets(score, danma, kill, meta, top_n=20, enable_exploration=True, a
             pool,
             top_n=top_n,
             candidate_size=max(top_n * 5, SERVED_POOL_CANDIDATE_SIZE),
+            use_diversity=enable_diversity,
+            use_correlation=enable_correlation,
         )
     return pool[:top_n]
 
@@ -2673,22 +2947,29 @@ def evaluate_strategy_admission(
     served_last100_rate,
     raw_last100_rate,
     actual_rank_avg,
-    random_baseline,
+    random_baseline=None,
     significance=None,
 ):
-    """策略准入检查：仅当多项指标同时达标才建议进入实盘融合"""
+    """策略准入检查：仅当多项指标同时达标才建议进入实盘融合
+    
+    参数：
+        random_baseline: 随机基准命中率（可选，默认使用理论基准 3%）
+    """
+    # 使用固定理论基准 3%（30/1000），避免单次随机抽样波动
+    baseline_rate = random_baseline if random_baseline is not None else 0.03
+    
     checks = {
-        "served_top30_last100_above_random": {
-            "passed": served_last100_rate >= random_baseline,
+        "served_top30_last100_above_baseline": {
+            "passed": served_last100_rate >= baseline_rate,
             "actual": round(served_last100_rate, 4),
-            "required": random_baseline,
-            "reason": "近100期 served Top30 不低于随机基准",
+            "required": round(baseline_rate, 4),
+            "reason": f"近100期 served Top30 不低于理论基准({baseline_rate*100:.1f}%)",
         },
-        "raw_top30_last100_above_random": {
-            "passed": raw_last100_rate >= random_baseline,
+        "raw_top30_last100_above_baseline": {
+            "passed": raw_last100_rate >= baseline_rate,
             "actual": round(raw_last100_rate, 4),
-            "required": random_baseline,
-            "reason": "近100期 raw Top30 不低于随机基准",
+            "required": round(baseline_rate, 4),
+            "reason": f"近100期 raw Top30 不低于理论基准({baseline_rate*100:.1f}%)",
         },
         "avg_rank_below_500": {
             "passed": actual_rank_avg < 500,
@@ -2722,6 +3003,7 @@ def backtest(numbers, trials=BACKTEST_TRIALS, window_weights=None):
         - Top30 至少命中两个数字比例
     
     使用滚动窗口训练，与实盘逻辑保持一致。
+    窗口权重每 10 期更新一次，更接近实际线上运行逻辑。
     """
     max_w = max(RECENT_WINDOWS)
     if len(numbers) < trials + max_w + 5:
@@ -2733,7 +3015,10 @@ def backtest(numbers, trials=BACKTEST_TRIALS, window_weights=None):
     served_top30_hits = []
     actual_ranks = []
     start = len(numbers) - trials
-    ww = window_weights or compute_window_weights(numbers[:start])[0]
+    
+    # 如果传入了固定窗口权重，使用它（用于参数搜索）
+    # 否则动态计算（用于正常滚动回测）
+    ww = dict(window_weights) if window_weights else None
 
     rank_kw_pure = dict(
         enable_exploration=False,
@@ -2756,6 +3041,17 @@ def backtest(numbers, trials=BACKTEST_TRIALS, window_weights=None):
         # 使用滚动窗口：每次只用当前可用的数据
         train = numbers[:i]
         actual = numbers[i]
+        
+        # 每 10 期更新一次窗口权重（模拟实盘"回填后刷新权重"逻辑）
+        # 只有当 window_weights 为 None 时才动态更新（正常滚动回测）
+        # 如果传入了固定窗口权重（参数搜索），则保持不变
+        if window_weights is None and (ww is None or (i - start) % 10 == 0):
+            ww, _ = compute_window_weights(
+                train,
+                trials=WINDOW_BACKTEST_TRIALS,
+                enable_cache=False,
+            )
+        
         sums = [sum(x) for x in train]
         spans = [calc_span(x) for x in train]
         meta = build_ranking_meta(train, ww, sums, spans, tail_top=4)
@@ -2862,14 +3158,14 @@ def backtest(numbers, trials=BACKTEST_TRIALS, window_weights=None):
         "actual_rank_top300_rate": round(actual_rank_top300_rate, 4),
         # 数字命中比例
         "ge2_digit_rate": round(hit_ge2 / n, 4) if n > 0 else 0.0,
-        # 随机基准
+        # 随机基准（仅用于页面展示，准入使用固定理论基准 3%）
         "random_rate": random_baseline,
         "random_hit": random_result["random_hit"],
         "admission": evaluate_strategy_admission(
             served_last100_rate,
             raw_last100_rate,
             actual_rank_avg,
-            random_baseline,
+            # 不传 random_baseline，使用默认理论基准 3%
         ),
     }
 
@@ -3117,17 +3413,20 @@ def evaluate_weights(
     trials=60,
     window_weights=None,
     metric="top3_rate",
-    recompute_window_weights=False,
 ):
-    """给定权重在历史数据上跑滚动回测，返回 (目标值, 回测详情)"""
+    """给定权重在历史数据上跑滚动回测，返回 (目标值, 回测详情)
+
+    参数：
+        window_weights: 固定窗口权重（用于参数搜索时公平比较）。
+                       设为 None 时，由 backtest() 内部按时间滚动计算，
+                       避免训练集内部前视。
+    """
     with patch_weights(weights):
-        if recompute_window_weights or window_weights is None:
-            ww, _ = compute_window_weights(
-                numbers, trials=min(WINDOW_BACKTEST_TRIALS, max(20, trials // 2))
-            )
-        else:
-            ww = window_weights
-        bt = backtest(numbers, trials=trials, window_weights=ww)
+        bt = backtest(
+            numbers,
+            trials=trials,
+            window_weights=window_weights,
+        )
     return backtest_objective(bt, metric), bt
 
 
@@ -3164,28 +3463,39 @@ def search_weights(
     seed=42,
     refine_rounds=30,
     verbose=True,
+    test_ratio=0.15,  # 预留测试集比例，不参与搜索
 ):
     """
     随机搜索 + 局部 refine，最大化历史回测命中率。
 
+    参数：
+        test_ratio: 预留测试集比例，用于最终验收，不参与参数搜索（防止数据泄漏）
+    
     metric: top3_rate | top_rate | ge2_digit_rate | composite
-    返回 dict：baseline / best / improvement / history
+    返回 dict：baseline / best / improvement / history / test_result
     """
     if numbers is None:
         numbers = [x[2] for x in fetch_data()]
     if not numbers:
         return {"error": "未获取到数据"}
 
+    # 时序切分：训练集用于参数搜索，测试集用于最终验收
+    train_size = int(len(numbers) * (1 - test_ratio))
+    train_numbers = numbers[:train_size]
+    test_numbers = numbers[train_size:]
+    
+    if verbose:
+        print(f"数据切分: 训练集 {len(train_numbers)} 期, 测试集 {len(test_numbers)} 期")
+        print(f"参数搜索: {iterations} 次随机采样 + {refine_rounds} 次局部 refine")
+        print(f"回测期数={backtest_trials}, 目标={metric}")
+
     rng = random.Random(seed)
     base = default_weights()
-    fixed_ww, _ = compute_window_weights(numbers)
-
-    if verbose:
-        print(f"参数搜索: {iterations} 次随机采样 + {refine_rounds} 次局部 refine")
-        print(f"回测期数={backtest_trials}, 目标={metric}, 窗口权重固定（加速搜索）")
-
+    
+    # 不预先计算窗口权重，让 backtest() 内部按时间滚动计算
+    # 这样训练集前面的预测不会看到训练集后段的开奖结果
     _, baseline_bt = evaluate_weights(
-        numbers, base, trials=backtest_trials, window_weights=fixed_ww, metric=metric
+        train_numbers, base, trials=backtest_trials, window_weights=None, metric=metric
     )
     baseline_score = backtest_objective(baseline_bt, metric)
     best_weights = dict(base)
@@ -3195,8 +3505,9 @@ def search_weights(
 
     for i in range(iterations):
         candidate = _sample_random_weights(base, rng)
+        # 不传固定窗口权重，让回测内部按时间滚动计算
         score, bt = evaluate_weights(
-            numbers, candidate, trials=backtest_trials, window_weights=fixed_ww, metric=metric
+            train_numbers, candidate, trials=backtest_trials, window_weights=None, metric=metric
         )
         history.append({"phase": "random", "score": score, "weights": candidate})
         if score > best_score:
@@ -3206,8 +3517,9 @@ def search_weights(
 
     for i in range(refine_rounds):
         candidate = _mutate_weights(best_weights, base, rng)
+        # 不传固定窗口权重，避免训练集内未来信息泄漏
         score, bt = evaluate_weights(
-            numbers, candidate, trials=backtest_trials, window_weights=fixed_ww, metric=metric
+            train_numbers, candidate, trials=backtest_trials, window_weights=None, metric=metric
         )
         history.append({"phase": "refine", "score": score, "weights": candidate})
         if score > best_score:
@@ -3215,13 +3527,31 @@ def search_weights(
             if verbose:
                 print(f"  [refine {i + 1:3d}] 新最优 {score * 100:.2f}%  top3={bt['top3_rate'] * 100:.1f}%")
 
+    # 在测试集上验收最优参数（测试集从未参与搜索）
+    # 注意：传入完整数据（训练集+测试集），但只统计测试段的最后 N 期
+    # 这样测试期有真实的历史上下文，与线上逻辑一致
+    test_result = None
+    test_trials = min(len(test_numbers), backtest_trials)
+    if test_trials >= 20:  # 至少20期才有统计意义
+        _, test_result = evaluate_weights(
+            numbers, best_weights, trials=test_trials, window_weights=None, metric=metric
+        )
+        if verbose:
+            print(f"\n测试集验收（测试段 {test_trials} 期，使用完整历史上下文）:")
+            print(f"  Top3 命中率: {test_result['top3_rate'] * 100:.2f}%")
+            print(f"  Top30 命中率: {test_result['top30_rate'] * 100:.2f}%")
+            print(f"  平均排名: {test_result['actual_rank_avg']}")
+
     return {
         "metric": metric,
         "backtest_trials": backtest_trials,
+        "train_size": len(train_numbers),
+        "test_size": len(test_numbers),
         "baseline": {"weights": base, "score": baseline_score, "backtest": baseline_bt},
         "best": {"weights": best_weights, "score": best_score, "backtest": best_bt},
         "improvement": best_score - baseline_score,
         "history_len": len(history),
+        "test_result": test_result,
     }
 
 
@@ -3291,6 +3621,67 @@ def _transition_for_api(lag1, dynamic, pos_names=("百", "十", "个")):
     }
 
 
+def assess_data_quality(data):
+    """Return a compact quality summary for the history used by the 3D models."""
+    periods = [str(x[0]) for x in data if x]
+    dates = [str(x[1]) for x in data if len(x) > 1]
+    duplicate_periods = len(periods) - len(set(periods))
+    numeric_gaps = 0
+
+    for prev, curr in zip(periods, periods[1:]):
+        try:
+            prev_year, prev_seq = int(prev[:4]), int(prev[4:])
+            curr_year, curr_seq = int(curr[:4]), int(curr[4:])
+        except Exception:
+            continue
+        if curr_year == prev_year and curr_seq - prev_seq != 1:
+            numeric_gaps += 1
+        elif curr_year == prev_year + 1 and curr_seq != 1:
+            numeric_gaps += 1
+
+    warnings = []
+    if len(periods) < MIN_DATA_PERIODS_FOR_ML_FUSION:
+        warnings.append("history_too_short_for_ml_fusion")
+    if duplicate_periods:
+        warnings.append("duplicate_periods")
+    if numeric_gaps:
+        warnings.append("period_gaps")
+
+    return {
+        "periods": len(periods),
+        "first_period": periods[0] if periods else None,
+        "last_period": periods[-1] if periods else None,
+        "first_date": dates[0] if dates else None,
+        "last_date": dates[-1] if dates else None,
+        "duplicate_periods": duplicate_periods,
+        "period_gaps": numeric_gaps,
+        "ml_fusion_allowed": (
+            len(periods) >= MIN_DATA_PERIODS_FOR_ML_FUSION
+            and duplicate_periods == 0
+            and numeric_gaps == 0
+        ),
+        "warnings": warnings,
+    }
+
+
+def is_ml_prediction_cache_valid(cache, current_period):
+    """Guard against stale ML predictions being reused after data/model changes."""
+    if not cache or cache.get("base_period") != current_period:
+        return False
+    if cache.get("model_version") != ML_MODEL_VERSION:
+        return False
+
+    created_at = cache.get("created_at")
+    if created_at:
+        try:
+            created_ts = time.mktime(time.strptime(created_at, "%Y-%m-%d %H:%M:%S"))
+            if time.time() - created_ts > ML_CACHE_MAX_AGE_SECONDS:
+                return False
+        except Exception:
+            return False
+    return True
+
+
 def run_prediction(data=None, force_refresh=False, enable_backtest=False, enable_permutation=False, compute_weights=False, use_prediction_cache=False):
     """运行预测，返回 JSON 可序列化 dict；data 为 None 时自动抓取。
     
@@ -3322,6 +3713,7 @@ def run_prediction(data=None, force_refresh=False, enable_backtest=False, enable
     if not data:
         return {"error": "未获取到数据"}
 
+    data_quality = assess_data_quality(data)
     periods = [x[0] for x in data]
     numbers = [x[2] for x in data]
     settle_pending_online_predictions(periods, numbers)
@@ -3387,8 +3779,132 @@ def run_prediction(data=None, force_refresh=False, enable_backtest=False, enable
         zhixuan_top, score, danma, kill, meta
     )
     
+    # 保存融合前的规则模型推荐（用于策略推荐展示）
+    rule_only_detail = zhixuan_with_detail.copy()
+    
+    # 先初始化回测结果（放在ML逻辑之前，避免提前引用）
+    bt = None
+    
+    # 获取ML预测结果（带缓存，避免每次重新训练）
+    ml_result = None
+    ml_list = []
+    try:
+        from .ml import predict_current, load_ml_cache, save_ml_cache, ML_CACHE_KEY
+        # 尝试加载缓存
+        ml_cache = load_ml_cache()
+        current_period = periods[-1] if periods else None
+        
+        # 检查缓存是否有效
+        cache_valid = is_ml_prediction_cache_valid(ml_cache, current_period)
+        
+        if cache_valid and not force_refresh:
+            ml_result = ml_cache
+            ml_list = ml_cache.get("recommendations", [])
+            log.info(f"使用ML缓存（期号: {current_period}）")
+        else:
+            # 需要重新训练
+            ml_result = predict_current(numbers, top_k=100)
+            ml_list = ml_result.get("recommendations", []) if not ml_result.get("error") else []
+            
+            # 保存缓存
+            if not ml_result.get("error") and current_period:
+                ml_result["base_period"] = current_period
+                ml_result["model_version"] = ML_MODEL_VERSION
+                ml_result["created_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+                save_ml_cache(ml_result)
+            
+            log.info(f"ML预测完成，推荐{len(ml_list)}注")
+    except Exception as e:
+        log.warning(f"ML预测失败: {e}")
+    
+    # 获取缓存的回测表现（不依赖本次是否开启回测）
+    rule_perf = load_recent_rule_performance()
+    rule_top30_rate = rule_perf.get("top30_rate", 0.03)
+    
+    baseline_rate = RECOMMEND_GROUPS / 1000.0
+    rule_lift = rule_top30_rate - baseline_rate
+    
+    # ML准入：只基于已保存的滚动回测结果，不使用当前预测去匹配历史数据（避免数据泄漏）
+    ml_eligible = data_quality.get("ml_fusion_allowed", False) and is_ml_eligible_from_backtest(current_period)
+    ml_weight = 0.0
+    rule_weight = 1.0
+    
+    # 如果ML符合准入条件且有正Lift，计算动态权重
+    # 从已保存的回测历史读取ML表现（与准入判断使用同一份数据）
+    if ml_eligible:
+        ml_perf = load_latest_ml_performance()
+        ml_top30_rate = ml_perf.get("top30_rate", 0.0)
+        ml_lift = ml_top30_rate - baseline_rate
+        
+        if ml_lift > 0:
+            total_lift = max(rule_lift, 0) + ml_lift
+            rule_weight = max(rule_lift, 0) / total_lift
+            ml_weight = ml_lift / total_lift
+    
+    # 融合规则模型和ML模型
+    # 当ML不准入、权重为0或推荐列表为空时，直接使用规则模型，避免无意义的重排
+    ml_status = "eligible"
+    ml_error = None
+    ml_eligible_reason = ""
+
+    if not ml_list:
+        ml_status = "no_recommendations"
+        ml_eligible_reason = "ML推荐列表为空"
+        fused = rule_only_detail
+        log.info("ML推荐列表为空，使用纯规则模型推荐")
+    elif not data_quality.get("ml_fusion_allowed", False):
+        ml_status = "insufficient_history"
+        ml_eligible_reason = f"ML fusion requires at least {MIN_DATA_PERIODS_FOR_ML_FUSION} periods"
+        fused = rule_only_detail
+        log.info("ML fusion skipped because history is too short")
+    elif ml_weight <= 0:
+        ml_status = "low_weight"
+        ml_eligible_reason = "ML权重为0"
+        fused = rule_only_detail
+        log.info("ML权重为0，使用纯规则模型推荐")
+    elif not ml_eligible:
+        ml_status = "not_eligible"
+        ml_eligible_reason = "ML未通过准入检查"
+        fused = rule_only_detail
+        log.info("ML未准入，使用纯规则模型推荐")
+    else:
+        fused = fuse_rule_ml(
+            rule_list=zhixuan_with_detail,
+            ml_list=ml_list,
+            top_n=RECOMMEND_GROUPS,
+            rule_weight=rule_weight,
+            ml_weight=ml_weight,
+            score=score,
+            danma=danma,
+            kill=kill,
+            meta=meta,
+        )
+        ml_eligible_reason = f"ML准入成功，规则权重={rule_weight:.2f}, ML权重={ml_weight:.2f}"
+        log.info(f"ML融合完成，规则权重={rule_weight:.2f}, ML权重={ml_weight:.2f}")
+    
+    # 保存ML状态信息（等最后构造result时再加入）
+    ml_status_info = {
+        "status": ml_status,
+        "eligible": ml_eligible,
+        "weight": round(ml_weight, 4),
+        "error": ml_error,
+        "reason": ml_eligible_reason,
+    }
+
+    # 保存三套策略记录
+    save_strategy_records(
+        period=periods[-1],
+        rule_only=[r["num"] for r in rule_only_detail],
+        ml_only=[m["num"] for m in ml_list[:RECOMMEND_GROUPS]],
+        fused=[f["num"] for f in fused],
+    )
+    
+    # 使用融合结果作为最终推荐
+    zhixuan_with_detail = fused
+    zhixuan_top3_detail = fused[:ZHIXUAN_TOP3]
+    
     # 保存本次推荐历史（按期号去重）
-    current_recommendations = [num for _, num in zhixuan_top]
+    current_recommendations = [f["num"] for f in fused]
     save_recent_3d_recommendations(periods[-1], current_recommendations)
     
     # 计算推荐稳定度
@@ -3400,6 +3916,23 @@ def run_prediction(data=None, force_refresh=False, enable_backtest=False, enable
     bt = None
     if enable_backtest:
         bt = backtest(numbers, window_weights=window_weights)
+        
+        # 保存规则模型表现到缓存（用于动态融合权重计算）
+        try:
+            kv_store.save("lottery3d_rule_performance", {
+                "base_period": periods[-1],
+                "top30_rate": bt.get("top30_rate", 0.0),
+                "top3_rate": bt.get("top3_rate", 0.0),
+                "top100_rate": bt.get("top100_rate", 0.0),
+                "actual_rank_avg": bt.get("actual_rank_avg", 500),
+                "actual_rank_median": bt.get("actual_rank_median", 500),
+                "trials": bt.get("trials", 0),
+                "updated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            })
+            log.info("规则模型表现已保存")
+        except Exception as e:
+            log.error(f"保存规则模型表现失败: {e}")
+        
         if enable_permutation:
             sig = permutation_test(
                 numbers, bt["raw_top30_rate"], window_weights=window_weights
@@ -3409,7 +3942,7 @@ def run_prediction(data=None, force_refresh=False, enable_backtest=False, enable
                 bt["served_top30_last100_rate"],
                 bt["raw_top30_last100_rate"],
                 bt["actual_rank_avg"],
-                bt["random_rate"],
+                # 不传 random_rate，使用默认理论基准 3%
                 significance=sig,
             )
 
@@ -3519,20 +4052,41 @@ def run_prediction(data=None, force_refresh=False, enable_backtest=False, enable
         },
         "version": PREDICTOR_VERSION,
         "online_stats": online_stats,
+        "ml_status": ml_status_info,
+        "data_quality": data_quality,
     }
     
     # 添加策略推荐（保守/均衡/探索）
+    # 使用融合前的规则列表和ML列表，而非融合后的结果
     result["strategy_recommendations"] = generate_strategy_recommendations(
-        zhixuan_with_detail,
-        [],  # ML列表暂时为空，需要从外部传入
+        rule_only_detail,
+        ml_list,
         danma,
         kill,
     )
     
     # 添加策略模式选择
-    model_lift = bt["top30_rate"] - bt.get("random_rate", 0.03) if bt else 0.0
+    # 优先使用本次回测结果，否则读取缓存的规则模型表现
+    if bt:
+        top30_rate = bt["top30_rate"]
+        actual_rank_avg = bt.get("actual_rank_avg", 500)
+        rank_top100_rate = bt.get("actual_rank_top100_rate", 0.0)
+    else:
+        # 从缓存读取规则模型表现（不依赖本次是否开启回测）
+        rule_perf = load_recent_rule_performance()
+        # load_recent_rule_performance 返回的是 top30_rate 值，需要调整
+        if isinstance(rule_perf, dict):
+            top30_rate = rule_perf.get("top30_rate", 0.03)
+            actual_rank_avg = rule_perf.get("actual_rank_avg", 500)
+            rank_top100_rate = rule_perf.get("top100_rate", 0.0)
+        else:
+            top30_rate = rule_perf  # 兼容旧版本返回值
+            actual_rank_avg = 500
+            rank_top100_rate = 0.0
+    
+    # 使用固定理论基准 3%（30/1000）
+    model_lift = top30_rate - 0.03
     recent_hit_rate = online_stats.get("hit_top30_rate", 0.0)
-    actual_rank_avg = bt.get("actual_rank_avg", 500) if bt else 500
     
     strategy_mode, strategy_reason = select_strategy_mode(
         stability,
@@ -3550,7 +4104,6 @@ def run_prediction(data=None, force_refresh=False, enable_backtest=False, enable
     result["budget_recommendation"] = budget_info
     
     # 添加自动推荐注数
-    rank_top100_rate = bt.get("actual_rank_top100_rate", 0.0) if bt else 0.0
     auto_count, count_reason = auto_recommend_count(model_lift, rank_top100_rate, recent_hit_rate)
     result["auto_recommend_count"] = {
         "count": auto_count,

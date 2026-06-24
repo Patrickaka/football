@@ -438,8 +438,10 @@ class Handler(BaseHTTPRequestHandler):
             
             # 清除模块级缓存
             from src.lottery3d import clear_cache
+            from src.lottery3d.ml import clear_ml_cache, fetch_data as fetch_ml_data
             from src.common.data_cache import clear_cache as clear_fetch_cache
             clear_cache()
+            clear_ml_cache()
             clear_fetch_cache('lottery3d')
             clear_fetch_cache('lottery3d_ml')
             
@@ -455,6 +457,7 @@ class Handler(BaseHTTPRequestHandler):
             self._log.info('3D 强制刷新：重新抓取数据...')
             start = time.time()
             result = run_prediction(force_refresh=True, enable_backtest=False, compute_weights=True)
+            ml_data = fetch_ml_data(force_refresh=True)
             elapsed = time.time() - start
             
             if 'error' in result:
@@ -463,6 +466,8 @@ class Handler(BaseHTTPRequestHandler):
             # 更新缓存
             _CACHE['3d']['data'] = result
             _CACHE['3d']['timestamp'] = time.time()
+            _CACHE['3d_data']['data'] = ml_data
+            _CACHE['3d_data']['timestamp'] = time.time()
             
             self._log.info('3D 强制刷新完成，耗时 %.2f秒', elapsed)
             

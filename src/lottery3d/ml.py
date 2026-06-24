@@ -32,11 +32,13 @@ import math
 import random
 import re
 import sys
+import time
 import urllib.request
 from collections import Counter, defaultdict
 from itertools import combinations, product
 from ..common.logger import setup_logger
 from ..common.data_cache import cached_fetch
+from ..common import kv_store
 
 log = setup_logger('lottery3d_ml')
 
@@ -77,14 +79,14 @@ if hasattr(sys.stdout, "reconfigure"):
 URL = "https://www.8300.cn/kjhhis/3/200.html"
 
 # 模型参数
-BACKTEST_TRIALS = 80
+BACKTEST_TRIALS = 40  # 临时降低回测期数，适配当前200期数据（最低需要160期）
 TRAIN_RATIO = 0.8  # 时序划分比例
 NEGATIVE_SAMPLES_PER_PERIOD = 30  # 每期负例采样数（减少负例，提高正负样本比例）
 TOP_K = 15  # 推荐注数
 FEATURE_SUBSET_RATIO = 0.8  # 特征选择保留比例
 MIN_VARIANCE = 0.001  # 方差过滤阈值
-TRAINING_WINDOW = 180  # 滚动训练样本窗口（期数）
-FEATURE_HISTORY_WINDOW = 120  # 特征工程历史窗口（训练/回测/实盘统一）
+TRAINING_WINDOW = 120  # 滚动训练样本窗口（期数），临时降低以适配小数据量
+FEATURE_HISTORY_WINDOW = 90  # 特征工程历史窗口（训练/回测/实盘统一）
 
 # 时间衰减训练参数
 TIME_DECAY_RECENT = 30  # 最近 30 期
@@ -590,6 +592,12 @@ def build_training_data(numbers, neg_samples=NEGATIVE_SAMPLES_PER_PERIOD, rng=No
     - 最近 30 期：权重 1.5
     - 最近 60 期：权重 1.2
     - 历史数据：权重 1.0
+    
+    返回：
+        X: 特征矩阵
+        y: 标签
+        sample_weights: 样本权重
+        group_ids: 期号分组（用于按期切分验证集）
     """
     if rng is None:
         rng = random.Random(len(numbers) * 10007)
@@ -597,11 +605,12 @@ def build_training_data(numbers, neg_samples=NEGATIVE_SAMPLES_PER_PERIOD, rng=No
     X = []
     y = []
     sample_weights = []
+    group_ids = []  # 用于标记每个样本属于哪一期
     
     # 需要足够的历史数据来构建特征
     min_history = 60
     if len(numbers) <= min_history:
-        return None, None, None
+        return None, None, None, None
     
     # 使用滑动窗口，只使用最近的数据构建特征
     window_size = FEATURE_HISTORY_WINDOW
@@ -628,11 +637,11 @@ def build_training_data(numbers, neg_samples=NEGATIVE_SAMPLES_PER_PERIOD, rng=No
         X.append(features)
         y.append(1)
         sample_weights.append(weight)
+        group_ids.append(i)  # 标记属于第 i 期
         
         # 负例：neg_samples 个（排除已开出的号码）
         neg_count = 0
         tried = set()
-        # 减少尝试次数以加速
         for _ in range(neg_samples * 2):
             if neg_count >= neg_samples:
                 break
@@ -643,10 +652,11 @@ def build_training_data(numbers, neg_samples=NEGATIVE_SAMPLES_PER_PERIOD, rng=No
             features = fe.build_features(*combo)
             X.append(features)
             y.append(0)
-            sample_weights.append(weight)  # 负例同样权重
+            sample_weights.append(weight)
+            group_ids.append(i)  # 负例同样标记为第 i 期
             neg_count += 1
     
-    return X, y, sample_weights
+    return X, y, sample_weights, group_ids
 
 
 def select_features(X, y, feature_names, keep_ratio=FEATURE_SUBSET_RATIO):
@@ -697,23 +707,26 @@ def train_single_model(X, y, model_name, sample_weight=None):
     try:
         if model_name == "catboost" and HAS_CATBOOST:
             model = CatBoostClassifier(
-                iterations=50,  # 减少迭代次数
-                depth=3,        # 减少树深度
-                learning_rate=0.2,  # 增大学习率
+                iterations=30,     # 保守迭代次数，减少过拟合
+                depth=2,           # 更浅的树，减少过拟合
+                learning_rate=0.05, # 更小的学习率，更稳定
+                l2_leaf_reg=20,    # 更强的正则化
+                random_strength=2,  # 增加随机性防止过拟合
                 scale_pos_weight=scale_pos_weight,
                 random_state=42,
                 verbose=False,
                 task_type="CPU",
-                early_stopping_rounds=5  # 提前停止
+                # 注意：early_stopping_rounds 需要配合 eval_set 使用，当前未传验证集
             )
             model.fit(X, y, sample_weight=sample_weight)
             return model, "catboost"
         
         elif model_name == "xgboost" and HAS_XGBOOST:
             model = XGBClassifier(
-                n_estimators=50,  # 减少迭代次数
-                max_depth=3,      # 减少树深度
-                learning_rate=0.2,  # 增大学习率
+                n_estimators=30,   # 保守迭代次数
+                max_depth=2,       # 更浅的树
+                learning_rate=0.05, # 更小的学习率
+                reg_lambda=20,     # L2正则化
                 scale_pos_weight=scale_pos_weight,
                 random_state=42,
                 use_label_encoder=False,
@@ -725,9 +738,10 @@ def train_single_model(X, y, model_name, sample_weight=None):
         
         elif model_name == "lightgbm" and HAS_LIGHTGBM:
             model = lgb.LGBMClassifier(
-                n_estimators=50,  # 减少迭代次数
-                max_depth=3,      # 减少树深度
-                learning_rate=0.2,  # 增大学习率
+                n_estimators=30,   # 保守迭代次数
+                max_depth=2,       # 更浅的树
+                learning_rate=0.05, # 更小的学习率
+                reg_lambda=20,     # L2正则化
                 scale_pos_weight=scale_pos_weight,
                 random_state=42,
                 verbose=-1,
@@ -755,11 +769,18 @@ def _validation_score(y_true, probs):
     return 1.0 / (1.0 + ll)
 
 
-def train_ensemble(X, y, models_to_try=None, sample_weight=None):
+def train_ensemble(X, y, models_to_try=None, sample_weight=None, group_ids=None):
     """
-    训练多模型集成（支持样本权重）
+    训练多模型集成（支持样本权重和按期切分）
     
     流程：先时序切分 → 训练集选特征 → 验证集评权重 → 全量数据重训
+    
+    参数：
+        X: 特征矩阵
+        y: 标签
+        models_to_try: 尝试的模型列表
+        sample_weight: 样本权重
+        group_ids: 期号分组（用于按期切分验证集，避免数据泄漏）
     """
     if models_to_try is None:
         models_to_try = ["catboost", "xgboost", "lightgbm"]
@@ -767,14 +788,29 @@ def train_ensemble(X, y, models_to_try=None, sample_weight=None):
     fe = FeatureEngineer([])
     feature_names = fe.get_feature_names()
 
-    split = max(10, int(len(X) * 0.8))
-    use_valid = len(X) - split >= 5
+    # 按期号切分验证集（严格时序验证，避免数据泄漏）
+    if group_ids and len(group_ids) == len(X):
+        unique_periods = sorted(set(group_ids))
+        if len(unique_periods) >= 10:
+            split_period = unique_periods[int(len(unique_periods) * 0.8)]
+            train_idx = [j for j, gid in enumerate(group_ids) if gid <= split_period]
+            valid_idx = [j for j, gid in enumerate(group_ids) if gid > split_period]
+            use_valid = len(valid_idx) >= 5
+        else:
+            use_valid = False
+    else:
+        # 降级为按样本切分（不推荐）
+        split = max(10, int(len(X) * 0.8))
+        train_idx = list(range(split))
+        valid_idx = list(range(split, len(X)))
+        use_valid = len(X) - split >= 5
+    
     if use_valid:
-        X_train_raw = X[:split]
-        y_train = y[:split]
-        X_valid_raw = X[split:]
-        y_valid = y[split:]
-        w_train = sample_weight[:split] if sample_weight is not None else None
+        X_train_raw = [X[j] for j in train_idx]
+        y_train = [y[j] for j in train_idx]
+        X_valid_raw = [X[j] for j in valid_idx]
+        y_valid = [y[j] for j in valid_idx]
+        w_train = [sample_weight[j] for j in train_idx] if sample_weight is not None else None
         w_full = sample_weight
     else:
         X_train_raw = X
@@ -875,7 +911,7 @@ def predict_single(model, X):
     return model.predict(X)
 
 
-def backtest_ml(numbers, trials=BACKTEST_TRIALS, train_window=TRAINING_WINDOW):
+def backtest_ml(numbers, trials=BACKTEST_TRIALS, train_window=TRAINING_WINDOW, base_period=None, neg_samples=NEGATIVE_SAMPLES_PER_PERIOD):
     """
     时序回测（滚动窗口版本）
     
@@ -886,12 +922,16 @@ def backtest_ml(numbers, trials=BACKTEST_TRIALS, train_window=TRAINING_WINDOW):
         numbers: 历史号码数据
         trials: 回测期数
         train_window: 训练窗口大小（使用最近多少期数据训练）
+        base_period: 当前最后一期期号（用于标记回测记录）
+    
+    返回：
+        包含多维度命中率指标的回测结果
     """
     if len(numbers) < trials + train_window:
         return {"error": f"数据量不足，需要至少 {trials + train_window} 期"}
     
     start_idx = len(numbers) - trials
-    hit_top = hit_top3 = 0
+    hit_top3 = hit_top15 = hit_top30 = hit_top100 = 0
     actual_ranks = []
     
     for i in range(start_idx, len(numbers)):
@@ -900,24 +940,23 @@ def backtest_ml(numbers, trials=BACKTEST_TRIALS, train_window=TRAINING_WINDOW):
         actual = numbers[i]
         
         # 滚动窗口：使用最近 train_window 期数据训练
-        # 这样与实盘逻辑一致：预测时使用最新的历史数据
         train_nums = history[-train_window:] if len(history) > train_window else history
         
-        if len(train_nums) < 60:  # 最小训练数据量
+        if len(train_nums) < 60:
             continue
         
         train_rng = random.Random(len(train_nums) * 10007)
-        # 构建训练数据（包含样本权重）
-        result = build_training_data(train_nums, neg_samples=NEGATIVE_SAMPLES_PER_PERIOD, rng=train_rng)
-        if result is None or len(result) < 3:
+        # 构建训练数据（包含样本权重和期号分组）
+        result = build_training_data(train_nums, neg_samples=neg_samples, rng=train_rng)
+        if result is None or len(result) < 4:
             continue
-        X, y, sample_weights = result
+        X, y, sample_weights, group_ids = result
         if len(X) < 100:
             continue
         
         # 训练模型（使用集成方法，传递样本权重）
         try:
-            models, selected_indices = train_ensemble(X, y, sample_weight=sample_weights)
+            models, selected_indices = train_ensemble(X, y, sample_weight=sample_weights, group_ids=group_ids)
         except Exception as e:
             print(f"训练失败：{e}")
             continue
@@ -951,40 +990,85 @@ def backtest_ml(numbers, trials=BACKTEST_TRIALS, train_window=TRAINING_WINDOW):
         actual_rank = rank_map.get(actual_str, 1001)
         actual_ranks.append(actual_rank)
         
-        # 检查命中
-        top_nums = [f"{a}{b}{c}" for _, a, b, c in ranked[:TOP_K]]
-        top3_nums = [f"{a}{b}{c}" for _, a, b, c in ranked[:3]]
+        # 检查命中（统一口径：Top3/Top15/Top30/Top100）
+        top3_nums = {f"{a}{b}{c}" for _, a, b, c in ranked[:3]}
+        top15_nums = {f"{a}{b}{c}" for _, a, b, c in ranked[:15]}
+        top30_nums = {f"{a}{b}{c}" for _, a, b, c in ranked[:30]}
+        top100_nums = {f"{a}{b}{c}" for _, a, b, c in ranked[:100]}
         
-        if actual_str in top_nums:
-            hit_top += 1
         if actual_str in top3_nums:
             hit_top3 += 1
+        if actual_str in top15_nums:
+            hit_top15 += 1
+        if actual_str in top30_nums:
+            hit_top30 += 1
+        if actual_str in top100_nums:
+            hit_top100 += 1
     
     n = len(actual_ranks)
     actual_rank_avg = sum(actual_ranks) / n if n > 0 else 0.0
     actual_rank_median = sorted(actual_ranks)[n // 2] if actual_ranks else 0
     
-    return {
+    result = {
         "trials": n,
         "evaluated": n,
-        "top_hit": hit_top,
-        "top_rate": hit_top / n if n > 0 else 0,
-        "top3_hit": hit_top3,
-        "top3_rate": hit_top3 / n if n > 0 else 0,
         "model_type": "ensemble",
         "train_window": train_window,
+        "base_period": base_period,  # 标记回测对应的期号
+        # 统一口径的命中率指标
+        "top3_hit": hit_top3,
+        "top3_rate": round(hit_top3 / n if n > 0 else 0, 4),
+        "top15_hit": hit_top15,
+        "top15_rate": round(hit_top15 / n if n > 0 else 0, 4),
+        "top30_hit": hit_top30,
+        "top30_rate": round(hit_top30 / n if n > 0 else 0, 4),
+        "top100_hit": hit_top100,
+        "top100_rate": round(hit_top100 / n if n > 0 else 0, 4),
+        # 排名指标
         "actual_rank_avg": round(actual_rank_avg, 1),
         "actual_rank_median": actual_rank_median,
+        # 基准率（用于计算Lift）
+        "baseline_top3_rate": 3 / 1000,
+        "baseline_top30_rate": 30 / 1000,
     }
+    
+    # 保存回测结果到历史记录
+    save_ml_backtest_history(result)
+    
+    return result
 
 
-def predict_current(numbers, top_k=TOP_K, model_type="ensemble"):
+def save_ml_backtest_history(result):
+    """保存ML回测结果到历史记录"""
+    try:
+        history = kv_store.load("lottery3d_ml_backtest_history", [])
+        record = {
+            "base_period": result.get("base_period"),
+            "model_version": "ml-v6",
+            "top30_rate": result["top30_rate"],
+            "top3_rate": result["top3_rate"],
+            "top100_rate": result["top100_rate"],
+            "actual_rank_avg": result["actual_rank_avg"],
+            "actual_rank_median": result["actual_rank_median"],
+            "trials": result["trials"],
+            "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        }
+        history.append(record)
+        # 保留最近30次回测记录
+        kv_store.save("lottery3d_ml_backtest_history", history[-30:])
+        log.info("ML回测历史已保存")
+    except Exception as e:
+        log.error(f"保存ML回测历史失败: {e}")
+
+
+def predict_current(numbers, top_k=TOP_K, model_type="ensemble", neg_samples=NEGATIVE_SAMPLES_PER_PERIOD):
     """
     预测当前期（多模型集成版）
     返回推荐号码
 
     参数：
         model_type: "ensemble" (多模型集成), "catboost", "xgboost", "lightgbm", "random_forest"
+        neg_samples: 每期负例采样数
     """
     if len(numbers) < 100:
         return {"error": "历史数据不足"}
@@ -995,19 +1079,19 @@ def predict_current(numbers, top_k=TOP_K, model_type="ensemble"):
 
     result = build_training_data(
         train_numbers,
-        neg_samples=NEGATIVE_SAMPLES_PER_PERIOD,
+        neg_samples=neg_samples,
         rng=train_rng,
     )
-    if result is None or len(result) < 3:
+    if result is None or len(result) < 4:
         return {"error": "训练数据不足"}
-    X, y, sample_weights = result
+    X, y, sample_weights, group_ids = result
     if len(X) < 100:
         return {"error": "训练数据不足"}
 
     try:
         if model_type == "ensemble":
-            # 多模型集成（传递样本权重）
-            models, selected_indices = train_ensemble(X, y, sample_weight=sample_weights)
+            # 多模型集成（传递样本权重和分组信息）
+            models, selected_indices = train_ensemble(X, y, sample_weight=sample_weights, group_ids=group_ids)
             model_names = [name for _, name, _ in models]
             model_weights = [score for _, _, score in models]
             log.info(f'3D-ML 多模型集成完成：{model_names}')
@@ -1016,7 +1100,7 @@ def predict_current(numbers, top_k=TOP_K, model_type="ensemble"):
             model, used_name = train_single_model(X, y, model_type, sample_weight=sample_weights)
             if not model:
                 log.warning(f"{model_type} 不可用，降级为集成模式")
-                models, selected_indices = train_ensemble(X, y, sample_weight=sample_weights)
+                models, selected_indices = train_ensemble(X, y, sample_weight=sample_weights, group_ids=group_ids)
                 model_names = [name for _, name, _ in models]
                 model_weights = [score for _, _, score in models]
             else:
@@ -1057,14 +1141,15 @@ def predict_current(numbers, top_k=TOP_K, model_type="ensemble"):
     total_top_prob = sum(top_probs) or 1.0
     
     # 返回 Top K（model_score 为排序分，topk_score_share 为 TopK 内占比，非真实概率）
+    # 注意：由于训练集是 1:30 正负采样，而非真实 1:999 比例，
+    # model_score 只能用于排序，不能当作真实概率使用
     recommendations = []
     for prob, a, b, c in ranked[:top_k]:
         score_share = round(_native_number(prob) / total_top_prob, 4)
         recommendations.append({
             "num": f"{a}{b}{c}",
             "model_score": round(_native_number(prob), 4),
-            "topk_score_share": score_share,
-            "relative_prob": score_share,  # 兼容旧字段名
+            "topk_score_share": score_share,  # TopK 内部分数占比（非真实概率）
         })
 
     # 特征重要性（取第一个模型的）
@@ -1204,11 +1289,13 @@ def main():
     print(f"共 {len(numbers)} 期数据")
     
     if args.backtest:
-        print(f"\n运行回测（{args.trials}期，训练窗口={args.train_window}）...")
+        print(f"\n运行回测（{args.trials}期，训练窗口={args.train_window}，负例数={args.neg_samples}）...")
         result = backtest_ml(
             numbers,
             trials=args.trials,
             train_window=args.train_window,
+            base_period=data[-1][0],  # 传入最新期号
+            neg_samples=args.neg_samples,
         )
         if result.get("error"):
             print(result["error"])
@@ -1217,16 +1304,51 @@ def main():
             print("【回测结果】")
             print("=" * 70)
             print(f"  回测期数：{result['trials']}")
-            print(f"  Top{TOP_K} 命中：{result['top_hit']} ({result['top_rate']*100:.2f}%)")
             print(f"  Top3 命中：{result['top3_hit']} ({result['top3_rate']*100:.2f}%)")
+            print(f"  Top15 命中：{result['top15_hit']} ({result['top15_rate']*100:.2f}%)")
+            print(f"  Top30 命中：{result['top30_hit']} ({result['top30_rate']*100:.2f}%)")
+            print(f"  Top100 覆盖率：{result['top100_hit']} ({result['top100_rate']*100:.2f}%)")
+            print(f"  平均真实排名：{result['actual_rank_avg']}")
+            print(f"  中位真实排名：{result['actual_rank_median']}")
     else:
         print("\n运行预测...")
         result = predict_current(
             numbers,
             top_k=args.top_k,
-            model_type=args.model
+            model_type=args.model,
+            neg_samples=args.neg_samples,
         )
         print_ml_report(result, top_k=args.top_k)
+
+
+# ML 缓存配置
+ML_CACHE_KEY = "lottery3d_ml_prediction_cache"
+
+
+def load_ml_cache():
+    """加载 ML 预测缓存"""
+    try:
+        return kv_store.load(ML_CACHE_KEY, None)
+    except Exception as e:
+        log.error(f"加载 ML 缓存失败: {e}")
+        return None
+
+
+def save_ml_cache(data):
+    """保存 ML 预测缓存"""
+    try:
+        kv_store.save(ML_CACHE_KEY, data)
+        log.info("ML 缓存已保存")
+    except Exception as e:
+        log.error(f"保存 ML 缓存失败: {e}")
+
+def clear_ml_cache():
+    """Clear persisted ML prediction cache."""
+    try:
+        kv_store.save(ML_CACHE_KEY, None)
+        log.info("ML prediction cache cleared")
+    except Exception as e:
+        log.error(f"Clear ML prediction cache failed: {e}")
 
 
 if __name__ == "__main__":
