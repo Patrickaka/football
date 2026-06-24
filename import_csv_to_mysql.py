@@ -3,10 +3,10 @@
 """把 data/ 下的 football-data.co.uk CSV 导入 MySQL。
 
 写入两张表：
-- matches         经 match_store 幂等 UPSERT。
-- similar_market  复用 football.similar_market 解析器全量重建（幂等）。
+- matches         由 data/ 下 CSV 经 match_store 幂等 UPSERT 写入。
+- similar_market  从 matches 表全量重建（先清空再写，幂等），不依赖 CSV。
 
-幂等可重跑。similar_market 全量重建（先清空再写），内容由 data/ 下 CSV 决定。
+幂等可重跑。matches 是 similar_market 的数据源，故删除历史 CSV 不影响 similar_market 重建。
 
 用法：
     export MYSQL_HOST=... MYSQL_PORT=... MYSQL_USER=... MYSQL_PASSWORD=... MYSQL_DB=football
@@ -17,7 +17,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from src.common import db, match_store, repositories as repo
+from src.common import db, match_store
 
 ROOT = Path(__file__).resolve().parent
 DATA = ROOT / 'data'
@@ -34,13 +34,11 @@ def import_matches():
 def import_similar_market():
     from src.football import similar_market as sm
 
-    records = []
-    for path in sorted(DATA.glob('*.csv')):
-        league_code = path.stem.split('_')[0]
-        for record in sm.parse_football_data_csv(str(path), league_code):
-            records.append(record.to_dict())
-    repo.similar_market_save({'records': records})
-    return len(records)
+    sdb = sm.SimilarMarketDB()
+    sdb.records.clear()
+    sm.build_from_matches(sdb)
+    sdb.save()
+    return len(sdb.records)
 
 
 def run():
