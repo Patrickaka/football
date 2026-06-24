@@ -865,6 +865,38 @@ def settle_prediction(record, actual):
     return record
 
 
+def settle_pending_online_predictions(periods, numbers):
+    """根据最新开奖数据结算未回填的线上预测记录"""
+    records = load_online_predictions()
+    if not records:
+        return 0
+
+    period_index = {p: i for i, p in enumerate(periods)}
+    changed = False
+    settled_count = 0
+
+    for record in records:
+        if record.get("settled"):
+            continue
+        base_period = record.get("period")
+        idx = period_index.get(base_period)
+        if idx is None or idx + 1 >= len(numbers):
+            continue
+        settle_prediction(record, numbers[idx + 1])
+        record["draw_period"] = periods[idx + 1]
+        changed = True
+        settled_count += 1
+
+    if changed:
+        try:
+            kv_store.save('lottery3d_online_predictions', records)
+            log.info(f"线上预测已结算 {settled_count} 条")
+        except Exception as e:
+            log.error(f"保存线上预测结算结果失败: {e}")
+
+    return settled_count
+
+
 def calculate_online_stats():
     """计算线上实盘命中率统计"""
     records = load_online_predictions()
@@ -1796,68 +1828,72 @@ def digit_scores(numbers, window=RECENT_WINDOW, dynamic=None):
     score = [0.0] * 10
     dyn = dynamic or {}
     w_last = dyn.get("w_last_appear", W_LAST_APPEAR)
+    flags = FEATURE_FLAGS
 
     freq_all = exp_weighted_counts([d for n in recent for d in n])
-    for d, _ in freq_all.most_common(4):
-        score[d] += W_HOT_GLOBAL
 
-    for pos in range(3):
-        pos_freq = exp_weighted_counts([n[pos] for n in recent])
-        for d, _ in pos_freq.most_common(3):
-            score[d] += W_HOT_POS
+    if flags.get("hot", True):
+        for d, _ in freq_all.most_common(4):
+            score[d] += W_HOT_GLOBAL
 
-        trans = build_markov(numbers, pos)
-        prev_d = last[pos]
-        row = trans.get(prev_d, Counter())
-        for d, p in markov_prob_smoothed(row, range(10)).items():
-            markov_score = W_MARKOV * p
-            score[d] += min(markov_score, MARKOV_MAX_SCORE)
+        for pos in range(3):
+            pos_freq = exp_weighted_counts([n[pos] for n in recent])
+            for d, _ in pos_freq.most_common(3):
+                score[d] += W_HOT_POS
 
-        # 二阶马尔可夫：基于最近两期的转移概率
-        if len(numbers) >= 2:
-            trans2 = build_markov2(numbers, pos)
-            prev2 = numbers[-2][pos]
-            prev1 = last[pos]
-            row2 = trans2.get((prev2, prev1), Counter())
-            for d, p in markov_prob_smoothed(row2, range(10)).items():
-                markov2_score = W_MARKOV2 * p
-                score[d] += min(markov2_score, MARKOV_MAX_SCORE)
+    if flags.get("markov", True):
+        for pos in range(3):
+            trans = build_markov(numbers, pos)
+            prev_d = last[pos]
+            row = trans.get(prev_d, Counter())
+            for d, p in markov_prob_smoothed(row, range(10)).items():
+                markov_score = W_MARKOV * p
+                score[d] += min(markov_score, MARKOV_MAX_SCORE)
 
-    for d in range(10):
-        mv = miss_value(numbers, d)
-        if mv >= 20:
-            score[d] += W_MISS_HIGH * (1 + mv / 20)  # 遗漏20期加6分，30期加9分，40期加12分
-        elif mv >= 12:
-            score[d] += W_MISS_MID
-    
-    # 遗漏周期奖励：超期倍率超过阈值的号码获得额外加分
-    miss_cycle_bonus_scores = miss_cycle_bonus(numbers)
-    for d in range(10):
-        score[d] += miss_cycle_bonus_scores.get(d, 0.0)
+            if len(numbers) >= 2:
+                trans2 = build_markov2(numbers, pos)
+                prev2 = numbers[-2][pos]
+                prev1 = last[pos]
+                row2 = trans2.get((prev2, prev1), Counter())
+                for d, p in markov_prob_smoothed(row2, range(10)).items():
+                    markov2_score = W_MARKOV2 * p
+                    score[d] += min(markov2_score, MARKOV_MAX_SCORE)
 
-    for d in set(last):
-        score[d] += w_last
+    if flags.get("miss", True):
+        for d in range(10):
+            mv = miss_value(numbers, d)
+            if mv >= 20:
+                score[d] += W_MISS_HIGH * (1 + mv / 20)
+            elif mv >= 12:
+                score[d] += W_MISS_MID
 
-    nb = set()
-    for d in last:
-        nb.update(neighbor(d))
-    for d in nb:
-        score[d] += W_NEIGHBOR
+        miss_cycle_bonus_scores = miss_cycle_bonus(numbers)
+        for d in range(10):
+            score[d] += miss_cycle_bonus_scores.get(d, 0.0)
 
-    last_roads = {road(d) for d in last}
-    for d in range(10):
-        if road(d) in last_roads:
-            score[d] += W_ROAD_MATCH
+        entropy_bonus = entropy_model(numbers)
+        for d in range(10):
+            score[d] += entropy_bonus.get(d, 0.0)
 
-    # 熵值奖励：长期未出现的号码获得额外加分
-    entropy_bonus = entropy_model(numbers)
-    for d in range(10):
-        score[d] += entropy_bonus.get(d, 0.0)
+        rebound_bonus = rebound_model(numbers)
+        for d in range(10):
+            score[d] += rebound_bonus.get(d, 0.0)
 
-    # 近期回补奖励：严重欠账的号码获得额外加分
-    rebound_bonus = rebound_model(numbers)
-    for d in range(10):
-        score[d] += rebound_bonus.get(d, 0.0)
+    if flags.get("neighbor", True):
+        for d in set(last):
+            score[d] += w_last
+
+        nb = set()
+        for d in last:
+            nb.update(neighbor(d))
+        for d in nb:
+            score[d] += W_NEIGHBOR
+
+    if flags.get("road", True):
+        last_roads = {road(d) for d in last}
+        for d in range(10):
+            if road(d) in last_roads:
+                score[d] += W_ROAD_MATCH
 
     return score, freq_all
 
@@ -2315,6 +2351,31 @@ def triplet_weight_detail(a, b, c, score, danma, kill, meta):
     return detail
 
 
+def build_detail_list(items, score, danma, kill, meta):
+    """为推荐号码列表构建带得分拆解的详情"""
+    result = []
+    for w, num in items:
+        a, b, c = map(int, num)
+        detail = triplet_weight_detail(a, b, c, score, danma, kill, meta)
+        result.append({
+            "num": num,
+            "score": round(w, 1),
+            "detail": {
+                "base_digit": round(detail["base_digit"], 1),
+                "danma": round(detail["danma"], 1),
+                "kill": round(detail["kill"], 1),
+                "sum_span": round(detail["sum_span"], 1),
+                "pattern": round(detail["pattern"], 1),
+                "last_repeat": round(detail["last_repeat"], 1),
+                "ratio_match": round(detail["ratio_match"], 1),
+                "pair": round(detail["pair"], 1),
+                "form_switch": round(detail["form_switch"], 1),
+                "sum_interval": round(detail["sum_interval"], 1),
+            }
+        })
+    return result
+
+
 def select_danma(score_rank, enable_random=True):
     """动态选择胆码
     
@@ -2581,6 +2642,10 @@ def backtest(numbers, trials=BACKTEST_TRIALS, window_weights=None):
         "top30_hit": hit_top,
         "top30_rate": round(hit_top / n, 4) if n > 0 else 0.0,
         "top30_rate_baseline": round(RECOMMEND_GROUPS / 1000.0, 4),
+        # 兼容旧字段名（CLI / Web / 权重搜索仍引用 top_rate）
+        "top_hit": hit_top,
+        "top_rate": round(hit_top / n, 4) if n > 0 else 0.0,
+        "top_rate_baseline": round(RECOMMEND_GROUPS / 1000.0, 4),
         "top100_hit": hit_top100,
         "top100_rate": round(hit_top100 / n, 4) if n > 0 else 0.0,
         # 真实号码排名指标（核心）
@@ -2686,9 +2751,9 @@ def multi_window_backtest(numbers, windows=(30, 60, 100, 150, 200)):
                 top_n=RECOMMEND_GROUPS,
             )
             result[str(w)] = {
-                "model_top_rate": bt["top_rate"],
+                "model_top_rate": bt["top30_rate"],
                 "random_rate": rb["random_rate"],
-                "lift": bt["top_rate"] - rb["random_rate"],
+                "lift": bt["top30_rate"] - rb["random_rate"],
                 "actual_rank_avg": bt.get("actual_rank_avg"),
                 "actual_rank_median": bt.get("actual_rank_median"),
             }
@@ -2758,7 +2823,7 @@ def auto_downgrade_features(ablation_result):
     返回：
         advice: 特征调整建议
     """
-    full_score = ablation_result["full"]["top_rate"]
+    full_score = ablation_result["full"]["top30_rate"]
 
     advice = {}
 
@@ -2767,7 +2832,7 @@ def auto_downgrade_features(ablation_result):
             continue
 
         feature = key.replace("without_", "")
-        score = bt["top_rate"]
+        score = bt["top30_rate"]
 
         if score > full_score:
             advice[feature] = {
@@ -2797,7 +2862,7 @@ def permutation_test(numbers, observed_rate, trials=BACKTEST_TRIALS,
     perm_rates = []
     for _ in range(shuffles):
         rng.shuffle(seq)
-        perm_rates.append(backtest(seq, trials=trials, window_weights=window_weights)["top_rate"])
+        perm_rates.append(backtest(seq, trials=trials, window_weights=window_weights)["top30_rate"])
     ge = sum(1 for r in perm_rates if r >= observed_rate)
     mean = sum(perm_rates) / len(perm_rates) if perm_rates else 0.0
     pvalue = (ge + 1) / (shuffles + 1)
@@ -2814,10 +2879,12 @@ def permutation_test(numbers, observed_rate, trials=BACKTEST_TRIALS,
 
 def backtest_objective(bt, metric="top3_rate"):
     """从回测结果提取优化目标"""
+    if metric == "top_rate":
+        metric = "top30_rate"
     if metric == "composite":
         return (
             0.55 * bt["top3_rate"]
-            + 0.30 * bt["top_rate"]
+            + 0.30 * bt["top30_rate"]
             + 0.15 * bt["ge2_digit_rate"]
         )
     if metric not in bt:
@@ -2961,7 +3028,7 @@ def print_search_report(result):
     for label, bt in ("基线", base_bt), ("最优", best_bt):
         print(
             f"    {label}: Top3 {bt['top3_rate'] * 100:.1f}% ({bt['top3_hit']}/{bt['trials']})  "
-            f"| Top{RECOMMEND_GROUPS} {bt['top_rate'] * 100:.1f}%  "
+            f"| Top{RECOMMEND_GROUPS} {bt['top30_rate'] * 100:.1f}%  "
             f"| ≥2码 {bt['ge2_digit_rate'] * 100:.1f}%"
         )
 
@@ -3029,7 +3096,7 @@ def run_prediction(data=None, force_refresh=False, enable_backtest=False, enable
     
     try:
         if data is None:
-            data = fetch_data()
+            data = fetch_data(force_refresh=force_refresh)
     except Exception:
         log.error('3D 数据抓取失败', exc_info=True)
         return {'error': '数据抓取失败'}
@@ -3038,6 +3105,7 @@ def run_prediction(data=None, force_refresh=False, enable_backtest=False, enable
 
     periods = [x[0] for x in data]
     numbers = [x[2] for x in data]
+    settle_pending_online_predictions(periods, numbers)
     sums = [sum(x) for x in numbers]
     spans = [calc_span(x) for x in numbers]
 
@@ -3077,7 +3145,7 @@ def run_prediction(data=None, force_refresh=False, enable_backtest=False, enable
         recent_recommendations=None
     )
     
-    # Top30：用于覆盖和复式池，应用冷热平衡、多样性和去相关
+    # Top30：用于覆盖和复式池，应用多样性、去相关和最近推荐惩罚
     zhixuan_top = rank_triplets(
         score, 
         danma, 
@@ -3086,33 +3154,18 @@ def run_prediction(data=None, force_refresh=False, enable_backtest=False, enable
         top_n=RECOMMEND_GROUPS, 
         enable_exploration=False, 
         apply_noise=False,
-        enable_cold_hot_balance=True,
+        enable_cold_hot_balance=FEATURE_FLAGS.get("cold_hot_balance", False),
         enable_diversity=True,
         enable_correlation=True,
         recent_recommendations=recent_recommendations
     )
     
-    # 计算推荐原因拆解
-    zhixuan_with_detail = []
-    for w, num in zhixuan_top:
-        a, b, c = int(num[0]), int(num[1]), int(num[2])
-        detail = triplet_weight_detail(a, b, c, score, danma, kill, meta)
-        zhixuan_with_detail.append({
-            "num": num,
-            "score": round(w, 1),
-            "detail": {
-                "base_digit": round(detail["base_digit"], 1),
-                "danma": round(detail["danma"], 1),
-                "kill": round(detail["kill"], 1),
-                "sum_span": round(detail["sum_span"], 1),
-                "pattern": round(detail["pattern"], 1),
-                "last_repeat": round(detail["last_repeat"], 1),
-                "ratio_match": round(detail["ratio_match"], 1),
-                "pair": round(detail["pair"], 1),
-                "form_switch": round(detail["form_switch"], 1),
-                "sum_interval": round(detail["sum_interval"], 1),
-            }
-        })
+    zhixuan_top3_detail = build_detail_list(
+        zhixuan_top3, score, danma, kill, meta
+    )
+    zhixuan_with_detail = build_detail_list(
+        zhixuan_top, score, danma, kill, meta
+    )
     
     # 保存本次推荐历史（按期号去重）
     current_recommendations = [num for _, num in zhixuan_top]
@@ -3129,7 +3182,7 @@ def run_prediction(data=None, force_refresh=False, enable_backtest=False, enable
         bt = backtest(numbers, window_weights=window_weights)
         if enable_permutation:
             bt["significance"] = permutation_test(
-                numbers, bt["top_rate"], window_weights=window_weights
+                numbers, bt["top30_rate"], window_weights=window_weights
             )
 
     last_num = numbers[-1]
@@ -3138,7 +3191,7 @@ def run_prediction(data=None, force_refresh=False, enable_backtest=False, enable
     save_online_prediction(
         period=periods[-1],
         last_draw="".join(map(str, last_num)),
-        zhixuan_top3=zhixuan_with_detail[:ZHIXUAN_TOP3],
+        zhixuan_top3=zhixuan_top3_detail,
         zhixuan=zhixuan_with_detail,
         danma=danma,
         kill=kill,
@@ -3229,7 +3282,7 @@ def run_prediction(data=None, force_refresh=False, enable_backtest=False, enable
             "digits_str": "".join(map(str, zu6_four)),
             "combos": z6_straight,
         },
-        "zhixuan_top3": zhixuan_with_detail[:ZHIXUAN_TOP3],
+        "zhixuan_top3": zhixuan_top3_detail,
         "zhixuan": zhixuan_with_detail,
         "stability": {
             "score": round(stability, 2),
@@ -3249,7 +3302,7 @@ def run_prediction(data=None, force_refresh=False, enable_backtest=False, enable
     )
     
     # 添加策略模式选择
-    model_lift = bt["top_rate"] - bt.get("random_rate", 0.03) if bt else 0.0
+    model_lift = bt["top30_rate"] - bt.get("random_rate", 0.03) if bt else 0.0
     recent_hit_rate = online_stats.get("hit_top30_rate", 0.0)
     actual_rank_avg = bt.get("actual_rank_avg", 500) if bt else 500
     
@@ -3430,24 +3483,22 @@ def print_report(result):
     for idx, item in enumerate(result["zhixuan"], start=1):
         print(f"  {idx:02d}. {item['num']}  评分={item['score']:.1f}")
 
-    bt = result["backtest"]
-    print("\n" + "=" * 70)
-    print("滚动回测（仅供参考）")
-    print("=" * 70)
-    print(f"  回测期数: {bt['trials']}")
-    print(f"  直选{RECOMMEND_GROUPS}注命中: {bt['top_rate']*100:.1f}%  ({bt['top_hit']}/{bt['trials']})")
-    print(f"  直选Top3命中: {bt['top3_rate']*100:.1f}%  ({bt['top3_hit']}/{bt['trials']})")
-    print(f"  推荐池至少中2个数字: {bt['ge2_digit_rate']*100:.1f}%")
-    print(f"  和值落在预测带±4: {bt['sum_band_rate']*100:.1f}%")
-    if bt["zu6_draws"]:
-        print(
-            f"  组六四码命中(开奖为组六时): {bt['zu6_four_rate']*100:.1f}%  "
-            f"({bt['zu6_four_hit']}/{bt['zu6_draws']})"
-        )
-        print(
-            f"  (参考)五码组六池含开奖三码: {bt['zu6_pool_rate']*100:.1f}%  "
-            f"({bt['zu6_pool_hit']}/{bt['zu6_draws']})"
-        )
+    bt = result.get("backtest")
+    if bt:
+        print("\n" + "=" * 70)
+        print("滚动回测（稳定基础版）")
+        print("=" * 70)
+        print(f"  回测期数: {bt['trials']}")
+        print(f"  Top3 命中: {bt['top3_rate'] * 100:.1f}% "
+              f"({bt['top3_hit']}/{bt['trials']})")
+        print(f"  Top30 命中: {bt['top30_rate'] * 100:.1f}% "
+              f"({bt['top30_hit']}/{bt['trials']})")
+        print(f"  Top100 覆盖: {bt['top100_rate'] * 100:.1f}% "
+              f"({bt['top100_hit']}/{bt['trials']})")
+        print(f"  平均真实号码排名: {bt['actual_rank_avg']}")
+        print(f"  中位真实号码排名: {bt['actual_rank_median']}")
+        print(f"  Top30 至少中2码: {bt['ge2_digit_rate'] * 100:.1f}%")
+        print(f"  随机 Top30 基准: {bt['random_rate'] * 100:.1f}%")
 
     print("\n统计信息")
     print("  总期数:", result["total_periods"])

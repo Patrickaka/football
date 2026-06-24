@@ -418,6 +418,9 @@ class Handler(BaseHTTPRequestHandler):
             result = run_prediction(enable_backtest=False, compute_weights=False)
             elapsed = time.time() - start
             self._log.info('3D 预测计算完成，耗时 %.2f秒，结果长度 %d', elapsed, len(result))
+
+            if 'error' in result:
+                return {'error': result['error']}
             
             # 更新缓存
             cache['data'] = result
@@ -435,7 +438,10 @@ class Handler(BaseHTTPRequestHandler):
             
             # 清除模块级缓存
             from src.lottery3d import clear_cache
+            from src.common.data_cache import clear_cache as clear_fetch_cache
             clear_cache()
+            clear_fetch_cache('lottery3d')
+            clear_fetch_cache('lottery3d_ml')
             
             # 清除服务器级缓存
             _CACHE['3d']['data'] = None
@@ -448,8 +454,11 @@ class Handler(BaseHTTPRequestHandler):
             # 立即重新抓取并计算
             self._log.info('3D 强制刷新：重新抓取数据...')
             start = time.time()
-            result = run_prediction(enable_backtest=False, compute_weights=False)
+            result = run_prediction(force_refresh=True, enable_backtest=False, compute_weights=False)
             elapsed = time.time() - start
+            
+            if 'error' in result:
+                return {'success': False, 'error': result['error']}
             
             # 更新缓存
             _CACHE['3d']['data'] = result
@@ -461,7 +470,7 @@ class Handler(BaseHTTPRequestHandler):
                 'success': True,
                 'message': '缓存已刷新',
                 'elapsed': round(elapsed, 2),
-                'data_count': len(result)
+                'data_count': result.get('total_periods', 0)
             }
         except Exception as e:
             self._log.error('3D 强制刷新失败: %s', str(e), exc_info=True)

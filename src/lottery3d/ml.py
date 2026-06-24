@@ -319,8 +319,11 @@ class FeatureEngineer:
         if self.last_draw:
             features.append(position_repeat_count(triple, self.last_draw))  # 同位重复个数
             features.append(digit_overlap_count(triple, self.last_draw))  # 集合交集大小
-            # 每个位置是否重复
-            features.append(sum(1 for i in range(3) if triple[i] == self.last_draw[i]))
+            # 跨位复用：数字在上期出现但不在同位
+            features.append(sum(
+                1 for i in range(3)
+                if triple[i] in self.last_draw and triple[i] != self.last_draw[i]
+            ))
         else:
             features.extend([0, 0, 0])
         
@@ -933,12 +936,13 @@ def backtest_ml(numbers, trials=BACKTEST_TRIALS, train_window=TRAINING_WINDOW):
         if actual_str in top3_nums:
             hit_top3 += 1
     
-    n = trials
-    actual_rank_avg = sum(actual_ranks) / len(actual_ranks) if actual_ranks else 0.0
-    actual_rank_median = sorted(actual_ranks)[len(actual_ranks) // 2] if actual_ranks else 0
+    n = len(actual_ranks)
+    actual_rank_avg = sum(actual_ranks) / n if n > 0 else 0.0
+    actual_rank_median = sorted(actual_ranks)[n // 2] if actual_ranks else 0
     
     return {
         "trials": n,
+        "evaluated": n,
         "top_hit": hit_top,
         "top_rate": hit_top / n if n > 0 else 0,
         "top3_hit": hit_top3,
@@ -1132,10 +1136,10 @@ def main():
         help="回测期数"
     )
     parser.add_argument(
-        "--train-ratio",
-        type=float,
-        default=TRAIN_RATIO,
-        help="训练集比例（时序划分）"
+        "--train-window",
+        type=int,
+        default=TRAINING_WINDOW,
+        help="滚动训练窗口大小（期数）"
     )
     parser.add_argument(
         "--top-k",
@@ -1169,11 +1173,11 @@ def main():
     print(f"共 {len(numbers)} 期数据")
     
     if args.backtest:
-        print(f"\n运行回测（{args.trials}期，训练集比例={args.train_ratio}）...")
+        print(f"\n运行回测（{args.trials}期，训练窗口={args.train_window}）...")
         result = backtest_ml(
             numbers,
             trials=args.trials,
-            train_ratio=args.train_ratio
+            train_window=args.train_window,
         )
         if result.get("error"):
             print(result["error"])
