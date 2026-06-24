@@ -94,3 +94,30 @@ CREATE TABLE IF NOT EXISTS kv_store (
     cache_date VARCHAR(16),
     updated_at VARCHAR(64)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 比赛历史全量库（football-data.co.uk CSV 导入，match_id 幂等）
+CREATE TABLE IF NOT EXISTS matches (
+    id           BIGINT AUTO_INCREMENT PRIMARY KEY,
+    match_id     VARCHAR(256) UNIQUE NOT NULL,
+    league       VARCHAR(64),
+    league_code  VARCHAR(8),
+    match_date   DATE,
+    match_time   TIME NULL,
+    home_team    VARCHAR(128),
+    away_team    VARCHAR(128),
+    fthg         INT,
+    ftag         INT,
+    ftr          VARCHAR(1),
+    hthg         INT,
+    htag         INT,
+    htr          VARCHAR(1),
+    odds         JSON,
+    stats        JSON,
+    settled      TINYINT(1) DEFAULT 0,
+    created_at   VARCHAR(64),
+    updated_at   VARCHAR(64),
+    INDEX idx_matches_league (league_code),
+    INDEX idx_matches_date (match_date),
+    INDEX idx_matches_home (home_team),
+    INDEX idx_matches_away (away_team)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
