@@ -14,14 +14,20 @@ import os
 import threading
 from pathlib import Path
 
-import pymysql
-from pymysql.cursors import DictCursor
+try:
+    import pymysql
+    from pymysql.cursors import DictCursor
+except ImportError:
+    pymysql = None
+    DictCursor = None
 
 _SCHEMA_FILE = Path(__file__).resolve().parent / 'schema.sql'
 _local = threading.local()
 
 
 def _config():
+    if pymysql is None:
+        raise RuntimeError("PyMySQL is not installed; MySQL persistence is unavailable")
     return {
         'host': os.getenv('MYSQL_HOST', '127.0.0.1'),
         'port': int(os.getenv('MYSQL_PORT', '3306')),
@@ -37,6 +43,8 @@ def _config():
 
 def get_connection():
     """返回当前线程的 MySQL 连接，断线自动重建。"""
+    if pymysql is None:
+        raise RuntimeError("PyMySQL is not installed; MySQL persistence is unavailable")
     conn = getattr(_local, 'conn', None)
     if conn is not None:
         try:

@@ -175,6 +175,8 @@ class BacktestRunner:
             'league': record.get('league'),
             'home': record.get('home'),
             'away': record.get('away'),
+            'asian': record.get('asian'),
+            'total_line': record.get('total_line'),
             'actual_score': actual_score,
             'actual_result': actual_result,
             'top1_score': top1_score,
@@ -300,6 +302,78 @@ class BacktestRunner:
                 summary['by_league'][league] = league_summary
         
         return summary
+
+    def get_detailed_report(self) -> Dict:
+        """Return unified metrics with league, total-line, and handicap buckets."""
+        summary = self.get_summary()
+        if 'error' in summary:
+            return summary
+
+        def bucket_total_line(value):
+            if value is None:
+                return 'unknown'
+            try:
+                value = float(value)
+            except (TypeError, ValueError):
+                return 'unknown'
+            if value <= 2.25:
+                return '<=2.25'
+            if value <= 2.75:
+                return '2.5-2.75'
+            return '>=3.0'
+
+        def bucket_asian(value):
+            if value is None:
+                return 'unknown'
+            try:
+                value = float(value)
+            except (TypeError, ValueError):
+                return 'unknown'
+            abs_value = abs(value)
+            if abs_value <= 0.25:
+                return 'level_or_quarter'
+            if abs_value <= 0.75:
+                return 'half_to_0.75'
+            return 'deep'
+
+        def summarize(rows):
+            total = len(rows)
+            if total == 0:
+                return {}
+            htf_rows = [r for r in rows if r['has_htf_data']]
+            return {
+                'total': total,
+                'score_top1': sum(1 for r in rows if r['hit_top1']) / total,
+                'score_top3': sum(1 for r in rows if r['hit_top3']) / total,
+                'score_top5': sum(1 for r in rows if r['hit_top5']) / total,
+                'goal_top2': sum(1 for r in rows if r['hit_total']) / total,
+                'result_1x2': sum(1 for r in rows if r['hit_1x2']) / total,
+                'score_logloss': sum(r['score_logloss'] for r in rows) / total,
+                'score_brier': sum(r['score_brier'] for r in rows) / total,
+                'htf_total': len(htf_rows),
+                'htf_top1': (
+                    sum(1 for r in htf_rows if r['hit_htf_top1']) / len(htf_rows)
+                    if htf_rows else 0
+                ),
+                'htf_top3': (
+                    sum(1 for r in htf_rows if r['hit_htf_top3']) / len(htf_rows)
+                    if htf_rows else 0
+                ),
+            }
+
+        def group_by(key_func):
+            grouped = defaultdict(list)
+            for row in self.results:
+                grouped[key_func(row)].append(row)
+            return {key: summarize(rows) for key, rows in sorted(grouped.items())}
+
+        report = {
+            'summary': summary,
+            'by_league': group_by(lambda r: r.get('league') or 'unknown'),
+            'by_total_line': group_by(lambda r: bucket_total_line(r.get('total_line'))),
+            'by_asian_bucket': group_by(lambda r: bucket_asian(r.get('asian'))),
+        }
+        return report
     
     def print_summary(self):
         """打印回测汇总"""
@@ -419,6 +493,40 @@ def run_backtest(records: List[Dict],
     return runner.get_summary()
 
 
+def run_backtest_report(records: List[Dict],
+                        predict_func: Optional[Callable] = None,
+                        verbose: bool = False) -> Dict:
+    """Run backtest and return unified detailed report."""
+    runner = BacktestRunner()
+
+    for record in records:
+        actual_score = record.get('actual_score')
+        if not actual_score:
+            continue
+
+        actual_result = record.get('actual_result')
+        if not actual_result:
+            try:
+                home_g, away_g = map(int, actual_score.split('-'))
+                actual_result = 'H' if home_g > away_g else 'A' if home_g < away_g else 'D'
+            except Exception:
+                continue
+
+        prediction = {}
+        if predict_func:
+            try:
+                prediction = predict_func(record)
+            except Exception as e:
+                log.warning(f"预测失败: {e}")
+                continue
+
+        result = runner.add_result(record, prediction, {'score': actual_score, 'result': actual_result})
+        if verbose and result['hit_top1']:
+            log.info(f"命中: {record.get('home')} vs {record.get('away')} -> {actual_score}")
+
+    return runner.get_detailed_report()
+
+
 def backtest_from_history(league: str = None, limit: int = None) -> Dict:
     """
     从预测历史中运行回测
@@ -470,6 +578,21 @@ def backtest_from_history(league: str = None, limit: int = None) -> Dict:
         
     except ImportError:
         return {'error': 'result_sync 模块未导入'}
+
+
+def backtest_report_from_history(league: str = None, limit: int = None) -> Dict:
+    """Build detailed report from settled prediction history."""
+    try:
+        from .result_sync import get_prediction_records
+
+        records = [r for r in get_prediction_records(include_hidden=True) if r.get('settled')]
+        if league:
+            records = [r for r in records if r.get('league') == league]
+        if limit:
+            records = records[-limit:]
+        return run_backtest_report(records, verbose=False)
+    except Exception as e:
+        return {'error': str(e)}
 
 
 def compare_parameters(records: List[Dict], 
