@@ -701,13 +701,12 @@ class Handler(BaseHTTPRequestHandler):
             return {'error': '排列五抓取失败'}
 
     def _pailie5_backtest_payload(self, params):
-        """排列五历史回测"""
+        """排列五历史回测（滚动回测）"""
         try:
             analyzer = get_pailie5_analyzer()
-            method = params.get('method', ['bayesian'])[0]
             periods = int(params.get('periods', [30])[0])
             
-            result = analyzer.backtest(method=method, test_periods=periods)
+            result = analyzer.rolling_backtest(trials=periods)
             
             return {'result': result}
         except Exception:
@@ -715,10 +714,10 @@ class Handler(BaseHTTPRequestHandler):
             return {'error': '排列五回测失败'}
 
     def _pailie5_optimize_payload(self):
-        """排列五自动权重优化"""
+        """排列五窗口权重优化（回测驱动）"""
         try:
             analyzer = get_pailie5_analyzer()
-            weights = analyzer.optimize_weights()
+            weights = analyzer.optimize_window_weights(trials=80)
             
             return {'result': weights}
         except Exception:
@@ -726,17 +725,28 @@ class Handler(BaseHTTPRequestHandler):
             return {'error': '排列五权重优化失败'}
 
     def _pailie5_markov_payload(self):
-        """排列五马尔可夫链预测"""
+        """排列五位置级马尔可夫预测"""
         try:
+            from src.pailie5 import build_markov_pos, markov_prob_smoothed
             analyzer = get_pailie5_analyzer()
+            numbers_list = [r['numbers'] for r in reversed(analyzer.history)]
             recent = analyzer.get_recent_results(2)
-            recent_numbers = [r['numbers'] for r in recent]
-            prediction = analyzer.predict_with_markov(recent_numbers)
+            last = numbers_list[-1] if numbers_list else [0]*5
+            
+            # 每个位置的Top3预测
+            position_preds = []
+            for pos in range(5):
+                trans = build_markov_pos(numbers_list, pos)
+                prev_d = last[pos]
+                row = trans.get(prev_d, {})
+                probs = markov_prob_smoothed(row, range(10))
+                top3 = sorted(probs.items(), key=lambda x: -x[1])[:3]
+                position_preds.append({'position': pos, 'last': prev_d, 'top3': top3})
             
             return {
                 'result': {
-                    'recent_results': recent_numbers,
-                    'prediction': prediction
+                    'recent_results': [r['numbers'] for r in recent],
+                    'position_predictions': position_preds,
                 }
             }
         except Exception:
@@ -744,39 +754,57 @@ class Handler(BaseHTTPRequestHandler):
             return {'error': '排列五马尔可夫预测失败'}
 
     def _pailie5_filter_payload(self, params):
-        """排列五多条件缩水"""
+        """排列五多条件缩水筛选"""
         try:
+            from src.pailie5 import generate_pool, load_window_weights
             analyzer = get_pailie5_analyzer()
+            numbers_list = [r['numbers'] for r in reversed(analyzer.history)]
+            ww = load_window_weights()
             
-            # 生成候选号码
-            candidates = []
-            for _ in range(100):
-                candidates.append(analyzer.generate_recommendation('balanced'))
+            # 生成候选推荐池（Top100）
+            pool = generate_pool(numbers_list, ww, top_n=100, apply_dedup=False)
+            candidates = [list(map(int, num)) for _, num in pool]
             
             # 解析条件参数
             conditions = {}
-            
             if 'sum_min' in params and 'sum_max' in params:
                 conditions['sum_range'] = (int(params['sum_min'][0]), int(params['sum_max'][0]))
-            
             if 'span_min' in params and 'span_max' in params:
                 conditions['span_range'] = (int(params['span_min'][0]), int(params['span_max'][0]))
-            
             if 'odd_min' in params and 'odd_max' in params:
                 conditions['odd_count'] = (int(params['odd_min'][0]), int(params['odd_max'][0]))
-            
             if 'big_min' in params and 'big_max' in params:
                 conditions['big_count'] = (int(params['big_min'][0]), int(params['big_max'][0]))
             
             # 应用筛选
-            filtered = analyzer.multi_condition_filter(candidates, conditions)
+            filtered = []
+            for nums in candidates:
+                ok = True
+                if 'sum_range' in conditions:
+                    s = sum(nums)
+                    if s < conditions['sum_range'][0] or s > conditions['sum_range'][1]:
+                        ok = False
+                if ok and 'span_range' in conditions:
+                    sp = max(nums) - min(nums)
+                    if sp < conditions['span_range'][0] or sp > conditions['span_range'][1]:
+                        ok = False
+                if ok and 'odd_count' in conditions:
+                    oc = sum(1 for n in nums if n % 2 == 1)
+                    if oc < conditions['odd_count'][0] or oc > conditions['odd_count'][1]:
+                        ok = False
+                if ok and 'big_count' in conditions:
+                    bc = sum(1 for n in nums if n >= 5)
+                    if bc < conditions['big_count'][0] or bc > conditions['big_count'][1]:
+                        ok = False
+                if ok:
+                    filtered.append(nums)
             
             return {
                 'result': {
                     'conditions': conditions,
                     'total_candidates': len(candidates),
                     'filtered_count': len(filtered),
-                    'filtered': filtered[:20]  # 返回前20个
+                    'filtered': filtered[:20]
                 }
             }
         except Exception:
@@ -803,12 +831,10 @@ class Handler(BaseHTTPRequestHandler):
             return {'error': '排列五排名模型失败'}
 
     def _pailie5_ensemble_payload(self, params):
-        """排列五多模型集成投票"""
+        """排列五多模型集成预测"""
         try:
             analyzer = get_pailie5_analyzer()
-            method = params.get('method', ['voting'])[0]
-            
-            result = analyzer.ensemble_predict(method=method)
+            result = analyzer.ensemble_predict()
             
             return {'result': result}
         except Exception:
@@ -828,13 +854,20 @@ class Handler(BaseHTTPRequestHandler):
             return {'error': '排列五周期识别失败'}
 
     def _pailie5_contribution_payload(self):
-        """排列五特征贡献度分析"""
+        """排列五数字评分贡献度分析"""
         try:
+            from src.pailie5 import ensemble_digit_scores_multi_window, load_window_weights
             analyzer = get_pailie5_analyzer()
+            numbers_list = [r['numbers'] for r in reversed(analyzer.history)]
+            ww = load_window_weights()
+            score = ensemble_digit_scores_multi_window(numbers_list, ww)
             
-            contributions = analyzer.feature_contribution()
+            # 构建贡献度数据（归一化到0-1）
+            min_s = min(score)
+            max_s = max(score) - min_s + 1e-9
+            contributions = {str(d): round((score[d] - min_s) / max_s, 4) for d in range(10)}
             
-            return {'result': contributions}
+            return {'result': {'normalized_scores': contributions, 'raw_scores': {str(d): round(score[d], 3) for d in range(10)}}}
         except Exception:
             self._log.error('排列五特征贡献度分析失败', exc_info=True)
             return {'error': '排列五特征贡献度分析失败'}
