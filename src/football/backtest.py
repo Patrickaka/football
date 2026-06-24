@@ -21,6 +21,7 @@
 - LogLoss
 """
 
+import itertools
 import math
 import logging
 from typing import Dict, List, Optional, Tuple, Callable
@@ -29,6 +30,34 @@ from datetime import datetime
 
 
 log = logging.getLogger('football')
+
+
+def _quality_filter(records: List[Dict],
+                    enabled: bool = False,
+                    min_grade: str = 'medium',
+                    exclude_friendly: bool = True) -> Tuple[List[Dict], Dict]:
+    if not enabled:
+        return records, {
+            'enabled': False,
+            'input_count': len(records),
+            'kept_count': len(records),
+            'rejected_count': 0,
+        }
+    try:
+        from .sample_quality import filter_quality_records
+
+        kept, report = filter_quality_records(records, min_grade=min_grade, exclude_friendly=exclude_friendly)
+        report['enabled'] = True
+        return kept, report
+    except Exception as e:
+        log.warning(f"样本质量过滤失败，使用原始样本: {e}")
+        return records, {
+            'enabled': False,
+            'error': str(e),
+            'input_count': len(records),
+            'kept_count': len(records),
+            'rejected_count': 0,
+        }
 
 
 def _normalize_1x2_probs(probs: Dict[str, float]) -> Dict[str, float]:
@@ -68,7 +97,7 @@ class BacktestRunner:
             actual: 实际比赛结果
         """
         # 计算各项指标
-        predicted_scores = record.get('predicted_scores', {})
+        predicted_scores = prediction.get('predicted_scores') or record.get('predicted_scores', {})
         actual_score = actual.get('score', '')
         actual_result = actual.get('result', '')
         
@@ -84,7 +113,7 @@ class BacktestRunner:
         hit_top5 = (actual_score in top5_scores)
         
         # 胜平负
-        predicted_1x2 = _normalize_1x2_probs(record.get('predicted_1x2', {}))
+        predicted_1x2 = _normalize_1x2_probs(prediction.get('predicted_1x2') or record.get('predicted_1x2', {}))
         pred_result = max(predicted_1x2.items(), key=lambda x: x[1])[0] if predicted_1x2 else None
         hit_1x2 = (pred_result == actual_result)
         
@@ -146,7 +175,7 @@ class BacktestRunner:
         )
         
         # 计算胜平负 LogLoss 和 Brier
-        predicted_1x2 = _normalize_1x2_probs(record.get('predicted_1x2', {}))
+        predicted_1x2 = _normalize_1x2_probs(prediction.get('predicted_1x2') or record.get('predicted_1x2', {}))
         result_logloss = 0.0
         result_brier = 0.0
         if actual_result and predicted_1x2:
@@ -160,7 +189,7 @@ class BacktestRunner:
             )
         
         # 计算半全场指标
-        predicted_htf = record.get('predicted_half_full', {})
+        predicted_htf = prediction.get('predicted_half_full') or record.get('predicted_half_full', {})
         actual_htf = record.get('actual_half_full')
         hit_htf_top1 = False
         hit_htf_top3 = False
@@ -440,7 +469,9 @@ class BacktestRunner:
 
 def run_backtest(records: List[Dict], 
                 predict_func: Optional[Callable] = None,
-                verbose: bool = True) -> Dict:
+                verbose: bool = True,
+                quality_filter: bool = False,
+                min_quality_grade: str = 'medium') -> Dict:
     """
     运行回测
     
@@ -462,6 +493,7 @@ def run_backtest(records: List[Dict],
     返回：
         回测汇总结果
     """
+    records, quality_report = _quality_filter(records, quality_filter, min_quality_grade)
     runner = BacktestRunner()
     
     for record in records:
@@ -506,13 +538,18 @@ def run_backtest(records: List[Dict],
             log.info(f"命中: {record['home']} vs {record['away']} -> "
                     f"{actual_score} (预测: {result['top1_score']})")
     
-    return runner.get_summary()
+    summary = runner.get_summary()
+    summary['sample_quality'] = quality_report
+    return summary
 
 
 def run_backtest_report(records: List[Dict],
                         predict_func: Optional[Callable] = None,
-                        verbose: bool = False) -> Dict:
+                        verbose: bool = False,
+                        quality_filter: bool = False,
+                        min_quality_grade: str = 'medium') -> Dict:
     """Run backtest and return unified detailed report."""
+    records, quality_report = _quality_filter(records, quality_filter, min_quality_grade)
     runner = BacktestRunner()
 
     for record in records:
@@ -540,7 +577,9 @@ def run_backtest_report(records: List[Dict],
         if verbose and result['hit_top1']:
             log.info(f"命中: {record.get('home')} vs {record.get('away')} -> {actual_score}")
 
-    return runner.get_detailed_report()
+    report = runner.get_detailed_report()
+    report['sample_quality'] = quality_report
+    return report
 
 
 def backtest_from_history(league: str = None, limit: int = None) -> Dict:
@@ -596,7 +635,10 @@ def backtest_from_history(league: str = None, limit: int = None) -> Dict:
         return {'error': 'result_sync 模块未导入'}
 
 
-def backtest_report_from_history(league: str = None, limit: int = None) -> Dict:
+def backtest_report_from_history(league: str = None,
+                                 limit: int = None,
+                                 quality_filter: bool = True,
+                                 min_quality_grade: str = 'medium') -> Dict:
     """Build detailed report from settled prediction history."""
     try:
         from .result_sync import get_prediction_records
@@ -606,7 +648,133 @@ def backtest_report_from_history(league: str = None, limit: int = None) -> Dict:
             records = [r for r in records if r.get('league') == league]
         if limit:
             records = records[-limit:]
-        return run_backtest_report(records, verbose=False)
+        return run_backtest_report(
+            records,
+            verbose=False,
+            quality_filter=quality_filter,
+            min_quality_grade=min_quality_grade,
+        )
+    except Exception as e:
+        return {'error': str(e)}
+
+
+def _expand_param_grid(param_grid: Dict[str, List]) -> List[Dict]:
+    keys = list(param_grid.keys())
+    if not keys:
+        return [{}]
+    return [dict(zip(keys, values)) for values in itertools.product(*(param_grid[key] for key in keys))]
+
+
+def _objective_score(summary: Dict, objective: str = 'balanced') -> float:
+    if summary.get('error'):
+        return float('inf')
+
+    score_logloss = summary.get('score_logloss', 10.0) or 10.0
+    score_brier = summary.get('score_brier', 10.0) or 10.0
+    result_logloss = summary.get('result_logloss', 10.0) or 10.0
+    top3 = summary.get('top3_hit_rate', 0.0) or 0.0
+    total_hit = summary.get('hit_rate_total', 0.0) or 0.0
+    htf_top3 = summary.get('htf_top3_hit_rate', 0.0) or 0.0
+
+    if objective == 'score':
+        return score_logloss + 0.35 * score_brier - 0.20 * top3
+    if objective == 'goals':
+        return score_logloss + 0.25 * score_brier - 0.45 * total_hit
+    if objective == 'half_full':
+        return score_logloss + 0.25 * result_logloss - 0.40 * htf_top3
+    if objective == '1x2':
+        return result_logloss + 0.25 * score_brier
+
+    return (
+        score_logloss
+        + 0.30 * score_brier
+        + 0.25 * result_logloss
+        - 0.20 * top3
+        - 0.25 * total_hit
+        - 0.15 * htf_top3
+    )
+
+
+def optimize_prediction_parameters(records: List[Dict],
+                                   predict_func: Callable,
+                                   param_grid: Optional[Dict[str, List]] = None,
+                                   objective: str = 'balanced',
+                                   validation_ratio: float = 0.25,
+                                   min_samples: int = 30,
+                                   quality_filter: bool = True,
+                                   min_quality_grade: str = 'medium') -> Dict:
+    """
+    Search parameter combinations on quality-filtered historical records.
+
+    predict_func must accept: predict_func(record, **params) -> prediction
+    """
+    if predict_func is None:
+        return {'error': 'predict_func is required for parameter optimization'}
+
+    records, quality_report = _quality_filter(records, quality_filter, min_quality_grade)
+    records = [record for record in records if record.get('actual_score')]
+    if len(records) < min_samples:
+        return {
+            'error': f'not enough quality samples: {len(records)} < {min_samples}',
+            'sample_quality': quality_report,
+        }
+
+    default_grid = {
+        'market_db_weight': [0.10, 0.15, 0.20, 0.25],
+        'bayesian_weight': [0.00, 0.05, 0.10],
+        'goal_calibration_weight': [0.10, 0.20, 0.30],
+        'half_full_history_weight': [0.10, 0.20, 0.30],
+    }
+    param_sets = _expand_param_grid(param_grid or default_grid)
+
+    split_at = max(1, int(len(records) * (1 - validation_ratio)))
+    train_records = records[:split_at]
+    validation_records = records[split_at:] or records[-max(1, len(records) // 5):]
+
+    trials = []
+    for params in param_sets:
+        report = run_backtest_report(
+            validation_records,
+            predict_func=lambda record, p=params: predict_func(record, **p),
+            verbose=False,
+            quality_filter=False,
+        )
+        summary = report.get('summary', {})
+        trials.append({
+            'params': params,
+            'objective_score': _objective_score(summary, objective),
+            'summary': summary,
+        })
+
+    trials.sort(key=lambda item: item['objective_score'])
+    best = trials[0] if trials else None
+    return {
+        'objective': objective,
+        'best_params': best['params'] if best else {},
+        'best_score': best['objective_score'] if best else None,
+        'best_summary': best['summary'] if best else {},
+        'trial_count': len(trials),
+        'train_count': len(train_records),
+        'validation_count': len(validation_records),
+        'sample_quality': quality_report,
+        'top_trials': trials[:10],
+    }
+
+
+def optimize_parameters_from_history(predict_func: Callable,
+                                     league: str = None,
+                                     limit: int = None,
+                                     **kwargs) -> Dict:
+    """Load settled prediction history and run parameter optimization."""
+    try:
+        from .result_sync import get_prediction_records
+
+        records = [r for r in get_prediction_records(include_hidden=True) if r.get('settled')]
+        if league:
+            records = [r for r in records if r.get('league') == league]
+        if limit:
+            records = records[-limit:]
+        return optimize_prediction_parameters(records, predict_func, **kwargs)
     except Exception as e:
         return {'error': str(e)}
 
