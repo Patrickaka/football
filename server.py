@@ -219,7 +219,8 @@ class Handler(BaseHTTPRequestHandler):
         elif path == '/api/pailie5-refresh':
             self._serve_json(self._pailie5_refresh_payload())
         elif path == '/api/3d-refresh':
-            self._serve_json(self._lottery_3d_refresh_payload())
+            params = parse_qs(route.query)
+            self._serve_json(self._lottery_3d_refresh_payload(params))
         elif path == '/api/lottery/recommend':
             params = parse_qs(route.query)
             self._serve_json(self._lottery_recommend_payload(params))
@@ -431,9 +432,11 @@ class Handler(BaseHTTPRequestHandler):
             self._log.error('3D 预测失败: %s', str(e), exc_info=True)
             return {'error': '3D 预测失败'}
 
-    def _lottery_3d_refresh_payload(self):
+    def _lottery_3d_refresh_payload(self, params=None):
         """强制刷新3D数据缓存"""
         try:
+            params = params or {}
+            enable_backtest = str((params.get('backtest') or ['0'])[0]).lower() in ('1', 'true', 'yes', 'on')
             self._log.info('3D 强制刷新请求到达')
             
             # 清除模块级缓存
@@ -456,7 +459,7 @@ class Handler(BaseHTTPRequestHandler):
             # 立即重新抓取并计算
             self._log.info('3D 强制刷新：重新抓取数据...')
             start = time.time()
-            result = run_prediction(force_refresh=True, enable_backtest=False, compute_weights=True)
+            result = run_prediction(force_refresh=True, enable_backtest=enable_backtest, compute_weights=True)
             ml_data = fetch_ml_data(force_refresh=True)
             elapsed = time.time() - start
             
@@ -475,7 +478,11 @@ class Handler(BaseHTTPRequestHandler):
                 'success': True,
                 'message': '缓存已刷新',
                 'elapsed': round(elapsed, 2),
-                'data_count': result.get('total_periods', 0)
+                'data_count': result.get('total_periods', 0),
+                'ml_data_count': len(ml_data) if ml_data else 0,
+                'backtest_enabled': enable_backtest,
+                'data_quality': result.get('data_quality'),
+                'ml_status': result.get('ml_status')
             }
         except Exception as e:
             self._log.error('3D 强制刷新失败: %s', str(e), exc_info=True)

@@ -1533,6 +1533,32 @@ function renderLottery3d(r) {
     }</span></div>` : ''}
   </div>`;
 
+  if (r.data_quality || r.ml_status) {
+    const dq = r.data_quality || {};
+    const ms = r.ml_status || {};
+    const warnings = dq.warnings || [];
+    const statusColor = ms.status === 'eligible'
+      ? 'var(--accent2)'
+      : (ms.status === 'insufficient_history' || ms.status === 'not_eligible' ? 'var(--warn)' : 'var(--muted)');
+    const statusLabel = {
+      eligible: '已准入',
+      insufficient_history: '历史不足',
+      low_weight: '权重为0',
+      not_eligible: '未准入',
+      no_recommendations: '无推荐',
+    }[ms.status] || (ms.status || '-');
+    html += `<div class="card model-health">
+      <h3>数据质量 / ML 状态</h3>
+      <div class="row"><span class="k">历史期数</span><span class="v">${dq.periods ?? '-'} 期</span></div>
+      <div class="row"><span class="k">期号范围</span><span class="v">${esc(dq.first_period || '-')} → ${esc(dq.last_period || '-')}</span></div>
+      <div class="row"><span class="k">日期范围</span><span class="v">${esc(dq.first_date || '-')} → ${esc(dq.last_date || '-')}</span></div>
+      <div class="row"><span class="k">重复 / 断档</span><span class="v">${dq.duplicate_periods ?? 0} / ${dq.period_gaps ?? 0}</span></div>
+      <div class="row"><span class="k">ML 融合</span><span class="v" style="color:${statusColor}">${esc(statusLabel)}${ms.weight != null ? ` · 权重 ${(ms.weight * 100).toFixed(0)}%` : ''}</span></div>
+      ${ms.reason ? `<div class="row"><span class="k">原因</span><span class="v">${esc(ms.reason)}</span></div>` : ''}
+      ${warnings.length ? `<div class="note" style="margin-top:8px">警告：${esc(warnings.join(' / '))}</div>` : ''}
+    </div>`;
+  }
+
   // ── 直选 Top3（独立醒目块）──
   html += `<div class="section-title">【直选Top3推荐】（百十个位顺序一致）</div>`;
   html += `<div class="highlight" style="border-color:var(--warn)">`;
@@ -1886,23 +1912,26 @@ function renderLottery3d(r) {
   html += `<div class="status" style="padding:12px 0;font-size:13px">
     <span style="cursor:pointer;color:var(--accent2)" id="refresh-3d">↻ 重新抓取数据并计算</span>
     <span style="margin:0 12px;color:var(--line)">|</span>
+    <span style="cursor:pointer;color:var(--accent2)" id="refresh-3d-backtest">刷新+回测</span>
+    <span style="margin:0 12px;color:var(--line)">|</span>
     <span style="cursor:pointer;color:var(--accent2)" id="run-ml">🤖 运行 ML 预测</span>
   </div>`;
 
   app3d.innerHTML = html;
   document.getElementById('refresh-3d').onclick = () => refreshLottery3d();
+  document.getElementById('refresh-3d-backtest').onclick = () => refreshLottery3d(true);
   document.getElementById('run-ml').onclick = () => runMLPrediction();
 }
 
-async function refreshLottery3d() {
+async function refreshLottery3d(withBacktest = false) {
   const btn = document.getElementById('refresh-3d');
   btn.style.opacity = '0.5';
   btn.style.cursor = 'not-allowed';
   
-  app3d.innerHTML = `<div class="status"><span class="spinner"></span>正在重新抓取数据并计算…</div>`;
+  app3d.innerHTML = `<div class="status"><span class="spinner"></span>${withBacktest ? '正在刷新数据并回测…' : '正在重新抓取数据并计算…'}</div>`;
   
   try {
-    const result = await fetchJsonPost('/api/3d-refresh');
+    const result = await fetchJsonPost('/api/3d-refresh' + (withBacktest ? '?backtest=1' : ''));
     
     if (result.success) {
       console.log('3D缓存刷新成功:', result);

@@ -81,7 +81,7 @@ URL = "https://www.8300.cn/kjhhis/3/200.html"
 # 模型参数
 BACKTEST_TRIALS = 40  # 临时降低回测期数，适配当前200期数据（最低需要160期）
 TRAIN_RATIO = 0.8  # 时序划分比例
-NEGATIVE_SAMPLES_PER_PERIOD = 30  # 每期负例采样数（减少负例，提高正负样本比例）
+NEGATIVE_SAMPLES_PER_PERIOD = 80  # 每期负例采样数（增加覆盖，降低随机负样本偏差）
 TOP_K = 15  # 推荐注数
 FEATURE_SUBSET_RATIO = 0.8  # 特征选择保留比例
 MIN_VARIANCE = 0.001  # 方差过滤阈值
