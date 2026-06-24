@@ -6047,14 +6047,21 @@ def analyze_match(match, force_refresh=False):
     for (h, a), prob in candidates[:5]:
         probability_rank.append({
             'score': f"{h}-{a}",
+            'home': h,
+            'away': a,
+            'result': _result_label(h, a),
             'prob': prob
         })
     
     # ========== 构建推荐排序（带推荐原因）==========
     recommend_rank = []
     for rec in recommend:
+        h, a = rec['home'], rec['away']
         recommend_rank.append({
-            'score': f"{rec['home']}-{rec['away']}",
+            'score': f"{h}-{a}",
+            'home': h,
+            'away': a,
+            'result': _result_label(h, a),
             'prob': rec['prob'],
             'recommend_score': rec.get('prob', 0),
             'reasons': rec.get('reasons', [])

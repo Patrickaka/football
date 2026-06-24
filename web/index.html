@@ -1033,6 +1033,18 @@ function kellyCells(k, rr) {
 }
 
 function renderResult(r) {
+  const resultLabel = (s) => {
+    if (s.result) return s.result;
+    if (s.home != null && s.away != null) {
+      return s.home > s.away ? '主胜' : s.home < s.away ? '客胜' : '平局';
+    }
+    if (s.score) {
+      const [h, a] = s.score.split('-').map(Number);
+      return h > a ? '主胜' : h < a ? '客胜' : '平局';
+    }
+    return '平局';
+  };
+
   const { match: m, asian: a, euro: e, total: t, model: md, team: tm, confidence: cf, league_profile: lp } = r;
   const top = md && md.top_scores ? md.top_scores : [];
   if (!top.length) {
@@ -1243,7 +1255,7 @@ function renderResult(r) {
     html += `<div class="score">
       <span class="rank">#${i + 1}</span>
       <span class="sc">${esc(m.home)} ${s.home || (s.score ? s.score.split('-')[0] : '-')} - ${s.away || (s.score ? s.score.split('-')[1] : '-')} ${esc(m.away)}</span>
-      <span class="res res-${s.result || (s.home > s.away ? '主胜' : s.home < s.away ? '客胜' : '平局')}">${s.result || (s.home > s.away ? '主胜' : s.home < s.away ? '客胜' : '平局')}</span>
+      <span class="res res-${resultLabel(s)}">${resultLabel(s)}</span>
       <span class="bar"><i style="width:${barWidth}%"></i></span>
       <span class="pct">${pct(prob)} ${heatLabel(s.heat)}</span></div>`;
   });
@@ -1264,7 +1276,7 @@ function renderResult(r) {
     const reasons = s.reasons && s.reasons.length ? s.reasons : [];
     html += `<div class="rec">
       <div class="title"><span class="star">★</span> ${esc(m.home)} ${s.home || (s.score ? s.score.split('-')[0] : '-')} : ${s.away || (s.score ? s.score.split('-')[1] : '-')} ${esc(m.away)} <span class="star">★</span></div>
-      <div class="sub">第${i + 1}推荐 · 结果：${s.result || (s.home > s.away ? '主胜' : s.home < s.away ? '客胜' : '平局')} · 比分概率 ${pct(recProb)}${s.recommend_score != null ? ' · 推荐评分 ' + pct(s.recommend_score) : ''}</div>
+      <div class="sub">第${i + 1}推荐 · 结果：${resultLabel(s)} · 比分概率 ${pct(recProb)}${s.recommend_score != null ? ' · 推荐评分 ' + pct(s.recommend_score) : ''}</div>
       <div class="reasons">${reasons.map(x => `<span>${esc(x)}</span>`).join('')}</div></div>`;
   });
 
