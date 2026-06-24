@@ -219,9 +219,9 @@ def upsert_csv_file(path, league_code):
 def iter_csv_rows(league_code=None):
     """从 matches 还原「CSV 列名」row dict，逐条 yield。league_code 为 None 遍历全部。"""
     if league_code:
-        recs = db.query(_SELECT_SQL + " WHERE league_code=%s ORDER BY match_date, id",
+        recs = db.query(_SELECT_SQL + " WHERE league_code=%s ORDER BY matches.match_date, matches.id",
                         (league_code,))
     else:
-        recs = db.query(_SELECT_SQL + " ORDER BY match_date, id")
+        recs = db.query(_SELECT_SQL + " ORDER BY matches.match_date, matches.id")
     for rec in recs:
         yield record_to_csv_row(rec)

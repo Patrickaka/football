@@ -183,6 +183,33 @@ class MatchStoreDbTest(unittest.TestCase):
         rows = list(self.ms.iter_csv_rows('D1'))
         self.assertEqual(len(rows), 1)
 
+    def test_iter_returns_chronological_order(self):
+        """验证 iter_csv_rows 按真实日期升序而非字符串序排序。"""
+        league_code = 'SP1'
+        # 先插入较晚的日期，再插入较早的日期，验证返回按真实日期排序
+        row1 = {
+            'Div': league_code, 'Date': '15/08/2025',
+            'HomeTeam': 'Real Madrid', 'AwayTeam': 'Barcelona',
+            'FTHG': '3', 'FTAG': '2',
+        }
+        row2 = {
+            'Div': league_code, 'Date': '20/09/2024',
+            'HomeTeam': 'Atletico Madrid', 'AwayTeam': 'Valencia',
+            'FTHG': '1', 'FTAG': '1',
+        }
+        built1 = self.ms.build_match_row(row1, league_code, 'now')
+        built2 = self.ms.build_match_row(row2, league_code, 'now')
+        self.ms.upsert_rows([built1, built2])
+
+        rows = list(self.ms.iter_csv_rows(league_code))
+        self.assertEqual(len(rows), 2)
+        # 验证第一行是较早的日期（20/09/2024）
+        self.assertEqual(rows[0]['Date'], '20/09/2024')
+        self.assertEqual(rows[0]['HomeTeam'], 'Atletico Madrid')
+        # 验证第二行是较晚的日期（15/08/2025）
+        self.assertEqual(rows[1]['Date'], '15/08/2025')
+        self.assertEqual(rows[1]['HomeTeam'], 'Real Madrid')
+
 
 if __name__ == '__main__':
     unittest.main()
