@@ -20,7 +20,6 @@
 import os
 import re
 import json
-import csv
 import urllib.request
 from typing import Dict, List, Tuple, Optional, Any
 from collections import defaultdict
@@ -158,31 +157,6 @@ def download_recent_two_seasons(save_dir: str = DATA_DIR) -> dict:
 
 
 # ==================== 数据解析模块 ====================
-
-def parse_csv_file(filepath: str) -> List[Dict]:
-    """
-    解析CSV文件，提取所需字段
-    
-    参数：
-        filepath: CSV文件路径
-    
-    返回：
-        比赛记录列表
-    """
-    records = []
-    
-    try:
-        with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                record = parse_match_row(row)
-                if record:
-                    records.append(record)
-    except Exception as e:
-        print(f"解析文件失败 {filepath}: {e}")
-    
-    return records
-
 
 def parse_match_row(row: Dict) -> Optional[Dict]:
     """
