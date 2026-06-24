@@ -56,8 +56,9 @@ def clear_cache():
 W_HOT_GLOBAL = 2.5   # 原 4.0；降低热号全局权重，减少同一号码长期霸榜
 W_HOT_POS = 3.0     # 原 5.0；降低分位热号权重，让转移概率有更多发言权
 # 冷号遗漏加分：W_MISS_HIGH 对待极高遗漏值（≥20 期），W_MISS_MID 对待中等遗漏值（≥12 期）
-W_MISS_HIGH = 6.0   # 遗漏 20 期加 12 分，30 期加 18 分，40 期加 24 分（增强冷号补偿）
-W_MISS_MID = 7.0    # 中等遗漏值加分增强
+# 实盘保守版本：大幅降权冷号遗漏奖励，避免追冷
+W_MISS_HIGH = 1.5   # 遗漏 20 期加 1.5*(1+20/20)=3分（大幅降权）
+W_MISS_MID = 1.0    # 中等遗漏值加分（降权）
 W_MARKOV = 5.0       # 原 8.0；降低马尔可夫转移权重，避免过度依赖最近一期
 W_MARKOV2 = 1.5      # 原 4.0；降低二阶马尔可夫转移权重
 MARKOV_MAX_SCORE = 6.0  # 马尔可夫转移得分上限，避免主导推荐结果
@@ -76,11 +77,13 @@ SUM_SOFT_SIGMA = 3.2
 SPAN_SOFT_SIGMA = 1.4
 
 # 探索机制：推荐时有一定概率从候选池中随机选择
-EXPLORATION_RATE = 0.15  # 15%概率进行探索，85%概率选择最高分号码
+# 稳定基础版：关闭探索机制
+EXPLORATION_RATE = 0.0  # 关闭探索，始终选择最高分号码
 
 # 动态胆码机制：70%概率选 Top2，30%概率从 Top6 中随机选 2 个
+# 稳定基础版：关闭随机胆码
 DANMA_TOP_POOL = 6  # 胆码候选池大小
-DANMA_RANDOM_RATE = 0.30  # 30%概率随机选择胆码
+DANMA_RANDOM_RATE = 0.0  # 关闭随机选择胆码
 
 # 推荐注数（直选为带顺序的三位数）
 RECOMMEND_GROUPS = 30  # 推荐池扩大至 30 注
@@ -89,11 +92,12 @@ ZU6_POOL_SIZE = 5
 ZU6_FOUR_SIZE = 4
 
 # Top50 随机扰动：避免同分号长期霸榜
-RANDOM_NOISE = 0.3  # 随机噪声范围 [-0.3, 0.3]
+# 稳定基础版：关闭随机噪声
+RANDOM_NOISE = 0.0  # 关闭随机噪声
 
 # 近期回补模型：统计最近 30 期，严重欠账的号码额外加分
 RECENT_WINDOW_REBOUND = 30  # 回补统计窗口
-REBOUND_BONUS = 3.0  # 严重欠账号码加分
+REBOUND_BONUS = 0.5  # 严重欠账号码加分（实盘保守版本：大幅降权）
 REBOUND_THRESHOLD = 0.5  # 欠账阈值（实际值/理论值 < 0.5 认为严重欠账）
 
 # 冷热平衡模型：推荐池号码类型比例
@@ -101,6 +105,7 @@ HOT_RATIO = 0.40   # 热号比例 40%
 WARM_RATIO = 0.40  # 温号比例 40%
 
 # 特征开关：用于消融测试
+# 稳定基础版配置：关闭形态切换和冷热平衡
 FEATURE_FLAGS = {
     "hot": True,           # 热号得分
     "miss": True,          # 遗漏加分
@@ -108,20 +113,21 @@ FEATURE_FLAGS = {
     "neighbor": True,      # 邻号加分
     "sum_span": True,      # 和值跨度
     "pair": True,          # 数字配对
-    "form_switch": True,   # 形态切换
-    "cold_hot_balance": True,  # 冷热平衡
+    "form_switch": False,  # 形态切换（关闭：避免赌徒谬误）
+    "cold_hot_balance": False,  # 冷热平衡（关闭：避免干扰模型排序）
 }
 COLD_RATIO = 0.20  # 冷号比例 20%
 HOT_WINDOW = 20    # 冷热判断窗口
 
 # 和值趋势模型：统计最近 20 期和值趋势，动态调整和值中心
+# 实盘版本：关闭和值趋势调整（避免过度约束）
 SUM_TREND_WINDOW = 20  # 和值趋势统计窗口
-SUM_TREND_ADJUST = 2.0  # 和值中心调整幅度
+SUM_TREND_ADJUST = 0.0  # 和值中心调整幅度（关闭）
 
 # 遗漏周期模型：计算平均遗漏周期和超期倍率
 MISS_CYCLE_WINDOW = 200  # 统计平均遗漏周期的窗口大小
 MISS_OVER_RATIO_THRESHOLD = 2.5  # 超期倍率阈值
-MISS_OVER_BONUS = 5.0  # 超期额外加分
+MISS_OVER_BONUS = 1.0  # 超期额外加分（实盘保守版本：降权）
 
 # 数字配对模型：统计数字对出现频率
 PAIR_FREQ_WINDOWS = [50, 100, 200]  # 统计窗口
@@ -129,15 +135,17 @@ PAIR_HIGH_FREQ_THRESHOLD = 0.15  # 高频对子阈值（出现频率 > 15%）
 PAIR_BONUS = 2.5  # 高频对子加分
 
 # 组三组六切换模型：根据连续出现调整权重
-FORM_SWITCH_WEIGHT = 4.0  # 切换奖励权重
-ZU6_STREAK_THRESHOLD = 8  # 组六连续出现阈值，超过此值增加组三权重
-ZU3_STREAK_THRESHOLD = 4  # 组三连续出现阈值，超过此值增加组六权重
+# 实盘版本：关闭组三组六强制切换（典型赌徒谬误，连续出现不代表下期一定要切换）
+FORM_SWITCH_WEIGHT = 0.0  # 切换奖励权重（关闭）
+ZU6_STREAK_THRESHOLD = 8  # 组六连续出现阈值
+ZU3_STREAK_THRESHOLD = 4  # 组三连续出现阈值
 
 # 和值区间回归模型：预测区间而非具体和值
+# 实盘版本：关闭和值区间回归奖励（和值适合软排序，不适合硬约束）
 SUM_INTERVAL_WINDOW = 5  # 计算中心的窗口大小
 SUM_INTERVAL_WIDTH = 3  # 区间宽度（中心 ± width）
-SUM_INTERVAL_BONUS = 3.0  # 区间内加分
-SUM_EXTREME_PENALTY = 2.0  # 极端区间降权（0-5, 25-27）
+SUM_INTERVAL_BONUS = 0.0  # 区间内加分（关闭）
+SUM_EXTREME_PENALTY = 0.0  # 极端区间降权（关闭）
 
 # 最近5期排除机制：对重复推荐进行惩罚
 RECENT_RECOMMEND_WINDOW = 5  # 最近推荐窗口大小
@@ -361,46 +369,11 @@ def entropy_model(numbers, min_appear_window=30):
     
     返回：
         熵值奖励字典 {digit: entropy_bonus}
+    
+    注意：实盘版本已关闭熵值奖励，所谓"长期未出现"并不会提高下一期出现概率，容易形成追冷号。
     """
-    if len(numbers) < min_appear_window:
-        return {d: 0.0 for d in range(10)}
-    
-    # 统计数字出现频率
-    digit_counts = Counter()
-    sum_counts = Counter()
-    span_counts = Counter()
-    
-    for n in numbers[-min_appear_window:]:
-        for d in n:
-            digit_counts[d] += 1
-        sum_counts[sum(n)] += 1
-        span_counts[calc_span(n)] += 1
-    
-    # 计算熵值奖励
-    entropy_bonus = {}
-    total_digits = sum(digit_counts.values())
-    total_sums = sum(sum_counts.values())
-    total_spans = sum(span_counts.values())
-    
-    for d in range(10):
-        bonus = 0.0
-        
-        # 数字熵：计算该数字的出现频率
-        digit_freq = digit_counts.get(d, 0) / total_digits if total_digits > 0 else 0
-        
-        # 若某数字长期未进入推荐池（出现频率低于期望值的 50%）
-        expected_freq = 1.0 / 10  # 期望频率 10%
-        if digit_freq < expected_freq * 0.5:
-            bonus += 2.0  # 长期未出现奖励
-        
-        # 若长期未进入前三推荐（通过遗漏值判断）
-        mv = miss_value(numbers, d)
-        if mv >= 25:  # 遗漏 25 期以上
-            bonus += 3.0  # 长期未进前三奖励
-        
-        entropy_bonus[d] = bonus
-    
-    return entropy_bonus
+    # 实盘版本：关闭熵值奖励，避免追冷
+    return {d: 0.0 for d in range(10)}
 
 
 def rebound_model(numbers, window=RECENT_WINDOW_REBOUND):
@@ -737,7 +710,7 @@ def recent_recommend_penalty(pool, recent_recommendations):
     
     参数：
         pool: 当前推荐池 [(权重, 号码字符串), ...]
-        recent_recommendations: 最近推荐历史列表 [[号码字符串, ...], ...]
+        recent_recommendations: 最近推荐历史列表（新格式：[{"period": ..., "recommendations": [...]}, ...]）
     
     返回：
         penalized_pool: 应用惩罚后的推荐池
@@ -749,7 +722,12 @@ def recent_recommend_penalty(pool, recent_recommendations):
     recent_set = set()
     consecutive_count = {}
     
-    for rec_list in recent_recommendations[-RECENT_RECOMMEND_WINDOW:]:
+    for entry in recent_recommendations[-RECENT_RECOMMEND_WINDOW:]:
+        # 兼容新格式（字典）和旧格式（列表）
+        if isinstance(entry, dict):
+            rec_list = entry.get("recommendations", [])
+        else:
+            rec_list = entry
         for num_str in rec_list:
             recent_set.add(num_str)
             consecutive_count[num_str] = consecutive_count.get(num_str, 0) + 1
@@ -781,18 +759,39 @@ def load_recent_3d_recommendations():
         return []
 
 
-def save_recent_3d_recommendations(recommendations):
-    """保存推荐历史"""
+def save_recent_3d_recommendations(period, recommendations):
+    """保存推荐历史（按期号去重）
+    
+    参数：
+        period: 目标期号
+        recommendations: 推荐号码列表
+    
+    说明：同一期号多次调用时，只会保存最后一次的推荐，避免重复写入。
+    推荐历史必须以"期"为单位，不要以"页面调用次数"为单位。
+    """
     try:
         # 加载现有历史
         history = load_recent_3d_recommendations()
 
-        # 添加新推荐并保持最近 N 期
-        history.append(recommendations)
+        # 按期号去重：如果已有相同期号，更新推荐；否则添加新记录
+        if history and history[-1].get("period") == period:
+            # 更新当前期的推荐（覆盖）
+            history[-1]["recommendations"] = recommendations
+            history[-1]["updated_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+        else:
+            # 添加新期记录
+            history.append({
+                "period": period,
+                "recommendations": recommendations,
+                "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "updated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            })
+
+        # 保持最近 N 期
         history = history[-RECENT_RECOMMEND_WINDOW:]
 
         kv_store.save('lottery3d_recent_recommend', history)
-        log.info("推荐历史已保存")
+        log.info(f"推荐历史已保存（期号: {period}）")
     except Exception as e:
         log.error(f"保存推荐历史失败: {e}")
 
@@ -924,7 +923,7 @@ def recommendation_stability(current, history):
     
     参数：
         current: 当前推荐号码列表
-        history: 历史推荐列表
+        history: 历史推荐列表（新格式：[{"period": ..., "recommendations": [...]}, ...]）
     
     返回：
         stability: 稳定度分数 (0.0-1.0)
@@ -932,7 +931,12 @@ def recommendation_stability(current, history):
     current_set = set(current)
     scores = []
 
-    for old in history[-7:]:
+    for old_entry in history[-7:]:
+        # 兼容新格式（字典）和旧格式（列表）
+        if isinstance(old_entry, dict):
+            old = old_entry.get("recommendations", [])
+        else:
+            old = old_entry
         old_set = set(old)
         if not old_set:
             continue
@@ -1868,15 +1872,9 @@ def ensemble_digit_scores(numbers, window_weights, dynamic=None):
         for d, c in freq.items():
             freq_combined[d] += wt * c
     
-    # 熵值奖励：长期未出现的号码获得额外加分（只在最终评分中添加一次）
-    entropy_bonus = entropy_model(numbers)
-    for d in range(10):
-        combined[d] += entropy_bonus.get(d, 0.0)
-    
-    # 近期回补奖励：严重欠账的号码获得额外加分（只在最终评分中添加一次）
-    rebound_bonus = rebound_model(numbers)
-    for d in range(10):
-        combined[d] += rebound_bonus.get(d, 0.0)
+    # 注意：熵值奖励和回补奖励已经在 digit_scores() 内添加过，
+    # 这里不再重复添加，避免双重加权
+    # entropy_model() 和 rebound_model() 的奖励已在 digit_scores() 中处理
     
     return combined, freq_combined
 
@@ -2486,16 +2484,30 @@ def build_ranking_meta(numbers, window_weights, sums=None, spans=None, tail_top=
 
 
 def backtest(numbers, trials=BACKTEST_TRIALS, window_weights=None):
+    """
+    增强版滚动回测（稳定基础版）
+    
+    核心指标：
+        - Top3 命中率
+        - Top30 命中率
+        - Top100 覆盖率
+        - 平均真实号码排名
+        - 真实号码中位排名
+        - Top30 至少命中两个数字比例
+    
+    使用滚动窗口训练，与实盘逻辑保持一致。
+    """
     max_w = max(RECENT_WINDOWS)
     if len(numbers) < trials + max_w + 5:
         trials = max(20, len(numbers) - max_w - 5)
 
-    hit_top = hit_top3 = hit_ge2 = hit_sum_band = hit_zu6_pool = hit_zu6_four = zu6_draws = 0
+    hit_top = hit_top3 = hit_top100 = hit_ge2 = 0
     actual_ranks = []
     start = len(numbers) - trials
     ww = window_weights or compute_window_weights(numbers[:start])[0]
 
     for i in range(start, len(numbers)):
+        # 使用滚动窗口：每次只用当前可用的数据
         train = numbers[:i]
         actual = numbers[i]
         sums = [sum(x) for x in train]
@@ -2519,27 +2531,33 @@ def backtest(numbers, trials=BACKTEST_TRIALS, window_weights=None):
         actual_rank = rank_map.get(act_s, 1001)
         actual_ranks.append(actual_rank)
         
-        top = rank_triplets(sc, dan, kill, meta, top_n=RECOMMEND_GROUPS, enable_exploration=False)
-        top_nums = [t[1] for t in top]
+        # Top30 预测
+        top30 = rank_triplets(
+            sc, dan, kill, meta, 
+            top_n=RECOMMEND_GROUPS, 
+            enable_exploration=False,
+            apply_noise=False,
+            enable_cold_hot_balance=False,
+            enable_diversity=False,
+            enable_correlation=False,
+        )
+        top30_nums = [t[1] for t in top30]
+        
+        # Top100（用于覆盖率统计）
+        top100_nums = [t[1] for t in all_ranked[:100]]
 
-        if act_s in top_nums:
+        # 统计命中
+        if act_s in top30_nums:
             hit_top += 1
-        if act_s in top_nums[:ZHIXUAN_TOP3]:
+        if act_s in top30_nums[:ZHIXUAN_TOP3]:
             hit_top3 += 1
-        pred_digits = {int(ch) for s in top_nums for ch in s}
+        if act_s in top100_nums:
+            hit_top100 += 1
+        
+        # Top30 至少命中两个数字
+        pred_digits = {int(ch) for s in top30_nums for ch in s}
         if len(pred_digits & set(actual)) >= 2:
             hit_ge2 += 1
-        if abs(sum(actual) - meta["sum_center"]) <= 4:
-            hit_sum_band += 1
-
-        z6 = pick_zu6_pool(sc, kill)
-        z4 = pick_zu6_four(sc, kill)
-        if is_zu6_draw(actual):
-            zu6_draws += 1
-            if set(actual).issubset(set(z6)):
-                hit_zu6_pool += 1
-            if set(actual).issubset(set(z4)):
-                hit_zu6_four += 1
 
     n = trials
     
@@ -2555,27 +2573,62 @@ def backtest(numbers, trials=BACKTEST_TRIALS, window_weights=None):
     
     return {
         "trials": n,
-        "top_hit": hit_top,
-        "top_rate": hit_top / n,
-        "top_rate_baseline": RECOMMEND_GROUPS / 1000.0,
+        "strategy": "stable_baseline",
+        # TopK 命中率
         "top3_hit": hit_top3,
-        "top3_rate": hit_top3 / n,
-        "top3_rate_baseline": ZHIXUAN_TOP3 / 1000.0,
-        "recommend_groups": RECOMMEND_GROUPS,
-        "ge2_digit_rate": hit_ge2 / n,
-        "sum_band_rate": hit_sum_band / n,
-        "zu6_draws": zu6_draws,
-        "zu6_pool_hit": hit_zu6_pool,
-        "zu6_pool_rate": hit_zu6_pool / zu6_draws if zu6_draws else 0.0,
-        "zu6_four_hit": hit_zu6_four,
-        "zu6_four_rate": hit_zu6_four / zu6_draws if zu6_draws else 0.0,
+        "top3_rate": round(hit_top3 / n, 4) if n > 0 else 0.0,
+        "top3_rate_baseline": round(ZHIXUAN_TOP3 / 1000.0, 4),
+        "top30_hit": hit_top,
+        "top30_rate": round(hit_top / n, 4) if n > 0 else 0.0,
+        "top30_rate_baseline": round(RECOMMEND_GROUPS / 1000.0, 4),
+        "top100_hit": hit_top100,
+        "top100_rate": round(hit_top100 / n, 4) if n > 0 else 0.0,
+        # 真实号码排名指标（核心）
         "actual_rank_avg": round(actual_rank_avg, 1),
         "actual_rank_median": actual_rank_median,
         "actual_rank_top100_rate": round(actual_rank_top100_rate, 4),
         "actual_rank_top300_rate": round(actual_rank_top300_rate, 4),
-        "random_rate": random_result["random_rate"],
+        # 数字命中比例
+        "ge2_digit_rate": round(hit_ge2 / n, 4) if n > 0 else 0.0,
+        # 随机基准
+        "random_rate": round(random_result["random_rate"], 4),
         "random_hit": random_result["random_hit"],
     }
+
+
+def print_backtest_report(result):
+    """打印回测报告（稳定基础版）"""
+    print("\n" + "=" * 75)
+    print("【福彩 3D 回测报告 - 稳定基础版】")
+    print("=" * 75)
+    
+    print(f"\n 策略名称：{result.get('strategy', 'unknown')}")
+    print(f" 回测期数：{result.get('trials', 0)} 期")
+    
+    print("\n" + "-" * 75)
+    print("【TopK 命中率】")
+    print("-" * 75)
+    print(f"  Top3 命中：{result.get('top3_hit', 0)} 次 ({result.get('top3_rate', 0):.2%})")
+    print(f"  Top3 基准：{result.get('top3_rate_baseline', 0):.2%}")
+    print(f"  Top30 命中：{result.get('top30_hit', 0)} 次 ({result.get('top30_rate', 0):.2%})")
+    print(f"  Top30 基准：{result.get('top30_rate_baseline', 0):.2%}")
+    print(f"  Top100 命中：{result.get('top100_hit', 0)} 次 ({result.get('top100_rate', 0):.2%})")
+    
+    print("\n" + "-" * 75)
+    print("【真实号码排名指标（核心）】")
+    print("-" * 75)
+    print(f"  平均排名：{result.get('actual_rank_avg', 0)}")
+    print(f"  中位排名：{result.get('actual_rank_median', 0)}")
+    print(f"  Top100 覆盖率：{result.get('actual_rank_top100_rate', 0):.2%}")
+    print(f"  Top300 覆盖率：{result.get('actual_rank_top300_rate', 0):.2%}")
+    
+    print("\n" + "-" * 75)
+    print("【其他指标】")
+    print("-" * 75)
+    print(f"  Top30 至少命中2个数字：{result.get('ge2_digit_rate', 0):.2%}")
+    print(f"  随机基准命中率：{result.get('random_rate', 0):.2%}")
+    
+    print("\n" + "=" * 75)
 
 
 def random_baseline_backtest(numbers, trials=80, top_n=30, seed=42):
@@ -2999,7 +3052,8 @@ def run_prediction(data=None, force_refresh=False, enable_backtest=False, enable
     pat = {k: meta[k] for k in ("consec_rate", "oe_freq", "bs_freq", "oe_total", "bs_total")}
 
     score, freq_all = ensemble_digit_scores(numbers, window_weights, dynamic=meta.get("dynamic"))
-    danma, tuoma, kill, rank = pick_dan_tuo_kill(score, enable_danma_random=True)
+    # 实盘版本：关闭胆码随机选择
+    danma, tuoma, kill, rank = pick_dan_tuo_kill(score, enable_danma_random=False)
     form_prob = analyze_form_probability(numbers, window_weights=window_weights)
     zu6_four = pick_zu6_four(score, kill)
     _, z6_straight = zu6_notes_from_digits(zu6_four)
@@ -3007,14 +3061,34 @@ def run_prediction(data=None, force_refresh=False, enable_backtest=False, enable
     # 加载最近推荐历史（用于排除重复推荐）
     recent_recommendations = load_recent_3d_recommendations()
     
+    # 实盘版本：关闭随机探索和随机噪声，确保结果稳定
+    # Top3：纯模型排序，不应用冷热平衡、多样性和去相关
+    zhixuan_top3 = rank_triplets(
+        score, 
+        danma, 
+        kill, 
+        meta, 
+        top_n=3, 
+        enable_exploration=False, 
+        apply_noise=False,
+        enable_cold_hot_balance=False,
+        enable_diversity=False,
+        enable_correlation=False,
+        recent_recommendations=None
+    )
+    
+    # Top30：用于覆盖和复式池，应用冷热平衡、多样性和去相关
     zhixuan_top = rank_triplets(
         score, 
         danma, 
         kill, 
         meta, 
         top_n=RECOMMEND_GROUPS, 
-        enable_exploration=True, 
-        apply_noise=True,
+        enable_exploration=False, 
+        apply_noise=False,
+        enable_cold_hot_balance=True,
+        enable_diversity=True,
+        enable_correlation=True,
         recent_recommendations=recent_recommendations
     )
     
@@ -3040,9 +3114,9 @@ def run_prediction(data=None, force_refresh=False, enable_backtest=False, enable
             }
         })
     
-    # 保存本次推荐历史
+    # 保存本次推荐历史（按期号去重）
     current_recommendations = [num for _, num in zhixuan_top]
-    save_recent_3d_recommendations(current_recommendations)
+    save_recent_3d_recommendations(periods[-1], current_recommendations)
     
     # 计算推荐稳定度
     stability = recommendation_stability(current_recommendations, recent_recommendations)

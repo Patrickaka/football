@@ -683,8 +683,8 @@ def select_features(X, y, feature_names, keep_ratio=FEATURE_SUBSET_RATIO):
     return selected_indices, selected_names
 
 
-def train_single_model(X, y, model_name):
-    """训练单个模型"""
+def train_single_model(X, y, model_name, sample_weight=None):
+    """训练单个模型（支持样本权重）"""
     y_list = list(y)
     n_neg = sum(1 for yi in y_list if yi == 0)
     n_pos = sum(1 for yi in y_list if yi == 1)
@@ -702,7 +702,7 @@ def train_single_model(X, y, model_name):
                 task_type="CPU",
                 early_stopping_rounds=5  # 提前停止
             )
-            model.fit(X, y)
+            model.fit(X, y, sample_weight=sample_weight)
             return model, "catboost"
         
         elif model_name == "xgboost" and HAS_XGBOOST:
@@ -716,7 +716,7 @@ def train_single_model(X, y, model_name):
                 eval_metric='logloss',
                 verbosity=0
             )
-            model.fit(X, y)
+            model.fit(X, y, sample_weight=sample_weight)
             return model, "xgboost"
         
         elif model_name == "lightgbm" and HAS_LIGHTGBM:
@@ -729,7 +729,7 @@ def train_single_model(X, y, model_name):
                 verbose=-1,
                 force_col_wise=True
             )
-            model.fit(X, y)
+            model.fit(X, y, sample_weight=sample_weight)
             return model, "lightgbm"
     except Exception as e:
         log.warning(f"训练 {model_name} 失败: {e}")
@@ -737,9 +737,15 @@ def train_single_model(X, y, model_name):
     return None, None
 
 
-def train_ensemble(X, y, models_to_try=None):
+def train_ensemble(X, y, models_to_try=None, sample_weight=None):
     """
-    训练多模型集成
+    训练多模型集成（支持样本权重）
+    
+    参数：
+        X: 特征矩阵
+        y: 标签
+        models_to_try: 尝试的模型列表
+        sample_weight: 样本权重
     
     返回：
         models: 训练好的模型列表 [(model, model_name, score), ...]
@@ -756,13 +762,19 @@ def train_ensemble(X, y, models_to_try=None):
     # 筛选特征
     X_selected = [[x[i] for i in selected_indices] for x in X]
     
+    # 如果有样本权重，也筛选对应的权重
+    if sample_weight is not None:
+        sample_weight_selected = sample_weight
+    else:
+        sample_weight_selected = None
+    
     # 训练各个模型
     trained_models = []
     
     for model_name in models_to_try:
-        model, used_name = train_single_model(X_selected, y, model_name)
+        model, used_name = train_single_model(X_selected, y, model_name, sample_weight=sample_weight_selected)
         if model:
-            # 简单评估
+            # 简单评估（使用训练集，实际应用中应使用验证集）
             try:
                 if hasattr(model, 'predict_proba'):
                     probs = model.predict_proba(X_selected)[:, 1]
@@ -838,30 +850,38 @@ def predict_single(model, X):
     return model.predict(X)
 
 
-def backtest_ml(numbers, trials=BACKTEST_TRIALS, train_ratio=TRAIN_RATIO):
+def backtest_ml(numbers, trials=BACKTEST_TRIALS, train_window=TRAINING_WINDOW):
     """
-    时序回测
-    按时间划分训练集（前 80%）和验证集（后 20%）
+    时序回测（滚动窗口版本）
+    
+    使用滚动窗口训练：每次预测时使用最近 train_window 期历史数据训练模型，
+    与实盘逻辑保持一致。
+    
+    参数：
+        numbers: 历史号码数据
+        trials: 回测期数
+        train_window: 训练窗口大小（使用最近多少期数据训练）
     """
-    if len(numbers) < trials + 100:
-        return {"error": "数据量不足"}
+    if len(numbers) < trials + train_window:
+        return {"error": f"数据量不足，需要至少 {trials + train_window} 期"}
     
     start_idx = len(numbers) - trials
     hit_top = hit_top3 = 0
+    actual_ranks = []
     
     for i in range(start_idx, len(numbers)):
         # 准备数据
         history = numbers[:i]
         actual = numbers[i]
         
-        # 时序划分
-        split = int(len(history) * train_ratio)
-        train_nums = history[:split]
+        # 滚动窗口：使用最近 train_window 期数据训练
+        # 这样与实盘逻辑一致：预测时使用最新的历史数据
+        train_nums = history[-train_window:] if len(history) > train_window else history
         
-        if len(train_nums) < 50:
+        if len(train_nums) < 60:  # 最小训练数据量
             continue
         
-        # 构建训练数据
+        # 构建训练数据（包含样本权重）
         result = build_training_data(train_nums, neg_samples=NEGATIVE_SAMPLES_PER_PERIOD)
         if result is None or len(result) < 3:
             continue
@@ -869,9 +889,9 @@ def backtest_ml(numbers, trials=BACKTEST_TRIALS, train_ratio=TRAIN_RATIO):
         if len(X) < 100:
             continue
         
-        # 训练模型（使用集成方法）
+        # 训练模型（使用集成方法，传递样本权重）
         try:
-            models, selected_indices = train_ensemble(X, y)
+            models, selected_indices = train_ensemble(X, y, sample_weight=sample_weights)
         except Exception as e:
             print(f"训练失败：{e}")
             continue
@@ -898,8 +918,13 @@ def backtest_ml(numbers, trials=BACKTEST_TRIALS, train_ratio=TRAIN_RATIO):
             key=lambda x: -x[0]
         )
         
-        # 检查命中
+        # 计算真实号码排名
         actual_str = f"{actual[0]}{actual[1]}{actual[2]}"
+        rank_map = {f"{a}{b}{c}": idx + 1 for idx, (_, a, b, c) in enumerate(ranked)}
+        actual_rank = rank_map.get(actual_str, 1001)
+        actual_ranks.append(actual_rank)
+        
+        # 检查命中
         top_nums = [f"{a}{b}{c}" for _, a, b, c in ranked[:TOP_K]]
         top3_nums = [f"{a}{b}{c}" for _, a, b, c in ranked[:3]]
         
@@ -909,6 +934,9 @@ def backtest_ml(numbers, trials=BACKTEST_TRIALS, train_ratio=TRAIN_RATIO):
             hit_top3 += 1
     
     n = trials
+    actual_rank_avg = sum(actual_ranks) / len(actual_ranks) if actual_ranks else 0.0
+    actual_rank_median = sorted(actual_ranks)[len(actual_ranks) // 2] if actual_ranks else 0
+    
     return {
         "trials": n,
         "top_hit": hit_top,
@@ -916,7 +944,9 @@ def backtest_ml(numbers, trials=BACKTEST_TRIALS, train_ratio=TRAIN_RATIO):
         "top3_hit": hit_top3,
         "top3_rate": hit_top3 / n if n > 0 else 0,
         "model_type": "ensemble",
-        "train_ratio": train_ratio,
+        "train_window": train_window,
+        "actual_rank_avg": round(actual_rank_avg, 1),
+        "actual_rank_median": actual_rank_median,
     }
 
 
@@ -943,17 +973,17 @@ def predict_current(numbers, top_k=TOP_K, model_type="ensemble"):
 
     try:
         if model_type == "ensemble":
-            # 多模型集成
-            models, selected_indices = train_ensemble(X, y)
+            # 多模型集成（传递样本权重）
+            models, selected_indices = train_ensemble(X, y, sample_weight=sample_weights)
             model_names = [name for _, name, _ in models]
             model_weights = [score for _, _, score in models]
             log.info(f'3D-ML 多模型集成完成：{model_names}')
         else:
-            # 单模型
-            model, used_name = train_single_model(X, y, model_type)
+            # 单模型（传递样本权重）
+            model, used_name = train_single_model(X, y, model_type, sample_weight=sample_weights)
             if not model:
                 log.warning(f"{model_type} 不可用，降级为集成模式")
-                models, selected_indices = train_ensemble(X, y)
+                models, selected_indices = train_ensemble(X, y, sample_weight=sample_weights)
                 model_names = [name for _, name, _ in models]
                 model_weights = [score for _, _, score in models]
             else:
@@ -989,8 +1019,8 @@ def predict_current(numbers, top_k=TOP_K, model_type="ensemble"):
         key=lambda x: -x[0]
     )
     
-    # 计算 Top K 的相对占比
-    top_probs = [probs[i] for i in range(top_k)]
+    # 计算 Top K 的相对占比（使用排序后的概率，而非原始顺序）
+    top_probs = [item[0] for item in ranked[:top_k]]
     total_top_prob = sum(top_probs) or 1.0
     
     # 返回 Top K（使用模型分而非概率，避免误导）
@@ -1073,11 +1103,11 @@ def print_ml_report(result, top_k=TOP_K):
     print(f"  训练样本：{result.get('total_samples', 0)} (正例：{result.get('pos_samples', 0)}, 负例：{result.get('neg_samples', 0)})")
     
     print("\n" + "=" * 70)
-    print(f"【直选推荐 {top_k} 注】（按概率排序）")
+    print(f"【直选推荐 {top_k} 注】（按模型分排序）")
     print("=" * 70)
     for idx, rec in enumerate(result["recommendations"], start=1):
         marker = "★" if idx <= 3 else " "
-        print(f"  {marker} {idx:02d}. {rec['num']}  概率={rec['probability']*100:.2f}%")
+        print(f"  {marker} {idx:02d}. {rec['num']}  模型分={rec['model_score']:.4f}")
     
     print("\n" + "=" * 70)
     print("【特征重要性（前 10 个）】")
