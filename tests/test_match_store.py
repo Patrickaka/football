@@ -97,5 +97,92 @@ class BuildMatchRowTest(unittest.TestCase):
         self.assertIsNone(ms.build_match_row(self._csv_row(Date=''), 'E0', 'now'))
 
 
+import pymysql
+from src.common import db
+
+
+def _can_connect():
+    try:
+        conn = pymysql.connect(
+            host=os.getenv('MYSQL_HOST', '127.0.0.1'),
+            port=int(os.getenv('MYSQL_PORT', '3306')),
+            user=os.getenv('MYSQL_USER', 'root'),
+            password=os.getenv('MYSQL_PASSWORD', ''),
+            connect_timeout=2,
+        )
+        conn.close()
+        return True
+    except Exception:
+        return False
+
+
+@unittest.skipUnless(_can_connect(), "无可用 MySQL，跳过 match_store DB 测试")
+class MatchStoreDbTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls._orig_db = os.environ.get('MYSQL_DB', 'football')
+        os.environ['MYSQL_DB'] = cls._orig_db + '_test'
+        import importlib
+        importlib.reload(db)
+        from src.common import match_store
+        importlib.reload(match_store)
+        cls.ms = match_store
+        conn = pymysql.connect(
+            host=os.getenv('MYSQL_HOST', '127.0.0.1'),
+            port=int(os.getenv('MYSQL_PORT', '3306')),
+            user=os.getenv('MYSQL_USER', 'root'),
+            password=os.getenv('MYSQL_PASSWORD', ''),
+        )
+        with conn.cursor() as cur:
+            cur.execute(f"CREATE DATABASE IF NOT EXISTS {cls._orig_db}_test "
+                        "DEFAULT CHARSET=utf8mb4")
+        conn.close()
+        db.init_db()
+        db.execute("DELETE FROM matches")
+
+    @classmethod
+    def tearDownClass(cls):
+        db.execute("DELETE FROM matches")
+        os.environ['MYSQL_DB'] = cls._orig_db
+        import importlib
+        importlib.reload(db)
+
+    def test_upsert_then_iter_roundtrip(self):
+        row = {
+            'Div': 'E0', 'Date': '15/08/2025', 'Time': '20:00',
+            'HomeTeam': 'Liverpool', 'AwayTeam': 'Bournemouth',
+            'FTHG': '4', 'FTAG': '2', 'FTR': 'H',
+            'HTHG': '1', 'HTAG': '1', 'HTR': 'D',
+            'B365H': '1.35', 'AHh': '-1.5', 'Avg>2.5': '1.9',
+            'HS': '19', 'Referee': 'A Taylor',
+        }
+        built = self.ms.build_match_row(row, 'E0', '2026-06-24T00:00:00')
+        self.ms.upsert_rows([built])
+
+        rows = list(self.ms.iter_csv_rows('E0'))
+        self.assertEqual(len(rows), 1)
+        got = rows[0]
+        self.assertEqual(got['Date'], '15/08/2025')
+        self.assertEqual(got['Time'], '20:00')
+        self.assertEqual(got['HomeTeam'], 'Liverpool')
+        self.assertEqual(got['FTHG'], '4')
+        self.assertEqual(got['B365H'], '1.35')
+        self.assertEqual(got['AHh'], '-1.5')
+        self.assertEqual(got['HS'], '19')
+        self.assertEqual(got['Referee'], 'A Taylor')
+
+    def test_upsert_is_idempotent(self):
+        row = {
+            'Div': 'D1', 'Date': '20/09/2025',
+            'HomeTeam': 'Bayern', 'AwayTeam': 'Mainz',
+            'FTHG': '3', 'FTAG': '0', 'B365H': '1.2',
+        }
+        built = self.ms.build_match_row(row, 'D1', 'now')
+        self.ms.upsert_rows([built])
+        self.ms.upsert_rows([built])
+        rows = list(self.ms.iter_csv_rows('D1'))
+        self.assertEqual(len(rows), 1)
+
+
 if __name__ == '__main__':
     unittest.main()

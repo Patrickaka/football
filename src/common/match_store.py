@@ -186,3 +186,42 @@ def season_from_date(date_str):
     if d.month >= 8:
         return f"{y:02d}{(y + 1) % 100:02d}"
     return f"{(y - 1) % 100:02d}{y:02d}"
+
+
+_SELECT_SQL = (
+    "SELECT league_code, "
+    "DATE_FORMAT(match_date, '%%d/%%m/%%Y') AS match_date, "
+    "TIME_FORMAT(match_time, '%%H:%%i') AS match_time, "
+    "home_team, away_team, fthg, ftag, ftr, hthg, htag, htr, odds, stats "
+    "FROM matches"
+)
+
+
+def upsert_rows(rows):
+    """批量 upsert matches 行（按 match_id 幂等）。返回处理行数。"""
+    return db.execute_many(_MATCHES_UPSERT, rows)
+
+
+def upsert_csv_file(path, league_code):
+    """解析一个 CSV 文件并 upsert 进 matches。返回写入行数。"""
+    now = datetime.now().isoformat()
+    rows = []
+    with open(path, encoding='utf-8-sig') as f:
+        for row in csv.DictReader(f):
+            built = build_match_row(row, league_code, now)
+            if built:
+                rows.append(built)
+    if not rows:
+        return 0
+    return upsert_rows(rows)
+
+
+def iter_csv_rows(league_code=None):
+    """从 matches 还原「CSV 列名」row dict，逐条 yield。league_code 为 None 遍历全部。"""
+    if league_code:
+        recs = db.query(_SELECT_SQL + " WHERE league_code=%s ORDER BY match_date, id",
+                        (league_code,))
+    else:
+        recs = db.query(_SELECT_SQL + " ORDER BY match_date, id")
+    for rec in recs:
+        yield record_to_csv_row(rec)
