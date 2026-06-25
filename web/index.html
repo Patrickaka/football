@@ -3600,6 +3600,37 @@ function renderKL8(r) {
 
   // 选3/4/5/6/7推荐号码 — v7.1: 无论是否验证都显示，只是样式不同
   const selectTypes = [3, 4, 5, 6, 7];
+
+  // 候选池单独展示一次（各玩法候选池相同）
+  let sharedCandidates = null;
+  let sharedCandidatesNumbers = [];  // 推荐号码集合，用于高亮
+  for (const st of selectTypes) {
+    const sel = r[`select_${st}`];
+    if (sel && sel.candidates && sel.candidates.length > sel.pick) {
+      sharedCandidates = sel.candidates;
+      sharedCandidatesNumbers = sel.numbers || [];
+      break;
+    }
+  }
+  if (sharedCandidates) {
+    html += `<div class="card" style="margin-bottom:12px;padding:10px 14px">`;
+    html += `<div style="font-size:13px;font-weight:600;margin-bottom:8px">候选号码池</div>`;
+    html += `<div style="display:flex;flex-wrap:wrap;gap:4px;line-height:1.6">`;
+    for (const item of sharedCandidates.slice(0, 15)) {
+      const num = typeof item === 'object' ? item[0] : item;
+      const isPick = sharedCandidatesNumbers.includes(num);
+      if (isPick) {
+        html += `<span class="kl8-ball highlight-ball" style="width:28px;height:28px;font-size:11px">${String(num).padStart(2,'0')}</span> `;
+      } else {
+        html += `<span class="kl8-ball small-ball">${String(num).padStart(2,'0')}</span> `;
+      }
+    }
+    html += `</div>`;
+    html += `<div style="font-size:11px;color:var(--muted);margin-top:6px">以上号码为综合统计候选池，各玩法从中选取推荐号码（高亮球为当前推荐号）</div>`;
+    html += `</div>`;
+  }
+
+  // 各玩法推荐号码（不再重复显示候选池）
   html += `<div class="card" style="margin-bottom:16px">`;
   html += `<div class="section-title" style="font-size:15px;margin-bottom:12px">推荐号码</div>`;
   html += `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px">`;
@@ -3616,23 +3647,12 @@ function renderKL8(r) {
 
     html += `<div class="kl8-select-card" style="border-color:${borderColor}">`;
     html += `<div class="kl8-select-title">🎱 ${esc(sel.desc)} — 推荐${sel.pick}个号码 <span style="font-size:11px;color:${badgeColor};font-weight:700;margin-left:8px">[${badgeText}]</span></div>`;
-    // strategy_id
     html += `<div style="font-size:11px;color:#8b949e;margin-bottom:4px">策略: ${esc(sel.strategy_id || '')}</div>`;
     html += `<div class="kl8-numbers-row">`;
     for (const n of sel.numbers) {
       html += `<span class="kl8-ball highlight-ball">${String(n).padStart(2,'0')}</span>`;
     }
     html += `</div>`;
-
-    // 候选号码(更多参考)
-    if (sel.candidates && sel.candidates.length > sel.pick) {
-      html += `<div style="margin-top:8px;font-size:12px;color:var(--muted)">候选池: `;
-      for (const item of sel.candidates.slice(0, 10)) {
-        const num = typeof item === 'object' ? item[0] : item;
-        html += `<span class="kl8-ball small-ball">${String(num).padStart(2,'0')}</span> `;
-      }
-      html += `</div>`;
-    }
 
     // 参考模式警告
     if (isRef && sel.warning) {
