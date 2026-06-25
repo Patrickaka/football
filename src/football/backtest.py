@@ -543,6 +543,69 @@ class BacktestRunner:
             goal_bias = over_pred - over_hits
 
         weak_buckets = []
+        bucket_tuning_candidates = []
+
+        def bucket_candidate(section, key, metrics):
+            total_count = metrics.get('total', 0)
+            score_top3 = metrics.get('score_top3', 0.0) or 0.0
+            goal_top2 = metrics.get('goal_top2', 0.0) or 0.0
+            htf_total_count = metrics.get('htf_total', 0) or 0
+            htf_top3 = metrics.get('htf_top3', 0.0) or 0.0
+            deltas = defaultdict(float)
+            reasons = []
+
+            if score_top3 < 0.35:
+                reasons.append('score_top3_weak')
+                if section == 'by_total_line':
+                    if key == '<=2.25':
+                        deltas['low_score_bias'] += 0.02
+                        deltas['high_score_bias'] -= 0.02
+                    elif key == '>=3.0':
+                        deltas['high_score_bias'] += 0.02
+                        deltas['low_score_bias'] -= 0.02
+                    else:
+                        deltas['draw_bias'] -= 0.015
+                elif section == 'by_asian_bucket' and key == 'deep':
+                    deltas['draw_bias'] -= 0.02
+                    deltas['high_score_bias'] += 0.015
+                else:
+                    deltas['low_score_bias'] -= 0.015
+
+            if metrics.get('goal_count_total', total_count) >= 5 and goal_top2 < 0.40:
+                reasons.append('goal_top2_weak')
+                if section == 'by_total_line' and key == '>=3.0':
+                    deltas['high_score_bias'] += 0.025
+                elif section == 'by_total_line' and key == '<=2.25':
+                    deltas['low_score_bias'] += 0.025
+                else:
+                    deltas['high_score_bias'] += 0.015 if metrics.get('goal_logloss', 0) > 1.2 else 0.0
+
+            if htf_total_count >= 5 and htf_top3 < 0.35:
+                reasons.append('half_full_top3_weak')
+                deltas['half_full_real_weight'] += 0.03
+
+            if not deltas:
+                return None
+
+            severity = max(0.0, 0.35 - score_top3) + max(0.0, 0.40 - goal_top2)
+            confidence = 'medium' if total_count >= 12 and severity >= 0.20 else 'low'
+            return {
+                'section': section,
+                'bucket': key,
+                'scope': 'league' if section == 'by_league' else 'bucket',
+                'total': total_count,
+                'score_top3': round(score_top3, 3),
+                'goal_top2': round(goal_top2, 3),
+                'htf_top3': round(htf_top3, 3),
+                'reasons': reasons,
+                'param_deltas': {
+                    name: round(max(-0.04, min(0.04, value)), 4)
+                    for name, value in sorted(deltas.items())
+                    if abs(value) >= 0.0001
+                },
+                'confidence': confidence,
+            }
+
         if report:
             for section in ('by_total_line', 'by_asian_bucket', 'by_league'):
                 for key, metrics in report.get(section, {}).items():
@@ -557,6 +620,9 @@ class BacktestRunner:
                             'goal_top2': round(metrics.get('goal_top2', 0), 3),
                             'score_logloss': round(metrics.get('score_logloss', 0), 3),
                         })
+                    candidate = bucket_candidate(section, key, metrics)
+                    if candidate:
+                        bucket_tuning_candidates.append(candidate)
 
         notes = []
         if draw_pred - draw_actual > 0.06:
@@ -581,6 +647,15 @@ class BacktestRunner:
             },
             'goal_direction_bias': round(goal_bias, 3),
             'weak_buckets': sorted(weak_buckets, key=lambda item: (item['score_top3'], item['goal_top2']))[:10],
+            'bucket_tuning_candidates': sorted(
+                bucket_tuning_candidates,
+                key=lambda item: (
+                    item['confidence'] != 'medium',
+                    item['score_top3'],
+                    item['goal_top2'],
+                    -item['total'],
+                ),
+            )[:10],
             'notes': notes,
         }
     
@@ -757,6 +832,7 @@ def get_diagnostic_tuning_suggestions(diagnostics: Dict) -> Dict:
             'suggestions': [],
             'param_deltas': {},
             'bucket_reviews': [],
+            'bucket_tuning_candidates': [],
         }
 
     suggestions = []
@@ -810,6 +886,7 @@ def get_diagnostic_tuning_suggestions(diagnostics: Dict) -> Dict:
         })
 
     bucket_reviews = diagnostics.get('weak_buckets') or []
+    bucket_candidates = diagnostics.get('bucket_tuning_candidates') or []
     if bucket_reviews:
         suggestions.append({
             'area': 'bucket_policy',
@@ -817,11 +894,19 @@ def get_diagnostic_tuning_suggestions(diagnostics: Dict) -> Dict:
             'reason': 'Some league/handicap/total-line buckets have weak Top3 or goal-count hit rates.',
             'confidence': 'low',
         })
+    if bucket_candidates:
+        suggestions.append({
+            'area': 'bucket_policy',
+            'action': 'apply_bucket_specific_micro_tuning',
+            'reason': 'Weak buckets have conservative candidate deltas for score, goal-count, or half/full-time policy.',
+            'confidence': 'medium' if any(c.get('confidence') == 'medium' for c in bucket_candidates) else 'low',
+        })
 
     return {
         'suggestions': suggestions,
         'param_deltas': {key: round(value, 4) for key, value in sorted(param_deltas.items())},
         'bucket_reviews': bucket_reviews[:10],
+        'bucket_tuning_candidates': bucket_candidates[:10],
     }
 
 

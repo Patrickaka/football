@@ -18,6 +18,7 @@ from src.football.result_sync import (
     _calibration_sample_weight,
     _is_match_settle_due,
     _parse_match_datetime,
+    time_layer_weight,
 )
 from src.football.sample_quality import assess_record_quality
 
@@ -98,6 +99,37 @@ class ResultSyncQualityGuardTests(unittest.TestCase):
         self.assertEqual(rows[0]['sync_status'], 'pending')
         self.assertFalse(rows[0]['settled'])
         self.assertIsNone(rows[0]['actual_score'])
+
+    def test_time_layer_stats_do_not_backfill_missing_layers(self):
+        history = PredictionHistory()
+        history._save = lambda: None
+        history.records = [{
+            'match_id': 'layer-1',
+            'settled': True,
+            'actual_score': '1-0',
+            'actual_result': 'H',
+            'predicted_scores': {'1-0': 0.6, '0-0': 0.4},
+            'predicted_1x2': {'H': 0.6, 'D': 0.3, 'A': 0.1},
+            'time_layers': {
+                'T-1h': {'0-0': 0.7, '1-0': 0.3},
+                'final': {'1-0': 0.6, '0-0': 0.4},
+            },
+        }]
+
+        stats = history.get_stats()
+
+        self.assertEqual(stats['by_time_layer']['T-24h']['total'], 0)
+        self.assertEqual(stats['by_time_layer']['T-6h']['total'], 0)
+        self.assertEqual(stats['by_time_layer']['T-1h']['total'], 1)
+        self.assertEqual(stats['by_time_layer']['final']['total'], 1)
+        self.assertEqual(stats['by_time_layer']['T-1h']['weight'], time_layer_weight('T-1h'))
+        self.assertAlmostEqual(stats['by_time_layer']['T-1h']['weighted_total'], 0.75)
+
+    def test_time_layer_weight_increases_toward_kickoff(self):
+        self.assertLess(time_layer_weight('T-24h'), time_layer_weight('T-6h'))
+        self.assertLess(time_layer_weight('T-6h'), time_layer_weight('T-1h'))
+        self.assertLess(time_layer_weight('T-1h'), time_layer_weight('T-15min'))
+        self.assertLess(time_layer_weight('T-15min'), time_layer_weight('final'))
 
     def test_audit_prediction_history_reports_without_repairing_by_default(self):
         history = PredictionHistory()
@@ -395,8 +427,12 @@ class ResultSyncQualityGuardTests(unittest.TestCase):
         self.assertIn('common_scores_overheated', diagnostics['notes'])
         self.assertIn('draw', diagnostics)
         self.assertIn('weak_buckets', diagnostics)
+        self.assertIn('bucket_tuning_candidates', diagnostics)
+        self.assertTrue(diagnostics['bucket_tuning_candidates'])
+        self.assertIn('param_deltas', diagnostics['bucket_tuning_candidates'][0])
         self.assertIn('diagnostic_suggestions', report)
         self.assertTrue(report['diagnostic_suggestions']['suggestions'])
+        self.assertTrue(report['diagnostic_suggestions']['bucket_tuning_candidates'])
 
     def test_rolling_backtest_report_includes_recent_windows_and_suggestions(self):
         records = []

@@ -378,6 +378,18 @@ def infer_time_layer(match_time_str: str) -> str:
         return 'final'
 
 
+def time_layer_weight(time_layer: str) -> float:
+    """Information weight for prediction snapshots at different pre-match layers."""
+    weights = {
+        'T-24h': 0.35,
+        'T-6h': 0.55,
+        'T-1h': 0.75,
+        'T-15min': 0.90,
+        'final': 1.00,
+    }
+    return weights.get(time_layer, 0.50)
+
+
 class PredictionHistory:
     """预测历史记录管理器"""
     
@@ -1397,8 +1409,19 @@ class PredictionHistory:
         
         # 时间分层统计
         time_layers = ['T-24h', 'T-6h', 'T-1h', 'T-15min', 'final']
-        layer_stats = {layer: {'correct_top1': 0, 'correct_top3': 0, 'correct_top5': 0, 'total': 0} 
-                      for layer in time_layers}
+        layer_stats = {
+            layer: {
+                'correct_top1': 0,
+                'correct_top3': 0,
+                'correct_top5': 0,
+                'total': 0,
+                'weighted_correct_top1': 0.0,
+                'weighted_correct_top3': 0.0,
+                'weighted_correct_top5': 0.0,
+                'weighted_total': 0.0,
+            }
+            for layer in time_layers
+        }
         
         # 计算命中率
         correct_top1 = 0
@@ -1421,23 +1444,30 @@ class PredictionHistory:
             
             # 统计各时间层命中率
             for layer in time_layers:
-                layer_pred = time_layers_data.get(layer) or predicted_scores
+                layer_pred = time_layers_data.get(layer)
+                if layer == 'final' and not layer_pred:
+                    layer_pred = predicted_scores
                 if not layer_pred:
                     continue
+                layer_weight = time_layer_weight(layer)
                 
                 sorted_scores = sorted(layer_pred.items(), key=lambda x: -x[1])
                 layer_stats[layer]['total'] += 1
+                layer_stats[layer]['weighted_total'] += layer_weight
                 
                 if sorted_scores and sorted_scores[0][0] == actual_score:
                     layer_stats[layer]['correct_top1'] += 1
+                    layer_stats[layer]['weighted_correct_top1'] += layer_weight
                 
                 top3_scores = [s[0] for s in sorted_scores[:3]]
                 if actual_score in top3_scores:
                     layer_stats[layer]['correct_top3'] += 1
+                    layer_stats[layer]['weighted_correct_top3'] += layer_weight
                 
                 top5_scores = [s[0] for s in sorted_scores[:5]]
                 if actual_score in top5_scores:
                     layer_stats[layer]['correct_top5'] += 1
+                    layer_stats[layer]['weighted_correct_top5'] += layer_weight
             
             # 最终预测统计
             sorted_scores = sorted(predicted_scores.items(), key=lambda x: -x[1])
@@ -1477,6 +1507,20 @@ class PredictionHistory:
                     'correct_top3': layer_stats[layer]['correct_top3'],
                     'correct_top5': layer_stats[layer]['correct_top5'],
                     'total': total_layer,
+                    'weight': time_layer_weight(layer),
+                    'weighted_hit_rate_top1': (
+                        layer_stats[layer]['weighted_correct_top1'] / layer_stats[layer]['weighted_total']
+                        if layer_stats[layer]['weighted_total'] > 0 else 0.0
+                    ),
+                    'weighted_hit_rate_top3': (
+                        layer_stats[layer]['weighted_correct_top3'] / layer_stats[layer]['weighted_total']
+                        if layer_stats[layer]['weighted_total'] > 0 else 0.0
+                    ),
+                    'weighted_hit_rate_top5': (
+                        layer_stats[layer]['weighted_correct_top5'] / layer_stats[layer]['weighted_total']
+                        if layer_stats[layer]['weighted_total'] > 0 else 0.0
+                    ),
+                    'weighted_total': round(layer_stats[layer]['weighted_total'], 3),
                 }
             else:
                 layer_hit_rates[layer] = {
@@ -1487,6 +1531,11 @@ class PredictionHistory:
                     'correct_top3': 0,
                     'correct_top5': 0,
                     'total': 0,
+                    'weight': time_layer_weight(layer),
+                    'weighted_hit_rate_top1': 0.0,
+                    'weighted_hit_rate_top3': 0.0,
+                    'weighted_hit_rate_top5': 0.0,
+                    'weighted_total': 0.0,
                 }
         
         return {
