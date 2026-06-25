@@ -47,7 +47,7 @@ from src.common.logger import setup_logger
 
 log = setup_logger('kl8')
 
-KL8_PREDICTOR_VERSION = "kl8-v7.1-reference-strategy"
+KL8_PREDICTOR_VERSION = "kl8-v7.2-repeat-penalty"
 
 # ─── 快乐8常量 ───
 KL8_NUM_RANGE = 80       # 号码范围 1-80
@@ -143,11 +143,12 @@ from copy import deepcopy
 REFERENCE_STRATEGY = {
     'strategy_id': 'reference_heuristic_v1',
     'feature_weights': {
-        'frequency': 0.12,
-        'position': 0.08,
-        'road': 0.10,
-        'odd_even': 0.06,
-        'big_small': 0.06,
+        'frequency': 0.20,    # 冷号偏好
+        'position': 0.12,     # 区内相对冷热
+        'road': 0.10,        # 路内相对冷热
+        'repeat': 0.25,      # 重号惩罚 (v7.2新增)
+        'odd_even': 0.05,
+        'big_small': 0.05,
     },
     'model_weights': {
         'rank': 1.0,
@@ -1052,19 +1053,36 @@ class KL8Analyzer:
         else:
             scores['gap'] = 0.85 - 0.45 * (1.0 - math.exp(-(gap_ratio - 1.0) * 0.8))
 
-        # 3. 区位特征(对称标准化偏离)
+        # 3. 区位特征(v7.2: 区内相对冷热，而非全局平衡)
         zone = (num - 1) // 10 + 1
-        zone_freq = stats['freq_by_zone']
-        expected_zone = total * KL8_DRAW_COUNT / 8
-        zone_ratio = zone_freq.get(zone, 0) / max(expected_zone, 0.01)
-        scores['position'] = 0.4 + 0.6 * max(0, 1.0 - abs(zone_ratio - 1.0))
+        zone_nums = [z for z in range(((zone-1)*10)+1, zone*10+1)]
+        # 该号码在所属区位内的频率 vs 区位平均频率
+        num_freq = freq.get(num, 0)
+        zone_total = sum(freq.get(z, 0) for z in zone_nums)
+        zone_avg = zone_total / len(zone_nums)
+        if zone_avg > 0:
+            pos_ratio = num_freq / zone_avg
+            # 冷号(低于区内平均)得高分，热号(高于区内平均)得低分
+            if pos_ratio <= 1.0:
+                scores['position'] = 0.55 + 0.30 * (1.0 - pos_ratio)
+            else:
+                scores['position'] = max(0.15, 0.55 * math.exp(-1.5 * (pos_ratio - 1.0)))
+        else:
+            scores['position'] = 0.50
 
-        # 4. 路数特征
+        # 4. 路数特征(v7.2: 路内相对冷热)
         road = num % 3
-        road_freq = stats['freq_by_road']
-        expected_road = total * KL8_DRAW_COUNT / 3
-        road_ratio = road_freq.get(road, 0) / max(expected_road, 0.01)
-        scores['road'] = 0.4 + 0.6 * max(0, 1.0 - abs(road_ratio - 1.0) * 0.5)
+        road_nums = [r for r in range(1, 81) if r % 3 == road]
+        road_total = sum(freq.get(r, 0) for r in road_nums)
+        road_avg = road_total / len(road_nums)
+        if road_avg > 0:
+            rd_ratio = num_freq / road_avg
+            if rd_ratio <= 1.0:
+                scores['road'] = 0.55 + 0.25 * (1.0 - rd_ratio)
+            else:
+                scores['road'] = max(0.15, 0.55 * math.exp(-1.5 * (rd_ratio - 1.0)))
+        else:
+            scores['road'] = 0.50
 
         # 5. 和值特征 -- 停用
         scores['sum'] = 0.5
@@ -1077,8 +1095,11 @@ class KL8Analyzer:
         zone_deviation = abs(zone_hit_rate - expected_hit_rate) / max(expected_hit_rate, 0.01)
         scores['zone'] = 0.4 + 0.6 * max(0, 1.0 - zone_deviation)
 
-        # 7. 重号 -- 停用
-        scores['repeat'] = 0.5
+        # 7. 重号惩罚(v7.2: 上期开出号码大幅降分)
+        if num in last_nums:
+            scores['repeat'] = 0.10  # 上期号：重罚
+        else:
+            scores['repeat'] = 0.85  # 非上期号：奖励
 
         # 8. 邻号 -- 停用
         scores['adjacent'] = 0.5
