@@ -37,8 +37,9 @@ from src.kl8 import (
     KL8RollingBacktest, load_prize_table as kl8_load_prize_table,
     check_data_integrity as kl8_check_data_integrity,
     list_conflict_queue as kl8_list_conflict_queue,
-    ACTIVE_STRATEGIES, KL8_PREDICTOR_VERSION,
+    ACTIVE_STRATEGIES, REFERENCE_STRATEGY, KL8_PREDICTOR_VERSION,
     benjamini_hochberg_fdr, bonferroni_correction,
+    validate_and_activate_strategy, resolve_play_strategy,
 )
 from src.common.logger import setup_logger
 
@@ -202,6 +203,12 @@ class Handler(BaseHTTPRequestHandler):
             self._serve_json(self._football_clear_cache_payload())
         elif path == '/api/football/prepare_ml_data':
             self._serve_json(self._prepare_ml_history_data_payload())
+        elif path == '/api/football/diagnostics':
+            params = parse_qs(route.query)
+            self._serve_json(self._football_diagnostics_payload(params))
+        elif path == '/api/football/review':
+            params = parse_qs(route.query)
+            self._serve_json(self._football_review_payload(params))
         elif path == '/api/3d':
             self._serve_json(self._lottery_3d_payload())
         elif path == '/api/3d-ml':
@@ -282,6 +289,9 @@ class Handler(BaseHTTPRequestHandler):
             self._serve_json(self._kl8_integrity_payload())
         elif path == '/api/kl8/conflicts':
             self._serve_json(self._kl8_conflicts_payload())
+        elif path == '/api/kl8/activate':
+            params = parse_qs(route.query)
+            self._serve_json(self._kl8_activate_payload(params))
         elif path == '/api/calibrate':
             params = parse_qs(route.query)
             self._serve_json(self._calibrate_payload(params))
@@ -444,6 +454,91 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:
             self._log.error('下载训练数据失败', exc_info=True)
             return {'error': f'下载失败: {str(e)}'}
+
+    def _football_diagnostics_payload(self, params):
+        try:
+            limit = int((params.get('limit') or [180])[0])
+            windows_raw = (params.get('windows') or ['30,60,90'])[0]
+            windows = tuple(
+                int(item.strip())
+                for item in str(windows_raw).split(',')
+                if item.strip()
+            ) or (30, 60, 90)
+
+            from src.football.backtest import rolling_backtest_from_history
+            from src.football.result_sync import audit_prediction_history, get_sync_status_summary
+
+            rolling = rolling_backtest_from_history(limit=limit, windows=windows)
+            audit = audit_prediction_history(repair=False)
+            sync = get_sync_status_summary()
+
+            compact_windows = {}
+            for key, report in (rolling.get('windows') or {}).items():
+                summary = report.get('summary', {})
+                compact_windows[key] = {
+                    'sample_count': report.get('sample_count'),
+                    'summary': {
+                        'total_matches': summary.get('total_matches'),
+                        'top1_hit_rate': summary.get('top1_hit_rate'),
+                        'top3_hit_rate': summary.get('top3_hit_rate'),
+                        'hit_rate_total': summary.get('hit_rate_total'),
+                        'htf_top3_hit_rate': summary.get('htf_top3_hit_rate'),
+                        'score_logloss': summary.get('score_logloss'),
+                        'goal_logloss': summary.get('goal_logloss'),
+                    },
+                    'diagnostics': report.get('diagnostics', {}),
+                    'diagnostic_suggestions': report.get('diagnostic_suggestions', {}),
+                }
+
+            return {
+                'result': {
+                    'available_samples': rolling.get('available_samples', 0),
+                    'latest_window': rolling.get('latest_window'),
+                    'windows': compact_windows,
+                    'diagnostic_suggestions': rolling.get('diagnostic_suggestions', {}),
+                    'audit': audit,
+                    'sync': sync,
+                }
+            }
+        except Exception as e:
+            self._log.error('获取足球诊断面板失败', exc_info=True)
+            return {'error': f'诊断失败: {str(e)}'}
+
+    def _football_review_payload(self, params):
+        try:
+            repair = str((params.get('repair') or ['0'])[0]).lower() in ('1', 'true', 'yes', 'on')
+            apply_tuning = str((params.get('apply_tuning') or ['0'])[0]).lower() in ('1', 'true', 'yes', 'on')
+            limit = int((params.get('limit') or [180])[0])
+
+            from src.football.backtest import apply_diagnostic_tuning_from_history, rolling_backtest_from_history
+            from src.football.result_sync import audit_prediction_history, auto_sync_results, get_sync_status_summary
+
+            sync_result = auto_sync_results()
+            audit = audit_prediction_history(repair=repair)
+            rolling = rolling_backtest_from_history(limit=limit)
+            tuning = apply_diagnostic_tuning_from_history(
+                limit=limit,
+                dry_run=not apply_tuning,
+            )
+
+            return {
+                'result': {
+                    'sync': sync_result,
+                    'audit': audit,
+                    'rolling': {
+                        'available_samples': rolling.get('available_samples', 0),
+                        'latest_window': rolling.get('latest_window'),
+                        'diagnostic_suggestions': rolling.get('diagnostic_suggestions', {}),
+                    },
+                    'tuning': tuning,
+                    'sync_status': get_sync_status_summary(),
+                    'repair': repair,
+                    'apply_tuning': apply_tuning,
+                }
+            }
+        except Exception as e:
+            self._log.error('足球赛后复盘失败', exc_info=True)
+            return {'error': f'复盘失败: {str(e)}'}
 
     def _lottery_3d_payload(self):
         try:
@@ -1384,6 +1479,66 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:
             self._log.error('快乐8冲突队列查询失败', exc_info=True)
             return {'error': '冲突队列查询失败'}
+
+    def _kl8_activate_payload(self, params):
+        """快乐8策略激活（v7: 回测验证后才允许写入ACTIVE_STRATEGIES）
+
+        参数:
+            play_type: 玩法名称 (select_3, select_4, select_5, select_6, select_7, fu_shi_7)
+            feature_weights: JSON字符串，如 {"frequency":0.12}
+            model_weights: JSON字符串，如 {"rank":1.0,"bayesian":0.0,"markov":0.0}
+            window_size: 统计窗口大小，如 250
+            auto_activate: 是否自动激活（默认false，需人工确认）
+            n_permutations: 置换检验次数（默认1000）
+        """
+        try:
+            play_type = (params.get('play_type') or [''])[0]
+            feature_weights_json = (params.get('feature_weights') or [''])[0]
+            model_weights_json = (params.get('model_weights') or [''])[0]
+            window_size_str = (params.get('window_size') or ['0'])[0]
+            auto_activate_str = (params.get('auto_activate') or ['false'])[0]
+            n_permutations_str = (params.get('n_permutations') or ['1000'])[0]
+
+            if not play_type:
+                return {'error': '缺少play_type参数'}
+
+            if not feature_weights_json:
+                return {'error': '缺少feature_weights参数'}
+
+            try:
+                feature_weights = json.loads(feature_weights_json)
+            except json.JSONDecodeError:
+                return {'error': 'feature_weights JSON解析失败'}
+
+            try:
+                model_weights = json.loads(model_weights_json) if model_weights_json else {}
+            except json.JSONDecodeError:
+                return {'error': 'model_weights JSON解析失败'}
+
+            try:
+                window_size = int(window_size_str)
+            except ValueError:
+                return {'error': 'window_size必须是整数'}
+
+            auto_activate = auto_activate_str.lower() in ('true', '1', 'yes')
+
+            try:
+                n_permutations = int(n_permutations_str)
+            except ValueError:
+                n_permutations = 1000
+
+            result = validate_and_activate_strategy(
+                play_type=play_type,
+                feature_weights=feature_weights,
+                model_weights=model_weights,
+                window_size=window_size,
+                auto_activate=auto_activate,
+                n_permutations=n_permutations,
+            )
+            return {'result': result}
+        except Exception as e:
+            self._log.error('快乐8策略激活失败', exc_info=True)
+            return {'error': f'策略激活失败: {str(e)}'}
 
     def _send(self, status, content_type, body):
         self.send_response(status)

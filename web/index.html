@@ -3304,7 +3304,16 @@ function renderKL8(r) {
 
   html += `<div class="section-title">【快乐8数据分析】</div>`;
   html += `<div class="note" style="color:var(--accent2);margin-bottom:12px">⚠ 快乐8开奖具有随机性，以上分析仅为历史统计参考，不构成任何投注建议。请理性对待！</div>`;
-  html += `<div class="note" style="color:#f85149;margin-bottom:12px;font-weight:700">v6说明：所有策略默认空(未通过回测验证)，当前不输出号码推荐。ACTIVE_STRATEGIES按玩法分别配置strategy_id/权重/窗口。final_test完全冻结不参与启用判断。</div>`;
+
+  // v7.1: 三种状态 banner
+  const signalStatus = r.statistics?.signal_status || 'unknown';
+  if (signalStatus === 'validated') {
+    html += `<div class="note" style="color:#2ea043;margin-bottom:12px;font-weight:700">✅ 已验证策略：当前启用策略已通过严格回测验证。</div>`;
+  } else if (signalStatus === 'reference_unvalidated') {
+    html += `<div class="note" style="color:#9a6700;margin-bottom:12px;font-weight:700">参考预测模式：当前特征未通过严格回测验证，系统仍会输出基础统计参考号码，但不代表策略已验证有效，请勿将其视为高置信度推荐。</div>`;
+  } else if (signalStatus === 'no_data') {
+    html += `<div class="note" style="color:#f85149;margin-bottom:12px;font-weight:700">历史数据不足，无法进行预测。请先抓取真实数据。</div>`;
+  }
 
   if (r.using_simulated_data || r.error) {
     const errMsg = r.error || '当前使用模拟数据，无法产生有效预测';
@@ -3313,14 +3322,14 @@ function renderKL8(r) {
   }
 
   // 版本信息 + 信号状态
-  html += `<div class="note" style="margin-bottom:8px">版本: ${esc(r.statistics?.version || 'unknown')} · 分析期数: ${r.statistics?.total_periods || 0} · 信号状态: ${esc(r.statistics?.signal_status || 'unknown')}</div>`;
+  html += `<div class="note" style="margin-bottom:8px">版本: ${esc(r.statistics?.version || 'unknown')} · 分析期数: ${r.statistics?.total_periods || 0} · 信号状态: ${esc(signalStatus)}</div>`;
 
-  // 无信号状态提示
-  if (r.statistics?.signal_status === 'no_validated_signal') {
+  // 无验证信号状态提示（黄色参考模式）
+  if (signalStatus === 'reference_unvalidated') {
     html += `<div class="card" style="margin-bottom:16px;background:#fff8e1;border:1px solid #ffcc02;padding:12px">`;
-    html += `<div style="font-size:14px;font-weight:700;color:#9a6700;margin-bottom:8px">暂无通过回测验证的有效特征</div>`;
-    html += `<div style="font-size:13px;color:#7a5800">当前所有特征和模型均未通过严格滚动回测验证（显著优于随机基线），因此不输出号码推荐。排名数据仅供回测对照参考，不应作为投注依据。</div>`;
-    html += `<div style="font-size:12px;color:#7a5800;margin-top:6px">可通过 /api/kl8/backtest 接口运行回测，验证各特征有效性。</div>`;
+    html += `<div style="font-size:14px;font-weight:700;color:#9a6700;margin-bottom:8px">参考预测模式</div>`;
+    html += `<div style="font-size:13px;color:#7a5800">当前特征未通过严格回测验证，系统仍会输出基础统计参考号码，但不代表策略已验证有效，请勿将其视为高置信度推荐。排名数据仅供回测对照参考，不应作为投注依据。</div>`;
+    html += `<div style="font-size:12px;color:#7a5800;margin-top:6px">可通过 /api/kl8/backtest 接口运行回测，验证各特征有效性后激活正式策略。</div>`;
     html += `</div>`;
   }
 
@@ -3362,51 +3371,67 @@ function renderKL8(r) {
     html += `</div>`;
   }
 
-  // 选3/4/5/6/7推荐号码 — 有信号时才显示
-  const hasSignal = r.statistics?.is_prediction_ready === true;
+  // 选3/4/5/6/7推荐号码 — v7.1: 无论是否验证都显示，只是样式不同
   const selectTypes = [3, 4, 5, 6, 7];
-  if (hasSignal) {
-    html += `<div class="card" style="margin-bottom:16px">`;
-    html += `<div class="section-title" style="font-size:15px;margin-bottom:12px">推荐号码</div>`;
-    html += `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px">`;
+  html += `<div class="card" style="margin-bottom:16px">`;
+  html += `<div class="section-title" style="font-size:15px;margin-bottom:12px">推荐号码</div>`;
+  html += `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px">`;
 
-    for (const st of selectTypes) {
-      const key = `select_${st}`;
-      const sel = r[key];
-      if (!sel || !sel.numbers || sel.numbers.length === 0) continue;
+  for (const st of selectTypes) {
+    const key = `select_${st}`;
+    const sel = r[key];
+    if (!sel || !sel.numbers || sel.numbers.length === 0) continue;
 
-      html += `<div class="kl8-select-card">`;
-      html += `<div class="kl8-select-title">🎱 ${esc(sel.desc)} — 推荐${sel.pick}个号码</div>`;
-      // v6: 显示strategy_id
-      if (sel.strategy_id) {
-        html += `<div style="font-size:11px;color:#8b949e;margin-bottom:4px">策略: ${esc(sel.strategy_id)}</div>`;
-      }
-      html += `<div class="kl8-numbers-row">`;
-      for (const n of sel.numbers) {
-        html += `<span class="kl8-ball highlight-ball">${String(n).padStart(2,'0')}</span>`;
+    const isRef = sel.prediction_mode === 'reference_unvalidated';
+    const borderColor = isRef ? '#ffcc02' : '#2ea043';
+    const badgeText = isRef ? '参考' : '已验证';
+    const badgeColor = isRef ? '#9a6700' : '#2ea043';
+
+    html += `<div class="kl8-select-card" style="border-color:${borderColor}">`;
+    html += `<div class="kl8-select-title">🎱 ${esc(sel.desc)} — 推荐${sel.pick}个号码 <span style="font-size:11px;color:${badgeColor};font-weight:700;margin-left:8px">[${badgeText}]</span></div>`;
+    // strategy_id
+    html += `<div style="font-size:11px;color:#8b949e;margin-bottom:4px">策略: ${esc(sel.strategy_id || '')}</div>`;
+    html += `<div class="kl8-numbers-row">`;
+    for (const n of sel.numbers) {
+      html += `<span class="kl8-ball highlight-ball">${String(n).padStart(2,'0')}</span>`;
+    }
+    html += `</div>`;
+
+    // 候选号码(更多参考)
+    if (sel.candidates && sel.candidates.length > sel.pick) {
+      html += `<div style="margin-top:8px;font-size:12px;color:var(--muted)">候选池: `;
+      for (const item of sel.candidates.slice(0, 10)) {
+        const num = typeof item === 'object' ? item[0] : item;
+        html += `<span class="kl8-ball small-ball">${String(num).padStart(2,'0')}</span> `;
       }
       html += `</div>`;
+    }
 
-      // 候选号码(更多参考)
-      if (sel.candidates && sel.candidates.length > sel.pick) {
-        html += `<div style="margin-top:8px;font-size:12px;color:var(--muted)">候选池: `;
-        for (const item of sel.candidates.slice(0, 10)) {
-          const num = typeof item === 'object' ? item[0] : item;
-          html += `<span class="kl8-ball small-ball">${String(num).padStart(2,'0')}</span> `;
-        }
-        html += `</div>`;
-      }
+    // 参考模式警告
+    if (isRef && sel.warning) {
+      html += `<div style="font-size:11px;color:#9a6700;margin-top:6px">⚠ ${esc(sel.warning)}</div>`;
+    }
 
-      html += `</div>`;
+    html += `</div>`;
+  }
+  html += `</div></div>`;      html += `</div>`;
     }
     html += `</div></div>`;
   }
 
-  // 选5复式7码 — 有信号时才显示
+  // 选5复式7码 — v7.1: 无论是否验证都显示
   const fushi = r.fu_shi_7;
-  if (fushi && hasSignal && fushi.top7_numbers && fushi.top7_numbers.length > 0) {
-    html += `<div class="card" style="margin-bottom:16px">`;
-    html += `<div class="kl8-fushi-header">🎱 选5复式 — 7码复式 (共${fushi.total_combinations}组)</div>`;
+  if (fushi && fushi.top7_numbers && fushi.top7_numbers.length > 0) {
+    const fu7IsRef = fushi.prediction_mode === 'reference_unvalidated';
+    const fu7Border = fu7IsRef ? '#ffcc02' : '#2ea043';
+    const fu7Badge = fu7IsRef ? '参考' : '已验证';
+    const fu7BadgeColor = fu7IsRef ? '#9a6700' : '#2ea043';
+
+    html += `<div class="card" style="margin-bottom:16px;border:2px solid ${fu7Border}">`;
+    html += `<div class="kl8-fushi-header">🎱 选5复式 — 7码复式 (共${fushi.total_combinations}组) <span style="font-size:11px;color:${fu7BadgeColor};font-weight:700;margin-left:8px">[${fu7Badge}]</span></div>`;
+    if (fushi.strategy_id) {
+      html += `<div style="font-size:11px;color:#8b949e;margin-bottom:4px">策略: ${esc(fushi.strategy_id)}</div>`;
+    }
 
     // Top7号码
     html += `<div class="section-title" style="font-size:14px;margin-bottom:8px">7个核心号码</div>`;
@@ -3428,6 +3453,10 @@ function renderKL8(r) {
       html += `</div>`;
     }
     html += `</div>`;
+    // 参考模式警告
+    if (fu7IsRef && fushi.warning) {
+      html += `<div style="font-size:11px;color:#9a6700;margin-top:6px">⚠ ${esc(fushi.warning)}</div>`;
+    }
     html += `</div>`;
   }
 
@@ -3493,18 +3522,108 @@ function initPage() {
   switchTab(hash === '3d' ? 'lottery3d' : hash === 'pailie5' ? 'pailie5' : hash === 'lottery' ? 'lottery' : hash === 'kl8' ? 'kl8' : hash === 'predictions' ? 'predictions' : 'football');
 }
 
+function fmtPctValue(value) {
+  return typeof value === 'number' && Number.isFinite(value) ? `${(value * 100).toFixed(1)}%` : '-';
+}
+
+function fmtNumValue(value, digits = 3) {
+  return typeof value === 'number' && Number.isFinite(value) ? value.toFixed(digits) : '-';
+}
+
+function renderFootballDiagnostics(diagnostics) {
+  if (!diagnostics || !diagnostics.windows) return '';
+
+  const windows = diagnostics.windows || {};
+  const latestKey = diagnostics.latest_window && windows[diagnostics.latest_window]
+    ? diagnostics.latest_window
+    : Object.keys(windows)[0];
+  const latest = latestKey ? windows[latestKey] : null;
+  const summary = latest?.summary || {};
+  const notes = latest?.diagnostics?.notes || [];
+  const suggestions = diagnostics.diagnostic_suggestions?.suggestions || [];
+  const deltas = diagnostics.diagnostic_suggestions?.param_deltas || {};
+  const audit = diagnostics.audit || {};
+  const sync = diagnostics.sync || {};
+
+  const windowRows = Object.entries(windows).map(([key, report]) => {
+    const item = report.summary || {};
+    return `<tr>
+      <td style="padding:6px 8px;color:var(--muted)">${esc(key)}</td>
+      <td style="padding:6px 8px;text-align:right">${report.sample_count || 0}</td>
+      <td style="padding:6px 8px;text-align:right">${fmtPctValue(item.top1_hit_rate)}</td>
+      <td style="padding:6px 8px;text-align:right">${fmtPctValue(item.top3_hit_rate)}</td>
+      <td style="padding:6px 8px;text-align:right">${fmtPctValue(item.hit_rate_total)}</td>
+      <td style="padding:6px 8px;text-align:right">${fmtPctValue(item.htf_top3_hit_rate)}</td>
+      <td style="padding:6px 8px;text-align:right">${fmtNumValue(item.goal_logloss)}</td>
+    </tr>`;
+  }).join('');
+
+  const deltaText = Object.keys(deltas).length
+    ? Object.entries(deltas).map(([key, value]) => `${esc(key)} ${value > 0 ? '+' : ''}${fmtNumValue(value, 2)}`).join(' / ')
+    : '暂无稳定调参项';
+
+  const noteHtml = notes.length
+    ? notes.slice(0, 4).map(note => `<div style="color:var(--muted);font-size:12px;margin-top:4px">${esc(note)}</div>`).join('')
+    : '<div style="color:var(--muted);font-size:12px;margin-top:4px">暂无明显偏差</div>';
+
+  const suggestionHtml = suggestions.length
+    ? suggestions.slice(0, 4).map(item => `<div style="color:var(--muted);font-size:12px;margin-top:4px">${esc(item)}</div>`).join('')
+    : '<div style="color:var(--muted);font-size:12px;margin-top:4px">建议先继续积累样本</div>';
+
+  return `<div class="card model-health">
+    <h3>预测诊断与赛后复盘</h3>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px;margin-bottom:12px">
+      <div class="status-item"><span class="status-dot">1</span><div><div class="status-name">Top1</div><div class="status-desc">${fmtPctValue(summary.top1_hit_rate)}</div></div></div>
+      <div class="status-item"><span class="status-dot">3</span><div><div class="status-name">Top3</div><div class="status-desc">${fmtPctValue(summary.top3_hit_rate)}</div></div></div>
+      <div class="status-item"><span class="status-dot">G</span><div><div class="status-name">进球数</div><div class="status-desc">${fmtPctValue(summary.hit_rate_total)}</div></div></div>
+      <div class="status-item"><span class="status-dot">H</span><div><div class="status-name">半全场</div><div class="status-desc">${fmtPctValue(summary.htf_top3_hit_rate)}</div></div></div>
+      <div class="status-item"><span class="status-dot">!</span><div><div class="status-name">审计问题</div><div class="status-desc">${audit.issue_count || 0} 项</div></div></div>
+      <div class="status-item"><span class="status-dot">S</span><div><div class="status-name">待同步</div><div class="status-desc">${sync.pending_sync || 0} 场</div></div></div>
+    </div>
+    <div style="overflow:auto;border:1px solid var(--line);border-radius:8px;margin-bottom:12px">
+      <table style="width:100%;border-collapse:collapse;font-size:12px;min-width:560px">
+        <thead style="color:var(--muted);background:var(--card2)">
+          <tr>
+            <th style="padding:6px 8px;text-align:left">窗口</th>
+            <th style="padding:6px 8px;text-align:right">样本</th>
+            <th style="padding:6px 8px;text-align:right">Top1</th>
+            <th style="padding:6px 8px;text-align:right">Top3</th>
+            <th style="padding:6px 8px;text-align:right">进球数</th>
+            <th style="padding:6px 8px;text-align:right">半全场</th>
+            <th style="padding:6px 8px;text-align:right">Goal LL</th>
+          </tr>
+        </thead>
+        <tbody>${windowRows || `<tr><td colspan="7" style="padding:10px;color:var(--muted);text-align:center">暂无可用样本</td></tr>`}</tbody>
+      </table>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px">
+      <div>
+        <div style="font-size:13px;font-weight:600">偏差提示</div>
+        ${noteHtml}
+      </div>
+      <div>
+        <div style="font-size:13px;font-weight:600">调参建议</div>
+        <div style="color:var(--accent);font-size:12px;margin-top:4px">${deltaText}</div>
+        ${suggestionHtml}
+      </div>
+    </div>
+  </div>`;
+}
+
 async function loadPredictions() {
   const app = document.getElementById('app-predictions');
   app.innerHTML = `<div class="status"><span class="spinner"></span>正在加载预测记录…</div>`;
   
   try {
-    const [syncStatus, recordsData] = await Promise.all([
+    const [syncStatus, recordsData, diagnosticsData] = await Promise.all([
       fetchJson('/api/sync/status'),
-      fetchJson('/api/predictions')
+      fetchJson('/api/predictions'),
+      fetchJson('/api/football/diagnostics')
     ]);
     
     const sync = syncStatus.result || {};
     const records = recordsData.result?.records || [];
+    const diagnostics = diagnosticsData.result || {};
     
     let html = '';
     
@@ -3540,10 +3659,18 @@ async function loadPredictions() {
       </div>` : ''}
     </div>`;
     
+    html += renderFootballDiagnostics(diagnostics);
+
     // ── 操作按钮 ──
     html += `<div style="display:flex;gap:10px;margin-bottom:16px">
       <button type="button" onclick="triggerSync()" style="flex:1;padding:10px;background:var(--card2);color:var(--text);border:1px solid var(--line);border-radius:8px;font-size:14px;cursor:pointer">
         🔁 立即同步一次
+      </button>
+      <button type="button" onclick="runFootballReview(false)" style="flex:1;padding:10px;background:var(--card2);color:var(--text);border:1px solid var(--line);border-radius:8px;font-size:14px;cursor:pointer">
+        赛后复盘
+      </button>
+      <button type="button" onclick="runFootballReview(true)" style="flex:1;padding:10px;background:var(--card2);color:var(--warn);border:1px solid var(--line);border-radius:8px;font-size:14px;cursor:pointer">
+        复盘+修复
       </button>
       ${sync.failed > 0 ? `<button type="button" onclick="hideFailedRecords()" style="flex:1;padding:10px;background:var(--card2);color:var(--muted);border:1px solid var(--line);border-radius:8px;font-size:14px;cursor:pointer">
         🧹 隐藏失败记录
@@ -3636,6 +3763,46 @@ async function triggerSync() {
     }
   } catch (e) {
     alert('同步失败：' + e.message);
+  } finally {
+    btn.textContent = originalText;
+    btn.disabled = false;
+  }
+}
+
+async function runFootballReview(repair = false) {
+  if (repair && !confirm('确定执行复盘修复吗？会重置提前回填，并把低可信样本排除出校准。')) return;
+
+  const btn = event.target;
+  const originalText = btn.textContent;
+  btn.textContent = repair ? '修复中...' : '复盘中...';
+  btn.disabled = true;
+
+  try {
+    const data = await fetchJson(`/api/football/review?repair=${repair ? 1 : 0}`);
+    if (!data.result) {
+      alert('复盘失败：' + (data.error || '未知错误'));
+      return;
+    }
+
+    const result = data.result || {};
+    const audit = result.audit || {};
+    const rolling = result.rolling || {};
+    const tuning = result.tuning || {};
+    const plan = tuning.plan || {};
+    const sync = result.sync || {};
+    const message = [
+      '复盘完成',
+      `同步：${sync.message || '-'}`,
+      `审计问题：${audit.issue_count || 0}`,
+      `已修复：${audit.repaired_count || 0}`,
+      `可用样本：${rolling.available_samples || 0}`,
+      `调参预案：${plan.reason || tuning.error || '暂无'}`
+    ].join('\n');
+
+    alert(message);
+    loadPredictions();
+  } catch (e) {
+    alert('复盘失败：' + e.message);
   } finally {
     btn.textContent = originalText;
     btn.disabled = false;

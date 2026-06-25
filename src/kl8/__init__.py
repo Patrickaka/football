@@ -19,7 +19,16 @@ v6 核心改动:
 11. 超几何分布替代二项分布(80选20不放回)
 12. 数据排序+连续性检查+冲突审核队列
 
-版本: kl8-v6.0-strict-three-stage
+版本: kl8-v7.1-reference-strategy
+
+v7.1 核心改动（在v7基础上）:
+1. REFERENCE_STRATEGY: 默认参考策略（基础统计排序），标记为未验证参考
+2. resolve_play_strategy(): 优先使用已验证策略，回测未通过时自动降级到参考策略
+3. _build_window_analyzer(): 统一的临时分析器构造，确保线上预测和回测使用相同窗口
+4. predict_all() 重构: 使用 resolve_play_strategy + _build_window_analyzer，返回 prediction_mode/is_validated/warning
+5. 页面显示: 不再红色"不输出号码"，改为黄色"参考预测模式"提示，三种状态(validated/reference_unvalidated/no_data)
+6. 快照记录 play_strategies + prediction_modes
+7. 缓存指纹包含 ACTIVE_STRATEGIES + REFERENCE_STRATEGY
 """
 
 import math
@@ -38,7 +47,7 @@ from src.common.logger import setup_logger
 
 log = setup_logger('kl8')
 
-KL8_PREDICTOR_VERSION = "kl8-v6.0-strict-three-stage"
+KL8_PREDICTOR_VERSION = "kl8-v7.1-reference-strategy"
 
 # ─── 快乐8常量 ───
 KL8_NUM_RANGE = 80       # 号码范围 1-80
@@ -127,6 +136,29 @@ ACTIVE_STRATEGIES = {
     },
 }
 
+# ─── 默认参考策略（v7.1新增）───
+# 回测未通过时，自动降级到此策略：基础统计排序，但明确标记为"未验证参考"
+from copy import deepcopy
+
+REFERENCE_STRATEGY = {
+    'strategy_id': 'reference_heuristic_v1',
+    'feature_weights': {
+        'frequency': 0.12,
+        'position': 0.08,
+        'road': 0.10,
+        'odd_even': 0.06,
+        'big_small': 0.06,
+    },
+    'model_weights': {
+        'rank': 1.0,
+        'bayesian': 0.0,
+        'markov': 0.0,
+    },
+    'window_size': 250,
+    'prediction_mode': 'reference_unvalidated',
+    'is_validated': False,
+}
+
 # ─── 预测快照目录 ───
 KL8_SNAPSHOT_DIR = data_path('kl8_snapshots')
 KL8_SETTLEMENT_DIR = data_path('kl8_settlements')
@@ -159,6 +191,323 @@ def is_prediction_ready() -> bool:
 def has_active_signal() -> bool:
     """是否有任何启用的特征或模型（向后兼容，但推荐用is_prediction_ready）"""
     return is_prediction_ready()
+
+
+# ─── 策略解析（v7.1新增）───
+
+def _strategy_is_usable(strategy: Dict) -> bool:
+    """判断一个策略是否可用（有权重且非全零）
+
+    可用条件: rank模型启用 + 至少一个特征有权重，或者其他模型(bayesian/markov)启用
+    """
+    fw = strategy.get('feature_weights', {})
+    mw = strategy.get('model_weights', {})
+
+    rank_ready = (
+        mw.get('rank', 0) > 0
+        and any(weight > 0 for weight in fw.values())
+    )
+
+    return (
+        rank_ready
+        or mw.get('bayesian', 0) > 0
+        or mw.get('markov', 0) > 0
+    )
+
+
+def resolve_play_strategy(play_type: str) -> Dict:
+    """解析玩法策略：优先使用已验证策略，回测未通过时自动降级到参考策略
+
+    返回 Dict 包含:
+        strategy_id: 策略标识
+        feature_weights: 特征权重
+        model_weights: 模型权重
+        window_size: 统计窗口
+        prediction_mode: 'validated' 或 'reference_unvalidated'
+        is_validated: True 或 False
+    """
+    strategy = ACTIVE_STRATEGIES.get(play_type, {})
+
+    # 已验证的正式策略
+    if strategy.get('strategy_id') and _strategy_is_usable(strategy):
+        result = deepcopy(strategy)
+        result['prediction_mode'] = 'validated'
+        result['is_validated'] = True
+        return result
+
+    # 没通过回测时，自动使用参考策略
+    result = deepcopy(REFERENCE_STRATEGY)
+    result['strategy_id'] = f'{play_type}_reference_heuristic_v1'
+    return result
+
+
+# ─── 策略激活流程（v7新增）───
+
+def validate_and_activate_strategy(
+    play_type: str,
+    feature_weights: Dict[str, float],
+    model_weights: Dict[str, float],
+    window_size: int,
+    auto_activate: bool = False,
+    n_permutations: int = BACKTEST_PERMUTATION_COUNT,
+) -> Dict:
+    """策略激活流程 — 回测结果满足条件后才允许写入ACTIVE_STRATEGIES
+
+    v7核心设计:
+    1. 验证集 Lift > 0
+    2. FDR 校正后 p < 0.05
+    3. 稳定性窗口至少 3/4 为正（将验证段分成4个子窗口，各检查Lift）
+    4. 最终封存测试集只做结果确认，不参与激活决策
+
+    参数:
+        play_type: 玩法名称，如 'select_5', 'fu_shi_7'
+        feature_weights: 特征权重字典
+        model_weights: 模型权重字典
+        window_size: 统计窗口大小
+        auto_activate: 是否验证通过后自动写入ACTIVE_STRATEGIES（默认False=需人工审核确认）
+        n_permutations: 置换检验次数
+
+    返回:
+        验证报告 Dict，包含各条件是否通过、最终建议、以及（若auto_activate=True且通过）激活结果
+    """
+    # ── 参数校验 ──
+    valid_play_types = list(ACTIVE_STRATEGIES.keys())
+    if play_type not in valid_play_types:
+        return {
+            'error': f'无效玩法: {play_type}',
+            'valid_play_types': valid_play_types,
+        }
+
+    # 确定 select_type（用于置换检验和Lift计算）
+    if play_type == 'fu_shi_7':
+        pick_n = 7
+    elif play_type.startswith('select_'):
+        try:
+            pick_n = int(play_type.split('_')[1])
+        except (ValueError, IndexError):
+            return {'error': f'无法解析玩法select_type: {play_type}'}
+    else:
+        return {'error': f'无法解析玩法: {play_type}'}
+
+    # 至少有一个有效权重
+    has_fw = any(w > 0 for w in feature_weights.values())
+    has_mw = any(w > 0 for w in model_weights.values())
+    if not (has_fw or has_mw):
+        return {'error': 'feature_weights和model_weights至少有一个非零权重'}
+
+    if window_size <= 0:
+        return {'error': 'window_size必须为正整数'}
+
+    # ── 获取数据 ──
+    analyzer = get_kl8_analyzer()
+    if not analyzer.history_data:
+        return {'error': '历史数据不足，无法验证策略'}
+
+    history = analyzer.history_data
+    n = len(history)
+
+    # ── 三段式分割 ──
+    bt = KL8RollingBacktest(analyzer)
+    try:
+        split = bt._split_three_stage(n)
+    except ValueError as e:
+        return {'error': str(e)}
+
+    val_range = split['val']
+    final_test_range = split['final_test']
+
+    # ── 条件1: 验证集 Lift > 0 ──
+    val_result = bt._rolling_backtest_parametric(
+        feature_weights, model_weights,
+        start_idx=val_range[0],
+        end_idx=val_range[1],
+        min_train=50,
+        window_size=window_size,
+    )
+
+    if 'error' in val_result:
+        return {'error': f'验证集回测失败: {val_result["error"]}'}
+
+    s_key = f'select_{pick_n}' if play_type != 'fu_shi_7' else 'fu_shi_7'
+    val_lift = val_result.get(s_key, {}).get('lift', 0)
+    # fu_shi_7 用 pool_mean_hits 的 lift
+    if play_type == 'fu_shi_7':
+        fu7_val = val_result.get('fu_shi_7', {})
+        pool_mean = fu7_val.get('pool_mean_hits', 0)
+        expected_random = fu7_val.get('pool_expected_random', hypergeom_expected(7))
+        val_lift = (pool_mean - expected_random) / expected_random if expected_random > 0 else 0
+
+    condition_1_lift_positive = val_lift > 0
+
+    # ── 条件2: FDR 校正后 p < 0.05 ──
+    # 对当前玩法的置换检验 + BH FDR校正
+    # BH FDR需要多个p值做校正：当前特征在该玩法下的p值 + 同玩法下其他已测特征的p值
+    # 简化做法：对该玩法做一次置换检验，然后与其他玩法做FDR校正
+    perm_result = bt._permutation_test(
+        feature_weights, model_weights,
+        start_idx=val_range[0],
+        end_idx=val_range[1],
+        pick_n=pick_n,
+        metric='mean_hits',
+        n_permutations=n_permutations,
+    )
+
+    if 'error' in perm_result:
+        return {'error': f'置换检验失败: {perm_result["error"]}'}
+
+    raw_p_value = perm_result.get('p_value', 1.0)
+
+    # BH FDR校正：对当前5个玩法+fu_shi_7=6个检验做校正
+    # 但只有1个p值（当前玩法），其他玩法用默认p=1.0（未检验）
+    all_p_for_fdr = [1.0] * len(valid_play_types)
+    play_type_idx = valid_play_types.index(play_type)
+    all_p_for_fdr[play_type_idx] = raw_p_value
+    adjusted_p_values = benjamini_hochberg_fdr(all_p_for_fdr)
+    adjusted_p = adjusted_p_values[play_type_idx]
+
+    # 同时做Bonferroni校正（保守版）
+    bonferroni_p = bonferroni_correction(raw_p_value, len(valid_play_types))
+
+    condition_2_fdr_significant = adjusted_p < 0.05
+
+    # ── 条件3: 稳定性窗口至少 3/4 为正 ──
+    # 将验证段分成4个子窗口，每个检查Lift是否>0
+    val_start = val_range[0]
+    val_end = val_range[1]
+    val_len = val_end - val_start
+    sub_window_size = val_len // BACKTEST_STABILITY_WINDOWS
+
+    sub_window_lifts = []
+    for i in range(BACKTEST_STABILITY_WINDOWS):
+        sub_start = val_start + i * sub_window_size
+        sub_end = val_start + (i + 1) * sub_window_size
+        if i == BACKTEST_STABILITY_WINDOWS - 1:
+            sub_end = val_end  # 最后一段用剩余全部
+
+        sub_result = bt._rolling_backtest_parametric(
+            feature_weights, model_weights,
+            start_idx=sub_start,
+            end_idx=sub_end,
+            min_train=50,
+            window_size=window_size,
+        )
+
+        if 'error' in sub_result:
+            sub_window_lifts.append(0)  # 出错视为0
+            continue
+
+        sub_lift = sub_result.get(s_key, {}).get('lift', 0)
+        if play_type == 'fu_shi_7':
+            fu7_sub = sub_result.get('fu_shi_7', {})
+            sub_pool_mean = fu7_sub.get('pool_mean_hits', 0)
+            sub_expected = fu7_sub.get('pool_expected_random', hypergeom_expected(7))
+            sub_lift = (sub_pool_mean - sub_expected) / sub_expected if sub_expected > 0 else 0
+
+        sub_window_lifts.append(sub_lift)
+
+    n_positive_sub_windows = sum(1 for l in sub_window_lifts if l > 0)
+    condition_3_stability = n_positive_sub_windows >= BACKTEST_STABILITY_THRESHOLD
+
+    # ── 条件4: 最终封存测试集结果确认（只报告，不参与激活决策）───
+    final_test_result = bt._rolling_backtest_parametric(
+        feature_weights, model_weights,
+        start_idx=final_test_range[0],
+        end_idx=final_test_range[1],
+        min_train=50,
+        window_size=window_size,
+    )
+
+    final_test_lift = None
+    if 'error' not in final_test_result:
+        final_test_lift = final_test_result.get(s_key, {}).get('lift', 0)
+        if play_type == 'fu_shi_7':
+            fu7_ft = final_test_result.get('fu_shi_7', {})
+            ft_pool_mean = fu7_ft.get('pool_mean_hits', 0)
+            ft_expected = fu7_ft.get('pool_expected_random', hypergeom_expected(7))
+            final_test_lift = (ft_pool_mean - ft_expected) / ft_expected if ft_expected > 0 else 0
+
+    # ── 激活判断 ──
+    all_conditions_passed = condition_1_lift_positive and condition_2_fdr_significant and condition_3_stability
+
+    # 生成 strategy_id
+    strategy_id = f'{play_type}_w{window_size}_v1'
+    # 加入特征哈希以区分不同配置
+    fw_hash = hashlib.sha256(
+        json.dumps(feature_weights, sort_keys=True, separators=(',', ':')).encode()
+    ).hexdigest()[:6]
+    strategy_id = f'{play_type}_w{window_size}_{fw_hash}'
+
+    # ── 激活（若条件通过 + auto_activate=True）───
+    activated = False
+    if all_conditions_passed and auto_activate:
+        ACTIVE_STRATEGIES[play_type] = {
+            'strategy_id': strategy_id,
+            'feature_weights': feature_weights,
+            'model_weights': model_weights,
+            'window_size': window_size,
+        }
+        clear_cache()
+        activated = True
+        log.info(f'快乐8: 策略已激活 {play_type} -> {strategy_id}')
+    elif all_conditions_passed and not auto_activate:
+        log.info(f'快乐8: 策略验证通过 {play_type}，但auto_activate=False，需人工确认')
+
+    # ── 返回验证报告 ──
+    report = {
+        'play_type': play_type,
+        'strategy_id': strategy_id,
+        'window_size': window_size,
+        'feature_weights': feature_weights,
+        'model_weights': model_weights,
+        'conditions': {
+            'condition_1_lift_positive': {
+                'passed': condition_1_lift_positive,
+                'val_lift': round(val_lift, 4),
+                'detail': f'验证集 Lift = {round(val_lift, 4)}，要求 > 0',
+            },
+            'condition_2_fdr_significant': {
+                'passed': condition_2_fdr_significant,
+                'raw_p_value': raw_p_value,
+                'bh_fdr_adjusted_p': round(adjusted_p, 6),
+                'bonferroni_adjusted_p': round(bonferroni_p, 6),
+                'detail': f'BH FDR校正后 p = {round(adjusted_p, 6)}，要求 < 0.05',
+            },
+            'condition_3_stability': {
+                'passed': condition_3_stability,
+                'n_positive_sub_windows': n_positive_sub_windows,
+                'sub_window_lifts': [round(l, 4) for l in sub_window_lifts],
+                'detail': f'稳定性 {n_positive_sub_windows}/{BACKTEST_STABILITY_WINDOWS} 窗口为正，要求 ≥ {BACKTEST_STABILITY_THRESHOLD}',
+            },
+            'condition_4_final_test_confirmation': {
+                'final_test_lift': round(final_test_lift, 4) if final_test_lift is not None else None,
+                'note': '最终封存测试集只做结果确认，不参与激活决策',
+            },
+        },
+        'all_conditions_passed': all_conditions_passed,
+        'val_result_summary': {
+            s_key: {
+                'lift': round(val_result.get(s_key, {}).get('lift', 0), 4),
+                'mean_hits': round(val_result.get(s_key, {}).get('mean_hits', 0), 4),
+                'n_tests': val_result.get(s_key, {}).get('n_tests', 0),
+                'profit_roi': round(val_result.get(s_key, {}).get('profit_roi', 0), 4),
+            }
+        },
+        'recommendation': 'activate' if all_conditions_passed else 'keep_disabled',
+        'activated': activated,
+        'auto_activate': auto_activate,
+        'version': KL8_PREDICTOR_VERSION,
+    }
+
+    if final_test_lift is not None:
+        report['final_test_result_summary'] = {
+            s_key: {
+                'lift': round(final_test_result.get(s_key, {}).get('lift', 0), 4),
+                'mean_hits': round(final_test_result.get(s_key, {}).get('mean_hits', 0), 4),
+                'profit_roi': round(final_test_result.get(s_key, {}).get('profit_roi', 0), 4),
+            }
+        }
+
+    return report
 
 
 def get_active_feature_weights() -> Dict[str, float]:
@@ -998,13 +1347,24 @@ class KL8Analyzer:
             'feature_config': {k: dict(v) for k, v in FEATURE_CONFIG.items()},
             'model_config': {k: dict(v) for k, v in MODEL_CONFIG.items()},
             'active_strategies': {k: dict(v) for k, v in ACTIVE_STRATEGIES.items()},
-            # v6: 每个玩法记录strategy_id
-            'select_3_strategy_id': prediction_result.get('select_3', {}).get('strategy_id', ''),
-            'select_4_strategy_id': prediction_result.get('select_4', {}).get('strategy_id', ''),
-            'select_5_strategy_id': prediction_result.get('select_5', {}).get('strategy_id', ''),
-            'select_6_strategy_id': prediction_result.get('select_6', {}).get('strategy_id', ''),
-            'select_7_strategy_id': prediction_result.get('select_7', {}).get('strategy_id', ''),
-            'fu_shi_7_strategy_id': prediction_result.get('fu_shi_7', {}).get('strategy_id', ''),
+            'reference_strategy': dict(REFERENCE_STRATEGY),
+            # v7.1: 每个玩法记录strategy_id和prediction_mode
+            'play_strategies': {
+                'select_3': prediction_result.get('select_3', {}).get('strategy_id', ''),
+                'select_4': prediction_result.get('select_4', {}).get('strategy_id', ''),
+                'select_5': prediction_result.get('select_5', {}).get('strategy_id', ''),
+                'select_6': prediction_result.get('select_6', {}).get('strategy_id', ''),
+                'select_7': prediction_result.get('select_7', {}).get('strategy_id', ''),
+                'fu_shi_7': prediction_result.get('fu_shi_7', {}).get('strategy_id', ''),
+            },
+            'prediction_modes': {
+                'select_3': prediction_result.get('select_3', {}).get('prediction_mode', ''),
+                'select_4': prediction_result.get('select_4', {}).get('prediction_mode', ''),
+                'select_5': prediction_result.get('select_5', {}).get('prediction_mode', ''),
+                'select_6': prediction_result.get('select_6', {}).get('prediction_mode', ''),
+                'select_7': prediction_result.get('select_7', {}).get('prediction_mode', ''),
+                'fu_shi_7': prediction_result.get('fu_shi_7', {}).get('prediction_mode', ''),
+            },
             'ranking': prediction_result.get('ranking', []),
             'select_3': prediction_result.get('select_3', {}).get('numbers', []),
             'select_4': prediction_result.get('select_4', {}).get('numbers', []),
@@ -1193,14 +1553,39 @@ class KL8Analyzer:
         except Exception as e:
             return {'error': f'写入结算失败: {e}'}
 
-    # ─── 综合预测（v6: 使用ACTIVE_STRATEGIES按玩法分别配置）───
+    # ─── 窗口分析器构造（v7.1新增）───
+
+    def _build_window_analyzer(self, window_size: int):
+        """构造临时分析器（与回测逻辑完全一致）
+
+        策略指定window_size时，必须创建临时分析器并调用update_statistics()
+        确保线上预测和回测使用相同的统计窗口，而不是只临时计算freq。
+
+        参数:
+            window_size: 统计窗口大小，0或None时使用KL8_DEFAULT_HISTORY
+        """
+        recent = min(len(self.history_data), window_size or KL8_DEFAULT_HISTORY)
+
+        temp = KL8Analyzer.__new__(KL8Analyzer)
+        temp.history_data = self.history_data[:recent]
+        temp.using_simulated_data = False
+        temp.history_file = self.history_file
+        temp._data_mtime = self._data_mtime
+        temp.statistics = {}
+        temp.update_statistics()
+
+        return temp
+
+    # ─── 综合预测（v7.1: resolve_play_strategy + _build_window_analyzer）───
 
     def predict_all(self) -> Dict:
         """生成所有选型的预测结果
 
-        v6改动:
-        - 使用ACTIVE_STRATEGIES，每个玩法有独立策略配置
-        - strategy_id记录到快照，不使用全局FEATURE_CONFIG
+        v7.1改动:
+        - 使用 resolve_play_strategy() 优先已验证策略，降级到参考策略
+        - 使用 _build_window_analyzer() 确保窗口一致性
+        - 返回 prediction_mode/is_validated/warning 三个字段
+        - 无验证策略时不再返回空号码，而是输出参考号码+黄色提示
         """
         if not self.history_data or self.using_simulated_data:
             return {
@@ -1215,74 +1600,68 @@ class KL8Analyzer:
         for select_type in [3, 4, 5, 6, 7]:
             config = SELECT_CONFIG[select_type]
             s_key = f'select_{select_type}'
-            strategy = ACTIVE_STRATEGIES.get(s_key, {})
 
-            # v6: 使用策略配置（有strategy_id时才真正预测）
-            strategy_id = strategy.get('strategy_id', '')
-            fw = strategy.get('feature_weights', {})
-            mw = strategy.get('model_weights', {})
-            window_size = strategy.get('window_size', 0) or KL8_DEFAULT_HISTORY
+            # v7.1: 使用 resolve_play_strategy 优先已验证策略，降级到参考策略
+            strategy = resolve_play_strategy(s_key)
 
-            if strategy_id and (any(w > 0 for w in fw.values()) or any(w > 0 for w in mw.values())):
-                # 有验证策略，使用策略权重预测
-                # 使用策略指定的窗口大小
-                if window_size != KL8_DEFAULT_HISTORY and window_size > 0:
-                    # 重新统计只使用策略指定窗口的数据
-                    recent = min(len(self.history_data), window_size)
-                    recent_data = self.history_data[:recent]
-                    freq = Counter()
-                    for record in recent_data:
-                        for num in record['numbers']:
-                            freq[num] += 1
-                    # 简化: 直接使用multi_model_voting（已支持feature_weights/model_weights）
-                    vote_result = self.multi_model_voting(
-                        pick_n=config['pick'],
-                        top_n=config['top_n'],
-                        feature_weights=fw,
-                        model_weights=mw,
-                    )
-                else:
-                    vote_result = self.multi_model_voting(
-                        pick_n=config['pick'],
-                        top_n=config['top_n'],
-                        feature_weights=fw,
-                        model_weights=mw,
-                    )
-            else:
-                # 无验证策略，使用全局默认（当前全是停用）
-                vote_result = self.multi_model_voting(
-                    pick_n=config['pick'],
-                    top_n=config['top_n'],
-                )
+            # v7.1: 使用 _build_window_analyzer 确保窗口一致性
+            predictor = self._build_window_analyzer(
+                strategy.get('window_size', KL8_DEFAULT_HISTORY)
+            )
+
+            vote_result = predictor.multi_model_voting(
+                pick_n=config['pick'],
+                top_n=config['top_n'],
+                feature_weights=strategy['feature_weights'],
+                model_weights=strategy['model_weights'],
+            )
 
             results[s_key] = {
                 'desc': config['desc'],
                 'pick': config['pick'],
                 'numbers': vote_result['selected'],
                 'candidates': vote_result.get('candidates', [])[:10],
-                'version': vote_result.get('version', KL8_PREDICTOR_VERSION),
-                'status': vote_result.get('status', ''),
-                'message': vote_result.get('message', ''),
-                'strategy_id': strategy_id,
+                'strategy_id': strategy['strategy_id'],
+                'prediction_mode': strategy['prediction_mode'],
+                'is_validated': strategy['is_validated'],
+                'warning': (
+                    '' if strategy['is_validated']
+                    else '参考预测：当前策略尚未通过严格回测验证，仅供数据观察。'
+                ),
             }
 
-        # 复式7码
-        fu7_strategy = ACTIVE_STRATEGIES.get('fu_shi_7', {})
-        fu7_strategy_id = fu7_strategy.get('strategy_id', '')
-        fu7_fw = fu7_strategy.get('feature_weights', {})
-        fu7_mw = fu7_strategy.get('model_weights', {})
+        # 复式7码（v7.1: 同样使用 resolve_play_strategy + _build_window_analyzer）
+        strategy = resolve_play_strategy('fu_shi_7')
 
-        if fu7_strategy_id and (any(w > 0 for w in fu7_fw.values()) or any(w > 0 for w in fu7_mw.values())):
-            results['fu_shi_7'] = self.get_fu_shi_7(feature_weights=fu7_fw, model_weights=fu7_mw)
-        else:
-            results['fu_shi_7'] = self.get_fu_shi_7()
-        results['fu_shi_7']['strategy_id'] = fu7_strategy_id
+        predictor = self._build_window_analyzer(
+            strategy.get('window_size', KL8_DEFAULT_HISTORY)
+        )
+
+        results['fu_shi_7'] = predictor.get_fu_shi_7(
+            feature_weights=strategy['feature_weights'],
+            model_weights=strategy['model_weights'],
+        )
+        results['fu_shi_7']['strategy_id'] = strategy['strategy_id']
+        results['fu_shi_7']['prediction_mode'] = strategy['prediction_mode']
+        results['fu_shi_7']['is_validated'] = strategy['is_validated']
 
         recent = self.history_data[:10] if self.history_data else []
         results['recent_results'] = [
             {'issue': r['issue'], 'numbers': r['numbers'], 'date': r['date']}
             for r in recent
         ]
+
+        # v7.1: 状态分三种: validated / reference_unvalidated / no_data
+        # 判断整体预测模式
+        all_modes = [results.get(f'select_{st}', {}).get('prediction_mode', '') for st in [3,4,5,6,7]]
+        all_modes.append(results.get('fu_shi_7', {}).get('prediction_mode', ''))
+
+        if any(m == 'validated' for m in all_modes):
+            overall_status = 'validated'
+        elif any(m == 'reference_unvalidated' for m in all_modes):
+            overall_status = 'reference_unvalidated'
+        else:
+            overall_status = 'no_data'
 
         stats = self.statistics
         results['statistics'] = {
@@ -1296,12 +1675,15 @@ class KL8Analyzer:
             'model_config': MODEL_CONFIG,
             'active_model_weights': get_active_model_weights(),
             'active_strategies': ACTIVE_STRATEGIES,
+            'reference_strategy': REFERENCE_STRATEGY,
             'is_prediction_ready': prediction_ready,
-            'signal_status': 'no_validated_signal' if not prediction_ready else 'active',
+            'signal_status': overall_status,
             'note': (
-                '暂无通过回测验证的有效策略，不输出号码推荐。'
-                if not prediction_ready
-                else '当前启用策略已通过回测验证。'
+                '当前启用策略已通过回测验证。'
+                if overall_status == 'validated'
+                else '参考预测模式：当前特征未通过严格回测验证，系统仍会输出基础统计参考号码，但不代表策略已验证有效，请勿将其视为高置信度推荐。'
+                if overall_status == 'reference_unvalidated'
+                else '历史数据不足，无法进行预测。'
             ),
         }
 
@@ -1336,6 +1718,7 @@ def get_kl8_analyzer() -> KL8Analyzer:
 
 
 def run_prediction(force_refresh: bool = False) -> Dict:
+    """快乐8预测入口（v7.1: 缓存指纹包含ACTIVE_STRATEGIES + REFERENCE_STRATEGY）"""
     analyzer = get_kl8_analyzer()
 
     if not force_refresh:
@@ -1348,11 +1731,19 @@ def run_prediction(force_refresh: bool = False) -> Dict:
             'using_simulated_data': True,
         }
 
-    active_fw = get_active_feature_weights()
-    active_mw = get_active_model_weights()
-    config_fingerprint = hashlib.md5(
-        json.dumps({'fw': active_fw, 'mw': active_mw}, separators=(',', ':')).encode()
-    ).hexdigest()[:8]
+    # v7.1: 缓存指纹包含 ACTIVE_STRATEGIES + REFERENCE_STRATEGY
+    # 任何一个策略变更都不会拿到旧缓存
+    config_fingerprint = hashlib.sha256(
+        json.dumps(
+            {
+                'active_strategies': ACTIVE_STRATEGIES,
+                'reference_strategy': REFERENCE_STRATEGY,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(',', ':'),
+        ).encode()
+    ).hexdigest()[:16]
 
     cache_key = (
         analyzer.history_data[0]['issue'],

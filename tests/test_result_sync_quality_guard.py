@@ -99,6 +99,90 @@ class ResultSyncQualityGuardTests(unittest.TestCase):
         self.assertFalse(rows[0]['settled'])
         self.assertIsNone(rows[0]['actual_score'])
 
+    def test_audit_prediction_history_reports_without_repairing_by_default(self):
+        history = PredictionHistory()
+        history._save = lambda: None
+        history.records = [{
+            'match_id': 'audit-future',
+            'home': 'A',
+            'away': 'B',
+            'match_time': '06-27 11:00',
+            'actual_score': '1-1',
+            'actual_result': 'D',
+            'settled': True,
+            'sync_status': 'synced',
+            'predicted_scores': {'1-1': 0.2},
+            'predicted_1x2': {'D': 0.5},
+        }]
+
+        result = history.audit_prediction_history(repair=False)
+
+        self.assertEqual(result['issue_counts']['future_settlement'], 1)
+        self.assertTrue(history.records[0]['settled'])
+        self.assertEqual(history.records[0]['actual_score'], '1-1')
+
+    def test_audit_prediction_history_repair_marks_unsafe_samples(self):
+        history = PredictionHistory()
+        saved = {'called': False}
+        history._save = lambda: saved.__setitem__('called', True)
+        history.records = [
+            {
+                'match_id': 'audit-future-repair',
+                'home': 'A',
+                'away': 'B',
+                'match_time': '06-27 11:00',
+                'actual_score': '1-1',
+                'actual_result': 'D',
+                'settled': True,
+                'sync_status': 'synced',
+            },
+            {
+                'match_id': 'audit-low',
+                'home': 'C',
+                'away': 'D',
+                'match_time': '2026-06-20 11:00',
+                'actual_score': '2-1',
+                'actual_result': 'H',
+                'actual_half_score': 'bad',
+                'actual_half_result': 'D',
+                'actual_half_full': 'DH',
+                'half_time_data_quality': 'invalid',
+                'settled': True,
+                'sync_status': 'synced',
+                'predicted_scores': {'2-1': 0.2},
+                'predicted_1x2': {'H': 0.5, 'D': 0.3, 'A': 0.2},
+                'asian': 0,
+                'total_line': 2.5,
+                'odds_snapshot': {'x': 1},
+                'result_quality': {'grade': 'low', 'source': 'shuju'},
+            },
+        ]
+
+        result = history.audit_prediction_history(repair=True)
+
+        self.assertTrue(saved['called'])
+        self.assertEqual(result['repaired_count'], 3)
+        self.assertFalse(history.records[0]['settled'])
+        self.assertIsNone(history.records[0]['actual_score'])
+        self.assertTrue(history.records[1]['exclude_from_calibration'])
+        self.assertEqual(history.records[1]['half_time_data_quality'], 'missing')
+        self.assertIsNone(history.records[1]['actual_half_score'])
+
+    def test_excluded_record_has_zero_calibration_weight(self):
+        weight = _calibration_sample_weight({
+            'exclude_from_calibration': True,
+            'settled': True,
+            'actual_score': '2-1',
+            'predicted_scores': {'2-1': 0.2},
+            'predicted_1x2': {'H': 0.5, 'D': 0.3, 'A': 0.2},
+            'asian': 0,
+            'total_line': 2.5,
+            'odds_snapshot': {'x': 1},
+            'result_quality': {'grade': 'high', 'source': 'live_fid'},
+        })
+
+        self.assertEqual(weight, 0.0)
+
     def test_result_quality_marks_low_information_shuju_score(self):
         quality = _assess_result_quality(
             {'match_id': 'past-1', 'match_time': '2026-06-20 11:00'},

@@ -253,6 +253,8 @@ def _is_result_quality_usable(record: Dict, min_grade: str = 'medium') -> bool:
 
 
 def _calibration_sample_weight(record: Dict) -> float:
+    if record.get('exclude_from_calibration'):
+        return 0.0
     try:
         from .sample_quality import assess_record_quality
 
@@ -1065,6 +1067,107 @@ class PredictionHistory:
         if repaired:
             self._save()
         return {'repaired': len(repaired), 'records': repaired}
+
+    def audit_prediction_history(self, repair: bool = False, minutes: int = 180) -> Dict:
+        """Audit historical records for unsafe calibration/backtest samples."""
+        issues = []
+        repaired = []
+        now = datetime.now()
+
+        def add_issue(record, code, severity='warning', detail=None):
+            item = {
+                'match_id': record.get('match_id'),
+                'home': record.get('home'),
+                'away': record.get('away'),
+                'match_time': record.get('match_time'),
+                'code': code,
+                'severity': severity,
+            }
+            if detail is not None:
+                item['detail'] = detail
+            issues.append(item)
+
+        for record in self.records:
+            actual_score = record.get('actual_score')
+            settled = bool(record.get('settled'))
+            sync_status = record.get('sync_status')
+            match_time = record.get('match_time')
+
+            is_future_settled = False
+            if (settled or sync_status == 'synced') and match_time:
+                try:
+                    is_future_settled = not _is_match_settle_due(match_time, minutes=minutes, now=now)
+                except Exception:
+                    is_future_settled = False
+
+            if is_future_settled:
+                add_issue(record, 'future_settlement', 'error')
+                if repair:
+                    for field in (
+                        'actual_score', 'actual_result', 'actual_half_score', 'actual_half_result',
+                        'actual_half_full', 'settled_at', 'evaluation', 'hit_top1', 'hit_top3',
+                        'hit_top5', 'hit_top10', 'hit_top20', 'hit_top30', 'hit_1x2',
+                        'actual_score_rank', 'actual_score_prob',
+                    ):
+                        if field in record:
+                            record[field] = None
+                    record['settled'] = False
+                    record['sync_status'] = 'pending'
+                    record['audit_repaired_at'] = now.isoformat()
+                    repaired.append({'match_id': record.get('match_id'), 'action': 'reset_future_settlement'})
+                continue
+
+            if settled and actual_score:
+                try:
+                    home_goals, away_goals = map(int, str(actual_score).split('-'))
+                    if home_goals < 0 or away_goals < 0 or home_goals > 15 or away_goals > 15:
+                        add_issue(record, 'implausible_actual_score', 'error', actual_score)
+                except Exception:
+                    add_issue(record, 'invalid_actual_score', 'error', actual_score)
+
+            result_quality = record.get('result_quality') or {}
+            grade = result_quality.get('grade')
+            if settled and not result_quality:
+                add_issue(record, 'missing_result_quality', 'warning')
+            elif grade in {'reject', 'low'}:
+                add_issue(record, f'result_quality_{grade}', 'error' if grade == 'reject' else 'warning')
+                if repair:
+                    record['exclude_from_calibration'] = True
+                    record['audit_repaired_at'] = now.isoformat()
+                    repaired.append({'match_id': record.get('match_id'), 'action': 'exclude_from_calibration'})
+
+            if record.get('half_time_data_quality') == 'invalid':
+                add_issue(record, 'invalid_half_time_data', 'warning')
+                if repair:
+                    record['actual_half_score'] = None
+                    record['actual_half_result'] = None
+                    record['actual_half_full'] = None
+                    record['half_time_data_quality'] = 'missing'
+                    record['audit_repaired_at'] = now.isoformat()
+                    repaired.append({'match_id': record.get('match_id'), 'action': 'clear_invalid_half_time'})
+
+            if settled and _calibration_sample_weight(record) <= 0:
+                add_issue(record, 'zero_calibration_weight', 'warning')
+                if repair:
+                    record['exclude_from_calibration'] = True
+                    record['audit_repaired_at'] = now.isoformat()
+
+        issue_counts = {}
+        for issue in issues:
+            issue_counts[issue['code']] = issue_counts.get(issue['code'], 0) + 1
+
+        if repair and repaired:
+            self._save()
+
+        return {
+            'checked': len(self.records),
+            'issue_count': len(issues),
+            'issue_counts': dict(sorted(issue_counts.items())),
+            'issues': issues[:50],
+            'repaired_count': len(repaired),
+            'repaired': repaired[:50],
+            'repair': repair,
+        }
     
     def _update_calibrator(self, record: Dict):
         """更新贝叶斯校准库"""
@@ -2140,6 +2243,10 @@ def get_sync_status_summary() -> Dict:
 def repair_future_settlements(minutes: int = 180) -> Dict:
     """撤销尚未到结算时间却已经回填的记录。"""
     return _global_history.repair_future_settlements(minutes=minutes)
+
+
+def audit_prediction_history(repair: bool = False, minutes: int = 180) -> Dict:
+    return _global_history.audit_prediction_history(repair=repair, minutes=minutes)
 
 
 def get_prediction_records(include_hidden: bool = False) -> List[Dict]:
