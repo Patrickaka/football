@@ -4955,12 +4955,14 @@ def predict_scores(asian, euro, total, team_strength=None, league_profile=None,
         model_weight = 0.75
         static_market_weight = prediction_policy.get('static_market_cap', 0.15)
         change_market_weight = min(0.10, prediction_policy.get('change_market_cap', 0.15))
+        market_data_quality = _assess_market_data_quality(asian, euro, total)
+        market_quality_factor = market_data_quality.get('weight_factor', 1.0)
         
         # ========== 静态盘口先验 ==========
         if sample_count >= 30 and distance <= 0.5 and market_probs and len(market_probs) >= 3:
             # 计算历史权重：样本越多、盘口越接近，权重越高
             static_cap = prediction_policy.get('static_market_cap', 0.15)
-            static_weight = min(static_cap, sample_count / 300 * static_cap)
+            static_weight = min(static_cap, sample_count / 300 * static_cap) * market_quality_factor
             static_market_weight = static_weight
             
             # 融合预测：模型概率 + 静态历史盘口概率
@@ -5001,7 +5003,7 @@ def predict_scores(asian, euro, total, team_strength=None, league_profile=None,
                 if change_sample_count >= 30:
                     # 计算变化权重：5%～15%
                     change_cap = prediction_policy.get('change_market_cap', 0.15)
-                    change_weight = min(change_cap, change_sample_count / 300 * change_cap)
+                    change_weight = min(change_cap, change_sample_count / 300 * change_cap) * market_quality_factor
                     change_market_weight = change_weight
                     
                     # 融合预测：当前概率 + 变化历史概率
@@ -5083,6 +5085,8 @@ def predict_scores(asian, euro, total, team_strength=None, league_profile=None,
         'handicap_change': asian.get('handicap_change'),
         'line_change': total.get('line_change'),
         'market_db_used': market_db_used,
+        'market_data_quality': locals().get('market_data_quality', {'score': 1.0, 'grade': 'unknown'}),
+        'market_quality_factor': locals().get('market_quality_factor', 1.0),
         'policy_adjustment': policy_adjustment,
     }
     return candidates, lam_home, lam_away, meta
@@ -5574,6 +5578,63 @@ def _goal_over_under_from_line(goal_dist: Dict[int, float], total: Dict) -> Dict
     under = sum(prob for goals, prob in goal_dist.items() if goals < line)
     push = max(0.0, 1.0 - over - under)
     return {'over': over, 'under': under, 'push': push, 'line': line}
+
+
+def _assess_market_data_quality(asian: Dict, euro: Dict, total: Dict) -> Dict:
+    score = 1.0
+    reasons = []
+
+    if asian.get('handicap') is None:
+        score -= 0.25
+        reasons.append('missing_asian_handicap')
+    if total.get('close_line') is None:
+        score -= 0.25
+        reasons.append('missing_total_line')
+    if not euro.get('close') or not all(k in euro.get('close', {}) for k in ('home', 'draw', 'away')):
+        score -= 0.25
+        reasons.append('missing_euro_close')
+
+    for market_name, market, keys in (
+        ('asian', asian, ('open_prob', 'close_prob')),
+        ('total', total, ('open_prob', 'close_prob')),
+    ):
+        for key in keys:
+            if not market.get(key):
+                score -= 0.08
+                reasons.append(f'missing_{market_name}_{key}')
+
+    try:
+        sup_a = float(asian.get('implied_supremacy', 0.0))
+        sup_e = float(euro.get('implied_supremacy', 0.0))
+        if sup_a * sup_e < 0:
+            score -= 0.18
+            reasons.append('asian_euro_direction_conflict')
+        elif abs(sup_a - sup_e) >= SUPREMACY_CONFLICT_GAP:
+            score -= 0.10
+            reasons.append('asian_euro_supremacy_gap')
+    except Exception:
+        pass
+
+    score = max(0.0, min(1.0, score))
+    if score >= 0.85:
+        grade = 'high'
+        weight_factor = 1.0
+    elif score >= 0.62:
+        grade = 'medium'
+        weight_factor = 0.75
+    elif score >= 0.40:
+        grade = 'low'
+        weight_factor = 0.45
+    else:
+        grade = 'reject'
+        weight_factor = 0.0
+
+    return {
+        'score': round(score, 3),
+        'grade': grade,
+        'weight_factor': weight_factor,
+        'reasons': reasons,
+    }
 
 
 def _pick_recommendations(candidates, asian, euro, total, n=2, pool=12, confidence=None, league_profile=None, team=None, similar_market=None):

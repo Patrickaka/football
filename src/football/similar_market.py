@@ -19,6 +19,7 @@ import csv
 import math
 from typing import Dict, List, Tuple, Optional, Any
 from collections import defaultdict
+from datetime import datetime
 
 from ..common import repositories
 
@@ -40,6 +41,39 @@ DISTANCE_THRESHOLDS = [
     1.8,   # 不太相似
     float('inf')  # 放宽限制
 ]
+
+
+def _parse_record_date(value: str) -> Optional[datetime]:
+    if not value:
+        return None
+    text = str(value).strip()
+    for fmt in ('%d/%m/%Y', '%d/%m/%y', '%Y-%m-%d', '%Y/%m/%d', '%d-%m-%Y', '%d-%m-%y'):
+        try:
+            return datetime.strptime(text, fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def _recency_weight(record: 'MatchRecord', now: datetime = None) -> float:
+    now = now or datetime.now()
+    record_date = _parse_record_date(getattr(record, 'date', ''))
+    if not record_date:
+        season = str(getattr(record, 'season', '') or '')
+        if any(season_key in season for season_key in RECENT_SEASONS):
+            return 0.90
+        return 0.70
+
+    age_days = max(0, (now - record_date).days)
+    if age_days <= 180:
+        return 1.00
+    if age_days <= 365:
+        return 0.92
+    if age_days <= 730:
+        return 0.78
+    if age_days <= 1095:
+        return 0.62
+    return 0.48
 
 # 距离权重系数
 DISTANCE_WEIGHT_FACTOR = 2.5
@@ -541,16 +575,19 @@ class SimilarMarketDB:
         same_league_count = 0
         recent_season_count = 0
         friendly_count = 0
+        recency_weight_total = 0.0
         
         for dist, record in similar:
             # 使用指数衰减权重: weight = exp(-distance * DISTANCE_WEIGHT_FACTOR)
             # 距离越近权重越高，避免不相似样本影响结果
-            weight = math.exp(-dist * DISTANCE_WEIGHT_FACTOR)
+            recency_weight = _recency_weight(record)
+            weight = math.exp(-dist * DISTANCE_WEIGHT_FACTOR) * recency_weight
             
             result_counts[record.result] += weight
             goals_dist[f"{record.goals_home}-{record.goals_away}"] += weight
             total_distance += dist
             total_weight += weight
+            recency_weight_total += recency_weight
             
             # 样本质量统计
             if league and record.league and (league in record.league or record.league in league):
@@ -569,7 +606,12 @@ class SimilarMarketDB:
         avg_distance = total_distance / len(similar)
         distance_confidence = max(0.0, 1.0 - avg_distance * 2)
         sample_confidence = min(1.0, len(similar) / 500)
-        confidence = (distance_confidence + sample_confidence) / 2
+        avg_recency_weight = recency_weight_total / len(similar) if similar else 0.0
+        confidence = (
+            distance_confidence * 0.45
+            + sample_confidence * 0.35
+            + avg_recency_weight * 0.20
+        )
         
         # 排序比分分布
         sorted_goals = sorted(goals_dist.items(), key=lambda x: -x[1])[:10]
@@ -580,9 +622,10 @@ class SimilarMarketDB:
         recent_season_ratio = recent_season_count / len(similar) if len(similar) > 0 else 0.0
         
         # 评估样本质量等级
-        quality_score = (same_league_ratio * 0.4 + 
-                        recent_season_ratio * 0.3 + 
-                        max(0, 1 - avg_distance * 2) * 0.3)
+        quality_score = (same_league_ratio * 0.35 +
+                        recent_season_ratio * 0.25 +
+                        max(0, 1 - avg_distance * 2) * 0.25 +
+                        avg_recency_weight * 0.15)
         
         if quality_score >= 0.7:
             quality_level = '高'
@@ -600,6 +643,7 @@ class SimilarMarketDB:
             'avg_distance': round(avg_distance, 4),
             'sample_count': len(similar),
             'friendly_count': friendly_count,
+            'avg_recency_weight': round(avg_recency_weight, 3),
             'level': quality_level,
             'description': quality_desc,
             'score': round(quality_score, 2)

@@ -117,6 +117,22 @@ def _has_real_half_full_sample(record: Dict) -> bool:
     )
 
 
+def _actual_goals(score: str) -> int:
+    try:
+        home, away = str(score).split('-')
+        return int(home) + int(away)
+    except Exception:
+        return 0
+
+
+def _is_draw_score(score: str) -> bool:
+    try:
+        home, away = str(score).split('-')
+        return int(home) == int(away)
+    except Exception:
+        return False
+
+
 class BacktestRunner:
     """回测运行器"""
     
@@ -503,7 +519,69 @@ class BacktestRunner:
             'by_total_line': group_by(lambda r: bucket_total_line(r.get('total_line'))),
             'by_asian_bucket': group_by(lambda r: bucket_asian(r.get('asian'))),
         }
+        report['diagnostics'] = self.get_bias_diagnostics(report)
         return report
+
+    def get_bias_diagnostics(self, report: Dict = None) -> Dict:
+        if not self.results:
+            return {}
+
+        total = len(self.results)
+        draw_actual = sum(1 for r in self.results if r.get('actual_result') == 'D') / total
+        draw_pred = sum(1 for r in self.results if _is_draw_score(r.get('top1_score'))) / total
+
+        common_scores = {'0-0', '1-0', '0-1', '1-1'}
+        common_top1 = sum(1 for r in self.results if r.get('top1_score') in common_scores) / total
+        common_actual = sum(1 for r in self.results if r.get('actual_score') in common_scores) / total
+
+        goal_rows = [r for r in self.results if r.get('has_goal_count_data')]
+        goal_bias = 0.0
+        if goal_rows:
+            over_hits = sum(1 for r in goal_rows if _actual_goals(r.get('actual_score')) >= 3) / len(goal_rows)
+            over_pred = sum(1 for r in goal_rows if r.get('hit_total') and _actual_goals(r.get('actual_score')) >= 3) / len(goal_rows)
+            goal_bias = over_pred - over_hits
+
+        weak_buckets = []
+        if report:
+            for section in ('by_total_line', 'by_asian_bucket', 'by_league'):
+                for key, metrics in report.get(section, {}).items():
+                    if not metrics or metrics.get('total', 0) < 5:
+                        continue
+                    if metrics.get('score_top3', 1.0) < 0.35 or metrics.get('goal_top2', 1.0) < 0.40:
+                        weak_buckets.append({
+                            'section': section,
+                            'bucket': key,
+                            'total': metrics.get('total'),
+                            'score_top3': round(metrics.get('score_top3', 0), 3),
+                            'goal_top2': round(metrics.get('goal_top2', 0), 3),
+                            'score_logloss': round(metrics.get('score_logloss', 0), 3),
+                        })
+
+        notes = []
+        if draw_pred - draw_actual > 0.06:
+            notes.append('draw_top1_overheated')
+        elif draw_actual - draw_pred > 0.06:
+            notes.append('draw_top1_underweighted')
+        if common_top1 - common_actual > 0.08:
+            notes.append('common_scores_overheated')
+        if abs(goal_bias) > 0.08:
+            notes.append('goal_direction_bias')
+
+        return {
+            'draw': {
+                'actual_rate': round(draw_actual, 3),
+                'top1_draw_rate': round(draw_pred, 3),
+                'bias': round(draw_pred - draw_actual, 3),
+            },
+            'common_scores': {
+                'actual_rate': round(common_actual, 3),
+                'top1_rate': round(common_top1, 3),
+                'bias': round(common_top1 - common_actual, 3),
+            },
+            'goal_direction_bias': round(goal_bias, 3),
+            'weak_buckets': sorted(weak_buckets, key=lambda item: (item['score_top3'], item['goal_top2']))[:10],
+            'notes': notes,
+        }
     
     def print_summary(self):
         """打印回测汇总"""
