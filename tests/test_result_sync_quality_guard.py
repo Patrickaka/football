@@ -2,6 +2,7 @@ import unittest
 from datetime import datetime
 
 import src.football.result_sync as result_sync
+from src.football.backtest import _objective_score, run_backtest_report
 from src.football.result_sync import (
     PredictionHistory,
     _assess_result_quality,
@@ -114,6 +115,56 @@ class ResultSyncQualityGuardTests(unittest.TestCase):
 
         self.assertIn('result_quality_low', quality['reasons'])
         self.assertFalse(quality['usable_for_calibration'])
+
+    def test_backtest_reports_goal_distribution_quality(self):
+        report = run_backtest_report([{
+            'match_id': 'goal-1',
+            'league': 'Test League',
+            'home': 'A',
+            'away': 'B',
+            'actual_score': '2-1',
+            'actual_result': 'H',
+            'predicted_scores': {'2-1': 0.20, '1-1': 0.15},
+            'predicted_1x2': {'H': 0.55, 'D': 0.25, 'A': 0.20},
+            'goal_count': {'distribution_dict': {'2': 0.25, '3': 0.50, '4': 0.25}},
+            'predicted_half_full': {'HH': 0.40, 'HD': 0.20, 'DH': 0.15},
+            'actual_half_full': 'HH',
+            'half_time_data_quality': 'real',
+            'result_quality': {'grade': 'high'},
+            'asian': -0.25,
+            'total_line': 2.5,
+        }], verbose=False)
+
+        summary = report['summary']
+        self.assertEqual(summary['goal_count_total'], 1)
+        self.assertGreater(summary['goal_logloss'], 0)
+        self.assertGreater(summary['goal_brier'], 0)
+        self.assertEqual(summary['htf_total'], 1)
+        self.assertLess(
+            _objective_score({'goal_count_total': 1, 'goal_logloss': 0.2, 'goal_brier': 0.1, 'hit_rate_total': 1.0}, 'goals'),
+            _objective_score({'goal_count_total': 1, 'goal_logloss': 1.0, 'goal_brier': 0.5, 'hit_rate_total': 0.0}, 'goals'),
+        )
+
+    def test_backtest_excludes_inferred_half_full_samples(self):
+        report = run_backtest_report([{
+            'match_id': 'htf-inferred-1',
+            'league': 'Test League',
+            'home': 'A',
+            'away': 'B',
+            'actual_score': '1-1',
+            'actual_result': 'D',
+            'predicted_scores': {'1-1': 0.20},
+            'predicted_1x2': {'H': 0.30, 'D': 0.45, 'A': 0.25},
+            'goal_count': {'distribution_dict': {2: 1.0}},
+            'predicted_half_full': {'DD': 0.60, 'HD': 0.20},
+            'actual_half_full': 'DD',
+            'half_time_data_quality': 'inferred',
+            'result_quality': {'grade': 'high'},
+            'asian': 0,
+            'total_line': 2.0,
+        }], verbose=False)
+
+        self.assertEqual(report['summary']['htf_total'], 0)
 
 
 if __name__ == '__main__':

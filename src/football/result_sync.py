@@ -1131,6 +1131,9 @@ class PredictionHistory:
         """更新半场比分统计数据库"""
         try:
             from .half_time_stats import record_half_time_result
+
+            if record.get('half_time_data_quality') != 'real' or not _is_result_quality_usable(record):
+                return
             
             league = record.get('league', '')
             total_line = record.get('total_line')

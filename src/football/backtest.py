@@ -76,6 +76,47 @@ def _normalize_1x2_probs(probs: Dict[str, float]) -> Dict[str, float]:
     return normalized
 
 
+def _normalize_goal_distribution(goal_dist) -> Dict[int, float]:
+    """Normalize a total-goals probability distribution to int goal keys."""
+    if isinstance(goal_dist, list):
+        goal_dist = {
+            item.get('goals'): item.get('probability', 0.0)
+            for item in goal_dist
+            if isinstance(item, dict) and item.get('goals') is not None
+        }
+    if not isinstance(goal_dist, dict):
+        return {}
+
+    normalized = {}
+    for goals, probability in goal_dist.items():
+        try:
+            goal_key = int(goals)
+            prob_value = max(0.0, float(probability or 0.0))
+        except (TypeError, ValueError):
+            continue
+        normalized[goal_key] = normalized.get(goal_key, 0.0) + prob_value
+
+    total = sum(normalized.values())
+    if total > 0:
+        normalized = {key: value / total for key, value in normalized.items()}
+    return normalized
+
+
+def _result_quality_is_usable(record: Dict) -> bool:
+    quality = record.get('result_quality') or {}
+    grade = quality.get('grade')
+    if not grade:
+        return True
+    return grade not in {'reject', 'low'}
+
+
+def _has_real_half_full_sample(record: Dict) -> bool:
+    return (
+        record.get('half_time_data_quality') == 'real'
+        and _result_quality_is_usable(record)
+    )
+
+
 class BacktestRunner:
     """回测运行器"""
     
@@ -134,16 +175,11 @@ class BacktestRunner:
         if not goal_dist:
             # 兼容旧格式
             goal_dist = prediction.get('goal_count', {}) or record.get('goal_count', {})
-        if isinstance(goal_dist, list):
-            goal_dist = {
-                item.get('goals'): item.get('probability', 0.0)
-                for item in goal_dist
-                if isinstance(item, dict) and item.get('goals') is not None
-            }
+        goal_dist = _normalize_goal_distribution(goal_dist)
         
         # 按概率排序，取Top2
         sorted_totals = sorted(goal_dist.items(), key=lambda x: -x[1])
-        top2_totals = [int(goals) for goals, _ in sorted_totals[:2]]
+        top2_totals = [goals for goals, _ in sorted_totals[:2]]
         hit_total = actual_goals in top2_totals
         
         # 让球方向
@@ -176,6 +212,18 @@ class BacktestRunner:
         
         # 计算胜平负 LogLoss 和 Brier
         predicted_1x2 = _normalize_1x2_probs(prediction.get('predicted_1x2') or record.get('predicted_1x2', {}))
+        goal_logloss = 0.0
+        goal_brier = 0.0
+        has_goal_count_data = bool(goal_dist)
+        if has_goal_count_data:
+            actual_goal_prob = goal_dist.get(actual_goals, 1e-15)
+            goal_logloss = -math.log(max(1e-15, min(1 - 1e-15, actual_goal_prob)))
+            all_goal_counts = set(goal_dist.keys()) | {actual_goals}
+            goal_brier = sum(
+                (goal_dist.get(goals, 0.0) - (1.0 if goals == actual_goals else 0.0)) ** 2
+                for goals in all_goal_counts
+            )
+
         result_logloss = 0.0
         result_brier = 0.0
         if actual_result and predicted_1x2:
@@ -191,12 +239,13 @@ class BacktestRunner:
         # 计算半全场指标
         predicted_htf = prediction.get('predicted_half_full') or record.get('predicted_half_full', {})
         actual_htf = record.get('actual_half_full')
+        has_htf_data = bool(predicted_htf and actual_htf and _has_real_half_full_sample(record))
         hit_htf_top1 = False
         hit_htf_top3 = False
         htf_logloss = 0.0
         htf_brier = 0.0
         
-        if predicted_htf and actual_htf:
+        if has_htf_data:
             sorted_htf = sorted(predicted_htf.items(), key=lambda x: -x[1])
             htf_top1 = sorted_htf[0][0] if sorted_htf else None
             htf_top3 = [k for k, _ in sorted_htf[:3]]
@@ -233,6 +282,9 @@ class BacktestRunner:
             'hit_handicap': hit_handicap,
             'score_logloss': score_logloss,
             'score_brier': score_brier,
+            'goal_logloss': goal_logloss,
+            'goal_brier': goal_brier,
+            'has_goal_count_data': has_goal_count_data,
             'result_logloss': result_logloss,
             'result_brier': result_brier,
             # 半全场指标
@@ -240,7 +292,7 @@ class BacktestRunner:
             'hit_htf_top3': hit_htf_top3,
             'htf_logloss': htf_logloss,
             'htf_brier': htf_brier,
-            'has_htf_data': bool(predicted_htf and actual_htf),
+            'has_htf_data': has_htf_data,
         }
         
         self.results.append(result)
@@ -257,6 +309,12 @@ class BacktestRunner:
         if hit_handicap: stats['correct_handicap'] += 1
         stats['brier_scores'].append(score_brier)
         stats['log_losses'].append(score_logloss)
+        if has_goal_count_data:
+            if 'goal_logloss' not in stats:
+                stats['goal_logloss'] = []
+                stats['goal_brier'] = []
+            stats['goal_logloss'].append(goal_logloss)
+            stats['goal_brier'].append(goal_brier)
         
         # 半全场统计（只统计有真实半场数据的比赛）
         if result['has_htf_data']:
@@ -294,6 +352,11 @@ class BacktestRunner:
         htf_top3_hits = sum(1 for r in htf_results if r['hit_htf_top3'])
         htf_brier_scores = [r['htf_brier'] for r in htf_results]
         htf_log_losses = [r['htf_logloss'] for r in htf_results]
+
+        goal_results = [r for r in self.results if r.get('has_goal_count_data')]
+        goal_total = len(goal_results)
+        goal_brier_scores = [r['goal_brier'] for r in goal_results]
+        goal_log_losses = [r['goal_logloss'] for r in goal_results]
         
         brier_scores = [r['score_brier'] for r in self.results]
         log_losses = [r['score_logloss'] for r in self.results]
@@ -311,6 +374,9 @@ class BacktestRunner:
             'hit_rate_handicap': hits_handicap / total,
             'score_brier': sum(brier_scores) / total,
             'score_logloss': sum(log_losses) / total,
+            'goal_count_total': goal_total,
+            'goal_brier': sum(goal_brier_scores) / goal_total if goal_total > 0 else 0,
+            'goal_logloss': sum(goal_log_losses) / goal_total if goal_total > 0 else 0,
             'result_brier': sum(result_brier_scores) / total,
             'result_logloss': sum(result_log_losses) / total,
             # 半全场指标
@@ -334,6 +400,15 @@ class BacktestRunner:
                     'hit_rate_1x2': stats['correct_1x2'] / t,
                     'score_brier': sum(stats['brier_scores']) / t,
                     'score_logloss': sum(stats['log_losses']) / t,
+                    'goal_count_total': len(stats.get('goal_logloss', [])),
+                    'goal_brier': (
+                        sum(stats.get('goal_brier', [])) / len(stats.get('goal_brier', []))
+                        if stats.get('goal_brier') else 0
+                    ),
+                    'goal_logloss': (
+                        sum(stats.get('goal_logloss', [])) / len(stats.get('goal_logloss', []))
+                        if stats.get('goal_logloss') else 0
+                    ),
                 }
                 # 半全场统计
                 if 'htf_top1' in stats:
@@ -386,12 +461,22 @@ class BacktestRunner:
             if total == 0:
                 return {}
             htf_rows = [r for r in rows if r['has_htf_data']]
+            goal_rows = [r for r in rows if r.get('has_goal_count_data')]
             return {
                 'total': total,
                 'score_top1': sum(1 for r in rows if r['hit_top1']) / total,
                 'score_top3': sum(1 for r in rows if r['hit_top3']) / total,
                 'score_top5': sum(1 for r in rows if r['hit_top5']) / total,
                 'goal_top2': sum(1 for r in rows if r['hit_total']) / total,
+                'goal_count_total': len(goal_rows),
+                'goal_logloss': (
+                    sum(r['goal_logloss'] for r in goal_rows) / len(goal_rows)
+                    if goal_rows else 0
+                ),
+                'goal_brier': (
+                    sum(r['goal_brier'] for r in goal_rows) / len(goal_rows)
+                    if goal_rows else 0
+                ),
                 'result_1x2': sum(1 for r in rows if r['hit_1x2']) / total,
                 'score_logloss': sum(r['score_logloss'] for r in rows) / total,
                 'score_brier': sum(r['score_brier'] for r in rows) / total,
@@ -445,6 +530,10 @@ class BacktestRunner:
         print(f"胜平负 Brier Score:   {summary['result_brier']:.4f}")
         print(f"胜平负 LogLoss:       {summary['result_logloss']:.4f}")
         print("-" * 60)
+        if summary.get('goal_count_total', 0) > 0:
+            print(f"Goal Brier Score:       {summary['goal_brier']:.4f}")
+            print(f"Goal LogLoss:           {summary['goal_logloss']:.4f}")
+            print("-" * 60)
         if summary['htf_total'] > 0:
             print(f"半全场统计 (有真实半场数据 {summary['htf_total']} 场):")
             print(f"  半全场 Top1 命中率: {summary['htf_top1_hit_rate']:.2%}")
@@ -671,6 +760,13 @@ def _objective_score(summary: Dict, objective: str = 'balanced') -> float:
 
     score_logloss = summary.get('score_logloss', 10.0) or 10.0
     score_brier = summary.get('score_brier', 10.0) or 10.0
+    goal_logloss = summary.get('goal_logloss')
+    goal_brier = summary.get('goal_brier')
+    if not summary.get('goal_count_total'):
+        goal_logloss = score_logloss
+        goal_brier = score_brier
+    goal_logloss = goal_logloss if goal_logloss is not None else score_logloss
+    goal_brier = goal_brier if goal_brier is not None else score_brier
     result_logloss = summary.get('result_logloss', 10.0) or 10.0
     top3 = summary.get('top3_hit_rate', 0.0) or 0.0
     total_hit = summary.get('hit_rate_total', 0.0) or 0.0
@@ -679,7 +775,7 @@ def _objective_score(summary: Dict, objective: str = 'balanced') -> float:
     if objective == 'score':
         return score_logloss + 0.35 * score_brier - 0.20 * top3
     if objective == 'goals':
-        return score_logloss + 0.25 * score_brier - 0.45 * total_hit
+        return goal_logloss + 0.35 * goal_brier - 0.35 * total_hit
     if objective == 'half_full':
         return score_logloss + 0.25 * result_logloss - 0.40 * htf_top3
     if objective == '1x2':
@@ -688,6 +784,8 @@ def _objective_score(summary: Dict, objective: str = 'balanced') -> float:
     return (
         score_logloss
         + 0.30 * score_brier
+        + 0.20 * goal_logloss
+        + 0.10 * goal_brier
         + 0.25 * result_logloss
         - 0.20 * top3
         - 0.25 * total_hit
