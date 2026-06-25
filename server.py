@@ -1737,11 +1737,11 @@ def _candidate_ips():
 
 
 def _start_background_sync():
-    """启动后台自动同步线程"""
+    """启动后台自动同步线程（football + KL8）"""
     try:
         from src.football.result_sync import start_background_sync
         import threading
-        
+
         # 使用后台线程启动同步（非阻塞）
         sync_thread = threading.Thread(
             target=start_background_sync,
@@ -1753,6 +1753,14 @@ def _start_background_sync():
         log.info('后台自动同步线程已启动')
     except Exception as e:
         log.warning(f"启动后台同步失败: {e}")
+
+    # 快乐8定时调度（每小时检查新期号）
+    try:
+        from src.kl8.scheduler import start_kl8_scheduler
+        start_kl8_scheduler(interval_hours=1)
+        log.info('快乐8定时调度器已启动')
+    except Exception as e:
+        log.warning(f"启动快乐8调度器失败: {e}")
 
 def main():
     server = ThreadingHTTPServer((HOST, PORT), Handler)
