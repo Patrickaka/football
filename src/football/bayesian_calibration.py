@@ -86,7 +86,8 @@ class BayesianCalibrator:
             return f"{score}_all_all_all"
     
     def add_record(self, score: str, predicted_prob: float, actual_outcome: bool,
-                   league: str = '', total_line: float = 2.5, asian: float = 0.0):
+                   league: str = '', total_line: float = 2.5, asian: float = 0.0,
+                   sample_weight: float = 1.0):
         """
         添加一条校准记录
         
@@ -99,15 +100,41 @@ class BayesianCalibrator:
             asian: 让球盘口
         """
         # 为所有层级添加记录
+        try:
+            sample_weight = max(0.0, min(1.0, float(sample_weight)))
+        except (TypeError, ValueError):
+            sample_weight = 1.0
+        if sample_weight <= 0:
+            return
+
         for level in [1, 2, 3]:
             bucket_key = self._get_bucket_key(score, league, total_line, asian, level)
             if bucket_key not in self.history:
-                self.history[bucket_key] = {'count': 0, 'success': 0, 'predicted_sum': 0.0}
+                self.history[bucket_key] = {
+                    'count': 0,
+                    'weighted_count': 0.0,
+                    'success': 0,
+                    'weighted_success': 0.0,
+                    'predicted_sum': 0.0,
+                    'weighted_predicted_sum': 0.0,
+                }
             
             self.history[bucket_key]['count'] += 1
             self.history[bucket_key]['predicted_sum'] += predicted_prob
+            self.history[bucket_key]['weighted_count'] = (
+                self.history[bucket_key].get('weighted_count', self.history[bucket_key]['count'] - 1)
+                + sample_weight
+            )
+            self.history[bucket_key]['weighted_predicted_sum'] = (
+                self.history[bucket_key].get('weighted_predicted_sum', self.history[bucket_key]['predicted_sum'] - predicted_prob)
+                + predicted_prob * sample_weight
+            )
             if actual_outcome:
                 self.history[bucket_key]['success'] += 1
+                self.history[bucket_key]['weighted_success'] = (
+                    self.history[bucket_key].get('weighted_success', self.history[bucket_key]['success'] - 1)
+                    + sample_weight
+                )
     
     def calibrate(self, score: str, predicted_prob: float,
                   league: str = '', total_line: float = 2.5, asian: float = 0.0) -> float:
@@ -133,11 +160,12 @@ class BayesianCalibrator:
         
         for level, min_samples in level_requirements:
             bucket_key = self._get_bucket_key(score, league, total_line, asian, level)
-            if bucket_key in self.history and self.history[bucket_key]['count'] >= min_samples:
+            if bucket_key in self.history and self.history[bucket_key].get('weighted_count', self.history[bucket_key]['count']) >= min_samples:
                 record = self.history[bucket_key]
-                total = record['count']
-                success = record['success']
-                avg_predicted = record['predicted_sum'] / total
+                total = record.get('weighted_count', record['count'])
+                success = record.get('weighted_success', record['success'])
+                predicted_sum = record.get('weighted_predicted_sum', record['predicted_sum'])
+                avg_predicted = predicted_sum / total
                 
                 if avg_predicted < 0.001:
                     continue

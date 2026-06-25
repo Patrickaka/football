@@ -3304,13 +3304,41 @@ function renderKL8(r) {
 
   html += `<div class="section-title">【快乐8数据分析】</div>`;
   html += `<div class="note" style="color:var(--accent2);margin-bottom:12px">⚠ 快乐8开奖具有随机性，以上分析仅为历史统计参考，不构成任何投注建议。请理性对待！</div>`;
+  html += `<div class="note" style="color:#f85149;margin-bottom:12px;font-weight:700">v6说明：所有策略默认空(未通过回测验证)，当前不输出号码推荐。ACTIVE_STRATEGIES按玩法分别配置strategy_id/权重/窗口。final_test完全冻结不参与启用判断。</div>`;
 
-  if (r.using_simulated_data) {
-    html += `<div class="note" style="color:#f85149;margin-bottom:12px">⚠ 当前使用模拟数据，请抓取真实开奖数据以获得更好的预测效果。</div>`;
+  if (r.using_simulated_data || r.error) {
+    const errMsg = r.error || '当前使用模拟数据，无法产生有效预测';
+    html += `<div class="note" style="color:#f85149;margin-bottom:12px;font-weight:700">${esc(errMsg)}</div>`;
+    html += `<div class="note" style="margin-bottom:12px">请点击下方"抓取最新开奖数据"按钮获取真实历史数据。</div>`;
   }
 
-  // 版本信息
-  html += `<div class="note" style="margin-bottom:8px">版本: ${esc(r.statistics?.version || 'unknown')} · 分析期数: ${r.statistics?.total_periods || 0}</div>`;
+  // 版本信息 + 信号状态
+  html += `<div class="note" style="margin-bottom:8px">版本: ${esc(r.statistics?.version || 'unknown')} · 分析期数: ${r.statistics?.total_periods || 0} · 信号状态: ${esc(r.statistics?.signal_status || 'unknown')}</div>`;
+
+  // 无信号状态提示
+  if (r.statistics?.signal_status === 'no_validated_signal') {
+    html += `<div class="card" style="margin-bottom:16px;background:#fff8e1;border:1px solid #ffcc02;padding:12px">`;
+    html += `<div style="font-size:14px;font-weight:700;color:#9a6700;margin-bottom:8px">暂无通过回测验证的有效特征</div>`;
+    html += `<div style="font-size:13px;color:#7a5800">当前所有特征和模型均未通过严格滚动回测验证（显著优于随机基线），因此不输出号码推荐。排名数据仅供回测对照参考，不应作为投注依据。</div>`;
+    html += `<div style="font-size:12px;color:#7a5800;margin-top:6px">可通过 /api/kl8/backtest 接口运行回测，验证各特征有效性。</div>`;
+    html += `</div>`;
+  }
+
+  // 特征开关展示
+  if (r.statistics?.feature_config) {
+    html += `<div class="card" style="margin-bottom:12px;padding:10px 12px">`;
+    html += `<div style="font-size:13px;font-weight:600;margin-bottom:6px">特征开关状态</div>`;
+    html += `<div style="display:flex;flex-wrap:wrap;gap:6px;font-size:11px">`;
+    const fc = r.statistics.feature_config;
+    for (const [k, v] of Object.entries(fc)) {
+      const enabled = v.enabled;
+      const badge = enabled ? 'ON' : 'OFF';
+      const badgeColor = enabled ? '#2ea043' : '#8b949e';
+      html += `<span style="background:var(--card);padding:3px 8px;border-radius:4px;white-space:nowrap">${esc(k)} <span style="color:${badgeColor};font-weight:700">${badge}</span> w=${v.weight}</span>`;
+    }
+    html += `</div>`;
+    html += `</div>`;
+  }
 
   // 最近开奖结果
   if (r.recent_results && r.recent_results.length > 0) {
@@ -3334,42 +3362,49 @@ function renderKL8(r) {
     html += `</div>`;
   }
 
-  // 选3/4/5/6/7推荐号码
+  // 选3/4/5/6/7推荐号码 — 有信号时才显示
+  const hasSignal = r.statistics?.is_prediction_ready === true;
   const selectTypes = [3, 4, 5, 6, 7];
-  html += `<div class="card" style="margin-bottom:16px">`;
-  html += `<div class="section-title" style="font-size:15px;margin-bottom:12px">推荐号码</div>`;
-  html += `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px">`;
+  if (hasSignal) {
+    html += `<div class="card" style="margin-bottom:16px">`;
+    html += `<div class="section-title" style="font-size:15px;margin-bottom:12px">推荐号码</div>`;
+    html += `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px">`;
 
-  for (const st of selectTypes) {
-    const key = `select_${st}`;
-    const sel = r[key];
-    if (!sel) continue;
+    for (const st of selectTypes) {
+      const key = `select_${st}`;
+      const sel = r[key];
+      if (!sel || !sel.numbers || sel.numbers.length === 0) continue;
 
-    html += `<div class="kl8-select-card">`;
-    html += `<div class="kl8-select-title">🎱 ${esc(sel.desc)} — 推荐${sel.pick}个号码</div>`;
-    html += `<div class="kl8-numbers-row">`;
-    for (const n of sel.numbers) {
-      html += `<span class="kl8-ball highlight-ball">${String(n).padStart(2,'0')}</span>`;
-    }
-    html += `</div>`;
-
-    // 候选号码(更多参考)
-    if (sel.candidates && sel.candidates.length > sel.pick) {
-      html += `<div style="margin-top:8px;font-size:12px;color:var(--muted)">候选池: `;
-      for (const item of sel.candidates.slice(0, 10)) {
-        const num = typeof item === 'object' ? item[0] : item;
-        html += `<span class="kl8-ball small-ball">${String(num).padStart(2,'0')}</span> `;
+      html += `<div class="kl8-select-card">`;
+      html += `<div class="kl8-select-title">🎱 ${esc(sel.desc)} — 推荐${sel.pick}个号码</div>`;
+      // v6: 显示strategy_id
+      if (sel.strategy_id) {
+        html += `<div style="font-size:11px;color:#8b949e;margin-bottom:4px">策略: ${esc(sel.strategy_id)}</div>`;
+      }
+      html += `<div class="kl8-numbers-row">`;
+      for (const n of sel.numbers) {
+        html += `<span class="kl8-ball highlight-ball">${String(n).padStart(2,'0')}</span>`;
       }
       html += `</div>`;
+
+      // 候选号码(更多参考)
+      if (sel.candidates && sel.candidates.length > sel.pick) {
+        html += `<div style="margin-top:8px;font-size:12px;color:var(--muted)">候选池: `;
+        for (const item of sel.candidates.slice(0, 10)) {
+          const num = typeof item === 'object' ? item[0] : item;
+          html += `<span class="kl8-ball small-ball">${String(num).padStart(2,'0')}</span> `;
+        }
+        html += `</div>`;
+      }
+
+      html += `</div>`;
     }
-
-    html += `</div>`;
+    html += `</div></div>`;
   }
-  html += `</div></div>`;
 
-  // 选5复式7码
+  // 选5复式7码 — 有信号时才显示
   const fushi = r.fu_shi_7;
-  if (fushi) {
+  if (fushi && hasSignal && fushi.top7_numbers && fushi.top7_numbers.length > 0) {
     html += `<div class="card" style="margin-bottom:16px">`;
     html += `<div class="kl8-fushi-header">🎱 选5复式 — 7码复式 (共${fushi.total_combinations}组)</div>`;
 
@@ -3399,13 +3434,13 @@ function renderKL8(r) {
   // 号码排名Top20
   if (r.ranking && r.ranking.length > 0) {
     html += `<div class="card" style="margin-bottom:16px">`;
-    html += `<div class="section-title" style="font-size:14px;margin-bottom:8px">号码评分排名 (Top20)</div>`;
+    html += `<div class="section-title" style="font-size:14px;margin-bottom:8px">号码排名 (Top20) — 启发式排序值，非开出概率</div>`;
     html += `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:6px">`;
     for (const item of r.ranking) {
-      const score = item.score?.toFixed(3) || '0';
+      const rankingScore = item.ranking_score?.toFixed(3) || item.score?.toFixed(3) || '0';
       html += `<div style="display:flex;align-items:center;gap:8px;padding:4px 8px;background:var(--card);border-radius:6px;font-size:13px">`;
       html += `<span class="kl8-ball" style="width:28px;height:28px;font-size:11px">${String(item.num).padStart(2,'0')}</span>`;
-      html += `<span style="color:var(--muted)">得分: ${score}</span>`;
+      html += `<span style="color:var(--muted)">排序: ${rankingScore}</span>`;
       html += `</div>`;
     }
     html += `</div>`;

@@ -87,7 +87,8 @@ class GoalCountCalibrator:
                       predicted_goal_dist: Dict[int, float],
                       actual_total_goals: int,
                       expected_total_goals: float,
-                      asian: float = 0.0):
+                      asian: float = 0.0,
+                      sample_weight: float = 1.0):
         """
         记录赛后结果
         
@@ -99,6 +100,13 @@ class GoalCountCalibrator:
             expected_total_goals: 模型期望总进球数
             asian: 亚盘让球
         """
+        try:
+            sample_weight = max(0.0, min(1.0, float(sample_weight)))
+        except (TypeError, ValueError):
+            sample_weight = 1.0
+        if sample_weight <= 0:
+            return
+
         bucket_key = self._get_bucket_key(league, total_line, asian, expected_total_goals)
         
         if bucket_key not in self.db:
@@ -108,15 +116,22 @@ class GoalCountCalibrator:
                 'asian_bucket': round(asian * 2) / 2,
                 'expected_total_bucket': round(expected_total_goals * 2) / 2,
                 'sample_count': 0,
+                'weighted_sample_count': 0.0,
                 'predicted_distributions': [],  # 存储历史预测分布用于分析
                 'actual_goals': [],             # 存储实际进球数
+                'sample_weights': [],
                 'calibration_factors': {},      # 预计算的校准因子
             }
         
         # 添加记录
         self.db[bucket_key]['sample_count'] += 1
+        self.db[bucket_key]['weighted_sample_count'] = self.db[bucket_key].get(
+            'weighted_sample_count',
+            self.db[bucket_key]['sample_count'] - 1,
+        ) + sample_weight
         self.db[bucket_key]['predicted_distributions'].append(predicted_goal_dist)
         self.db[bucket_key]['actual_goals'].append(actual_total_goals)
+        self.db[bucket_key].setdefault('sample_weights', []).append(sample_weight)
         
         # 更新校准因子
         self._update_calibration_factors(bucket_key)
@@ -128,7 +143,7 @@ class GoalCountCalibrator:
         计算每个进球数的实际频率与预测频率的比值，作为校准因子。
         """
         bucket = self.db[bucket_key]
-        sample_count = bucket['sample_count']
+        sample_count = bucket.get('weighted_sample_count', bucket['sample_count'])
         
         if sample_count < 10:
             # 样本不足，不计算校准因子
@@ -136,9 +151,13 @@ class GoalCountCalibrator:
             return
         
         # 计算实际频率分布
-        actual_dist = defaultdict(int)
-        for goals in bucket['actual_goals']:
-            actual_dist[goals] += 1
+        weights = bucket.get('sample_weights') or [1.0] * len(bucket['actual_goals'])
+        if len(weights) < len(bucket['actual_goals']):
+            weights = weights + [1.0] * (len(bucket['actual_goals']) - len(weights))
+
+        actual_dist = defaultdict(float)
+        for goals, weight in zip(bucket['actual_goals'], weights):
+            actual_dist[goals] += weight
         
         # 归一化
         actual_total = sum(actual_dist.values())
@@ -146,9 +165,9 @@ class GoalCountCalibrator:
         
         # 计算平均预测分布
         pred_dist = defaultdict(float)
-        for dist in bucket['predicted_distributions']:
+        for dist, weight in zip(bucket['predicted_distributions'], weights):
             for goals, prob in dist.items():
-                pred_dist[goals] += prob
+                pred_dist[goals] += prob * weight
         
         # 归一化
         pred_total = sum(pred_dist.values())
@@ -193,7 +212,7 @@ class GoalCountCalibrator:
         
         if bucket_key in self.db:
             factors = self.db[bucket_key].get('calibration_factors', {})
-            if factors and self.db[bucket_key].get('sample_count', 0) >= 10:
+            if factors and self.db[bucket_key].get('weighted_sample_count', self.db[bucket_key].get('sample_count', 0)) >= 10:
                 return factors
         
         # 如果没有匹配的分桶或样本不足，返回空字典（不校准）
@@ -356,7 +375,8 @@ def record_goal_count_result(league: str, total_line: float,
                              predicted_goal_dist: Dict[int, float],
                              actual_total_goals: int,
                              expected_total_goals: float,
-                             asian: float = 0.0):
+                             asian: float = 0.0,
+                             sample_weight: float = 1.0):
     """
     便捷函数：记录赛后结果
     
@@ -370,7 +390,7 @@ def record_goal_count_result(league: str, total_line: float,
     """
     calibrator = GoalCountCalibrator()
     calibrator.record_result(league, total_line, predicted_goal_dist,
-                            actual_total_goals, expected_total_goals, asian)
+                            actual_total_goals, expected_total_goals, asian, sample_weight)
     calibrator.save()
 
 

@@ -252,6 +252,26 @@ def _is_result_quality_usable(record: Dict, min_grade: str = 'medium') -> bool:
     return rank.get(quality.get('grade'), 0) >= rank.get(min_grade, 2)
 
 
+def _calibration_sample_weight(record: Dict) -> float:
+    try:
+        from .sample_quality import assess_record_quality
+
+        quality = assess_record_quality(record)
+        return max(0.0, min(1.0, float(quality.get('calibration_weight', 0.0))))
+    except Exception:
+        result_quality = record.get('result_quality') or {}
+        if result_quality.get('grade') in {'reject', 'low'}:
+            return 0.0
+        source = result_quality.get('source')
+        if source == 'live_fid':
+            return 1.0
+        if source == 'live_team':
+            return 0.85
+        if source == 'shuju':
+            return 0.60
+        return 0.70
+
+
 def fuse_probabilities(base_probs: Dict[str, float], ml_probs: Dict[str, float], 
                       ml_weight: float = 0.05) -> Dict[str, float]:
     """
@@ -1057,11 +1077,14 @@ class PredictionHistory:
             league = record.get('league', '')
             total_line = record.get('total_line')
             asian = record.get('asian')
+            sample_weight = _calibration_sample_weight(record)
+            if sample_weight <= 0:
+                return
             
             for score, prob in predicted_scores.items():
                 is_correct = (score == actual_score)
                 # 添加市场环境信息
-                calibrator.add_record(score, prob, is_correct, league, total_line or 2.5, asian or 0.0)
+                calibrator.add_record(score, prob, is_correct, league, total_line or 2.5, asian or 0.0, sample_weight)
             
             calibrator.save()
             log.debug(f"已更新贝叶斯校准库")
@@ -1164,7 +1187,8 @@ class PredictionHistory:
                         half_home=half_h,
                         half_away=half_a,
                         full_home=full_h,
-                        full_away=full_a
+                        full_away=full_a,
+                        sample_weight=_calibration_sample_weight(record)
                     )
                     log.debug(f"已更新半场统计数据库")
                 except Exception as e:

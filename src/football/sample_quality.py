@@ -38,6 +38,7 @@ def assess_record_quality(record: Dict) -> Dict:
     """Return a conservative quality assessment for one historical record."""
     reasons: List[str] = []
     score = 1.0
+    source_weight = 0.70
 
     if not record.get('settled') and not record.get('actual_score'):
         reasons.append('unsettled')
@@ -62,6 +63,15 @@ def assess_record_quality(record: Dict) -> Dict:
     result_quality = record.get('result_quality') or {}
     result_grade = result_quality.get('grade')
     result_quality_usable = True
+    result_source = result_quality.get('source') or record.get('result_source') or record.get('sync_source')
+    if result_source == 'live_fid':
+        source_weight = 1.0
+    elif result_source == 'live_team':
+        source_weight = 0.85
+    elif result_source == 'shuju':
+        source_weight = 0.60
+    elif result_source:
+        source_weight = 0.70
     if result_grade in {'reject', 'low'}:
         reasons.append(f"result_quality_{result_grade}")
         score -= 0.35 if result_grade == 'low' else 0.65
@@ -101,11 +111,19 @@ def assess_record_quality(record: Dict) -> Dict:
     else:
         grade = 'reject'
 
+    usable_for_calibration = GRADE_RANK[grade] >= GRADE_RANK['medium'] and result_quality_usable
+    calibration_weight = 0.0
+    if usable_for_calibration:
+        grade_weight = {'high': 1.0, 'medium': 0.75}.get(grade, 0.0)
+        calibration_weight = max(0.0, min(1.0, grade_weight * source_weight))
+
     return {
         'score': round(score, 3),
         'grade': grade,
         'reasons': reasons,
-        'usable_for_calibration': GRADE_RANK[grade] >= GRADE_RANK['medium'] and result_quality_usable,
+        'usable_for_calibration': usable_for_calibration,
+        'calibration_weight': round(calibration_weight, 3),
+        'source_weight': round(source_weight, 3),
     }
 
 

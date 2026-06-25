@@ -5580,6 +5580,264 @@ def _goal_over_under_from_line(goal_dist: Dict[int, float], total: Dict) -> Dict
     return {'over': over, 'under': under, 'push': push, 'line': line}
 
 
+def _adjust_goal_dist_with_total_movement(goal_dist: Dict[int, float], total: Dict) -> Tuple[Dict[int, float], Dict]:
+    """Softly tilt goal-count distribution with O/U line and water movement."""
+    normalized = _normalize_goal_dist(goal_dist)
+    if not normalized:
+        return goal_dist, {'applied': False, 'reason': 'empty_distribution'}
+
+    total = total or {}
+    try:
+        open_line = float(total.get('open_line'))
+        close_line = float(get_close_total_line(total))
+    except (TypeError, ValueError):
+        open_line = None
+        close_line = None
+
+    open_prob = total.get('open_prob') or {}
+    close_prob = total.get('close_prob') or {}
+    try:
+        over_delta = float(close_prob.get('over', 0.0)) - float(open_prob.get('over', 0.0))
+    except (TypeError, ValueError):
+        over_delta = 0.0
+
+    line_delta = 0.0
+    if open_line is not None and close_line is not None:
+        line_delta = close_line - open_line
+
+    if abs(line_delta) < 0.01 and abs(over_delta) < 0.015:
+        return normalized, {
+            'applied': False,
+            'reason': 'stable_total_market',
+            'line_delta': round(line_delta, 3),
+            'over_delta': round(over_delta, 3),
+        }
+
+    line_signal = max(-1.0, min(1.0, line_delta / 0.5))
+    water_signal = max(-1.0, min(1.0, over_delta / 0.08))
+    conflict = line_signal * water_signal < -0.15
+
+    signal = (0.60 * line_signal) + (0.40 * water_signal)
+    if conflict:
+        signal *= 0.35
+
+    theta = max(-0.10, min(0.10, signal * 0.08))
+    if abs(theta) < 0.003:
+        return normalized, {
+            'applied': False,
+            'reason': 'weak_or_conflicted_signal',
+            'line_delta': round(line_delta, 3),
+            'over_delta': round(over_delta, 3),
+            'conflict': conflict,
+        }
+
+    expected_before = sum(goals * prob for goals, prob in normalized.items())
+    tilted = {goals: prob * math.exp(theta * (goals - expected_before)) for goals, prob in normalized.items()}
+    total_prob = sum(tilted.values())
+    if total_prob <= 0:
+        return normalized, {'applied': False, 'reason': 'zero_tilted_total'}
+
+    adjusted = {goals: prob / total_prob for goals, prob in tilted.items()}
+    expected_after = sum(goals * prob for goals, prob in adjusted.items())
+    return adjusted, {
+        'applied': True,
+        'theta': round(theta, 4),
+        'line_delta': round(line_delta, 3),
+        'over_delta': round(over_delta, 3),
+        'direction': 'over' if theta > 0 else 'under',
+        'conflict': conflict,
+        'expected_before': expected_before,
+        'expected_after': expected_after,
+    }
+
+
+def _score_result_code(h: int, a: int) -> str:
+    if h > a:
+        return 'H'
+    if h < a:
+        return 'A'
+    return 'D'
+
+
+def _candidate_result_support(candidates, limit: int = 8) -> Dict[str, float]:
+    support = {'H': 0.0, 'D': 0.0, 'A': 0.0}
+    for item in candidates[:limit]:
+        if len(item) == 2 and isinstance(item[0], tuple):
+            (h, a), prob = item
+        elif len(item) == 3:
+            h, a, prob = item
+        else:
+            continue
+        support[_score_result_code(h, a)] += max(0.0, float(prob or 0.0))
+    total_prob = sum(support.values())
+    if total_prob > 0:
+        support = {key: value / total_prob for key, value in support.items()}
+    return support
+
+
+def _adjust_half_full_with_score_context(half_full_time: Dict, candidates, strength: float = 0.35) -> Dict:
+    """Softly align half/full-time final direction with the score candidate distribution."""
+    if not half_full_time or not isinstance(half_full_time, dict):
+        return half_full_time
+
+    support = _candidate_result_support(candidates)
+    if not support or max(support.values()) <= 0:
+        return half_full_time
+
+    rows = half_full_time.get('probs')
+    if not isinstance(rows, list):
+        return half_full_time
+
+    adjusted_rows = []
+    adjusted_dist = {}
+    for row in rows:
+        code = row.get('code')
+        if not code or len(code) != 2:
+            adjusted_rows.append(row)
+            continue
+        final_result = code[1]
+        factor = 1.0 - strength + strength * (support.get(final_result, 0.0) * 3.0)
+        factor = max(0.65, min(1.25, factor))
+        raw_prob = max(0.0, float(row.get('raw_prob', 0.0))) * factor
+        new_row = row.copy()
+        new_row['raw_prob'] = raw_prob
+        adjusted_rows.append(new_row)
+        adjusted_dist[code] = raw_prob
+
+    total_prob = sum(row.get('raw_prob', 0.0) for row in adjusted_rows)
+    if total_prob <= 0:
+        return half_full_time
+
+    for row in adjusted_rows:
+        raw_prob = row.get('raw_prob', 0.0) / total_prob
+        row['raw_prob'] = raw_prob
+        row['probability'] = round(raw_prob * 100, 1)
+
+    adjusted_rows.sort(key=lambda item: -item.get('raw_prob', 0.0))
+    adjusted = half_full_time.copy()
+    adjusted['probs'] = adjusted_rows
+    adjusted['distribution'] = {
+        row['code']: row['raw_prob']
+        for row in adjusted_rows
+        if row.get('code')
+    }
+    adjusted['score_context'] = {
+        'applied': True,
+        'support': support,
+        'strength': strength,
+    }
+    return adjusted
+
+
+def _adjust_half_full_with_market_context(half_full_time: Dict,
+                                          asian: Dict = None,
+                                          total: Dict = None,
+                                          strength: float = 0.18) -> Dict:
+    """Softly align half/full-time paths with handicap depth and total-goal tempo."""
+    if not half_full_time or not isinstance(half_full_time, dict):
+        return half_full_time
+
+    rows = half_full_time.get('probs')
+    if not isinstance(rows, list):
+        return half_full_time
+
+    asian = asian or {}
+    total = total or {}
+    try:
+        handicap = float(asian.get('handicap') or 0.0)
+    except (TypeError, ValueError):
+        handicap = 0.0
+    favor = asian.get('favor') or ('home' if handicap > 0 else 'away' if handicap < 0 else 'even')
+    try:
+        total_line = float(get_close_total_line(total))
+    except (TypeError, ValueError):
+        total_line = 2.5
+
+    open_prob = total.get('open_prob') or {}
+    close_prob = total.get('close_prob') or {}
+    try:
+        over_delta = float(close_prob.get('over', 0.0)) - float(open_prob.get('over', 0.0))
+    except (TypeError, ValueError):
+        over_delta = 0.0
+
+    tempo = 0.0
+    if total_line >= 3.0:
+        tempo += 0.7
+    elif total_line <= 2.25:
+        tempo -= 0.7
+    tempo += max(-0.5, min(0.5, over_delta / 0.08))
+    tempo = max(-1.0, min(1.0, tempo))
+
+    depth = abs(handicap)
+    adjusted_rows = []
+    for row in rows:
+        code = row.get('code')
+        if not code or len(code) != 2:
+            adjusted_rows.append(row)
+            continue
+
+        half_res, full_res = code[0], code[1]
+        factor = 1.0
+
+        if tempo > 0:
+            if half_res != 'D':
+                factor *= 1.0 + strength * 0.55 * tempo
+            if code in {'HH', 'AA'}:
+                factor *= 1.0 + strength * 0.35 * tempo
+            if code == 'DD':
+                factor *= 1.0 - strength * 0.45 * tempo
+        elif tempo < 0:
+            slow = abs(tempo)
+            if half_res == 'D':
+                factor *= 1.0 + strength * 0.55 * slow
+            if code in {'DD', 'HD', 'AD'}:
+                factor *= 1.0 + strength * 0.35 * slow
+            if code in {'HA', 'AH'}:
+                factor *= 1.0 - strength * 0.35 * slow
+
+        if depth >= 1.0 and favor in {'home', 'away'}:
+            fav_res = 'H' if favor == 'home' else 'A'
+            if code == f'{fav_res}{fav_res}':
+                factor *= 1.0 + strength * min(1.0, depth / 1.5)
+            elif full_res != fav_res and half_res != 'D':
+                factor *= 1.0 - strength * 0.45
+        elif depth <= 0.25:
+            if half_res == 'D':
+                factor *= 1.0 + strength * 0.35
+            if full_res == 'D':
+                factor *= 1.0 + strength * 0.25
+
+        new_row = row.copy()
+        new_row['raw_prob'] = max(0.0, float(row.get('raw_prob', 0.0))) * max(0.65, min(1.35, factor))
+        adjusted_rows.append(new_row)
+
+    total_prob = sum(row.get('raw_prob', 0.0) for row in adjusted_rows)
+    if total_prob <= 0:
+        return half_full_time
+
+    for row in adjusted_rows:
+        raw_prob = row.get('raw_prob', 0.0) / total_prob
+        row['raw_prob'] = raw_prob
+        row['probability'] = round(raw_prob * 100, 1)
+    adjusted_rows.sort(key=lambda item: -item.get('raw_prob', 0.0))
+
+    adjusted = half_full_time.copy()
+    adjusted['probs'] = adjusted_rows
+    adjusted['distribution'] = {
+        row['code']: row['raw_prob']
+        for row in adjusted_rows
+        if row.get('code')
+    }
+    adjusted['market_context'] = {
+        'applied': True,
+        'tempo': round(tempo, 3),
+        'handicap': handicap,
+        'favor': favor,
+        'strength': strength,
+    }
+    return adjusted
+
+
 def _assess_market_data_quality(asian: Dict, euro: Dict, total: Dict) -> Dict:
     score = 1.0
     reasons = []
@@ -5870,12 +6128,89 @@ def _pick_recommendations(candidates, asian, euro, total, n=2, pool=12, confiden
 
     # 转换为原有格式 (h, a, prob)
     # 返回推荐列表和价值投注列表（分开输出）
+    picked = _diversify_score_recommendations(picked, scored, n, favor, upset_count, max_upsets)
     recommendations = [(h, a, prob) for h, a, prob, _, _, _ in picked]
     
     # 对价值投注按 EV 排序
     value_bets.sort(key=lambda x: -x.get('ev', 0))
     
     return recommendations, value_bets
+
+
+def _diversify_score_recommendations(picked, scored, n: int, favor: str, upset_count: int, max_upsets: int):
+    """Avoid returning recommendations that all tell the same score story."""
+    if len(picked) < 3:
+        return picked
+
+    def result_code(h, a):
+        return 'H' if h > a else 'A' if h < a else 'D'
+
+    def goal_band(h, a):
+        goals = h + a
+        if goals <= 1:
+            return 'low'
+        if goals <= 3:
+            return 'mid'
+        return 'high'
+
+    def replace_last_matching(items, predicate, replacement):
+        diversified = items[:]
+        for idx in range(len(diversified) - 1, 0, -1):
+            if predicate(diversified[idx]):
+                diversified[idx] = replacement
+                return diversified[:n]
+        return items
+
+    pattern_counts = {}
+    for _, _, _, _, pattern, _ in picked:
+        pattern_counts[pattern] = pattern_counts.get(pattern, 0) + 1
+
+    seen = {(h, a) for h, a, *_ in picked}
+    min_prob = min(prob for _, _, prob, *_ in picked)
+
+    overloaded_pattern = next((pattern for pattern, count in pattern_counts.items() if count >= 3), None)
+    picked_results = {result_code(h, a) for h, a, *_ in picked}
+    picked_bands = {goal_band(h, a) for h, a, *_ in picked}
+
+    target = None
+    if overloaded_pattern:
+        target = ('pattern', overloaded_pattern)
+    elif len(picked_results) == 1:
+        target = ('result', next(iter(picked_results)))
+    elif len(picked_bands) == 1:
+        target = ('goal_band', next(iter(picked_bands)))
+
+    if not target:
+        return picked
+
+    for (h, a), prob, _, _, cluster, _ in scored:
+        if (h, a) in seen:
+            continue
+        if prob < min_prob * 0.65:
+            continue
+        pattern = score_pattern(h, a)
+        candidate_result = result_code(h, a)
+        candidate_band = goal_band(h, a)
+        if target[0] == 'pattern' and pattern == target[1]:
+            continue
+        if target[0] == 'result' and candidate_result == target[1]:
+            continue
+        if target[0] == 'goal_band' and candidate_band == target[1]:
+            continue
+
+        is_upset = (favor == 'home' and h < a) or (favor == 'away' and h > a)
+        if is_upset and upset_count >= max_upsets:
+            continue
+        replacement = (h, a, prob, cluster, pattern, 'diversity')
+        if target[0] == 'pattern':
+            return replace_last_matching(picked, lambda item: item[4] == target[1], replacement)
+        if target[0] == 'result':
+            return replace_last_matching(picked, lambda item: result_code(item[0], item[1]) == target[1], replacement)
+        if target[0] == 'goal_band':
+            return replace_last_matching(picked, lambda item: goal_band(item[0], item[1]) == target[1], replacement)
+        break
+
+    return picked
 
 
 def analyze_match(match, force_refresh=False):
@@ -6331,6 +6666,8 @@ def analyze_match(match, force_refresh=False):
     half_full_time = calculate_half_full_time_probs(
         candidates, team, asian, total, home_team=home, away_team=away, league=match.get('league', '')
     )
+    half_full_time = _adjust_half_full_with_score_context(half_full_time, candidates)
+    half_full_time = _adjust_half_full_with_market_context(half_full_time, asian, total)
 
     # 新增：进球数推荐（结合历史盘口数据 + 校准器）
     goal_count_result = None
@@ -6378,16 +6715,20 @@ def analyze_match(match, force_refresh=False):
             
             # 保存校准后的分布
             calibrated_dist, goal_line_anchor = _anchor_goal_dist_to_total_line(calibrated_dist, total)
+            calibrated_dist, goal_movement_adjustment = _adjust_goal_dist_with_total_movement(calibrated_dist, total)
             goal_dist_after_calibration = calibrated_dist
             
             # 更新结果中的分布
             goal_count_result['distribution_dict'] = calibrated_dist
             goal_count_result['line_anchor'] = goal_line_anchor
+            goal_count_result['movement_adjustment'] = goal_movement_adjustment
             
             # 重新计算推荐（基于校准后的分布）
             from .ml import recommend_goal_counts_from_dist, get_goal_count_distribution_from_dist
             high_risk = goal_count_result.get('sample_info', {}).get('quality', 'none') in ['low', 'none']
             low_quality_sample = goal_count_result.get('sample_info', {}).get('quality', 'none') in ['low', 'none']
+            if goal_movement_adjustment.get('conflict'):
+                high_risk = True
             
             goal_count_result['recommendations'] = recommend_goal_counts_from_dist(
                 calibrated_dist, top_n=3, high_risk=high_risk, low_quality_sample=low_quality_sample

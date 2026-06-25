@@ -30,7 +30,16 @@ from src.lottery3d.ml import fetch_data, predict_current
 from src.pailie5 import get_pailie5_analyzer, run_prediction as pailie5_run_prediction
 from src.lottery import get_lottery_analyzer, run_prediction as lottery_run_prediction
 from src.lottery.ml import predict_with_ml, clear_ml_cache
-from src.kl8 import get_kl8_analyzer, run_prediction as kl8_run_prediction, clear_cache as kl8_clear_cache
+from src.kl8 import (
+    get_kl8_analyzer, run_prediction as kl8_run_prediction,
+    clear_cache as kl8_clear_cache, list_prediction_snapshots as kl8_list_snapshots,
+    has_active_signal, is_prediction_ready as kl8_is_prediction_ready,
+    KL8RollingBacktest, load_prize_table as kl8_load_prize_table,
+    check_data_integrity as kl8_check_data_integrity,
+    list_conflict_queue as kl8_list_conflict_queue,
+    ACTIVE_STRATEGIES, KL8_PREDICTOR_VERSION,
+    benjamini_hochberg_fdr, bonferroni_correction,
+)
 from src.common.logger import setup_logger
 
 # 回测模块（延迟导入以加速启动）
@@ -261,6 +270,18 @@ class Handler(BaseHTTPRequestHandler):
             self._serve_json(self._kl8_refresh_payload())
         elif path == '/api/kl8/fetch':
             self._serve_json(self._kl8_fetch_payload())
+        elif path == '/api/kl8/snapshots':
+            self._serve_json(self._kl8_snapshots_payload())
+        elif path == '/api/kl8/settle':
+            params = parse_qs(route.query)
+            self._serve_json(self._kl8_settle_payload(params))
+        elif path == '/api/kl8/backtest':
+            params = parse_qs(route.query)
+            self._serve_json(self._kl8_backtest_payload(params))
+        elif path == '/api/kl8/integrity':
+            self._serve_json(self._kl8_integrity_payload())
+        elif path == '/api/kl8/conflicts':
+            self._serve_json(self._kl8_conflicts_payload())
         elif path == '/api/calibrate':
             params = parse_qs(route.query)
             self._serve_json(self._calibrate_payload(params))
@@ -1270,11 +1291,12 @@ class Handler(BaseHTTPRequestHandler):
             if not data:
                 return {'success': False, 'message': '网络抓取失败'}
 
-            # 保存到本地
-            save_kl8_data(data)
+            # v2: 合并保存（不是覆盖），save_kl8_data内部会调clear_cache()
+            save_ok = save_kl8_data(data)
+            if not save_ok:
+                return {'success': False, 'message': '数据量不足，不允许覆盖原历史'}
 
-            # 清除缓存并重新预测
-            kl8_clear_cache()
+            # 重新预测（clear_cache已在save内部完成）
             _CACHE['kl8']['data'] = None
             _CACHE['kl8']['timestamp'] = 0
 
@@ -1291,6 +1313,77 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:
             self._log.error('快乐8抓取失败', exc_info=True)
             return {'error': '快乐8抓取失败'}
+
+    def _kl8_snapshots_payload(self):
+        """快乐8预测快照列表"""
+        try:
+            snapshots = kl8_list_snapshots()
+            return {'result': {'snapshots': snapshots, 'count': len(snapshots)}}
+        except Exception:
+            self._log.error('快乐8快照列表失败', exc_info=True)
+            return {'error': '快乐8快照列表失败'}
+
+    def _kl8_settle_payload(self, params):
+        """快乐8赛后结算 -- v4: 给结算单独保存(不复写原始快照), 增加期号校验"""
+        try:
+            snapshot_file = (params.get('snapshot') or [''])[0]
+            actual_issue = (params.get('issue') or [''])[0]
+            numbers_str = (params.get('numbers') or [''])[0]
+            if not snapshot_file or not actual_issue or not numbers_str:
+                return {'error': '缺少snapshot、issue和numbers参数'}
+
+            # 解析号码
+            try:
+                actual_numbers = [int(x.strip()) for x in numbers_str.split(',') if x.strip()]
+            except ValueError:
+                return {'error': '号码格式错误，应为逗号分隔的1-80整数'}
+
+            analyzer = get_kl8_analyzer()
+            result = analyzer.settle_prediction(snapshot_file, actual_issue, actual_numbers)
+            return {'result': result}
+        except Exception as e:
+            self._log.error('快乐8结算失败', exc_info=True)
+            return {'error': f'结算失败: {str(e)}'}
+
+    def _kl8_backtest_payload(self, params):
+        """快乐8滚动回测（v5: 最低300期OOS，默认500）"""
+        try:
+            test_periods_str = (params.get('periods') or ['500'])[0]
+            test_periods = int(test_periods_str)
+            if test_periods < 300:
+                return {'error': f'回测期数最低300期（v5要求BACKTEST_MIN_OOS={300}），当前输入={test_periods}'}
+
+            analyzer = get_kl8_analyzer()
+            if not analyzer.history_data:
+                return {'error': '历史数据不足，无法回测'}
+
+            bt = KL8RollingBacktest(analyzer)
+            result = bt.run_full_backtest(test_periods=test_periods)
+            return {'result': result}
+        except Exception as e:
+            self._log.error('快乐8回测失败', exc_info=True)
+            return {'error': f'回测失败: {str(e)}'}
+
+    def _kl8_integrity_payload(self):
+        """快乐8数据完整性检查"""
+        try:
+            analyzer = get_kl8_analyzer()
+            if not analyzer.history_data:
+                return {'error': '无历史数据'}
+            integrity = kl8_check_data_integrity(analyzer.history_data)
+            return {'result': integrity}
+        except Exception:
+            self._log.error('快乐8数据完整性检查失败', exc_info=True)
+            return {'error': '数据完整性检查失败'}
+
+    def _kl8_conflicts_payload(self):
+        """快乐8冲突审核队列"""
+        try:
+            conflicts = kl8_list_conflict_queue()
+            return {'result': {'conflicts': conflicts, 'count': len(conflicts)}}
+        except Exception:
+            self._log.error('快乐8冲突队列查询失败', exc_info=True)
+            return {'error': '冲突队列查询失败'}
 
     def _send(self, status, content_type, body):
         self.send_response(status)

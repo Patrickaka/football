@@ -77,7 +77,8 @@ class HalfTimeStatsDB:
     
     def record_match(self, league: str, total_line: float, handicap: float,
                      match_type: str, half_home: int, half_away: int,
-                     full_home: int, full_away: int):
+                     full_home: int, full_away: int,
+                     sample_weight: float = 1.0):
         """
         记录一场比赛的半场和全场比分
         
@@ -91,6 +92,13 @@ class HalfTimeStatsDB:
             full_home: 全场主队进球
             full_away: 全场客队进球
         """
+        try:
+            sample_weight = max(0.0, min(1.0, float(sample_weight)))
+        except (TypeError, ValueError):
+            sample_weight = 1.0
+        if sample_weight <= 0:
+            return
+
         bucket_key = self._get_bucket_key(league, total_line, handicap, match_type)
         
         if bucket_key not in self.db:
@@ -100,6 +108,7 @@ class HalfTimeStatsDB:
                 'total_line': round(total_line * 4) / 4,
                 'handicap': round(handicap * 2) / 2,
                 'sample_count': 0,
+                'weighted_sample_count': 0.0,
                 'half_goals': [],        # 半场总进球数列表
                 'half_home_goals': [],   # 半场主队进球数列表
                 'half_away_goals': [],   # 半场客队进球数列表
@@ -107,12 +116,14 @@ class HalfTimeStatsDB:
                 'half_results': [],      # 半场结果: H/D/A
                 'full_results': [],      # 全场结果: H/D/A
                 'half_full_results': [], # 半全场结果: HH/HD/HA/DH/DD/DA/AH/AD/AA
+                'sample_weights': [],
                 # 预计算统计
                 'stats': {},
             }
         
         bucket = self.db[bucket_key]
         bucket['sample_count'] += 1
+        bucket['weighted_sample_count'] = bucket.get('weighted_sample_count', bucket['sample_count'] - 1) + sample_weight
         
         # 记录进球数
         bucket['half_goals'].append(half_home + half_away)
@@ -127,6 +138,7 @@ class HalfTimeStatsDB:
         bucket['half_results'].append(half_res)
         bucket['full_results'].append(full_res)
         bucket['half_full_results'].append(f"{half_res}{full_res}")
+        bucket.setdefault('sample_weights', []).append(sample_weight)
         
         # 更新预计算统计
         self._update_stats(bucket_key)
@@ -134,25 +146,35 @@ class HalfTimeStatsDB:
     def _update_stats(self, bucket_key: str):
         """更新分桶的统计数据"""
         bucket = self.db[bucket_key]
-        sample_count = bucket['sample_count']
+        raw_sample_count = bucket['sample_count']
+        weights = bucket.get('sample_weights') or [1.0] * raw_sample_count
+        if len(weights) < raw_sample_count:
+            weights = weights + [1.0] * (raw_sample_count - len(weights))
+        sample_count = max(0.0, sum(weights))
         
         if sample_count < 1:
             bucket['stats'] = {}
             return
         
+        def weighted_avg(values):
+            return sum(value * weight for value, weight in zip(values, weights)) / sample_count
+
+        def weighted_rate(values, target):
+            return sum(weight for value, weight in zip(values, weights) if value == target) / sample_count
+
         stats = {}
         
         # 半场进球统计
         half_goals = bucket['half_goals']
-        stats['first_half_goals_avg'] = round(sum(half_goals) / sample_count, 3)
+        stats['first_half_goals_avg'] = round(weighted_avg(half_goals), 3)
         stats['first_half_goals_std'] = round(
-            (sum((g - stats['first_half_goals_avg'])**2 for g in half_goals) / sample_count) ** 0.5,
+            (sum(((g - stats['first_half_goals_avg']) ** 2) * weight for g, weight in zip(half_goals, weights)) / sample_count) ** 0.5,
             3
         )
         
         # 全场进球统计
         full_goals = bucket['full_goals']
-        stats['full_goals_avg'] = round(sum(full_goals) / sample_count, 3)
+        stats['full_goals_avg'] = round(weighted_avg(full_goals), 3)
         
         # 半场比例
         if stats['full_goals_avg'] > 0:
@@ -162,25 +184,32 @@ class HalfTimeStatsDB:
         
         # 半场结果分布
         half_results = bucket['half_results']
-        stats['first_half_draw_rate'] = round(half_results.count('D') / sample_count, 3)
-        stats['home_lead_at_half_rate'] = round(half_results.count('H') / sample_count, 3)
-        stats['away_lead_at_half_rate'] = round(half_results.count('A') / sample_count, 3)
+        stats['first_half_draw_rate'] = round(weighted_rate(half_results, 'D'), 3)
+        stats['home_lead_at_half_rate'] = round(weighted_rate(half_results, 'H'), 3)
+        stats['away_lead_at_half_rate'] = round(weighted_rate(half_results, 'A'), 3)
         
         # 半全场结果分布
         htf_results = bucket['half_full_results']
         htf_dist = {}
         for res in ['HH', 'HD', 'HA', 'DH', 'DD', 'DA', 'AH', 'AD', 'AA']:
-            htf_dist[res] = round(htf_results.count(res) / sample_count, 3)
+            htf_dist[res] = round(weighted_rate(htf_results, res), 3)
         stats['half_full_distribution'] = htf_dist
         
         # 半场主客进球比例
         half_home_goals = bucket['half_home_goals']
         half_away_goals = bucket['half_away_goals']
-        total_half_goals = sum(half_home_goals) + sum(half_away_goals)
+        total_half_goals = (
+            sum(value * weight for value, weight in zip(half_home_goals, weights))
+            + sum(value * weight for value, weight in zip(half_away_goals, weights))
+        )
         if total_half_goals > 0:
-            stats['half_home_goal_ratio'] = round(sum(half_home_goals) / total_half_goals, 3)
+            stats['half_home_goal_ratio'] = round(
+                sum(value * weight for value, weight in zip(half_home_goals, weights)) / total_half_goals,
+                3,
+            )
         else:
             stats['half_home_goal_ratio'] = 0.5
+        stats['effective_sample_count'] = round(sample_count, 3)
         
         bucket['stats'] = stats
     
@@ -203,7 +232,7 @@ class HalfTimeStatsDB:
         
         if bucket_key in self.db:
             bucket = self.db[bucket_key]
-            if bucket.get('sample_count', 0) >= min_samples:
+            if bucket.get('weighted_sample_count', bucket.get('sample_count', 0)) >= min_samples:
                 return bucket.get('stats', {})
         
         return None
@@ -299,7 +328,8 @@ def get_half_time_statistics(league: str, total_line: float,
 
 def record_half_time_result(league: str, total_line: float, handicap: float,
                             match_type: str, half_home: int, half_away: int,
-                            full_home: int, full_away: int):
+                            full_home: int, full_away: int,
+                            sample_weight: float = 1.0):
     """
     记录半场比分结果
     
@@ -315,7 +345,7 @@ def record_half_time_result(league: str, total_line: float, handicap: float,
     """
     db = HalfTimeStatsDB()
     db.record_match(league, total_line, handicap, match_type, 
-                    half_home, half_away, full_home, full_away)
+                    half_home, half_away, full_home, full_away, sample_weight)
     db.save()
 
 

@@ -520,6 +520,7 @@ class BacktestRunner:
             'by_asian_bucket': group_by(lambda r: bucket_asian(r.get('asian'))),
         }
         report['diagnostics'] = self.get_bias_diagnostics(report)
+        report['diagnostic_suggestions'] = get_diagnostic_tuning_suggestions(report['diagnostics'])
         return report
 
     def get_bias_diagnostics(self, report: Dict = None) -> Dict:
@@ -747,6 +748,354 @@ def run_backtest_report(records: List[Dict],
     report = runner.get_detailed_report()
     report['sample_quality'] = quality_report
     return report
+
+
+def get_diagnostic_tuning_suggestions(diagnostics: Dict) -> Dict:
+    """Translate backtest bias diagnostics into conservative tuning hints."""
+    if not diagnostics:
+        return {
+            'suggestions': [],
+            'param_deltas': {},
+            'bucket_reviews': [],
+        }
+
+    suggestions = []
+    param_deltas = defaultdict(float)
+    notes = set(diagnostics.get('notes') or [])
+
+    draw_bias = diagnostics.get('draw', {}).get('bias', 0.0) or 0.0
+    common_bias = diagnostics.get('common_scores', {}).get('bias', 0.0) or 0.0
+    goal_bias = diagnostics.get('goal_direction_bias', 0.0) or 0.0
+
+    if 'draw_top1_overheated' in notes or draw_bias > 0.06:
+        param_deltas['draw_bias'] -= min(0.05, max(0.02, abs(draw_bias) * 0.50))
+        suggestions.append({
+            'area': 'score_1x2',
+            'action': 'lower_draw_bias',
+            'reason': 'Top1 draw rate is higher than actual draw rate.',
+            'confidence': 'medium',
+        })
+    elif 'draw_top1_underweighted' in notes or draw_bias < -0.06:
+        param_deltas['draw_bias'] += min(0.05, max(0.02, abs(draw_bias) * 0.50))
+        suggestions.append({
+            'area': 'score_1x2',
+            'action': 'raise_draw_bias',
+            'reason': 'Actual draw rate is higher than Top1 draw rate.',
+            'confidence': 'medium',
+        })
+
+    if 'common_scores_overheated' in notes or common_bias > 0.08:
+        param_deltas['low_score_bias'] -= min(0.06, max(0.02, common_bias * 0.40))
+        suggestions.append({
+            'area': 'score_distribution',
+            'action': 'reduce_common_low_score_heat',
+            'reason': '0-0/1-0/0-1/1-1 are appearing too often as Top1 picks.',
+            'confidence': 'medium',
+        })
+
+    if 'goal_direction_bias' in notes or abs(goal_bias) > 0.08:
+        if goal_bias > 0:
+            param_deltas['high_score_bias'] -= min(0.05, max(0.02, abs(goal_bias) * 0.40))
+            action = 'lower_over_goal_bias'
+            reason = 'High-goal direction is winning less often than the model expects.'
+        else:
+            param_deltas['high_score_bias'] += min(0.05, max(0.02, abs(goal_bias) * 0.40))
+            action = 'raise_over_goal_bias'
+            reason = 'High-goal direction is underrepresented in winning goal-count picks.'
+        suggestions.append({
+            'area': 'goal_count',
+            'action': action,
+            'reason': reason,
+            'confidence': 'medium',
+        })
+
+    bucket_reviews = diagnostics.get('weak_buckets') or []
+    if bucket_reviews:
+        suggestions.append({
+            'area': 'bucket_policy',
+            'action': 'review_weak_buckets',
+            'reason': 'Some league/handicap/total-line buckets have weak Top3 or goal-count hit rates.',
+            'confidence': 'low',
+        })
+
+    return {
+        'suggestions': suggestions,
+        'param_deltas': {key: round(value, 4) for key, value in sorted(param_deltas.items())},
+        'bucket_reviews': bucket_reviews[:10],
+    }
+
+
+def _records_with_actual_scores(records: List[Dict]) -> List[Dict]:
+    return [record for record in records if record.get('actual_score')]
+
+
+def rolling_backtest_report(records: List[Dict],
+                            windows: Tuple[int, ...] = (30, 60, 90),
+                            predict_func: Optional[Callable] = None,
+                            verbose: bool = False,
+                            quality_filter: bool = True,
+                            min_quality_grade: str = 'medium') -> Dict:
+    """Run recent-window backtests and return diagnostics for trend checks."""
+    records, quality_report = _quality_filter(records, quality_filter, min_quality_grade)
+    settled_records = _records_with_actual_scores(records)
+    if not settled_records:
+        return {
+            'error': 'no settled records with actual_score',
+            'sample_quality': quality_report,
+            'available_samples': 0,
+            'windows': {},
+            'latest_window': None,
+            'diagnostic_suggestions': get_diagnostic_tuning_suggestions({}),
+        }
+
+    unique_windows = sorted({int(window) for window in windows if int(window) > 0})
+    window_reports = {}
+    latest_key = None
+    for window in unique_windows:
+        window_records = settled_records[-window:]
+        report = run_backtest_report(
+            window_records,
+            predict_func=predict_func,
+            verbose=verbose,
+            quality_filter=False,
+        )
+        report['window_size'] = window
+        report['sample_count'] = len(window_records)
+        window_reports[str(window)] = report
+        latest_key = str(window)
+
+    latest_report = window_reports.get(latest_key, {})
+    return {
+        'available_samples': len(settled_records),
+        'sample_quality': quality_report,
+        'windows': window_reports,
+        'latest_window': latest_key,
+        'diagnostic_suggestions': latest_report.get(
+            'diagnostic_suggestions',
+            get_diagnostic_tuning_suggestions(latest_report.get('diagnostics', {})),
+        ),
+    }
+
+
+def rolling_backtest_from_history(league: str = None,
+                                  limit: int = None,
+                                  windows: Tuple[int, ...] = (30, 60, 90),
+                                  predict_func: Optional[Callable] = None,
+                                  **kwargs) -> Dict:
+    """Load settled prediction history and run rolling-window diagnostics."""
+    try:
+        from .result_sync import get_prediction_records
+
+        records = [r for r in get_prediction_records(include_hidden=True) if r.get('settled')]
+        if league:
+            records = [r for r in records if r.get('league') == league]
+        if limit:
+            records = records[-limit:]
+        return rolling_backtest_report(
+            records,
+            windows=windows,
+            predict_func=predict_func,
+            **kwargs,
+        )
+    except Exception as e:
+        return {'error': str(e)}
+
+
+def build_diagnostic_tuning_plan(rolling_report: Dict,
+                                 min_consistent_windows: int = 2,
+                                 min_window_samples: int = 30,
+                                 max_abs_delta: float = 0.04) -> Dict:
+    """Build a guarded tuning plan from rolling-window diagnostic suggestions."""
+    if not rolling_report or rolling_report.get('error'):
+        return {
+            'ready': False,
+            'reason': rolling_report.get('error', 'missing_rolling_report') if isinstance(rolling_report, dict) else 'missing_rolling_report',
+            'param_deltas': {},
+            'window_count': 0,
+        }
+
+    windows = rolling_report.get('windows') or {}
+    eligible = []
+    for key, report in sorted(windows.items(), key=lambda item: int(item[0])):
+        sample_count = report.get('sample_count') or report.get('summary', {}).get('total_matches', 0)
+        if sample_count < min_window_samples:
+            continue
+        eligible.append((key, report))
+
+    if len(eligible) < min_consistent_windows:
+        return {
+            'ready': False,
+            'reason': 'not_enough_eligible_windows',
+            'required_windows': min_consistent_windows,
+            'eligible_windows': len(eligible),
+            'min_window_samples': min_window_samples,
+            'param_deltas': {},
+            'window_count': len(eligible),
+        }
+
+    supported_params = {'draw_bias', 'low_score_bias', 'high_score_bias'}
+    by_param = defaultdict(list)
+    for key, report in eligible:
+        deltas = report.get('diagnostic_suggestions', {}).get('param_deltas') or {}
+        for param, delta in deltas.items():
+            if param not in supported_params:
+                continue
+            try:
+                delta_value = float(delta)
+            except (TypeError, ValueError):
+                continue
+            if abs(delta_value) < 1e-9:
+                continue
+            by_param[param].append((key, delta_value))
+
+    planned = {}
+    consistency = {}
+    for param, values in sorted(by_param.items()):
+        signs = [1 if delta > 0 else -1 for _, delta in values]
+        same_direction = len(set(signs)) == 1
+        if len(values) < min_consistent_windows or not same_direction:
+            consistency[param] = {
+                'accepted': False,
+                'windows': [key for key, _ in values],
+                'reason': 'insufficient_or_conflicting_direction',
+            }
+            continue
+        avg_delta = sum(delta for _, delta in values) / len(values)
+        avg_delta = max(-max_abs_delta, min(max_abs_delta, avg_delta))
+        planned[param] = round(avg_delta, 4)
+        consistency[param] = {
+            'accepted': True,
+            'windows': [key for key, _ in values],
+            'direction': 'up' if avg_delta > 0 else 'down',
+        }
+
+    return {
+        'ready': bool(planned),
+        'reason': 'ready' if planned else 'no_consistent_param_deltas',
+        'param_deltas': planned,
+        'consistency': consistency,
+        'eligible_windows': [key for key, _ in eligible],
+        'window_count': len(eligible),
+        'guards': {
+            'min_consistent_windows': min_consistent_windows,
+            'min_window_samples': min_window_samples,
+            'max_abs_delta': max_abs_delta,
+        },
+    }
+
+
+def apply_diagnostic_tuning(records: List[Dict],
+                            windows: Tuple[int, ...] = (30, 60, 90),
+                            predict_func: Optional[Callable] = None,
+                            quality_filter: bool = True,
+                            min_quality_grade: str = 'medium',
+                            min_consistent_windows: int = 2,
+                            min_window_samples: int = 30,
+                            max_abs_delta: float = 0.04,
+                            scope: str = 'bucket',
+                            league: str = None,
+                            total_line: float = None,
+                            handicap: float = None,
+                            dry_run: bool = True) -> Dict:
+    """Plan and optionally persist conservative tuning based on rolling diagnostics."""
+    rolling_report = rolling_backtest_report(
+        records,
+        windows=windows,
+        predict_func=predict_func,
+        verbose=False,
+        quality_filter=quality_filter,
+        min_quality_grade=min_quality_grade,
+    )
+    plan = build_diagnostic_tuning_plan(
+        rolling_report,
+        min_consistent_windows=min_consistent_windows,
+        min_window_samples=min_window_samples,
+        max_abs_delta=max_abs_delta,
+    )
+    if not plan.get('ready'):
+        return {
+            'applied': False,
+            'dry_run': dry_run,
+            'plan': plan,
+            'rolling_report': rolling_report,
+        }
+
+    settled_records = _records_with_actual_scores(records)
+    sample = settled_records[-1] if settled_records else {}
+    target_league = league if league is not None else sample.get('league')
+    target_total_line = total_line if total_line is not None else sample.get('total_line')
+    target_handicap = handicap if handicap is not None else sample.get('asian')
+
+    try:
+        from .prediction_policy import PARAM_RANGES, get_prediction_policy, save_tuning_params
+
+        current = get_prediction_policy(
+            league=target_league,
+            total_line=target_total_line,
+            handicap=target_handicap,
+        )
+        new_params = {}
+        for param, delta in plan['param_deltas'].items():
+            base_value = float(current.get(param, 1.0))
+            new_value = base_value + float(delta)
+            low, high = PARAM_RANGES.get(param, (0.0, 10.0))
+            new_params[param] = round(max(low, min(high, new_value)), 4)
+
+        save_result = None
+        if not dry_run:
+            save_result = save_tuning_params(
+                new_params,
+                league=target_league,
+                total_line=target_total_line,
+                handicap=target_handicap,
+                scope=scope,
+                metrics={
+                    'source': 'rolling_diagnostics',
+                    'plan': plan,
+                    'latest_window': rolling_report.get('latest_window'),
+                    'available_samples': rolling_report.get('available_samples'),
+                },
+            )
+        return {
+            'applied': not dry_run and bool(save_result and save_result.get('saved')),
+            'dry_run': dry_run,
+            'scope': scope,
+            'target': {
+                'league': target_league,
+                'total_line': target_total_line,
+                'handicap': target_handicap,
+            },
+            'current_params': {param: current.get(param) for param in plan['param_deltas']},
+            'new_params': new_params,
+            'save_result': save_result,
+            'plan': plan,
+            'rolling_report': rolling_report,
+        }
+    except Exception as e:
+        return {
+            'applied': False,
+            'dry_run': dry_run,
+            'error': str(e),
+            'plan': plan,
+            'rolling_report': rolling_report,
+        }
+
+
+def apply_diagnostic_tuning_from_history(league: str = None,
+                                         limit: int = None,
+                                         **kwargs) -> Dict:
+    """Load settled history and plan/apply guarded diagnostic tuning."""
+    try:
+        from .result_sync import get_prediction_records
+
+        records = [r for r in get_prediction_records(include_hidden=True) if r.get('settled')]
+        if league:
+            records = [r for r in records if r.get('league') == league]
+        if limit:
+            records = records[-limit:]
+        return apply_diagnostic_tuning(records, league=league, **kwargs)
+    except Exception as e:
+        return {'applied': False, 'error': str(e)}
 
 
 def backtest_from_history(league: str = None, limit: int = None) -> Dict:

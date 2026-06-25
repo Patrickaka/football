@@ -2,10 +2,20 @@ import unittest
 from datetime import datetime
 
 import src.football.result_sync as result_sync
-from src.football.backtest import _objective_score, run_backtest_report
+from src.football.bayesian_calibration import BayesianCalibrator
+from src.football.backtest import (
+    _objective_score,
+    apply_diagnostic_tuning,
+    build_diagnostic_tuning_plan,
+    rolling_backtest_report,
+    run_backtest_report,
+)
+from src.football.goal_count_calibrator import GoalCountCalibrator
+from src.football.half_time_stats import HalfTimeStatsDB
 from src.football.result_sync import (
     PredictionHistory,
     _assess_result_quality,
+    _calibration_sample_weight,
     _is_match_settle_due,
     _parse_match_datetime,
 )
@@ -115,6 +125,87 @@ class ResultSyncQualityGuardTests(unittest.TestCase):
 
         self.assertIn('result_quality_low', quality['reasons'])
         self.assertFalse(quality['usable_for_calibration'])
+        self.assertEqual(quality['calibration_weight'], 0.0)
+
+    def test_sample_quality_weights_result_sources(self):
+        base = {
+            'match_id': 'past-source',
+            'settled': True,
+            'actual_score': '2-1',
+            'predicted_scores': {'2-1': 0.2},
+            'predicted_1x2': {'H': 0.5, 'D': 0.3, 'A': 0.2},
+            'asian': -0.25,
+            'total_line': 2.5,
+            'odds_snapshot': {'x': 1},
+        }
+        live = assess_record_quality({
+            **base,
+            'result_quality': {'grade': 'high', 'source': 'live_fid'},
+        })
+        shuju = assess_record_quality({
+            **base,
+            'result_quality': {'grade': 'high', 'source': 'shuju'},
+        })
+
+        self.assertGreater(live['calibration_weight'], shuju['calibration_weight'])
+        self.assertEqual(live['source_weight'], 1.0)
+        self.assertEqual(shuju['source_weight'], 0.6)
+
+    def test_result_sync_uses_sample_quality_weight(self):
+        weight = _calibration_sample_weight({
+            'settled': True,
+            'actual_score': '2-1',
+            'predicted_scores': {'2-1': 0.2},
+            'predicted_1x2': {'H': 0.5, 'D': 0.3, 'A': 0.2},
+            'asian': -0.25,
+            'total_line': 2.5,
+            'odds_snapshot': {'x': 1},
+            'result_quality': {'grade': 'high', 'source': 'shuju'},
+        })
+
+        self.assertEqual(weight, 0.6)
+
+    def test_bayesian_calibrator_tracks_weighted_samples(self):
+        calibrator = BayesianCalibrator()
+        calibrator.history = {}
+
+        calibrator.add_record('1-1', 0.2, True, 'Test', 2.5, 0.0, sample_weight=1.0)
+        calibrator.add_record('1-1', 0.2, False, 'Test', 2.5, 0.0, sample_weight=0.5)
+
+        key = calibrator._get_bucket_key('1-1', 'Test', 2.5, 0.0, 1)
+        bucket = calibrator.history[key]
+
+        self.assertEqual(bucket['count'], 2)
+        self.assertAlmostEqual(bucket['weighted_count'], 1.5)
+        self.assertAlmostEqual(bucket['weighted_success'], 1.0)
+
+    def test_goal_count_calibrator_uses_weighted_effective_samples(self):
+        calibrator = GoalCountCalibrator()
+        calibrator.db = {}
+
+        dist = {2: 0.7, 3: 0.3}
+        for _ in range(9):
+            calibrator.record_result('Test', 2.5, dist, 2, 2.3, 0.0, sample_weight=1.0)
+        calibrator.record_result('Test', 2.5, dist, 3, 2.3, 0.0, sample_weight=0.2)
+
+        key = calibrator._get_bucket_key('Test', 2.5, 0.0, 2.3)
+        bucket = calibrator.db[key]
+
+        self.assertEqual(bucket['sample_count'], 10)
+        self.assertAlmostEqual(bucket['weighted_sample_count'], 9.2)
+        self.assertEqual(bucket['calibration_factors'], {})
+
+    def test_half_time_stats_uses_weighted_distribution(self):
+        db = HalfTimeStatsDB()
+        db.db = {}
+
+        db.record_match('Test', 2.5, 0.0, 'league', 1, 0, 2, 0, sample_weight=1.0)
+        db.record_match('Test', 2.5, 0.0, 'league', 0, 0, 1, 1, sample_weight=0.5)
+        stats = db.get_stats('Test', 2.5, 0.0, 'league', min_samples=1)
+
+        self.assertAlmostEqual(stats['effective_sample_count'], 1.5)
+        self.assertAlmostEqual(stats['home_lead_at_half_rate'], 0.667, places=3)
+        self.assertAlmostEqual(stats['first_half_draw_rate'], 0.333, places=3)
 
     def test_backtest_reports_goal_distribution_quality(self):
         report = run_backtest_report([{
@@ -191,6 +282,124 @@ class ResultSyncQualityGuardTests(unittest.TestCase):
         self.assertIn('common_scores_overheated', diagnostics['notes'])
         self.assertIn('draw', diagnostics)
         self.assertIn('weak_buckets', diagnostics)
+        self.assertIn('diagnostic_suggestions', report)
+        self.assertTrue(report['diagnostic_suggestions']['suggestions'])
+
+    def test_rolling_backtest_report_includes_recent_windows_and_suggestions(self):
+        records = []
+        actual_scores = ['2-1', '2-0', '3-1', '1-2', '2-2', '3-0', '2-1', '4-1']
+        for idx, actual in enumerate(actual_scores):
+            home_goals, away_goals = map(int, actual.split('-'))
+            actual_result = 'H' if home_goals > away_goals else 'A' if home_goals < away_goals else 'D'
+            records.append({
+                'match_id': f'rolling-{idx}',
+                'league': 'Rolling League',
+                'home': 'A',
+                'away': 'B',
+                'actual_score': actual,
+                'actual_result': actual_result,
+                'predicted_scores': {'1-1': 0.36, '0-0': 0.19, '2-1': 0.12},
+                'predicted_1x2': {'H': 0.38, 'D': 0.40, 'A': 0.22},
+                'goal_count': {'distribution_dict': {2: 0.65, 3: 0.20, 4: 0.15}},
+                'asian': 0,
+                'total_line': 2.5,
+                'result_quality': {'grade': 'high'},
+            })
+
+        report = rolling_backtest_report(
+            records,
+            windows=(3, 6),
+            verbose=False,
+            quality_filter=False,
+        )
+
+        self.assertEqual(report['available_samples'], len(records))
+        self.assertEqual(report['latest_window'], '6')
+        self.assertIn('3', report['windows'])
+        self.assertIn('6', report['windows'])
+        self.assertEqual(report['windows']['3']['sample_count'], 3)
+        self.assertTrue(report['diagnostic_suggestions']['suggestions'])
+
+    def test_diagnostic_tuning_plan_requires_consistent_windows(self):
+        report = {
+            'windows': {
+                '3': {
+                    'sample_count': 3,
+                    'diagnostic_suggestions': {'param_deltas': {'draw_bias': -0.03}},
+                },
+                '6': {
+                    'sample_count': 6,
+                    'diagnostic_suggestions': {'param_deltas': {'draw_bias': -0.05}},
+                },
+            }
+        }
+
+        plan = build_diagnostic_tuning_plan(
+            report,
+            min_consistent_windows=2,
+            min_window_samples=3,
+            max_abs_delta=0.04,
+        )
+
+        self.assertTrue(plan['ready'])
+        self.assertEqual(plan['param_deltas']['draw_bias'], -0.04)
+
+        conflicting = {
+            'windows': {
+                '3': {
+                    'sample_count': 3,
+                    'diagnostic_suggestions': {'param_deltas': {'draw_bias': -0.03}},
+                },
+                '6': {
+                    'sample_count': 6,
+                    'diagnostic_suggestions': {'param_deltas': {'draw_bias': 0.03}},
+                },
+            }
+        }
+
+        blocked = build_diagnostic_tuning_plan(
+            conflicting,
+            min_consistent_windows=2,
+            min_window_samples=3,
+        )
+
+        self.assertFalse(blocked['ready'])
+
+    def test_apply_diagnostic_tuning_dry_run_builds_new_params_without_saving(self):
+        records = []
+        actual_scores = ['2-1', '2-0', '3-1', '1-2', '2-2', '3-0', '2-1', '4-1']
+        for idx, actual in enumerate(actual_scores):
+            home_goals, away_goals = map(int, actual.split('-'))
+            actual_result = 'H' if home_goals > away_goals else 'A' if home_goals < away_goals else 'D'
+            records.append({
+                'match_id': f'apply-diagnostic-{idx}',
+                'league': 'Apply League',
+                'home': 'A',
+                'away': 'B',
+                'actual_score': actual,
+                'actual_result': actual_result,
+                'predicted_scores': {'1-1': 0.36, '0-0': 0.19, '2-1': 0.12},
+                'predicted_1x2': {'H': 0.38, 'D': 0.40, 'A': 0.22},
+                'goal_count': {'distribution_dict': {2: 0.65, 3: 0.20, 4: 0.15}},
+                'asian': 0,
+                'total_line': 2.5,
+                'result_quality': {'grade': 'high'},
+            })
+
+        result = apply_diagnostic_tuning(
+            records,
+            windows=(3, 6),
+            quality_filter=False,
+            min_consistent_windows=2,
+            min_window_samples=3,
+            dry_run=True,
+        )
+
+        self.assertFalse(result['applied'])
+        self.assertTrue(result['dry_run'])
+        self.assertTrue(result['plan']['ready'])
+        self.assertIn('new_params', result)
+        self.assertIsNone(result['save_result'])
 
 
 if __name__ == '__main__':
