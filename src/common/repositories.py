@@ -47,12 +47,22 @@ def prediction_record_save(records):
 # ==================== dlt_history（大乐透） ====================
 
 def dlt_load():
-    rows = db.query("SELECT issue, front, back, draw_date FROM dlt_history ORDER BY seq")
-    return [
-        {'issue': r['issue'], 'front': json.loads(r['front']),
-         'back': json.loads(r['back']), 'date': r['draw_date']}
-        for r in rows
-    ]
+    try:
+        rows = db.query("SELECT issue, front, back, draw_date FROM dlt_history ORDER BY seq")
+        return [
+            {'issue': r['issue'], 'front': json.loads(r['front']),
+             'back': json.loads(r['back']), 'date': r['draw_date']}
+            for r in rows
+        ]
+    except Exception:
+        records = doc_store._fallback_load_all('dlt_history')
+        return [
+            {'issue': r['issue'],
+             'front': json.loads(r['front']) if isinstance(r['front'], str) else r['front'],
+             'back': json.loads(r['back']) if isinstance(r['back'], str) else r['back'],
+             'date': r.get('draw_date') or r.get('date')}
+            for r in records
+        ]
 
 
 def dlt_save(results):
@@ -64,12 +74,23 @@ def dlt_save(results):
 # ==================== pailie5_history（排列5） ====================
 
 def pailie5_load():
-    rows = db.query("SELECT issue, numbers, draw_date, ts FROM pailie5_history ORDER BY seq")
-    return [
-        {'issue': r['issue'], 'numbers': json.loads(r['numbers']),
-         'date': r['draw_date'], 'timestamp': r['ts']}
-        for r in rows
-    ]
+    try:
+        rows = db.query("SELECT issue, numbers, draw_date, ts FROM pailie5_history ORDER BY seq")
+        return [
+            {'issue': r['issue'], 'numbers': json.loads(r['numbers']),
+             'date': r['draw_date'], 'timestamp': r['ts']}
+            for r in rows
+        ]
+    except Exception:
+        # MySQL 不可用时从 doc_store 文件降级加载
+        records = doc_store._fallback_load_all('pailie5_history')
+        return [
+            {'issue': r['issue'],
+             'numbers': json.loads(r['numbers']) if isinstance(r['numbers'], str) else r['numbers'],
+             'date': r.get('draw_date') or r.get('date'),
+             'timestamp': r.get('ts') or r.get('timestamp')}
+            for r in records
+        ]
 
 
 def pailie5_save(history):

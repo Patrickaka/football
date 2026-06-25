@@ -236,6 +236,50 @@ def load_tuning_params(league=None, total_line=None, handicap=None, league_profi
     }
 
 
+def get_tuning_config() -> Dict:
+    """Return the full persisted tuning config for inspection."""
+    config = _load_tuning_config()
+    config['path'] = str(TUNING_FILE)
+    return config
+
+
+def clear_tuning_params(scope: str = None,
+                        league=None,
+                        total_line=None,
+                        handicap=None,
+                        league_profile=None) -> Dict:
+    """Clear persisted tuning params by scope. Use scope=None to clear all."""
+    config = _load_tuning_config()
+
+    if scope is None or scope == 'all':
+        config['global'] = {}
+        config['leagues'] = {}
+        config['buckets'] = {}
+        target = 'all'
+    elif scope == 'global':
+        config['global'] = {}
+        target = 'global'
+    elif scope == 'league':
+        league_name = _league_text(league, league_profile) or '*'
+        config['leagues'].pop(league_name, None)
+        target = f"league:{league_name}"
+    else:
+        league_name = _league_text(league, league_profile) or '*'
+        bucket_key = policy_bucket_key(league_name, total_line, handicap)
+        config['buckets'].pop(bucket_key, None)
+        target = f"bucket:{bucket_key}"
+
+    config.setdefault('history', []).append({
+        'saved_at': datetime.now().isoformat(),
+        'action': 'clear',
+        'scope': scope or 'all',
+        'target': target,
+    })
+    config['history'] = config['history'][-50:]
+    saved = _save_tuning_config(config)
+    return {'cleared': saved, 'target': target, 'path': str(TUNING_FILE)}
+
+
 def get_prediction_policy(league=None, total_line=None, handicap=None, league_profile=None) -> Dict:
     league_name = _league_text(league, league_profile)
     total_bucket = get_total_bucket(total_line)

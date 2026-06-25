@@ -6331,11 +6331,11 @@ def analyze_match(match, force_refresh=False):
         'updated_modules': []
     }
     try:
-        from .result_sync import PredictionHistory
+        from .result_sync import PredictionHistory, _is_match_settle_due
         ph = PredictionHistory()
         for rec in ph.records:
             if rec.get('match_id') == mid:
-                if rec.get('settled'):
+                if rec.get('settled') and _is_match_settle_due(rec.get('match_time'), minutes=180):
                     settlement = {
                         'status': 'settled',
                         'actual_score': rec.get('actual_score'),

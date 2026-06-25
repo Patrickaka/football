@@ -466,15 +466,7 @@ class PredictionHistory:
                 continue
             
             try:
-                # 尝试解析时间
-                match_time = _parse_match_datetime(match_time_str)
-                if not match_time:
-                    continue
-                
-                # 比赛结束时间 = 比赛开始时间 + 150分钟
-                settle_time = match_time + timedelta(minutes=minutes)
-                
-                if now >= settle_time:
+                if _is_match_settle_due(match_time_str, minutes=minutes, now=now):
                     ready.append(record)
                     
             except Exception:
@@ -726,6 +718,17 @@ class PredictionHistory:
         for record in self.records:
             if record.get('match_id') == match_id:
                 if actual_score and actual_result:
+                    if not _is_match_settle_due(record.get('match_time'), minutes=180):
+                        record['sync_status'] = 'pending'
+                        record['last_sync_error'] = '比赛尚未到结算时间，拒绝提前回填'
+                        record['last_sync_at'] = datetime.now().isoformat()
+                        log.warning(
+                            f"拒绝提前回填: {record.get('home')} vs {record.get('away')} "
+                            f"match_time={record.get('match_time')} score={actual_score}"
+                        )
+                        self._save()
+                        return False
+
                     # 成功结算
                     record['actual_score'] = actual_score
                     record['actual_result'] = actual_result
@@ -835,15 +838,11 @@ class PredictionHistory:
                 continue
             
             try:
-                match_time = _parse_match_datetime(match_time_str)
-                if not match_time:
-                    continue
-                
-                settle_time = match_time + timedelta(minutes=minutes)
-                
-                if now >= settle_time:
+                if _is_match_settle_due(match_time_str, minutes=minutes, now=now):
                     record['sync_status'] = 'ready'
                     ready.append(record)
+                elif record.get('sync_status') == 'ready':
+                    record['sync_status'] = 'pending'
                     
             except Exception:
                 continue
@@ -895,6 +894,44 @@ class PredictionHistory:
             'ignored': ignored,
             'last_sync_at': last_sync.isoformat() if last_sync else None,
         }
+
+    def repair_future_settlements(self, minutes: int = 180) -> Dict:
+        """Reset records that were settled before kickoff plus wait window."""
+        repaired = []
+        now = datetime.now()
+        fields_to_clear = [
+            'actual_score', 'actual_result', 'actual_half_score', 'actual_half_result',
+            'actual_half_full', 'settled_at', 'evaluation', 'hit_top1', 'hit_top3',
+            'hit_top5', 'hit_top10', 'hit_top20', 'hit_top30', 'hit_1x2',
+            'actual_score_rank', 'actual_score_prob',
+        ]
+
+        for record in self.records:
+            if not record.get('settled') and record.get('sync_status') != 'synced':
+                continue
+            match_time = record.get('match_time')
+            if not match_time:
+                continue
+            if _is_match_settle_due(match_time, minutes=minutes, now=now):
+                continue
+
+            for field in fields_to_clear:
+                if field in record:
+                    record[field] = None
+            record['settled'] = False
+            record['sync_status'] = 'pending'
+            record['last_sync_error'] = '已撤销提前回填，等待比赛结束后重新同步'
+            record['updated_at'] = now.isoformat()
+            repaired.append({
+                'match_id': record.get('match_id'),
+                'home': record.get('home'),
+                'away': record.get('away'),
+                'match_time': match_time,
+            })
+
+        if repaired:
+            self._save()
+        return {'repaired': len(repaired), 'records': repaired}
     
     def _update_calibrator(self, record: Dict):
         """更新贝叶斯校准库"""
@@ -1630,9 +1667,11 @@ def auto_sync_results():
                 result = fetch_result_by_team_and_date(home, away, match_time)
             
             if result:
-                _global_history.update_result(match_id, result['score'], result['result'])
-                synced += 1
-                log.info(f"同步成功: {home} vs {away} -> {result['score']}")
+                if _global_history.update_result(match_id, result['score'], result['result']):
+                    synced += 1
+                    log.info(f"同步成功: {home} vs {away} -> {result['score']}")
+                else:
+                    failed += 1
             else:
                 _global_history.update_result(match_id, None, None, error='未找到赛果')
                 failed += 1
@@ -1738,26 +1777,28 @@ def _parse_match_datetime(match_time: str) -> Optional[datetime]:
     for fmt in ('%Y-%m-%d %H:%M:%S', '%Y-%m-%d %H:%M', '%Y/%m/%d %H:%M'):
         try:
             match_dt = datetime.strptime(text, fmt)
-            if fmt == '%m-%d %H:%M':
-                match_dt = match_dt.replace(year=now.year)
-                # 跨年：记录月份比当前月大很多，说明是去年
-                if match_dt > now + timedelta(days=2):
-                    match_dt = match_dt.replace(year=now.year - 1)
-                elif now.month == 12 and match_dt.month == 1:
-                    match_dt = match_dt.replace(year=now.year + 1)
             return match_dt
         except ValueError:
             continue
     try:
         match_dt = datetime.strptime(f"{now.year}-{text}", '%Y-%m-%d %H:%M')
-        if match_dt > now + timedelta(days=2):
-            match_dt = match_dt.replace(year=now.year - 1)
-        elif now.month == 12 and match_dt.month == 1:
+        if now.month == 12 and match_dt.month == 1:
             match_dt = match_dt.replace(year=now.year + 1)
+        elif now.month == 1 and match_dt.month == 12:
+            match_dt = match_dt.replace(year=now.year - 1)
         return match_dt
     except ValueError:
         pass
     return None
+
+
+def _is_match_settle_due(match_time: str, minutes: int = 180, now: datetime = None) -> bool:
+    """Return True only after kickoff plus the settlement wait window."""
+    match_dt = _parse_match_datetime(match_time)
+    if not match_dt:
+        return False
+    now = now or datetime.now()
+    return now >= match_dt + timedelta(minutes=minutes)
 
 
 def _live_query_dates(match_time: str) -> List[str]:
@@ -1942,6 +1983,11 @@ def get_sync_status_summary() -> Dict:
     return _global_history.get_sync_status_summary()
 
 
+def repair_future_settlements(minutes: int = 180) -> Dict:
+    """撤销尚未到结算时间却已经回填的记录。"""
+    return _global_history.repair_future_settlements(minutes=minutes)
+
+
 def get_prediction_records(include_hidden: bool = False) -> List[Dict]:
     """
     获取预测记录列表
@@ -1955,20 +2001,29 @@ def get_prediction_records(include_hidden: bool = False) -> List[Dict]:
             if record.get('sync_status') == 'failed':
                 continue
         
+        is_future_settled = (
+            (record.get('settled') or record.get('sync_status') == 'synced')
+            and record.get('match_time')
+            and not _is_match_settle_due(record.get('match_time'), minutes=180)
+        )
+
         records.append({
             'match_id': record.get('match_id'),
             'league': record.get('league'),
             'home': record.get('home'),
             'away': record.get('away'),
             'match_time': record.get('match_time'),
-            'settled': record.get('settled', False),
-            'actual_score': record.get('actual_score'),
-            'sync_status': record.get('sync_status', 'pending'),
+            'settled': False if is_future_settled else record.get('settled', False),
+            'actual_score': None if is_future_settled else record.get('actual_score'),
+            'sync_status': 'pending' if is_future_settled else record.get('sync_status', 'pending'),
             'sync_attempts': record.get('sync_attempts', 0),
-            'last_sync_error': record.get('last_sync_error'),
+            'last_sync_error': (
+                '比赛尚未到结算时间，已隐藏提前回填结果'
+                if is_future_settled else record.get('last_sync_error')
+            ),
             'next_sync_at': record.get('next_sync_at'),
-            'hit_top1': record.get('hit_top1'),
-            'hit_top3': record.get('hit_top3'),
+            'hit_top1': None if is_future_settled else record.get('hit_top1'),
+            'hit_top3': None if is_future_settled else record.get('hit_top3'),
             'predicted_scores': record.get('predicted_scores'),
         })
     

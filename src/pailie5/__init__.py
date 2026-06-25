@@ -26,7 +26,7 @@ import urllib.request
 import urllib.error
 from collections import Counter, defaultdict
 from typing import Dict, List, Tuple, Optional
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 import time
 
 from ..common.paths import data_path
@@ -111,22 +111,98 @@ COVERAGE_WEIGHT = 3.0       # 覆盖未选数字的奖励权重
 _prediction_cache = None
 _cache_time = 0
 
+# 磁盘缓存文件路径
+_DATA_DIR = None  # 延迟初始化
+_PREDICTION_CACHE_FILE = None
+_BACKTEST_CACHE_FILE = None
+
+def _init_cache_paths():
+    global _DATA_DIR, _PREDICTION_CACHE_FILE, _BACKTEST_CACHE_FILE
+    if _DATA_DIR is None:
+        _DATA_DIR = data_path('')
+        _PREDICTION_CACHE_FILE = data_path('pailie5_prediction_cache.json')
+        _BACKTEST_CACHE_FILE = data_path('pailie5_backtest_cache.json')
+
+def _is_today_cache(timestamp):
+    """判断时间戳是否是今天的缓存"""
+    if timestamp is None:
+        return False
+    try:
+        return datetime.fromtimestamp(timestamp).date() == date.today()
+    except:
+        return False
+
+def _save_prediction_cache(cache_data, cache_time):
+    """保存预测缓存到磁盘"""
+    _init_cache_paths()
+    try:
+        with open(_PREDICTION_CACHE_FILE, 'w', encoding='utf-8') as f:
+            json.dump({
+                'cache_time': cache_time,
+                'data': cache_data
+            }, f, ensure_ascii=False, default=str)
+        logger.info("预测缓存已保存到磁盘")
+    except Exception as e:
+        logger.warning(f"保存预测缓存失败: {e}")
+
+def _load_prediction_cache():
+    """从磁盘加载预测缓存"""
+    _init_cache_paths()
+    try:
+        if os.path.exists(_PREDICTION_CACHE_FILE):
+            with open(_PREDICTION_CACHE_FILE, 'r', encoding='utf-8') as f:
+                cached = json.load(f)
+            cache_time = cached.get('cache_time')
+            if _is_today_cache(cache_time):
+                logger.info("从磁盘加载预测缓存")
+                return cached.get('data'), cache_time
+    except Exception as e:
+        logger.warning(f"加载预测缓存失败: {e}")
+    return None, None
+
+def _save_backtest_cache(result, cache_time, history_count):
+    """保存回测缓存到磁盘"""
+    _init_cache_paths()
+    try:
+        with open(_BACKTEST_CACHE_FILE, 'w', encoding='utf-8') as f:
+            json.dump({
+                'cache_time': cache_time,
+                'data': result,
+                'history_count': history_count
+            }, f, ensure_ascii=False, default=str)
+        logger.info("回测缓存已保存到磁盘")
+    except Exception as e:
+        logger.warning(f"保存回测缓存失败: {e}")
+
+def _load_backtest_cache():
+    """从磁盘加载回测缓存，检查历史数据条数是否变化"""
+    _init_cache_paths()
+    try:
+        if os.path.exists(_BACKTEST_CACHE_FILE):
+            with open(_BACKTEST_CACHE_FILE, 'r', encoding='utf-8') as f:
+                cached = json.load(f)
+            cache_time = cached.get('cache_time')
+            history_count = cached.get('history_count', 0)
+            # 检查缓存是否有效（历史数据条数未变 且 是今日缓存）
+            try:
+                current_count = len(get_pailie5_analyzer().history)
+            except:
+                current_count = 0
+            if history_count == current_count and _is_today_cache(cache_time):
+                logger.info("从磁盘加载回测缓存")
+                return cached.get('data'), cache_time
+            else:
+                logger.info(f"回测缓存已过期（历史数据 {history_count}→{current_count}）")
+    except Exception as e:
+        logger.warning(f"加载回测缓存失败: {e}")
+    return None, None
+
 # KV 存储键
 RECENT_RECOMMEND_KV_KEY = 'pailie5_recent_recommend'
 WINDOW_WEIGHTS_KV_KEY = 'pailie5_window_weights'
 
 
 # ==================== 工具函数 ====================
-
-def _is_today_cache(cache_timestamp):
-    """检查缓存是否是今天的（按自然天判断）"""
-    if cache_timestamp is None or cache_timestamp == 0:
-        return False
-    import datetime
-    cache_date = datetime.date.fromtimestamp(cache_timestamp)
-    today = datetime.date.today()
-    return cache_date == today
-
 
 def clear_cache():
     """清除缓存"""
@@ -894,9 +970,9 @@ class Pailie5Analyzer:
 
     # ==================== 统计分析 ====================
 
-    def _get_numbers_list(self) -> List[List[int]]:
+    def _get_numbers_list(self):
         """获取历史号码列表（按开奖时间从旧到新）"""
-        return [r['numbers'] for r in reversed(self.history)]
+        return [r["numbers"] for r in self.history]
 
     def analyze_position_frequency(self) -> List[Dict[int, int]]:
         position_freq = []
@@ -1126,8 +1202,18 @@ class Pailie5Analyzer:
             'ranked_numbers': self.rank_model(10),
         }
 
-    def rolling_backtest(self, trials: int = 50) -> Dict:
-        """滚动回测（改进版：评估推荐池覆盖率）"""
+    def rolling_backtest(self, trials: int = 50, use_cache: bool = True) -> Dict:
+        """滚动回测（改进版：评估推荐池覆盖率）
+
+        use_cache: 是否使用磁盘缓存（默认True，今日已有缓存则直接返回）
+        """
+        # 尝试从磁盘缓存加载
+        if use_cache:
+            cached_result, _ = _load_backtest_cache()
+            if cached_result is not None:
+                logger.info("rolling_backtest：使用磁盘缓存，跳过计算")
+                return cached_result
+
         numbers_list = self._get_numbers_list()
         n = len(numbers_list)
         if n < 30:
@@ -1185,7 +1271,7 @@ class Pailie5Analyzer:
                 'best_overlap': best_overlap,
             })
 
-        return {
+        result = {
             'trials': trials,
             'top30_hit': top30_hit,
             'top30_rate': round(top30_hit / trials, 4),
@@ -1196,6 +1282,11 @@ class Pailie5Analyzer:
             'avg_digit_coverage': round(total_coverage / trials, 4),
             'predictions': predictions[-10:],  # 最近10条
         }
+
+        # 保存回测结果到磁盘缓存
+        _save_backtest_cache(result, time.time(), len(numbers_list))
+
+        return result
 
     def optimize_window_weights(self, trials: int = 80):
         """通过回测优化窗口权重并持久化"""
@@ -1248,6 +1339,13 @@ def run_prediction(force_refresh=False):
     """运行排列五预测，返回 JSON 可序列化 dict。"""
     global _prediction_cache, _cache_time
 
+    # 内存缓存为空时，尝试从磁盘加载
+    if _prediction_cache is None:
+        disk_cache, disk_cache_time = _load_prediction_cache()
+        if disk_cache is not None:
+            _prediction_cache = disk_cache
+            _cache_time = disk_cache_time
+
     if not force_refresh and _prediction_cache is not None:
         if _is_today_cache(_cache_time):
             elapsed = time.time() - _cache_time
@@ -1283,8 +1381,8 @@ def run_prediction(force_refresh=False):
                 recs.append(nums)
             recommendations[method] = recs
 
-        # 滚动回测
-        backtest = analyzer.rolling_backtest(trials=30)
+        # 滚动回测（使用缓存，trials 减少到 20）
+        backtest = analyzer.rolling_backtest(trials=20)
 
         result = {
             'statistics': stats,
@@ -1296,7 +1394,9 @@ def run_prediction(force_refresh=False):
 
         _prediction_cache = result
         _cache_time = time.time()
-        logger.info("排列五预测结果已缓存")
+        # 保存到磁盘缓存
+        _save_prediction_cache(result, _cache_time)
+        logger.info("排列五预测结果已缓存（内存+磁盘）")
         return result
 
     except Exception:

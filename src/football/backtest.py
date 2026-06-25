@@ -808,6 +808,107 @@ def optimize_parameters_from_history(predict_func: Callable,
         return {'error': str(e)}
 
 
+def optimize_policy_buckets(records: List[Dict],
+                            predict_func: Callable,
+                            group_by: str = 'bucket',
+                            min_samples: int = 30,
+                            limit_groups: int = None,
+                            save_best: bool = True,
+                            **kwargs) -> Dict:
+    """
+    Optimize and optionally persist policy params for multiple leagues/buckets.
+
+    group_by:
+        - 'league': one policy per league
+        - 'bucket': one policy per league + total bucket + handicap bucket
+        - 'market': one policy per total bucket + handicap bucket across leagues
+    """
+    if predict_func is None:
+        return {'error': 'predict_func is required for bucket optimization'}
+
+    try:
+        from .prediction_policy import get_handicap_bucket, get_total_bucket
+    except Exception as e:
+        return {'error': f'prediction_policy unavailable: {e}'}
+
+    groups = defaultdict(list)
+    for record in records:
+        if not record.get('actual_score'):
+            continue
+
+        league = record.get('league') or '*'
+        total_bucket = get_total_bucket(record.get('total_line'))
+        handicap_bucket = get_handicap_bucket(record.get('asian'))
+
+        if group_by == 'league':
+            key = (league, None, None)
+        elif group_by == 'market':
+            key = ('*', total_bucket, handicap_bucket)
+        else:
+            key = (league, total_bucket, handicap_bucket)
+        groups[key].append(record)
+
+    sortable_groups = sorted(groups.items(), key=lambda item: len(item[1]), reverse=True)
+    if limit_groups:
+        sortable_groups = sortable_groups[:limit_groups]
+
+    results = {}
+    skipped = {}
+    for (league, total_bucket, handicap_bucket), group_records in sortable_groups:
+        label = f"{league}|{total_bucket or '*'}|{handicap_bucket or '*'}"
+        if len(group_records) < min_samples:
+            skipped[label] = {
+                'reason': 'not_enough_samples',
+                'sample_count': len(group_records),
+                'required': min_samples,
+            }
+            continue
+
+        sample = group_records[-1]
+        tuning_scope = 'league' if group_by == 'league' else 'bucket'
+        tuning_league = None if group_by == 'market' else league
+
+        result = optimize_prediction_parameters(
+            group_records,
+            predict_func,
+            min_samples=min_samples,
+            save_best=save_best,
+            tuning_scope=tuning_scope,
+            tuning_league=tuning_league,
+            tuning_total_line=sample.get('total_line'),
+            tuning_handicap=sample.get('asian'),
+            **kwargs,
+        )
+        results[label] = result
+
+    return {
+        'group_by': group_by,
+        'group_count': len(groups),
+        'optimized_count': len(results),
+        'skipped_count': len(skipped),
+        'results': results,
+        'skipped': skipped,
+    }
+
+
+def optimize_policy_buckets_from_history(predict_func: Callable,
+                                         league: str = None,
+                                         limit: int = None,
+                                         **kwargs) -> Dict:
+    """Load settled history and optimize multiple policy groups."""
+    try:
+        from .result_sync import get_prediction_records
+
+        records = [r for r in get_prediction_records(include_hidden=True) if r.get('settled')]
+        if league:
+            records = [r for r in records if r.get('league') == league]
+        if limit:
+            records = records[-limit:]
+        return optimize_policy_buckets(records, predict_func, **kwargs)
+    except Exception as e:
+        return {'error': str(e)}
+
+
 def compare_parameters(records: List[Dict], 
                      param_sets: List[Dict],
                      predict_func: Optional[Callable] = None,

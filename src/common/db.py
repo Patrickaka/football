@@ -9,8 +9,10 @@
     MYSQL_CHARSET   默认 utf8mb4
 
 server.py 使用 ThreadingHTTPServer，PyMySQL 连接非线程安全，故每线程持有独立连接。
+MySQL 不可用时自动设置降级标记，60 秒内跳过重连避免反复超时。
 """
 import os
+import time
 import threading
 from pathlib import Path
 
@@ -23,6 +25,30 @@ except ImportError:
 
 _SCHEMA_FILE = Path(__file__).resolve().parent / 'schema.sql'
 _local = threading.local()
+
+# MySQL 降级标记：连接失败后 60 秒内跳过重连
+_mysql_down = False
+_down_since = 0.0
+_RETRY_INTERVAL = 60.0  # 秒
+
+
+def _should_try_mysql():
+    """判断是否应该尝试 MySQL 连接"""
+    global _mysql_down, _down_since
+    if not _mysql_down:
+        return True
+    # 降级后经过 RETRY_INTERVAL 秒，允许重试
+    if time.time() - _down_since >= _RETRY_INTERVAL:
+        _mysql_down = False
+        return True
+    return False
+
+
+def _mark_mysql_down():
+    """标记 MySQL 不可用"""
+    global _mysql_down, _down_since
+    _mysql_down = True
+    _down_since = time.time()
 
 
 def _config():
@@ -42,9 +68,11 @@ def _config():
 
 
 def get_connection():
-    """返回当前线程的 MySQL 连接，断线自动重建。"""
+    """返回当前线程的 MySQL 连接，断线自动重建。MySQL 降级期间抛 RuntimeError。"""
     if pymysql is None:
         raise RuntimeError("PyMySQL is not installed; MySQL persistence is unavailable")
+    if not _should_try_mysql():
+        raise RuntimeError("MySQL is marked down, skipping connection")
     conn = getattr(_local, 'conn', None)
     if conn is not None:
         try:
@@ -56,9 +84,13 @@ def get_connection():
             except Exception:
                 pass
             _local.conn = None
-    conn = pymysql.connect(**_config())
-    _local.conn = conn
-    return conn
+    try:
+        conn = pymysql.connect(**_config())
+        _local.conn = conn
+        return conn
+    except Exception:
+        _mark_mysql_down()
+        raise
 
 
 def query(sql, params=None):
