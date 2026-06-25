@@ -3323,7 +3323,7 @@ async function getLotteryContribution() {
     const maxWeight = Math.max(...Object.values(weights), 1);
     for (const [name, weight] of Object.entries(weights)) {
       const percent = (weight / maxWeight * 100).toFixed(0);
-      const label = { frequency: '频率', gap: '遗漏', position: '位置', road: '012路' }[name] || name;
+      const label = { frequency: '频率', gap: '遗漏', position_residual: '区位残差', road_residual: '路数残差', repeat: '重号', odd_even: '奇偶', big_small: '大小' }[name] || name;
       html += `<div class="zhixuan">
         <span class="rank">${label}</span>
         <span class="num">${weight.toFixed(3)}</span>

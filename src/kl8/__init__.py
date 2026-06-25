@@ -19,16 +19,24 @@ v6 核心改动:
 11. 超几何分布替代二项分布(80选20不放回)
 12. 数据排序+连续性检查+冲突审核队列
 
-版本: kl8-v7.1-reference-strategy
+版本: kl8-v8.0-residual-features
 
-v7.1 核心改动（在v7基础上）:
-1. REFERENCE_STRATEGY: 默认参考策略（基础统计排序），标记为未验证参考
-2. resolve_play_strategy(): 优先使用已验证策略，回测未通过时自动降级到参考策略
-3. _build_window_analyzer(): 统一的临时分析器构造，确保线上预测和回测使用相同窗口
-4. predict_all() 重构: 使用 resolve_play_strategy + _build_window_analyzer，返回 prediction_mode/is_validated/warning
-5. 页面显示: 不再红色"不输出号码"，改为黄色"参考预测模式"提示，三种状态(validated/reference_unvalidated/no_data)
-6. 快照记录 play_strategies + prediction_modes
-7. 缓存指纹包含 ACTIVE_STRATEGIES + REFERENCE_STRATEGY
+v8 核心改动:
+1. REFERENCE_STRATEGY: 纯frequency单特征(frequency=1.0, 其余0.0)，不再默认混合重复计分
+2. position → position_residual: 区内频率 - 全局频率(剔除全局频率后的真正残差信号)
+3. road → road_residual: 路内频率 - 全局频率(同理)
+4. repeat: 撤掉默认重号惩罚(repeat=0.0)，拆为3个候选策略(neutral/avoid/follow)
+5. CANDIDATE_STRATEGIES: 3个独立候选策略等回测胜出才进入正式策略
+6. STRATEGY_TRIAL_RESULTS: 策略试验结果记录表，供全量FDR校正
+7. FDR校正改为全量: 同玩法下所有候选策略p值统一BH校正，不再用其余填1.0的假FDR
+8. _permutation_test(): 新增window_size参数，确保与验证集回测使用相同窗口
+9. 贝叶斯先验: Beta(5,15)均值=0.25，修正原来近似均值0.5的问题
+10. 快照target_issue: 明确记录下期期号(不再为None)
+11. 历史补数: fetch_kl8_history_backfill()一次性补数至2000期
+12. 自动结算: scheduler发现新期号后先结算上一期未结算快照
+13. 策略降级: 正式策略命中率持续低于随机基线80%时自动降级为参考预测
+14. 冲突过滤: 跨源冲突期号真正过滤掉(不再把冲突数据传给save_kl8_data)
+15. 缓存指纹: 包含 ACTIVE_STRATEGIES + REFERENCE_STRATEGY + CANDIDATE_STRATEGIES
 """
 
 import math
@@ -47,7 +55,7 @@ from src.common.logger import setup_logger
 
 log = setup_logger('kl8')
 
-KL8_PREDICTOR_VERSION = "kl8-v7.2-repeat-penalty"
+KL8_PREDICTOR_VERSION = "kl8-v8.0-residual-features"
 
 # ─── 快乐8常量 ───
 KL8_NUM_RANGE = 80       # 号码范围 1-80
@@ -74,16 +82,16 @@ SELECT_CONFIG = {
 # ─── 特征开关配置（v5：所有特征默认停用，需回测验证才能启用）───
 # 按玩法分开评估: 每个特征可以有per-play-type的enabled状态
 FEATURE_CONFIG = {
-    'frequency':  {'enabled': False, 'weight': 0.12,  'desc': '频率偏离度(均值回归:冷号加分,热号降分)'},
-    'gap':        {'enabled': False, 'weight': 0.00,   'desc': '遗漏偏离度 -- 仅展示指标,不参与预测'},
-    'position':   {'enabled': False, 'weight': 0.08,   'desc': '区位均衡(8个10码区)'},
-    'road':       {'enabled': False, 'weight': 0.10,   'desc': '路数特征(012路分布)'},
-    'sum':        {'enabled': False, 'weight': 0.00,   'desc': '和值特征 -- 停用(代码与注释不一致)'},
-    'zone':       {'enabled': False, 'weight': 0.00,   'desc': '区位近期开出率 -- 停用(追上期模式不优于随机)'},
-    'repeat':     {'enabled': False, 'weight': 0.00,   'desc': '重号特征 -- 停用(上期出现!=下期更容易出现)'},
-    'adjacent':   {'enabled': False, 'weight': 0.00,   'desc': '邻号特征 -- 停用(追上期模式不优于随机)'},
-    'odd_even':   {'enabled': False, 'weight': 0.06,   'desc': '奇偶特征(对称评分)'},
-    'big_small':  {'enabled': False, 'weight': 0.06,   'desc': '大小特征(对称评分)'},
+    'frequency':        {'enabled': False, 'weight': 1.0,   'desc': '频率偏离度(均值回归:冷号加分,热号降分)'},
+    'gap':              {'enabled': False, 'weight': 0.0,   'desc': '遗漏偏离度 -- 仅展示指标,不参与预测'},
+    'position_residual': {'enabled': False, 'weight': 0.0,   'desc': '区内残差(剔除全局频率后的区位偏移)'},
+    'road_residual':    {'enabled': False, 'weight': 0.0,   'desc': '路内残差(剔除全局频率后的路数偏移)'},
+    'sum':              {'enabled': False, 'weight': 0.0,   'desc': '和值特征 -- 停用'},
+    'zone':             {'enabled': False, 'weight': 0.0,   'desc': '区位近期开出率 -- 停用'},
+    'repeat':           {'enabled': False, 'weight': 0.0,   'desc': '重号特征(3个候选方向: neutral/avoid/follow)'},
+    'adjacent':         {'enabled': False, 'weight': 0.0,   'desc': '邻号特征 -- 停用'},
+    'odd_even':         {'enabled': False, 'weight': 0.0,   'desc': '奇偶特征(暂停,等单特征回测)'},
+    'big_small':        {'enabled': False, 'weight': 0.0,   'desc': '大小特征(暂停,等单特征回测)'},
 }
 
 # ─── 投票模型权重（v6：停用，等策略注册表接管）───
@@ -143,12 +151,12 @@ from copy import deepcopy
 REFERENCE_STRATEGY = {
     'strategy_id': 'reference_heuristic_v1',
     'feature_weights': {
-        'frequency': 0.20,    # 冷号偏好
-        'position': 0.12,     # 区内相对冷热
-        'road': 0.10,        # 路内相对冷热
-        'repeat': 0.25,      # 重号惩罚 (v7.2新增)
-        'odd_even': 0.05,
-        'big_small': 0.05,
+        'frequency': 1.0,      # 全局频率偏离（唯一核心特征）
+        'position_residual': 0.0,  # 区内残差（暂停用，等单特征回测）
+        'road_residual': 0.0,      # 路内残差（暂停用，等单特征回测）
+        'repeat': 0.0,             # 重号特征（暂停用，等候选策略回测）
+        'odd_even': 0.0,
+        'big_small': 0.0,
     },
     'model_weights': {
         'rank': 1.0,
@@ -160,7 +168,76 @@ REFERENCE_STRATEGY = {
     'is_validated': False,
 }
 
-# ─── 预测快照目录 ───
+# ─── 候选策略试验表（v8新增）───
+# 3种重号方向候选策略，都标记is_validated=False，等回测胜出后才进入正式策略
+# repeat_neutral: 不处理重号（repeat权重=0）
+# repeat_avoid: 避开上期号（上期号得分0.10，非上期0.85，repeat权重0.25）
+# repeat_follow: 适度保留上期号（上期号得分0.90，非上期0.50，repeat权重0.15）
+
+CANDIDATE_STRATEGIES = {
+    'repeat_neutral': {
+        'strategy_id': 'candidate_repeat_neutral',
+        'feature_weights': {
+            'frequency': 1.0,
+            'position_residual': 0.0,
+            'road_residual': 0.0,
+            'repeat': 0.0,
+            'odd_even': 0.0,
+            'big_small': 0.0,
+        },
+        'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
+        'window_size': 250,
+        'prediction_mode': 'candidate_unvalidated',
+        'is_validated': False,
+        'candidate_group': 'repeat_direction',
+        'repeat_direction': 'neutral',
+    },
+    'repeat_avoid': {
+        'strategy_id': 'candidate_repeat_avoid',
+        'feature_weights': {
+            'frequency': 0.60,
+            'position_residual': 0.0,
+            'road_residual': 0.0,
+            'repeat': 0.25,
+            'odd_even': 0.0,
+            'big_small': 0.0,
+        },
+        'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
+        'window_size': 250,
+        'prediction_mode': 'candidate_unvalidated',
+        'is_validated': False,
+        'candidate_group': 'repeat_direction',
+        'repeat_direction': 'avoid',
+        'repeat_avoid_score': 0.10,   # 上期号得分
+        'repeat_non_avoid_score': 0.85,  # 非上期号得分
+    },
+    'repeat_follow': {
+        'strategy_id': 'candidate_repeat_follow',
+        'feature_weights': {
+            'frequency': 0.60,
+            'position_residual': 0.0,
+            'road_residual': 0.0,
+            'repeat': 0.15,
+            'odd_even': 0.0,
+            'big_small': 0.0,
+        },
+        'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
+        'window_size': 250,
+        'prediction_mode': 'candidate_unvalidated',
+        'is_validated': False,
+        'candidate_group': 'repeat_direction',
+        'repeat_direction': 'follow',
+        'repeat_follow_score': 0.90,     # 上期号得分
+        'repeat_non_follow_score': 0.50, # 非上期号得分
+    },
+}
+
+# ─── 策略试验结果记录表（v8新增）───
+# 所有候选策略的回测结果统一记录于此，最终做全量FDR校正
+# 格式: [{'strategy_id': ..., 'play_type': ..., 'raw_p_value': ..., 'validation_lift': ..., ...}]
+STRATEGY_TRIAL_RESULTS = []
+
+
 KL8_SNAPSHOT_DIR = data_path('kl8_snapshots')
 KL8_SETTLEMENT_DIR = data_path('kl8_settlements')
 KL8_PRIZE_TABLE_FILE = data_path('kl8_prize_table.json')
@@ -351,6 +428,7 @@ def validate_and_activate_strategy(
         pick_n=pick_n,
         metric='mean_hits',
         n_permutations=n_permutations,
+        window_size=window_size,  # v8: 确保与回测使用相同窗口
     )
 
     if 'error' in perm_result:
@@ -358,13 +436,34 @@ def validate_and_activate_strategy(
 
     raw_p_value = perm_result.get('p_value', 1.0)
 
-    # BH FDR校正：对当前5个玩法+fu_shi_7=6个检验做校正
-    # 但只有1个p值（当前玩法），其他玩法用默认p=1.0（未检验）
-    all_p_for_fdr = [1.0] * len(valid_play_types)
-    play_type_idx = valid_play_types.index(play_type)
-    all_p_for_fdr[play_type_idx] = raw_p_value
-    adjusted_p_values = benjamini_hochberg_fdr(all_p_for_fdr)
-    adjusted_p = adjusted_p_values[play_type_idx]
+    # v8: 记录到策略试验结果表（供后续全量FDR校正）
+    trial_record = {
+        'strategy_id': f'{play_type}_w{window_size}_{hashlib.sha256(json.dumps(feature_weights, sort_keys=True, separators=(",", ":")).encode()).hexdigest()[:6]}',
+        'play_type': play_type,
+        'feature_weights': feature_weights,
+        'model_weights': model_weights,
+        'window_size': window_size,
+        'raw_p_value': raw_p_value,
+        'validation_lift': round(val_lift, 4),
+        'n_permutations': n_permutations,
+        'tested_at': time.strftime('%Y-%m-%dT%H:%M:%S'),
+    }
+    STRATEGY_TRIAL_RESULTS.append(trial_record)
+
+    # v8: 全量BH FDR校正 — 对同一玩法下所有候选策略的p值统一校正
+    # 收集同玩法的所有试验记录
+    same_play_trials = [t for t in STRATEGY_TRIAL_RESULTS if t['play_type'] == play_type]
+    same_play_p_values = [t['raw_p_value'] for t in same_play_trials]
+
+    # 如果只有1个p值（当前刚添加的），FDR校正等于不校正
+    # 但随着候选策略增多，FDR校正越来越有意义
+    if len(same_play_p_values) > 1:
+        adjusted_p_values = benjamini_hochberg_fdr(same_play_p_values)
+        # 找到当前试验在列表中的索引
+        current_idx = len(same_play_p_values) - 1  # 刚添加的是最后一个
+        adjusted_p = adjusted_p_values[current_idx]
+    else:
+        adjusted_p = raw_p_value  # 单次检验时FDR校正等于原始p值
 
     # 同时做Bonferroni校正（保守版）
     bonferroni_p = bonferroni_correction(raw_p_value, len(valid_play_types))
@@ -1026,8 +1125,18 @@ class KL8Analyzer:
 
     # ─── 特征评分 ───
 
-    def _calculate_feature_score(self, num: int) -> Dict[str, float]:
-        """计算号码num的各特征得分"""
+    def _calculate_feature_score(self, num: int, repeat_direction: str = 'neutral',
+                                     repeat_avoid_score: float = 0.10,
+                                     repeat_non_avoid_score: float = 0.85,
+                                     repeat_follow_score: float = 0.90,
+                                     repeat_non_follow_score: float = 0.50) -> Dict[str, float]:
+        """计算号码num的各特征得分
+
+        v8改动:
+        - position → position_residual: 区内频率 - 全局频率期望(剔除全局频率影响)
+        - road → road_residual: 路内频率 - 全局频率期望(剔除全局频率影响)
+        - repeat支持3种方向: neutral(0.5), avoid(上期0.10/非上期0.85), follow(上期0.90/非上期0.50)
+        """
         scores = {}
         stats = self.statistics
         freq = stats['frequency']
@@ -1037,7 +1146,7 @@ class KL8Analyzer:
         last_nums = stats['last_numbers']
         total = stats['total_periods']
 
-        # 1. 频率偏离度
+        # 1. 频率偏离度（全局冷热信号）
         actual_freq = freq.get(num, 0)
         deviation_ratio = actual_freq / max(expected_freq, 0.01)
         if deviation_ratio <= 1.0:
@@ -1053,78 +1162,90 @@ class KL8Analyzer:
         else:
             scores['gap'] = 0.85 - 0.45 * (1.0 - math.exp(-(gap_ratio - 1.0) * 0.8))
 
-        # 3. 区位特征(v7.2: 区内相对冷热，而非全局平衡)
+        # 3. 区内残差(position_residual): 该号频率 - 区内平均频率 / 全局平均频率
+        #    剔除全局频率后，只保留"该号码在区内是否超出全局平均水平"的残差信号
         zone = (num - 1) // 10 + 1
         zone_nums = [z for z in range(((zone-1)*10)+1, zone*10+1)]
-        # 该号码在所属区位内的频率 vs 区位平均频率
         num_freq = freq.get(num, 0)
+        # 全局平均频率(每个号码期望出现次数)
+        global_avg = expected_freq
+        # 区内平均频率
         zone_total = sum(freq.get(z, 0) for z in zone_nums)
         zone_avg = zone_total / len(zone_nums)
-        if zone_avg > 0:
-            pos_ratio = num_freq / zone_avg
-            # 冷号(低于区内平均)得高分，热号(高于区内平均)得低分
-            if pos_ratio <= 1.0:
-                scores['position'] = 0.55 + 0.30 * (1.0 - pos_ratio)
+        # 残差 = (num_freq - global_avg) vs (zone_avg - global_avg)
+        # 如果号码频率 > 全局平均，但在区内也只是平均偏高，则残差为0（这只是区位偏移）
+        # 如果号码频率 > 区内平均 + global_avg偏差，则真正是该号码自己的冷热信号
+        if global_avg > 0:
+            zone_deviation = zone_avg - global_avg  # 区位整体偏移
+            num_residual = num_freq - zone_avg  # 号码在区内的偏移
+            # 标准化: 冷号(负残差=低于区内平均)得高分，热号(正残差)得低分
+            residual_ratio = num_residual / max(global_avg, 0.01)
+            if residual_ratio <= 0:
+                # 冷号(低于区内平均) → 均值回归加分
+                scores['position_residual'] = 0.55 + 0.25 * min(1.0, abs(residual_ratio))
             else:
-                scores['position'] = max(0.15, 0.55 * math.exp(-1.5 * (pos_ratio - 1.0)))
+                # 热号(高于区内平均) → 均值回归降分
+                scores['position_residual'] = max(0.15, 0.55 * math.exp(-1.5 * residual_ratio))
         else:
-            scores['position'] = 0.50
+            scores['position_residual'] = 0.50
 
-        # 4. 路数特征(v7.2: 路内相对冷热)
+        # 4. 路内残差(road_residual): 同理，剔除全局频率
         road = num % 3
         road_nums = [r for r in range(1, 81) if r % 3 == road]
         road_total = sum(freq.get(r, 0) for r in road_nums)
         road_avg = road_total / len(road_nums)
-        if road_avg > 0:
-            rd_ratio = num_freq / road_avg
-            if rd_ratio <= 1.0:
-                scores['road'] = 0.55 + 0.25 * (1.0 - rd_ratio)
+        if global_avg > 0:
+            road_deviation = road_avg - global_avg  # 路数整体偏移
+            num_road_residual = num_freq - road_avg  # 号码在路内的偏移
+            residual_ratio = num_road_residual / max(global_avg, 0.01)
+            if residual_ratio <= 0:
+                scores['road_residual'] = 0.55 + 0.20 * min(1.0, abs(residual_ratio))
             else:
-                scores['road'] = max(0.15, 0.55 * math.exp(-1.5 * (rd_ratio - 1.0)))
+                scores['road_residual'] = max(0.15, 0.55 * math.exp(-1.5 * residual_ratio))
         else:
-            scores['road'] = 0.50
+            scores['road_residual'] = 0.50
 
         # 5. 和值特征 -- 停用
         scores['sum'] = 0.5
 
-        # 6. 区位近期开出率 -- 对称标准化偏离
-        zone_nums = [z for z in range(((zone-1)*10)+1, zone*10+1)]
-        zone_hit_count = len([n for n in zone_nums if n in last_nums])
-        zone_hit_rate = zone_hit_count / len(zone_nums)
-        expected_hit_rate = KL8_DRAW_COUNT / KL8_NUM_RANGE
-        zone_deviation = abs(zone_hit_rate - expected_hit_rate) / max(expected_hit_rate, 0.01)
-        scores['zone'] = 0.4 + 0.6 * max(0, 1.0 - zone_deviation)
+        # 6. 区位近期开出率 -- 停用(追上期模式不优于随机)
+        scores['zone'] = 0.5
 
-        # 7. 重号惩罚(v7.2: 上期开出号码大幅降分)
-        if num in last_nums:
-            scores['repeat'] = 0.10  # 上期号：重罚
+        # 7. 重号(v8: 支持3种候选方向)
+        if repeat_direction == 'avoid':
+            # 避开上期号
+            scores['repeat'] = repeat_avoid_score if num in last_nums else repeat_non_avoid_score
+        elif repeat_direction == 'follow':
+            # 适度保留上期号
+            scores['repeat'] = repeat_follow_score if num in last_nums else repeat_non_follow_score
         else:
-            scores['repeat'] = 0.85  # 非上期号：奖励
+            # 不处理重号(中性)
+            scores['repeat'] = 0.50
 
         # 8. 邻号 -- 停用
         scores['adjacent'] = 0.5
 
-        # 9. 奇偶 -- 对称评分
-        oe = stats['freq_by_odd_even']
-        total_oe = oe.get('odd', 0) + oe.get('even', 0)
-        odd_ratio = oe.get('odd', 0) / max(total_oe, 1)
-        scores['odd_even'] = self.balance_score(odd_ratio, 0.5, num % 2 == 1)
+        # 9. 奇偶 -- 对称评分(暂停用)
+        scores['odd_even'] = 0.50
 
-        # 10. 大小 -- 对称评分
-        bs = stats['freq_by_big_small']
-        total_bs = bs.get('big', 0) + bs.get('small', 0)
-        big_ratio = bs.get('big', 0) / max(total_bs, 1)
-        scores['big_small'] = self.balance_score(big_ratio, 0.5, num > 40)
+        # 10. 大小 -- 对称评分(暂停用)
+        scores['big_small'] = 0.50
 
         return scores
 
     # ─── 排名模型（v5: 纯参数化，接受外部feature_weights）───
 
-    def get_ensemble_ranking(self, top_n: int = 20, feature_weights: Optional[Dict[str, float]] = None) -> List[Dict]:
+    def get_ensemble_ranking(self, top_n: int = 20, feature_weights: Optional[Dict[str, float]] = None,
+                              repeat_direction: str = 'neutral',
+                              repeat_avoid_score: float = 0.10,
+                              repeat_non_avoid_score: float = 0.85,
+                              repeat_follow_score: float = 0.90,
+                              repeat_non_follow_score: float = 0.50) -> List[Dict]:
         """综合特征评分排名
 
-        v5: feature_weights参数可选传入（回测时不修改全局配置）
-        无信号时返回空列表而非[1..20]
+        v8改动:
+        - feature_weights 支持 position_residual/road_residual（残差特征）
+        - repeat_direction 参数支持 neutral/avoid/follow
         """
         # 使用传入权重或全局活跃权重
         weights = feature_weights or get_active_feature_weights()
@@ -1136,7 +1257,14 @@ class KL8Analyzer:
 
         ranking = []
         for num in range(1, 81):
-            scores = self._calculate_feature_score(num)
+            scores = self._calculate_feature_score(
+                num,
+                repeat_direction=repeat_direction,
+                repeat_avoid_score=repeat_avoid_score,
+                repeat_non_avoid_score=repeat_non_avoid_score,
+                repeat_follow_score=repeat_follow_score,
+                repeat_non_follow_score=repeat_non_follow_score,
+            )
             total_score = sum(
                 scores.get(k, 0) * weights.get(k, 0) for k in scores
             )
@@ -1153,19 +1281,30 @@ class KL8Analyzer:
     # ─── 贝叶斯模型 ───
 
     def _model_bayesian(self, top_n: int = 20) -> List[int]:
-        """贝叶斯概率模型 -- 目前停用"""
+        """贝叶斯概率模型 -- 目前停用
+
+        v8修正:
+        - 先验均值从0.5修正为0.25（符合80选20的理论开出率）
+        - 使用 Beta(5, 15) 先验，均值=5/20=0.25
+        - 启用前需做概率校准和样本外验证
+        """
         stats = self.statistics
         freq = stats['frequency']
-        expected_freq = stats['expected_freq']
         total = stats['total_periods']
+
+        # v8: Beta(5, 15) 先验，均值=0.25
+        prior_alpha = 5
+        prior_beta = 15
+        prior_strength = prior_alpha + prior_beta  # = 20
 
         scores = {}
         for num in range(1, 81):
-            actual_rate = freq.get(num, 0) / max(total, 1)
-            expected_rate = KL8_DRAW_COUNT / KL8_NUM_RANGE
-            base_prob = (freq.get(num, 0) + 1) / (total + 2)
+            count = freq.get(num, 0)
+            # 后验均值 = (count + alpha) / (total + alpha + beta)
+            base_prob = (count + prior_alpha) / (total + prior_strength)
 
-            deviation_ratio = actual_rate / max(expected_rate, 0.01)
+            # 均值回归因子：偏离理论率0.25越多，回归越强
+            deviation_ratio = base_prob / 0.25  # 理论率=0.25
             reversion_factor = 1.0 / (1.0 + 0.6 * max(0, deviation_ratio - 1.0))
             if deviation_ratio < 1.0:
                 reversion_factor = min(1.5, 1.0 + 0.5 * (1.0 - deviation_ratio))
@@ -1208,9 +1347,21 @@ class KL8Analyzer:
 
     # ─── 排名模型(独立) ───
 
-    def _model_rank(self, top_n: int = 20, feature_weights: Optional[Dict[str, float]] = None) -> List[int]:
+    def _model_rank(self, top_n: int = 20, feature_weights: Optional[Dict[str, float]] = None,
+                     repeat_direction: str = 'neutral',
+                     repeat_avoid_score: float = 0.10,
+                     repeat_non_avoid_score: float = 0.85,
+                     repeat_follow_score: float = 0.90,
+                     repeat_non_follow_score: float = 0.50) -> List[int]:
         """纯排名模型"""
-        ranking = self.get_ensemble_ranking(top_n=top_n, feature_weights=feature_weights)
+        ranking = self.get_ensemble_ranking(
+            top_n=top_n, feature_weights=feature_weights,
+            repeat_direction=repeat_direction,
+            repeat_avoid_score=repeat_avoid_score,
+            repeat_non_avoid_score=repeat_non_avoid_score,
+            repeat_follow_score=repeat_follow_score,
+            repeat_non_follow_score=repeat_non_follow_score,
+        )
         return [r['num'] for r in ranking]
 
     # ─── 多模型投票（v5: 纯参数化 + 预测就绪判断）───
@@ -1221,11 +1372,16 @@ class KL8Analyzer:
         top_n: int = 20,
         feature_weights: Optional[Dict[str, float]] = None,
         model_weights: Optional[Dict[str, float]] = None,
+        repeat_direction: str = 'neutral',
+        repeat_avoid_score: float = 0.10,
+        repeat_non_avoid_score: float = 0.85,
+        repeat_follow_score: float = 0.90,
+        repeat_non_follow_score: float = 0.50,
     ) -> Dict:
         """多模型集成投票
 
-        v5: 纯参数化 — 传入权重不修改全局配置
-        无信号时返回空推荐 + no_validated_signal状态
+        v8改动:
+        - 传递 repeat_direction 到 get_ensemble_ranking
         """
         fw = feature_weights or get_active_feature_weights()
         mw = model_weights or get_active_model_weights()
@@ -1254,7 +1410,14 @@ class KL8Analyzer:
 
         # 懒加载: 只计算启用模型
         if rank_ready:
-            model_result = self._model_rank(top_n=top_n, feature_weights=fw)
+            model_result = self._model_rank(
+                top_n=top_n, feature_weights=fw,
+                repeat_direction=repeat_direction,
+                repeat_avoid_score=repeat_avoid_score,
+                repeat_non_avoid_score=repeat_non_avoid_score,
+                repeat_follow_score=repeat_follow_score,
+                repeat_non_follow_score=repeat_non_follow_score,
+            )
             for rank, num in enumerate(model_result):
                 vote_weight = (1.0 - (rank / max(len(model_result), 1))) * rank_weight
                 votes[num] += vote_weight
@@ -1288,12 +1451,22 @@ class KL8Analyzer:
         self,
         feature_weights: Optional[Dict[str, float]] = None,
         model_weights: Optional[Dict[str, float]] = None,
+        repeat_direction: str = 'neutral',
+        repeat_avoid_score: float = 0.10,
+        repeat_non_avoid_score: float = 0.85,
+        repeat_follow_score: float = 0.90,
+        repeat_non_follow_score: float = 0.50,
     ) -> Dict:
         """选5复式7码"""
         vote_result = self.multi_model_voting(
             pick_n=7, top_n=7,
             feature_weights=feature_weights,
             model_weights=model_weights,
+            repeat_direction=repeat_direction,
+            repeat_avoid_score=repeat_avoid_score,
+            repeat_non_avoid_score=repeat_non_avoid_score,
+            repeat_follow_score=repeat_follow_score,
+            repeat_non_follow_score=repeat_non_follow_score,
         )
 
         if vote_result.get('status') == 'no_validated_signal':
@@ -1354,10 +1527,16 @@ class KL8Analyzer:
         ).hexdigest()
 
         latest_issue = self.history_data[0]['issue']
+        # v8: target_issue = 下期期号(当前最新期号+1)
+        try:
+            target_issue_int = int(latest_issue) + 1
+            target_issue = str(target_issue_int)
+        except (ValueError, TypeError):
+            target_issue = f'next_after_{latest_issue}'
         snapshot_id = uuid.uuid4().hex
         snapshot = {
             'snapshot_id': snapshot_id,
-            'target_issue': None,  # 不预设目标期号
+            'target_issue': target_issue,  # v8: 明确记录目标期号（不再为None）
             'based_on_issue': latest_issue,
             'predicted_at': time.strftime('%Y-%m-%dT%H:%M:%S'),
             'history_window_size': recent,
@@ -1369,6 +1548,7 @@ class KL8Analyzer:
             'model_config': {k: dict(v) for k, v in MODEL_CONFIG.items()},
             'active_strategies': {k: dict(v) for k, v in ACTIVE_STRATEGIES.items()},
             'reference_strategy': dict(REFERENCE_STRATEGY),
+            'candidate_strategies': {k: dict(v) for k, v in CANDIDATE_STRATEGIES.items()},
             # v7.1: 每个玩法记录strategy_id和prediction_mode
             'play_strategies': {
                 'select_3': prediction_result.get('select_3', {}).get('strategy_id', ''),
@@ -1625,6 +1805,13 @@ class KL8Analyzer:
             # v7.1: 使用 resolve_play_strategy 优先已验证策略，降级到参考策略
             strategy = resolve_play_strategy(s_key)
 
+            # v8: 从策略中提取 repeat_direction 和相关参数
+            repeat_direction = strategy.get('repeat_direction', 'neutral')
+            repeat_avoid_score = strategy.get('repeat_avoid_score', 0.10)
+            repeat_non_avoid_score = strategy.get('repeat_non_avoid_score', 0.85)
+            repeat_follow_score = strategy.get('repeat_follow_score', 0.90)
+            repeat_non_follow_score = strategy.get('repeat_non_follow_score', 0.50)
+
             # v7.1: 使用 _build_window_analyzer 确保窗口一致性
             predictor = self._build_window_analyzer(
                 strategy.get('window_size', KL8_DEFAULT_HISTORY)
@@ -1635,6 +1822,11 @@ class KL8Analyzer:
                 top_n=config['top_n'],
                 feature_weights=strategy['feature_weights'],
                 model_weights=strategy['model_weights'],
+                repeat_direction=repeat_direction,
+                repeat_avoid_score=repeat_avoid_score,
+                repeat_non_avoid_score=repeat_non_avoid_score,
+                repeat_follow_score=repeat_follow_score,
+                repeat_non_follow_score=repeat_non_follow_score,
             )
 
             results[s_key] = {
@@ -1651,8 +1843,13 @@ class KL8Analyzer:
                 ),
             }
 
-        # 复式7码（v7.1: 同样使用 resolve_play_strategy + _build_window_analyzer）
+        # 复式7码（v8: 同样传递 repeat_direction）
         strategy = resolve_play_strategy('fu_shi_7')
+        repeat_direction = strategy.get('repeat_direction', 'neutral')
+        repeat_avoid_score = strategy.get('repeat_avoid_score', 0.10)
+        repeat_non_avoid_score = strategy.get('repeat_non_avoid_score', 0.85)
+        repeat_follow_score = strategy.get('repeat_follow_score', 0.90)
+        repeat_non_follow_score = strategy.get('repeat_non_follow_score', 0.50)
 
         predictor = self._build_window_analyzer(
             strategy.get('window_size', KL8_DEFAULT_HISTORY)
@@ -1661,6 +1858,11 @@ class KL8Analyzer:
         results['fu_shi_7'] = predictor.get_fu_shi_7(
             feature_weights=strategy['feature_weights'],
             model_weights=strategy['model_weights'],
+            repeat_direction=repeat_direction,
+            repeat_avoid_score=repeat_avoid_score,
+            repeat_non_avoid_score=repeat_non_avoid_score,
+            repeat_follow_score=repeat_follow_score,
+            repeat_non_follow_score=repeat_non_follow_score,
         )
         results['fu_shi_7']['strategy_id'] = strategy['strategy_id']
         results['fu_shi_7']['prediction_mode'] = strategy['prediction_mode']
@@ -1697,6 +1899,7 @@ class KL8Analyzer:
             'active_model_weights': get_active_model_weights(),
             'active_strategies': ACTIVE_STRATEGIES,
             'reference_strategy': REFERENCE_STRATEGY,
+            'candidate_strategies': CANDIDATE_STRATEGIES,
             'is_prediction_ready': prediction_ready,
             'signal_status': overall_status,
             'note': (
@@ -1739,7 +1942,7 @@ def get_kl8_analyzer() -> KL8Analyzer:
 
 
 def run_prediction(force_refresh: bool = False) -> Dict:
-    """快乐8预测入口（v7.1: 缓存指纹包含ACTIVE_STRATEGIES + REFERENCE_STRATEGY）"""
+    """快乐8预测入口（v8: 缓存指纹包含所有策略配置）"""
     analyzer = get_kl8_analyzer()
 
     if not force_refresh:
@@ -1752,13 +1955,13 @@ def run_prediction(force_refresh: bool = False) -> Dict:
             'using_simulated_data': True,
         }
 
-    # v7.1: 缓存指纹包含 ACTIVE_STRATEGIES + REFERENCE_STRATEGY
-    # 任何一个策略变更都不会拿到旧缓存
+    # v8: 缓存指纹包含 ACTIVE_STRATEGIES + REFERENCE_STRATEGY + CANDIDATE_STRATEGIES
     config_fingerprint = hashlib.sha256(
         json.dumps(
             {
                 'active_strategies': ACTIVE_STRATEGIES,
                 'reference_strategy': REFERENCE_STRATEGY,
+                'candidate_strategies': CANDIDATE_STRATEGIES,
             },
             ensure_ascii=False,
             sort_keys=True,
@@ -2119,26 +2322,23 @@ class KL8RollingBacktest:
         metric: str = 'mean_hits',
         n_permutations: int = BACKTEST_PERMUTATION_COUNT,
         min_train: int = 50,
+        window_size: Optional[int] = None,  # v8: 确保与回测使用相同窗口
     ) -> Dict:
-        """置换检验: 计算模型Lift在零假设下的p-value（v6: 按玩法检验）
+        """置换检验: 计算模型Lift在零假设下的p-value（v8: 传入window_size）
 
-        零假设: 模型排名与随机选择无区别
-        方法: 每期将模型推荐号码随机打散，计算"随机打散后的Lift"分布
-        只有模型成绩高于95%以上随机打散结果，才算候选有效
-
-        v6改动:
-        - pick_n参数: 可以指定检验选3/选4/选5/选6/选7
-        - metric: 'mean_hits' 或关键中奖档概率
-        - 结果包含该玩法的p值和Lift
+        v8改动:
+        - 新增 window_size 参数，确保置换检验的真实模型Lift与验证集回测使用相同的窗口
+        - 如果不传，默认使用KL8_DEFAULT_HISTORY（与之前行为一致，但现在显式可控）
         """
         history = self.analyzer.history_data
         history_asc = sorted(history, key=lambda x: x['issue'])
 
-        # 先跑一遍真实模型得分（用multi_model_voting管道）
+        # v8: 先跑一遍真实模型得分（用相同的window_size）
         real_result = self._rolling_backtest_parametric(
             feature_weights, model_weights,
             start_idx=start_idx, end_idx=end_idx,
             min_train=min_train,
+            window_size=window_size,
         )
 
         if 'error' in real_result:

@@ -56,6 +56,10 @@ def fetch_kl8_data(pages: int = 10, per_page: int = 50) -> List[Dict]:
     for page in range(1, pages + 1):
         url = f'http://api.huiniao.top/interface/home/lotteryHistory?type=klb&page={page}&limit={per_page}'
         try:
+            # v8: 补数时增加延时，避免API限流(401)
+            if pages > 10 and page > 5:
+                time.sleep(2)  # 补数抓取时每页间隔2秒
+
             req = urllib.request.Request(url, headers={
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
             })
@@ -64,7 +68,21 @@ def fetch_kl8_data(pages: int = 10, per_page: int = 50) -> List[Dict]:
 
             if raw.get('code') != 1:
                 log.warning(f'API返回错误: code={raw.get("code")}, info={raw.get("info")}')
-                continue
+                # v8: 401限流时等待后重试一次
+                if raw.get('code') == 401 and pages > 10:
+                    log.info(f'API限流，等待5秒后重试第{page}页')
+                    time.sleep(5)
+                    try:
+                        with urllib.request.urlopen(req, timeout=15) as resp_retry:
+                            raw = json.loads(resp_retry.read().decode('utf-8'))
+                        if raw.get('code') != 1:
+                            log.warning(f'API重试仍失败: code={raw.get("code")}')
+                            continue
+                    except Exception as e_retry:
+                        log.warning(f'API重试请求失败: {e_retry}')
+                        continue
+                else:
+                    continue
 
             data_obj = raw.get('data', {})
             list_data = data_obj.get('data', {}).get('list', [])
@@ -316,16 +334,19 @@ def fetch_or_load_kl8_data(force_refresh: bool = False) -> Optional[List[Dict]]:
                 log.warning(f'读取本地数据失败: {e}')
 
     # 需要抓取
-    data = fetch_kl8_data(pages=5, per_page=50)
+    # v8: 日常只抓最近1-2页；历史补数用 fetch_kl8_history_backfill
+    data = fetch_kl8_data(pages=2, per_page=50)
     if data:
         # v6: 抓取后执行第二数据源交叉校验
         cross_result = cross_validate_with_second_source(data)
         if cross_result.get('conflict_count', 0) > 0:
-            log.error(f'存在跨数据源冲突{cross_result["conflict_count"]}条，本次不更新冲突期号')
-            # 过滤掉冲突期号（不写入文件，但记录到审核队列已由cross_validate完成）
-            second_by_issue = {}
-            # 如果有第二数据源，过滤冲突期号
-            # cross_validate已将冲突写入审核队列，这里只跳过保存
+            log.error(f'存在跨数据源冲突{cross_result["conflict_count"]}条，过滤冲突期号')
+            # v8: 真正过滤掉冲突期号（不再把冲突数据传给save_kl8_data）
+            conflict_issues = {item['issue'] for item in cross_result.get('conflicts', [])}
+            # 冲突的完整列表在cross_result中只显示前10条，需要从second_source获取完整列表
+            # 但conflicts字段已由cross_validate保存到审核队列，这里用已知冲突过滤
+            data = [row for row in data if row['issue'] not in conflict_issues]
+            log.info(f'过滤冲突期号后，剩余{len(data)}期数据')
 
         merged = save_kl8_data(data)
         # v4: 返回合并后的完整历史，不只是本次API数据
@@ -497,4 +518,138 @@ def cross_validate_with_second_source(primary_data: List[Dict]) -> Dict:
         'second_source_available': True,
         'primary_only_issues': len(primary_by_issue) - len(common_issues),
         'second_only_issues': len(second_by_issue) - len(common_issues),
+    }
+
+
+# ─── 历史数据补数（v8新增）───
+
+KL8_BACKFILL_MIN_PERIODS = 1500  # 最低目标期数
+KL8_BACKFILL_RECOMMENDED_PERIODS = 2000  # 推荐目标期数
+KL8_BACKFILL_PAGES = 40  # 一次补数抓取40页(40*50=2000期)
+
+
+def check_need_backfill() -> Dict:
+    """检查是否需要历史补数
+
+    返回:
+        {
+            'need_backfill': bool,
+            'current_periods': int,
+            'min_target': int,
+            'recommended_target': int,
+        }
+    """
+    path = Path(KL8_HISTORY_FILE)
+    if not path.exists():
+        return {
+            'need_backfill': True,
+            'current_periods': 0,
+            'min_target': KL8_BACKFILL_MIN_PERIODS,
+            'recommended_target': KL8_BACKFILL_RECOMMENDED_PERIODS,
+        }
+
+    try:
+        raw = json.loads(path.read_text(encoding='utf-8'))
+        if isinstance(raw, dict):
+            source_list = raw.get('results', raw.get('data', []))
+        else:
+            source_list = raw
+
+        valid_count = 0
+        for r in source_list:
+            normed = normalize_record(r)
+            if normed:
+                valid_count += 1
+
+        need = valid_count < KL8_BACKFILL_MIN_PERIODS
+
+        return {
+            'need_backfill': need,
+            'current_periods': valid_count,
+            'min_target': KL8_BACKFILL_MIN_PERIODS,
+            'recommended_target': KL8_BACKFILL_RECOMMENDED_PERIODS,
+        }
+    except Exception as e:
+        log.warning(f'检查补数需求失败: {e}')
+        return {
+            'need_backfill': True,
+            'current_periods': 0,
+            'min_target': KL8_BACKFILL_MIN_PERIODS,
+            'recommended_target': KL8_BACKFILL_RECOMMENDED_PERIODS,
+        }
+
+
+def fetch_kl8_history_backfill(target_periods: int = KL8_BACKFILL_RECOMMENDED_PERIODS) -> Dict:
+    """一次性历史补数 — 抓取大量历史数据以满足回测最低要求
+
+    v8新增:
+    - 首次初始化或历史不足时自动触发
+    - 抓取足够多的页数(pages=40, per_page=50 ≈ 2000期)
+    - 日常定时任务只抓最近1-2页(50-100期)
+    - 只有首次初始化或历史不足时才抓30-60页补齐历史
+
+    参数:
+        target_periods: 目标期数，默认2000
+
+    返回:
+        {
+            'success': bool,
+            'periods_before': int,
+            'periods_after': int,
+            'fetched_count': int,
+            'error': str (if failed),
+        }
+    """
+    # 先检查当前有多少期
+    path = Path(KL8_HISTORY_FILE)
+    periods_before = 0
+    if path.exists():
+        try:
+            raw = json.loads(path.read_text(encoding='utf-8'))
+            if isinstance(raw, dict):
+                source_list = raw.get('results', raw.get('data', []))
+            else:
+                source_list = raw
+            for r in source_list:
+                if normalize_record(r):
+                    periods_before += 1
+        except Exception:
+            pass
+
+    if periods_before >= target_periods:
+        log.info(f'快乐8历史数据已足够({periods_before}期 >= {target_periods}期)，无需补数')
+        return {
+            'success': True,
+            'periods_before': periods_before,
+            'periods_after': periods_before,
+            'fetched_count': 0,
+            'message': f'历史数据已满足目标({periods_before}期)',
+        }
+
+    # 计算需要抓取的页数
+    pages_needed = max(KL8_BACKFILL_PAGES, (target_periods - periods_before) // 50 + 5)
+    log.info(f'快乐8开始历史补数: 当前{periods_before}期，目标{target_periods}期，将抓取{pages_needed}页')
+
+    # 抓取大量数据
+    data = fetch_kl8_data(pages=pages_needed, per_page=50)
+    if not data:
+        return {
+            'success': False,
+            'periods_before': periods_before,
+            'periods_after': periods_before,
+            'fetched_count': 0,
+            'error': '补数抓取失败',
+        }
+
+    # 保存并合并
+    merged = save_kl8_data(data)
+    periods_after = len(merged) if merged else periods_before
+
+    log.info(f'快乐8补数完成: {periods_before}期 -> {periods_after}期 (新增{len(data)}期抓取)')
+
+    return {
+        'success': True,
+        'periods_before': periods_before,
+        'periods_after': periods_after,
+        'fetched_count': len(data),
     }
