@@ -166,6 +166,32 @@ class ResultSyncQualityGuardTests(unittest.TestCase):
 
         self.assertEqual(report['summary']['htf_total'], 0)
 
+    def test_backtest_report_includes_bias_diagnostics(self):
+        records = []
+        for idx, actual in enumerate(['2-1', '2-0', '3-1', '1-2', '2-2', '3-0']):
+            home_goals, away_goals = map(int, actual.split('-'))
+            actual_result = 'H' if home_goals > away_goals else 'A' if home_goals < away_goals else 'D'
+            records.append({
+                'match_id': f'bias-{idx}',
+                'league': 'Bias League',
+                'home': 'A',
+                'away': 'B',
+                'actual_score': actual,
+                'actual_result': actual_result,
+                'predicted_scores': {'1-1': 0.35, '1-0': 0.20, '2-1': 0.10},
+                'predicted_1x2': {'H': 0.40, 'D': 0.35, 'A': 0.25},
+                'goal_count': {'distribution_dict': {2: 0.60, 3: 0.25, 4: 0.15}},
+                'asian': 0,
+                'total_line': 2.5,
+            })
+
+        report = run_backtest_report(records, verbose=False)
+        diagnostics = report['diagnostics']
+
+        self.assertIn('common_scores_overheated', diagnostics['notes'])
+        self.assertIn('draw', diagnostics)
+        self.assertIn('weak_buckets', diagnostics)
+
 
 if __name__ == '__main__':
     unittest.main()

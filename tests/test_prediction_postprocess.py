@@ -72,6 +72,16 @@ class PredictionPostprocessTests(unittest.TestCase):
         self.assertGreater(level_draw, 0.30)
         self.assertLessEqual(level_draw, 0.42)
 
+    def test_market_data_quality_reduces_conflicted_market_weight(self):
+        quality = football._assess_market_data_quality(
+            {'handicap': 0.75, 'implied_supremacy': 0.8, 'open_prob': {'home': 0.5}, 'close_prob': {'home': 0.5}},
+            {'close': {'home': 0.30, 'draw': 0.30, 'away': 0.40}, 'implied_supremacy': -0.4},
+            {'close_line': 2.5, 'open_prob': {'over': 0.5}, 'close_prob': {'over': 0.5}},
+        )
+
+        self.assertLess(quality['weight_factor'], 1.0)
+        self.assertIn('asian_euro_direction_conflict', quality['reasons'])
+
 
 if __name__ == '__main__':
     unittest.main()
