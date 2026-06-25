@@ -291,6 +291,35 @@ class ResultSyncQualityGuardTests(unittest.TestCase):
         self.assertAlmostEqual(stats['home_lead_at_half_rate'], 0.667, places=3)
         self.assertAlmostEqual(stats['first_half_draw_rate'], 0.333, places=3)
 
+    def test_half_time_stats_falls_back_to_nearest_bucket(self):
+        db = HalfTimeStatsDB()
+        db.db = {}
+
+        for _ in range(12):
+            db.record_match('Test', 2.5, 0.0, 'league', 0, 0, 1, 1, sample_weight=1.0)
+
+        stats = db.get_nearest_stats('Test', 2.75, 0.25, 'league', min_samples=10, max_distance=0.75)
+
+        self.assertIsNotNone(stats)
+        self.assertEqual(stats['_meta']['source'], 'nearest')
+        self.assertEqual(stats['_meta']['league'], 'Test')
+        self.assertAlmostEqual(stats['_meta']['distance'], 0.375, places=3)
+        self.assertGreater(stats['half_full_distribution']['DD'], 0)
+
+    def test_half_time_stats_nearest_prefers_same_league(self):
+        db = HalfTimeStatsDB()
+        db.db = {}
+
+        for _ in range(12):
+            db.record_match('Other', 2.5, 0.0, 'league', 1, 0, 2, 0, sample_weight=1.0)
+            db.record_match('Test', 2.0, 0.0, 'league', 0, 0, 1, 1, sample_weight=1.0)
+
+        stats = db.get_nearest_stats('Test', 2.5, 0.0, 'league', min_samples=10, max_distance=0.75)
+
+        self.assertIsNotNone(stats)
+        self.assertEqual(stats['_meta']['league'], 'Test')
+        self.assertEqual(stats['_meta']['bucket_key'], 'Test_league_2.00_0.00')
+
     def test_backtest_reports_goal_distribution_quality(self):
         report = run_backtest_report([{
             'match_id': 'goal-1',

@@ -12,9 +12,17 @@
 这是一个真正的动态权重系统，而非固定规则
 """
 
+from __future__ import annotations
+
 import pickle
-import numpy as np
 from typing import Dict, List, Tuple, Optional
+
+try:
+    import numpy as np
+    NUMPY_AVAILABLE = True
+except Exception:
+    np = None
+    NUMPY_AVAILABLE = False
 
 # 尝试导入机器学习库
 XGBOOST_AVAILABLE = False
@@ -23,13 +31,13 @@ SKLEARN_AVAILABLE = False
 
 try:
     from xgboost import XGBRegressor
-    XGBOOST_AVAILABLE = True
+    XGBOOST_AVAILABLE = NUMPY_AVAILABLE
 except Exception:
     pass
 
 try:
     from lightgbm import LGBMRegressor
-    LIGHTGBM_AVAILABLE = True
+    LIGHTGBM_AVAILABLE = NUMPY_AVAILABLE
 except Exception:
     pass
 
@@ -37,7 +45,7 @@ try:
     from sklearn.preprocessing import StandardScaler, LabelEncoder
     from sklearn.model_selection import train_test_split
     from sklearn.metrics import mean_squared_error
-    SKLEARN_AVAILABLE = True
+    SKLEARN_AVAILABLE = NUMPY_AVAILABLE
 except Exception:
     pass
 

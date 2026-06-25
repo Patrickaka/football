@@ -29,6 +29,8 @@ from ..common.logger import setup_logger
 
 log = setup_logger('football')
 
+FOOTBALL_PREDICTION_LOGIC_VERSION = '2026-06-25-score-tempo-v2'
+
 # ELO 评分系统（延迟导入）
 try:
     from .elo import get_elo_system, elo_to_goals_expected, elo_to_strength_factor
@@ -4547,9 +4549,23 @@ def calculate_half_full_time_probs(candidates, team_strength=None, asian=None, t
                 match_type='league',
                 min_samples=20,
             )
+            if not real_stats:
+                real_stats = half_db.get_nearest_stats(
+                    league=league,
+                    total_line=close_line,
+                    handicap=handicap,
+                    match_type='league',
+                    min_samples=12,
+                    max_distance=0.75,
+                )
             real_htf = real_stats.get('half_full_distribution', {}) if real_stats else {}
 
             if real_htf:
+                stats_meta = real_stats.get('_meta', {}) if isinstance(real_stats, dict) else {}
+                try:
+                    stats_distance = float(stats_meta.get('distance', 0.0) or 0.0)
+                except (TypeError, ValueError):
+                    stats_distance = 0.0
                 try:
                     from .prediction_policy import get_prediction_policy
                     htf_policy = get_prediction_policy(
@@ -4560,6 +4576,8 @@ def calculate_half_full_time_probs(candidates, team_strength=None, asian=None, t
                     real_weight = htf_policy.get('half_full_real_weight', 0.25)
                 except Exception:
                     real_weight = 0.25
+                if stats_meta.get('source') == 'nearest':
+                    real_weight *= max(0.35, 1 - stats_distance / 0.9)
                 blended_htf = {}
                 all_keys = set(htf_probs.keys()).union(set(real_htf.keys()))
 
@@ -4575,8 +4593,8 @@ def calculate_half_full_time_probs(candidates, team_strength=None, asian=None, t
                         for k, v in sorted(blended_htf.items(), key=lambda x: -x[1])
                     }
                     history_weight = max(history_weight, real_weight)
-                    sample_count = max(sample_count, 20)
-                    distance = min(distance, 0.0)
+                    sample_count = max(sample_count, int(stats_meta.get('weighted_sample_count') or 20))
+                    distance = min(distance, stats_distance)
                     log.info(f"半全场概率已融合真实半场统计数据，权重={real_weight:.3f}")
         except Exception as e:
             log.debug(f"无法加载真实半场统计数据调整半全场概率: {e}")
@@ -5515,6 +5533,133 @@ def _common_score_overheat_factor(h: int, a: int, prob: float, total_line: float
     return max(0.78, factor)
 
 
+def _total_market_tempo_signal(total: Dict) -> Dict:
+    """Return a conservative tempo signal from O/U line and water movement."""
+    total = total or {}
+    try:
+        close_line = float(get_close_total_line(total))
+    except (TypeError, ValueError):
+        close_line = None
+
+    try:
+        open_line = float(total.get('open_line'))
+    except (TypeError, ValueError):
+        open_line = close_line
+
+    open_prob = total.get('open_prob') or {}
+    close_prob = total.get('close_prob') or {}
+    try:
+        over_delta = float(close_prob.get('over', 0.0)) - float(open_prob.get('over', 0.0))
+    except (TypeError, ValueError):
+        over_delta = 0.0
+
+    line_delta = 0.0
+    if open_line is not None and close_line is not None:
+        line_delta = close_line - open_line
+
+    line_signal = max(-1.0, min(1.0, line_delta / 0.5))
+    water_signal = max(-1.0, min(1.0, over_delta / 0.08))
+    base_signal = (0.62 * line_signal) + (0.38 * water_signal)
+
+    if close_line is not None:
+        if close_line >= 3.0:
+            base_signal += 0.22
+        elif close_line <= 2.25:
+            base_signal -= 0.22
+
+    conflict = line_signal * water_signal < -0.15
+    if conflict:
+        base_signal *= 0.35
+
+    return {
+        'signal': max(-1.0, min(1.0, base_signal)),
+        'line': close_line,
+        'line_delta': line_delta,
+        'over_delta': over_delta,
+        'conflict': conflict,
+    }
+
+
+def _score_total_movement_factor(h: int, a: int, total: Dict) -> float:
+    """Soft score-ranking factor from O/U movement so score picks follow goal picks."""
+    signal_info = _total_market_tempo_signal(total)
+    signal = signal_info.get('signal', 0.0)
+    if abs(signal) < 0.12:
+        return 1.0
+
+    goals = h + a
+    line = signal_info.get('line')
+    if line is None:
+        line = 2.5
+
+    distance = goals - line
+    factor = 1.0 + max(-0.18, min(0.18, signal * distance * 0.10))
+
+    if signal > 0 and goals >= math.ceil(line + 0.5):
+        factor *= 1.0 + min(0.08, signal * 0.05)
+    elif signal < 0 and goals <= math.floor(line):
+        factor *= 1.0 + min(0.08, abs(signal) * 0.05)
+
+    if signal > 0 and goals <= 1:
+        factor *= 0.93
+    elif signal < 0 and goals >= 4:
+        factor *= 0.93
+
+    return max(0.82, min(1.12, factor))
+
+
+def _adjust_score_probs_with_total_movement(score_probs: Dict[str, float], total: Dict) -> Tuple[Dict[str, float], Dict]:
+    """Tilt the score probability distribution with the O/U tempo signal."""
+    if not isinstance(score_probs, dict) or not score_probs:
+        return score_probs, {'applied': False, 'reason': 'empty_distribution'}
+
+    signal_info = _total_market_tempo_signal(total)
+    if abs(signal_info.get('signal', 0.0)) < 0.12:
+        return score_probs, {
+            'applied': False,
+            'reason': 'weak_tempo_signal',
+            'tempo': signal_info,
+        }
+
+    parsed = {}
+    raw_total = 0.0
+    for score, prob in score_probs.items():
+        try:
+            h, a = map(int, str(score).split('-'))
+            value = max(0.0, float(prob or 0.0))
+        except (TypeError, ValueError):
+            continue
+        parsed[score] = (h, a, value)
+        raw_total += value
+
+    if raw_total <= 0:
+        return score_probs, {'applied': False, 'reason': 'zero_raw_total'}
+
+    expected_before = sum((h + a) * value for h, a, value in parsed.values()) / raw_total
+    adjusted = {
+        score: value * _score_total_movement_factor(h, a, total)
+        for score, (h, a, value) in parsed.items()
+    }
+
+    total_prob = sum(adjusted.values())
+    if total_prob <= 0:
+        return score_probs, {'applied': False, 'reason': 'zero_adjusted_total'}
+
+    adjusted = {score: prob / total_prob for score, prob in adjusted.items()}
+    expected_after = 0.0
+    for score, prob in adjusted.items():
+        h, a = map(int, score.split('-'))
+        expected_after += (h + a) * prob
+
+    return adjusted, {
+        'applied': True,
+        'tempo': signal_info,
+        'expected_before': expected_before,
+        'expected_after': expected_after,
+        'direction': 'over' if signal_info.get('signal', 0.0) > 0 else 'under',
+    }
+
+
 def _normalize_goal_dist(goal_dist: Dict) -> Dict[int, float]:
     normalized = {}
     if not isinstance(goal_dist, dict):
@@ -5748,25 +5893,13 @@ def _adjust_half_full_with_market_context(half_full_time: Dict,
     except (TypeError, ValueError):
         handicap = 0.0
     favor = asian.get('favor') or ('home' if handicap > 0 else 'away' if handicap < 0 else 'even')
+    tempo_info = _total_market_tempo_signal(total)
     try:
-        total_line = float(get_close_total_line(total))
+        total_line = float(tempo_info.get('line') if tempo_info.get('line') is not None else get_close_total_line(total))
     except (TypeError, ValueError):
         total_line = 2.5
 
-    open_prob = total.get('open_prob') or {}
-    close_prob = total.get('close_prob') or {}
-    try:
-        over_delta = float(close_prob.get('over', 0.0)) - float(open_prob.get('over', 0.0))
-    except (TypeError, ValueError):
-        over_delta = 0.0
-
-    tempo = 0.0
-    if total_line >= 3.0:
-        tempo += 0.7
-    elif total_line <= 2.25:
-        tempo -= 0.7
-    tempo += max(-0.5, min(0.5, over_delta / 0.08))
-    tempo = max(-1.0, min(1.0, tempo))
+    tempo = tempo_info.get('signal', 0.0)
 
     depth = abs(handicap)
     adjusted_rows = []
@@ -5794,6 +5927,10 @@ def _adjust_half_full_with_market_context(half_full_time: Dict,
                 factor *= 1.0 + strength * 0.35 * slow
             if code in {'HA', 'AH'}:
                 factor *= 1.0 - strength * 0.35 * slow
+            if total_line <= 2.25 and half_res == 'D':
+                factor *= 1.0 + strength * 0.30 * slow
+            if total_line <= 2.0 and half_res != 'D':
+                factor *= 1.0 - strength * 0.18 * slow
 
         if depth >= 1.0 and favor in {'home', 'away'}:
             fav_res = 'H' if favor == 'home' else 'A'
@@ -5831,6 +5968,7 @@ def _adjust_half_full_with_market_context(half_full_time: Dict,
     adjusted['market_context'] = {
         'applied': True,
         'tempo': round(tempo, 3),
+        'tempo_source': tempo_info,
         'handicap': handicap,
         'favor': favor,
         'strength': strength,
@@ -6213,6 +6351,22 @@ def _diversify_score_recommendations(picked, scored, n: int, favor: str, upset_c
     return picked
 
 
+def _cached_prediction_logic_version(result: Dict) -> str:
+    if not isinstance(result, dict):
+        return ''
+    model = result.get('model') or {}
+    status = result.get('model_status') or {}
+    return (
+        model.get('prediction_logic_version')
+        or status.get('prediction_logic_version')
+        or ''
+    )
+
+
+def _is_prediction_cache_current(result: Dict) -> bool:
+    return _cached_prediction_logic_version(result) == FOOTBALL_PREDICTION_LOGIC_VERSION
+
+
 def analyze_match(match, force_refresh=False):
     """抓取赔率 + 球队攻防 + 泊松模型，返回完整结果 dict
     
@@ -6232,6 +6386,15 @@ def analyze_match(match, force_refresh=False):
     
     if not force_refresh and CACHE_AVAILABLE:
         cached_result = get_cache('match_analysis', cache_key, match_time)
+        if cached_result is not None and not _is_prediction_cache_current(cached_result):
+            log.info(
+                "cached prediction logic stale: %s -> %s, recomputing %s vs %s",
+                _cached_prediction_logic_version(cached_result) or 'missing',
+                FOOTBALL_PREDICTION_LOGIC_VERSION,
+                home,
+                away,
+            )
+            cached_result = None
         if cached_result is not None:
             log.info(f"使用缓存的比赛分析结果: {home} vs {away}")
             # 即使使用缓存，也要确保预测记录被保存
@@ -6510,6 +6673,7 @@ def analyze_match(match, force_refresh=False):
         enable_ensemble=True,
         ensemble_size=5,
     )
+    meta['prediction_logic_version'] = FOOTBALL_PREDICTION_LOGIC_VERSION
 
     # 盘口变化先验融合
     market_change_result = None
@@ -6565,6 +6729,35 @@ def analyze_match(match, force_refresh=False):
         except Exception as e:
             meta['bayesian_candidate_calibrated'] = False
             log.warning(f"贝叶斯比分候选校准失败: {e}")
+
+    score_total_movement_result = None
+    try:
+        score_probs = {
+            f"{h}-{a}": prob
+            for (h, a), prob in candidates
+        }
+        score_probs, score_total_movement_result = _adjust_score_probs_with_total_movement(score_probs, total)
+        if score_total_movement_result.get('applied'):
+            candidates = [
+                (tuple(map(int, score.split('-'))), prob)
+                for score, prob in score_probs.items()
+            ]
+            candidates.sort(key=lambda x: -x[1])
+            meta['score_total_movement_adjusted'] = True
+            meta['score_total_movement'] = score_total_movement_result
+            log.info(
+                "score total movement adjusted: %s %.3f -> %.3f",
+                score_total_movement_result.get('direction'),
+                score_total_movement_result.get('expected_before', 0),
+                score_total_movement_result.get('expected_after', 0),
+            )
+        else:
+            meta['score_total_movement_adjusted'] = False
+            meta['score_total_movement'] = score_total_movement_result
+    except Exception as e:
+        meta['score_total_movement_adjusted'] = False
+        meta['score_total_movement'] = {'applied': False, 'reason': str(e)}
+        log.warning(f"score total movement adjustment failed: {e}")
 
     dixon_coles_result = None
     try:
@@ -7008,6 +7201,7 @@ def analyze_match(match, force_refresh=False):
     
     model_status = {
         'prediction_saved': False,  # 稍后更新
+        'prediction_logic_version': FOOTBALL_PREDICTION_LOGIC_VERSION,
         'result_sync': {
             'enabled': True,
             'pending_count': pending_count,

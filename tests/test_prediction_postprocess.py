@@ -77,6 +77,68 @@ class PredictionPostprocessTests(unittest.TestCase):
 
         self.assertLess(factor, 1.0)
 
+    def test_score_total_movement_factor_follows_over_signal(self):
+        total = {
+            'open_line': 2.5,
+            'close_line': 3.0,
+            'open_prob': {'over': 0.48, 'under': 0.52},
+            'close_prob': {'over': 0.58, 'under': 0.42},
+        }
+
+        high_factor = football._score_total_movement_factor(2, 2, total)
+        low_factor = football._score_total_movement_factor(0, 0, total)
+
+        self.assertGreater(high_factor, 1.0)
+        self.assertLess(low_factor, 1.0)
+
+    def test_score_total_movement_factor_follows_under_signal(self):
+        total = {
+            'open_line': 3.0,
+            'close_line': 2.25,
+            'open_prob': {'over': 0.54, 'under': 0.46},
+            'close_prob': {'over': 0.44, 'under': 0.56},
+        }
+
+        low_factor = football._score_total_movement_factor(1, 0, total)
+        high_factor = football._score_total_movement_factor(3, 2, total)
+
+        self.assertGreater(low_factor, 1.0)
+        self.assertLess(high_factor, 1.0)
+
+    def test_score_distribution_total_movement_tilts_expected_goals_up(self):
+        dist = {'0-0': 0.30, '1-1': 0.35, '2-2': 0.35}
+        before = sum(sum(map(int, score.split('-'))) * prob for score, prob in dist.items())
+
+        adjusted, meta = football._adjust_score_probs_with_total_movement(dist, {
+            'open_line': 2.5,
+            'close_line': 3.25,
+            'open_prob': {'over': 0.48, 'under': 0.52},
+            'close_prob': {'over': 0.58, 'under': 0.42},
+        })
+        after = sum(sum(map(int, score.split('-'))) * prob for score, prob in adjusted.items())
+
+        self.assertTrue(meta['applied'])
+        self.assertEqual(meta['direction'], 'over')
+        self.assertGreater(after, before)
+        self.assertAlmostEqual(sum(adjusted.values()), 1.0)
+
+    def test_score_distribution_total_movement_tilts_expected_goals_down(self):
+        dist = {'1-0': 0.25, '2-1': 0.35, '3-2': 0.40}
+        before = sum(sum(map(int, score.split('-'))) * prob for score, prob in dist.items())
+
+        adjusted, meta = football._adjust_score_probs_with_total_movement(dist, {
+            'open_line': 3.0,
+            'close_line': 2.0,
+            'open_prob': {'over': 0.54, 'under': 0.46},
+            'close_prob': {'over': 0.42, 'under': 0.58},
+        })
+        after = sum(sum(map(int, score.split('-'))) * prob for score, prob in adjusted.items())
+
+        self.assertTrue(meta['applied'])
+        self.assertEqual(meta['direction'], 'under')
+        self.assertLess(after, before)
+        self.assertAlmostEqual(sum(adjusted.values()), 1.0)
+
     def test_team_poisson_lambdas_apply_xg_without_unbound_recent_data(self):
         strength = {
             'attack_home': 1.4,
@@ -166,6 +228,54 @@ class PredictionPostprocessTests(unittest.TestCase):
         self.assertTrue(adjusted['market_context']['applied'])
         self.assertGreater(dist['HH'], half_full['probs'][1]['raw_prob'])
         self.assertLess(dist['DD'], half_full['probs'][0]['raw_prob'])
+
+    def test_half_full_market_context_protects_slow_half_draw_paths(self):
+        half_full = {
+            'probs': [
+                {'code': 'HH', 'raw_prob': 0.32, 'probability': 32.0},
+                {'code': 'DH', 'raw_prob': 0.24, 'probability': 24.0},
+                {'code': 'DD', 'raw_prob': 0.22, 'probability': 22.0},
+                {'code': 'AA', 'raw_prob': 0.22, 'probability': 22.0},
+            ]
+        }
+
+        adjusted = football._adjust_half_full_with_market_context(
+            half_full,
+            {'handicap': 0.0, 'favor': 'even'},
+            {
+                'open_line': 2.75,
+                'close_line': 2.0,
+                'open_prob': {'over': 0.53, 'under': 0.47},
+                'close_prob': {'over': 0.42, 'under': 0.58},
+            },
+        )
+        dist = adjusted['distribution']
+
+        self.assertGreater(dist['DH'], half_full['probs'][1]['raw_prob'])
+        self.assertGreater(dist['DD'], half_full['probs'][2]['raw_prob'])
+        self.assertLess(dist['AA'], half_full['probs'][3]['raw_prob'])
+
+    def test_prediction_cache_requires_current_logic_version(self):
+        current = {
+            'model': {
+                'prediction_logic_version': football.FOOTBALL_PREDICTION_LOGIC_VERSION,
+            }
+        }
+        stale = {'model': {'prediction_logic_version': 'old'}}
+        missing = {'model': {}}
+
+        self.assertTrue(football._is_prediction_cache_current(current))
+        self.assertFalse(football._is_prediction_cache_current(stale))
+        self.assertFalse(football._is_prediction_cache_current(missing))
+
+    def test_prediction_cache_version_can_fallback_to_status(self):
+        cached = {
+            'model_status': {
+                'prediction_logic_version': football.FOOTBALL_PREDICTION_LOGIC_VERSION,
+            }
+        }
+
+        self.assertTrue(football._is_prediction_cache_current(cached))
 
     def test_diversify_score_recommendations_replaces_third_same_pattern(self):
         picked = [

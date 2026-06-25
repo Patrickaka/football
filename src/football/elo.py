@@ -238,19 +238,6 @@ class ELORatingSystem:
             logger.debug("ELO 评分已保存")
         except Exception as e:
             logger.error(f"保存 ELO 评分失败: {e}")
-            # 尝试清理临时文件
-            if os.path.exists(temp_file):
-                try:
-                    os.remove(temp_file)
-                except:
-                    pass
-        except Exception as e:
-            logger.error(f"保存 ELO 评分时发生未知错误: {e}")
-            if os.path.exists(temp_file):
-                try:
-                    os.remove(temp_file)
-                except:
-                    pass
     
     def get_rating(self, team_name: str) -> float:
         """

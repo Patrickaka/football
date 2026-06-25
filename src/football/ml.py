@@ -11,13 +11,21 @@
 4. 盘口时序神经网络（LSTM/XGBoost/LightGBM时序模型）
 """
 
+from __future__ import annotations
+
 import math
 import os
 import pickle
-import numpy as np
 from typing import Tuple, Dict, List, Optional, Callable
 
 from ..common import kv_store
+
+try:
+    import numpy as np
+    NUMPY_AVAILABLE = True
+except Exception:
+    np = None
+    NUMPY_AVAILABLE = False
 
 # 尝试导入机器学习库
 CATBOOST_AVAILABLE = False
@@ -142,22 +150,40 @@ def dixon_coles_score_prob(h_goals: int, a_goals: int, lam_home: float,
 def dixon_coles_score_matrix(lam_home: float, lam_away: float,
                              max_goals: int = 7, rho: float = DEFAULT_RHO) -> np.ndarray:
     """生成 Dixon-Coles 比分概率矩阵"""
-    matrix = np.zeros((max_goals + 1, max_goals + 1))
-    for h in range(max_goals + 1):
-        for a in range(max_goals + 1):
-            matrix[h, a] = dixon_coles_score_prob(h, a, lam_home, lam_away, rho)
-    total = matrix.sum()
+    if NUMPY_AVAILABLE:
+        matrix = np.zeros((max_goals + 1, max_goals + 1))
+        for h in range(max_goals + 1):
+            for a in range(max_goals + 1):
+                matrix[h, a] = dixon_coles_score_prob(h, a, lam_home, lam_away, rho)
+        total = matrix.sum()
+        if total > 0:
+            matrix = matrix / total
+        return matrix
+
+    matrix = [
+        [
+            dixon_coles_score_prob(h, a, lam_home, lam_away, rho)
+            for a in range(max_goals + 1)
+        ]
+        for h in range(max_goals + 1)
+    ]
+    total = sum(sum(row) for row in matrix)
     if total > 0:
-        matrix = matrix / total
+        matrix = [[value / total for value in row] for row in matrix]
     return matrix
 
 def dixon_coles_1x2_prob(lam_home: float, lam_away: float,
                         max_goals: int = 7, rho: float = DEFAULT_RHO) -> Dict[str, float]:
     """计算 Dixon-Coles 模型下的 1X2 概率"""
     matrix = dixon_coles_score_matrix(lam_home, lam_away, max_goals, rho)
-    p_home = np.triu(matrix, 1).sum()
-    p_draw = np.trace(matrix)
-    p_away = np.tril(matrix, -1).sum()
+    if NUMPY_AVAILABLE:
+        p_home = np.triu(matrix, 1).sum()
+        p_draw = np.trace(matrix)
+        p_away = np.tril(matrix, -1).sum()
+    else:
+        p_home = sum(matrix[h][a] for h in range(max_goals + 1) for a in range(max_goals + 1) if h > a)
+        p_draw = sum(matrix[i][i] for i in range(max_goals + 1))
+        p_away = sum(matrix[h][a] for h in range(max_goals + 1) for a in range(max_goals + 1) if h < a)
     return {'home': p_home, 'draw': p_draw, 'away': p_away}
 
 
@@ -194,11 +220,12 @@ def get_close_total_line(total: dict, default: float = 2.5) -> float:
 def calculate_goal_counts(prob_matrix: np.ndarray) -> Dict[int, float]:
     """计算各进球数的概率"""
     goal_counts = {}
-    max_goals = prob_matrix.shape[0] - 1
+    max_goals = (prob_matrix.shape[0] - 1) if hasattr(prob_matrix, 'shape') else (len(prob_matrix) - 1)
     for h in range(max_goals + 1):
         for a in range(max_goals + 1):
             total_goals = h + a
-            goal_counts[total_goals] = goal_counts.get(total_goals, 0.0) + prob_matrix[h, a]
+            value = prob_matrix[h, a] if hasattr(prob_matrix, 'shape') else prob_matrix[h][a]
+            goal_counts[total_goals] = goal_counts.get(total_goals, 0.0) + value
     return goal_counts
 
 def recommend_goal_counts(prob_matrix: np.ndarray, top_n: int = 2) -> List[Dict]:
@@ -337,7 +364,10 @@ def get_goal_count_distribution_from_dist(goal_dist: Dict[int, float]) -> List[D
 
 def predict_goal_counts_from_candidates(candidates: List[Tuple], max_goals: int = 7, asian=None, total=None) -> Dict:
     """从候选比分列表计算进球数推荐"""
-    prob_matrix = np.zeros((max_goals + 1, max_goals + 1))
+    if NUMPY_AVAILABLE:
+        prob_matrix = np.zeros((max_goals + 1, max_goals + 1))
+    else:
+        prob_matrix = [[0.0 for _ in range(max_goals + 1)] for _ in range(max_goals + 1)]
     for item in candidates:
         if len(item) == 2 and isinstance(item[0], tuple):
             (h, a), prob = item
@@ -346,10 +376,16 @@ def predict_goal_counts_from_candidates(candidates: List[Tuple], max_goals: int 
         else:
             continue
         if h <= max_goals and a <= max_goals:
-            prob_matrix[h, a] += prob
-    total_prob = prob_matrix.sum()
+            if NUMPY_AVAILABLE:
+                prob_matrix[h, a] += prob
+            else:
+                prob_matrix[h][a] += prob
+    total_prob = prob_matrix.sum() if NUMPY_AVAILABLE else sum(sum(row) for row in prob_matrix)
     if total_prob > 0:
-        prob_matrix = prob_matrix / total_prob
+        if NUMPY_AVAILABLE:
+            prob_matrix = prob_matrix / total_prob
+        else:
+            prob_matrix = [[value / total_prob for value in row] for row in prob_matrix]
     
     # 获取进球数分布（字典格式）
     goal_dist = calculate_goal_counts(prob_matrix)
@@ -426,7 +462,7 @@ def predict_goal_counts_from_candidates(candidates: List[Tuple], max_goals: int 
         'distribution': get_goal_count_distribution_from_dist(goal_dist),
         'over_under': {'over': sum(v for k, v in goal_dist.items() if k >= 3),
                        'under': sum(v for k, v in goal_dist.items() if k <= 2)},
-        'matrix': prob_matrix.tolist(),
+        'matrix': prob_matrix.tolist() if NUMPY_AVAILABLE else prob_matrix,
         'sample_info': {
             'sample_count': sample_count,
             'distance': round(distance, 2),

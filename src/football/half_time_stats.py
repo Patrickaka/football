@@ -236,6 +236,91 @@ class HalfTimeStatsDB:
                 return bucket.get('stats', {})
         
         return None
+
+    def get_nearest_stats(self, league: str, total_line: float, handicap: float = 0.0,
+                          match_type: str = 'league', min_samples: int = 20,
+                          max_distance: float = 0.75) -> Optional[Dict]:
+        """
+        Find the closest usable half-time bucket when the exact bucket is too thin.
+
+        Exact same-league buckets are preferred. Cross-league buckets are allowed only
+        when the market shape is close enough, and carry a distance penalty for the
+        caller to reduce blending weight.
+        """
+        try:
+            total_line = float(total_line)
+        except (TypeError, ValueError):
+            total_line = 2.5
+        try:
+            handicap = float(handicap)
+        except (TypeError, ValueError):
+            handicap = 0.0
+        try:
+            max_distance = float(max_distance)
+        except (TypeError, ValueError):
+            max_distance = 0.75
+
+        exact_stats = self.get_stats(league, total_line, handicap, match_type, min_samples)
+        if exact_stats:
+            stats = dict(exact_stats)
+            stats['_meta'] = {
+                'source': 'exact',
+                'distance': 0.0,
+                'bucket_key': self._get_bucket_key(league, total_line, handicap, match_type),
+                'league': league,
+                'sample_count': stats.get('effective_sample_count', min_samples),
+                'weighted_sample_count': stats.get('effective_sample_count', min_samples),
+            }
+            return stats
+
+        candidates = []
+        for bucket_key, bucket in self.db.items():
+            if bucket.get('match_type') != match_type:
+                continue
+            weighted_count = bucket.get('weighted_sample_count', bucket.get('sample_count', 0))
+            if weighted_count < min_samples:
+                continue
+            stats = bucket.get('stats') or {}
+            if not stats.get('half_full_distribution'):
+                continue
+
+            try:
+                bucket_total = float(bucket.get('total_line', 2.5))
+                bucket_handicap = float(bucket.get('handicap', 0.0))
+            except (TypeError, ValueError):
+                continue
+
+            same_league = bucket.get('league') == league
+            league_penalty = 0.0 if same_league else 0.35
+            distance = (
+                abs(bucket_total - total_line)
+                + abs(bucket_handicap - handicap) * 0.5
+                + league_penalty
+            )
+            if distance > max_distance:
+                continue
+            candidates.append((
+                0 if same_league else 1,
+                distance,
+                -float(weighted_count),
+                bucket_key,
+                bucket,
+            ))
+
+        if not candidates:
+            return None
+
+        _, distance, _, bucket_key, bucket = min(candidates, key=lambda item: item[:4])
+        stats = dict(bucket.get('stats') or {})
+        stats['_meta'] = {
+            'source': 'nearest',
+            'distance': round(distance, 3),
+            'bucket_key': bucket_key,
+            'league': bucket.get('league'),
+            'sample_count': bucket.get('sample_count', 0),
+            'weighted_sample_count': round(bucket.get('weighted_sample_count', bucket.get('sample_count', 0)), 3),
+        }
+        return stats
     
     def get_bucket_list(self, league: str = None) -> List[Dict]:
         """
