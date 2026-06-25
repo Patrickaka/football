@@ -1005,17 +1005,25 @@ class Handler(BaseHTTPRequestHandler):
             return {'success': False, 'error': str(e)}
 
     def _lottery_recommend_payload(self, params):
-        """获取大乐透推荐号码 - 返回3组概率最高的推荐"""
+        """获取大乐透推荐号码 - 返回3组不同的推荐"""
         try:
             analyzer = get_lottery_analyzer()
             method = params.get('method', ['balanced'])[0]
-            
-            # 生成3组推荐
+
+            # 生成3组推荐，后一组避开前面已选的号码
             recommendations = []
-            for _ in range(3):
-                rec = analyzer.generate_recommendation(method)
+            used_front = set()
+            used_back = set()
+            for i in range(3):
+                rec = analyzer.generate_recommendation(
+                    method,
+                    exclude_front=list(used_front),
+                    exclude_back=list(used_back)
+                )
                 recommendations.append(rec)
-            
+                used_front.update(rec['front'])
+                used_back.update(rec['back'])
+
             return {
                 'result': {
                     'method': method,

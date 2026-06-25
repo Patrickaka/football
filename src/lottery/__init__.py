@@ -1020,9 +1020,19 @@ class LotteryAnalyzer:
     # ==================== 约束推荐生成器 ====================
 
     def _score_based_select(self, candidates: List[int], count: int,
-                            is_front: bool = True) -> List[int]:
-        """基于评分的约束选择 (替代 random.sample)"""
+                            is_front: bool = True,
+                            fallback_pool: List[int] = None) -> List[int]:
+        """基于评分的约束选择 (替代 random.sample)。
+
+        当候选数量不足时，若提供 fallback_pool，则从 fallback_pool 中按评分补充。
+        """
         stats = self.statistics
+
+        # 如果候选不足，用 fallback_pool 补充
+        if fallback_pool and len(candidates) < count:
+            pool = list(dict.fromkeys(list(candidates) + [n for n in fallback_pool if n not in candidates]))
+            candidates = pool
+
         if not stats or len(candidates) < count:
             return sorted(candidates[:count])
 
@@ -1169,31 +1179,68 @@ class LotteryAnalyzer:
 
         return selected
 
-    def generate_recommendation(self, method: str = 'balanced') -> Dict:
-        """生成推荐号码 (v2: 基于评分+约束选择)"""
+    def generate_recommendation(self, method: str = 'balanced',
+                                 exclude_front: List[int] = None,
+                                 exclude_back: List[int] = None) -> Dict:
+        """生成推荐号码 (v2: 基于评分+约束选择)。
+
+        Args:
+            method: 推荐策略 balanced/hot/cold/rank。
+            exclude_front: 已选前区号码，生成新组时避免重复。
+            exclude_back: 已选后区号码，生成新组时避免重复。
+        """
+        exclude_front = set(exclude_front or [])
+        exclude_back = set(exclude_back or [])
+
+        def _filter(candidates, exclude):
+            return [n for n in candidates if n not in exclude]
+
+        def _expand_front_candidates(result):
+            # 从投票结果中取前 15 个作为候选池，避免排除后不足
+            return [c['number'] for c in result.get('front_candidates', [])][:15]
+
+        def _expand_back_candidates(result):
+            return [c['number'] for c in result.get('back_candidates', [])][:10]
+
         if method == 'hot':
-            hot_front = [num for num, _ in self.statistics.get('hot_front', [])[:12]]
-            hot_back = [num for num, _ in self.statistics.get('hot_back', [])[:6]]
-            front = self._score_based_select(hot_front, 5, is_front=True)
-            back = self._score_based_select(hot_back, 2, is_front=False)
+            hot_front = [num for num, _ in self.statistics.get('hot_front', [])[:20]]
+            hot_back = [num for num, _ in self.statistics.get('hot_back', [])[:10]]
+            front = self._score_based_select(
+                _filter(hot_front, exclude_front), 5, is_front=True,
+                fallback_pool=FRONT_NUMBERS)
+            back = self._score_based_select(
+                _filter(hot_back, exclude_back), 2, is_front=False,
+                fallback_pool=BACK_NUMBERS)
         elif method == 'cold':
-            cold_front = [num for num, _ in self.statistics.get('cold_front', [])[:12]]
-            cold_back = [num for num, _ in self.statistics.get('cold_back', [])[:6]]
-            front = self._score_based_select(cold_front, 5, is_front=True)
-            back = self._score_based_select(cold_back, 2, is_front=False)
+            cold_front = [num for num, _ in self.statistics.get('cold_front', [])[:20]]
+            cold_back = [num for num, _ in self.statistics.get('cold_back', [])[:10]]
+            front = self._score_based_select(
+                _filter(cold_front, exclude_front), 5, is_front=True,
+                fallback_pool=FRONT_NUMBERS)
+            back = self._score_based_select(
+                _filter(cold_back, exclude_back), 2, is_front=False,
+                fallback_pool=BACK_NUMBERS)
         elif method == 'rank':
-            front_ranked, back_ranked = self.rank_model(top_n=15)
-            front_candidates = [num for num, _, _ in front_ranked[:12]]
-            back_candidates = [num for num, _, _ in back_ranked[:6]]
-            front = self._score_based_select(front_candidates, 5, is_front=True)
-            back = self._score_based_select(back_candidates, 2, is_front=False)
+            front_ranked, back_ranked = self.rank_model(top_n=20)
+            front_candidates = [num for num, _, _ in front_ranked[:20]]
+            back_candidates = [num for num, _, _ in back_ranked[:10]]
+            front = self._score_based_select(
+                _filter(front_candidates, exclude_front), 5, is_front=True,
+                fallback_pool=FRONT_NUMBERS)
+            back = self._score_based_select(
+                _filter(back_candidates, exclude_back), 2, is_front=False,
+                fallback_pool=BACK_NUMBERS)
         else:
             # 平衡模式 (集成投票)
-            result = self.multi_model_voting(front_n=12, back_n=6)
-            front_candidates = result['front'][:10]
-            back_candidates = result['back'][:5]
-            front = self._score_based_select(front_candidates, 5, is_front=True)
-            back = self._score_based_select(back_candidates, 2, is_front=False)
+            result = self.multi_model_voting(front_n=20, back_n=10)
+            front_candidates = _filter(_expand_front_candidates(result), exclude_front)
+            back_candidates = _filter(_expand_back_candidates(result), exclude_back)
+            front = self._score_based_select(
+                front_candidates, 5, is_front=True,
+                fallback_pool=FRONT_NUMBERS)
+            back = self._score_based_select(
+                back_candidates, 2, is_front=False,
+                fallback_pool=BACK_NUMBERS)
 
         return {
             'front': front,
