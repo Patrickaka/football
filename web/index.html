@@ -445,24 +445,21 @@
     background: #c62828;
   }
 
-  /* 移动端响应式优化 */
+  /* ─── 移动端导航条优化 ─── */
+  /* 中屏 (≤768px): 横向滚动导航 + 紧凑布局 */
   @media (max-width: 768px) {
     body {
-      padding: 16px 12px;
+      padding: 12px 8px 80px 8px;  /* 底部留空给固定导航 */
       font-size: 14px;
     }
     .wrap { max-width: 100%; }
     
-    header h1 { font-size: 20px; }
-    header p { font-size: 12px; }
+    header { margin-bottom: 12px; }
+    header h1 { font-size: 18px; }
+    header p { font-size: 11px; }
     
-    .tabs { flex-wrap: wrap; }
-    .tab { 
-      flex: 1; 
-      min-width: calc(50% - 1px);
-      padding: 10px 6px; 
-      font-size: 13px;
-    }
+    /* 隐藏顶部tabs，启用底部固定导航 */
+    .tabs { display: none; }
     
     .highlight {
       padding: 12px 14px;
@@ -591,23 +588,102 @@
       font-size: 11px;
       text-align: right;
     }
+
+    /* 快乐8移动端优化 */
+    .kl8-ball {
+      width: 30px; height: 30px; font-size: 12px;
+    }
+    .kl8-ball.highlight-ball {
+      width: 34px; height: 34px; font-size: 14px;
+    }
+    .kl8-ball.small-ball {
+      width: 26px; height: 26px; font-size: 11px;
+    }
+    .kl8-numbers-row {
+      gap: 5px;
+    }
+    .kl8-select-card {
+      padding: 12px;
+      margin-bottom: 12px;
+    }
+    .kl8-select-title {
+      font-size: 14px;
+      margin-bottom: 8px;
+    }
+    .kl8-fushi-grid {
+      grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+      gap: 6px;
+    }
+    .kl8-combo-item {
+      padding: 6px 8px;
+      font-size: 12px;
+    }
+    .kl8-history-num {
+      width: 28px; height: 28px; font-size: 10px;
+    }
+  }
+
+  /* ─── 底部固定导航条 (移动端) ─── */
+  .bottom-nav {
+    display: none;  /* PC端隐藏 */
+  }
+  @media (max-width: 768px) {
+    .bottom-nav {
+      display: flex;
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      background: var(--card);
+      border-top: 2px solid var(--line);
+      padding: 4px 0 env(safe-area-inset-bottom, 4px);  /* iPhone安全区 */
+      z-index: 1000;
+      box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.3);
+    }
+    .bottom-nav-item {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 6px 0 4px;
+      cursor: pointer;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 500;
+      text-decoration: none;
+      transition: color 0.15s;
+      -webkit-tap-highlight-color: transparent;
+      user-select: none;
+    }
+    .bottom-nav-item .nav-icon {
+      font-size: 20px;
+      margin-bottom: 2px;
+    }
+    .bottom-nav-item.active {
+      color: var(--accent2);
+    }
+    .bottom-nav-item:active {
+      color: var(--accent);
+    }
   }
 
   /* 小屏手机优化 (< 480px) */
   @media (max-width: 480px) {
     body {
-      padding: 12px 8px;
+      padding: 8px 6px 80px 6px;
     }
     
-    .tabs {
-      flex-direction: column;
-      border-radius: 8px;
+    header h1 { font-size: 16px; }
+    header p { font-size: 10px; }
+    
+    .bottom-nav-item {
+      font-size: 10px;
+      padding: 4px 0 2px;
     }
-    .tab {
-      min-width: 100%;
-      border-bottom: 1px solid var(--line);
+    .bottom-nav-item .nav-icon {
+      font-size: 18px;
     }
-    .tab:last-child { border-bottom: none; }
     
     .highlight .big { font-size: 22px; letter-spacing: 2px; }
     
@@ -649,6 +725,21 @@
     .kelly-grid {
       grid-template-columns: repeat(3, 1fr);
     }
+
+    /* 快乐8超小屏 */
+    .kl8-ball.highlight-ball {
+      width: 32px; height: 32px; font-size: 13px;
+    }
+    .kl8-fushi-grid {
+      grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+    }
+    .kl8-fushi-top7 {
+      gap: 6px;
+    }
+    .kl8-fushi-header {
+      padding: 10px 12px;
+      font-size: 14px;
+    }
   }
 </style>
 </head>
@@ -688,6 +779,30 @@
     ⚠ 以上分析仅为概率统计参考，不构成任何投注建议。请理性对待！
   </div>
 </div>
+
+<!-- 移动端底部固定导航 -->
+<nav class="bottom-nav" id="bottom-nav">
+  <a class="bottom-nav-item active" data-tab="football">
+    <span class="nav-icon">⚽</span>
+    <span>足球</span>
+  </a>
+  <a class="bottom-nav-item" data-tab="lottery3d">
+    <span class="nav-icon">🎲</span>
+    <span>3D</span>
+  </a>
+  <a class="bottom-nav-item" data-tab="pailie5">
+    <span class="nav-icon">🔢</span>
+    <span>排列五</span>
+  </a>
+  <a class="bottom-nav-item" data-tab="lottery">
+    <span class="nav-icon">🎯</span>
+    <span>大乐透</span>
+  </a>
+  <a class="bottom-nav-item" data-tab="kl8">
+    <span class="nav-icon">🎱</span>
+    <span>快乐8</span>
+  </a>
+</nav>
 
 <script>
 const app = document.getElementById('app');
@@ -1610,7 +1725,14 @@ function switchTab(tab) {
 }
 
 document.querySelectorAll('[data-tab]').forEach(el => {
-  el.onclick = () => switchTab(el.dataset.tab);
+  el.onclick = (e) => {
+    e.preventDefault();
+    switchTab(el.dataset.tab);
+    // 移动端切换tab后滚动到顶部
+    if (window.innerWidth <= 768) {
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  };
 });
 
 function formProbBar(blend) {
