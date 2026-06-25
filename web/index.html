@@ -601,6 +601,7 @@
     }
     .kl8-numbers-row {
       gap: 5px;
+      flex-wrap: wrap;
     }
     .kl8-select-card {
       padding: 12px;
@@ -620,6 +621,72 @@
     }
     .kl8-history-num {
       width: 28px; height: 28px; font-size: 10px;
+    }
+
+    /* KL8移动端特有优化 */
+    .kl8-feature-toggle {
+      display: none;  /* 移动端默认隐藏特征开关 */
+    }
+    .kl8-feature-toggle-mobile {
+      display: block;
+      margin-bottom: 12px;
+    }
+    .kl8-feature-toggle-mobile summary {
+      font-size: 12px;
+      color: var(--muted);
+      padding: 6px 10px;
+      background: var(--card);
+      border-radius: 6px;
+      cursor: pointer;
+      list-style: none;
+    }
+    .kl8-feature-toggle-mobile summary::-webkit-details-marker { display: none; }
+    .kl8-feature-toggle-mobile summary::before { content: '▸ 特征权重配置 '; font-weight: 600; }
+    .kl8-feature-toggle-mobile[open] summary::before { content: '▾ 特征权重配置 '; }
+    .kl8-feature-toggle-mobile .kl8-feature-body {
+      margin-top: 6px;
+      padding: 8px 10px;
+      background: var(--card);
+      border-radius: 6px;
+      font-size: 11px;
+      line-height: 1.8;
+    }
+
+    /* 历史开奖 — 每行20球自动换行 */
+    .kl8-lottery-balls {
+      display: flex !important;
+      flex-wrap: wrap !important;
+      gap: 3px !important;
+      line-height: 1.4 !important;
+    }
+    .kl8-lottery-balls .kl8-ball,
+    .kl8-lottery-balls .small-ball {
+      width: 24px !important;
+      height: 24px !important;
+      font-size: 10px !important;
+    }
+    .kl8-lottery-row {
+      padding: 8px 0 !important;
+      border-bottom: 1px solid var(--line) !important;
+    }
+    .kl8-lottery-row:last-child {
+      border-bottom: none !important;
+    }
+    /* 复式7码大球缩小 */
+    .kl8-fushi-top7 .kl8-ball.highlight-ball {
+      width: 36px !important;
+      height: 36px !important;
+      font-size: 15px !important;
+    }
+    /* 选号卡片中的球也缩小 */
+    .kl8-select-card .kl8-numbers-row {
+      flex-wrap: wrap;
+      gap: 4px;
+    }
+    .kl8-select-card .kl8-ball.highlight-ball {
+      width: 32px !important;
+      height: 32px !important;
+      font-size: 13px !important;
     }
   }
 
@@ -3455,11 +3522,21 @@ function renderKL8(r) {
     html += `</div>`;
   }
 
-  // 特征开关展示
+  // 特征开关展示 — 移动端折叠显示，PC端展开
   if (r.statistics?.feature_config) {
-    html += `<div class="card" style="margin-bottom:12px;padding:10px 12px">`;
-    html += `<div style="font-size:13px;font-weight:600;margin-bottom:6px">特征开关状态</div>`;
-    html += `<div style="display:flex;flex-wrap:wrap;gap:6px;font-size:11px">`;
+    const isMobile = window.innerWidth <= 768;
+    if (isMobile) {
+      // 移动端：折叠面板
+      html += `<details class="kl8-feature-toggle-mobile">`;
+      html += `<summary></summary>`;
+      html += `<div class="kl8-feature-body">`;
+      html += `<div style="display:flex;flex-wrap:wrap;gap:5px">`;
+    } else {
+      // PC端：原有展示
+      html += `<div class="card kl8-feature-toggle" style="margin-bottom:12px;padding:10px 12px">`;
+      html += `<div style="font-size:13px;font-weight:600;margin-bottom:6px">特征开关状态</div>`;
+      html += `<div style="display:flex;flex-wrap:wrap;gap:6px;font-size:11px">`;
+    }
     const fc = r.statistics.feature_config;
     for (const [k, v] of Object.entries(fc)) {
       const enabled = v.enabled;
@@ -3468,17 +3545,23 @@ function renderKL8(r) {
       html += `<span style="background:var(--card);padding:3px 8px;border-radius:4px;white-space:nowrap">${esc(k)} <span style="color:${badgeColor};font-weight:700">${badge}</span> w=${v.weight}</span>`;
     }
     html += `</div>`;
-    html += `</div>`;
+    if (isMobile) {
+      html += `</div></div></details>`;
+    } else {
+      html += `</div>`;
+    }
   }
 
   // 最近开奖结果
   if (r.recent_results && r.recent_results.length > 0) {
+    const isMobile = window.innerWidth <= 768;
+    const showCount = isMobile ? 3 : 5;  // 移动端只显示3期
     html += `<div class="card" style="margin-bottom:16px">`;
-    html += `<div class="section-title" style="font-size:14px;margin-bottom:8px">最近开奖结果</div>`;
-    for (const rec of r.recent_results.slice(0, 5)) {
-      html += `<div class="lottery-row">`;
+    html += `<div class="section-title" style="font-size:14px;margin-bottom:8px">最近开奖结果 ${isMobile ? '(近' + showCount + '期)' : ''}</div>`;
+    for (const rec of r.recent_results.slice(0, showCount)) {
+      html += `<div class="lottery-row kl8-lottery-row">`;
       html += `<span class="lottery-issue">${esc(rec.issue)}</span>`;
-      html += `<span class="lottery-numbers" style="font-size:13px;letter-spacing:1px;gap:4px;line-height:1.8">`;
+      html += `<span class="lottery-numbers kl8-lottery-balls" style="font-size:13px;letter-spacing:1px;gap:4px">`;
       // 显示20个号码,用不同颜色区分
       const nums = rec.numbers || [];
       const lastSet = new Set(r.statistics?.last_numbers || []);
