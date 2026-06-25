@@ -721,6 +721,9 @@
       text-decoration: none;
       transition: color 0.15s;
       -webkit-tap-highlight-color: transparent;
+      touch-action: manipulation;  /* 阻止双击缩放和延迟焦点 */
+      user-select: none;  /* 防止长按选中触发输入法 */
+      -webkit-user-select: none;
       user-select: none;
     }
     .bottom-nav-item .nav-icon {
@@ -849,26 +852,26 @@
 
 <!-- 移动端底部固定导航 -->
 <nav class="bottom-nav" id="bottom-nav">
-  <a class="bottom-nav-item active" data-tab="football">
+  <div class="bottom-nav-item active" data-tab="football">
     <span class="nav-icon">⚽</span>
     <span>足球</span>
-  </a>
-  <a class="bottom-nav-item" data-tab="lottery3d">
+  </div>
+  <div class="bottom-nav-item" data-tab="lottery3d">
     <span class="nav-icon">🎲</span>
     <span>3D</span>
-  </a>
-  <a class="bottom-nav-item" data-tab="pailie5">
+  </div>
+  <div class="bottom-nav-item" data-tab="pailie5">
     <span class="nav-icon">🔢</span>
     <span>排列五</span>
-  </a>
-  <a class="bottom-nav-item" data-tab="lottery">
+  </div>
+  <div class="bottom-nav-item" data-tab="lottery">
     <span class="nav-icon">🎯</span>
     <span>大乐透</span>
-  </a>
-  <a class="bottom-nav-item" data-tab="kl8">
+  </div>
+  <div class="bottom-nav-item" data-tab="kl8">
     <span class="nav-icon">🎱</span>
     <span>快乐8</span>
-  </a>
+  </div>
 </nav>
 
 <script>
@@ -1794,6 +1797,22 @@ function switchTab(tab) {
 document.querySelectorAll('[data-tab]').forEach(el => {
   el.onclick = (e) => {
     e.preventDefault();
+    // 主动blur当前焦点元素，关闭输入法键盘
+    const activeEl = document.activeElement;
+    if (activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA' || activeEl.isContentEditable)) {
+      activeEl.blur();
+    }
+    // 移动端额外处理：强制隐藏软键盘
+    if (window.innerWidth <= 768) {
+      // 创建临时input，设为readonly并聚焦再blur，确保键盘关闭
+      const tempInput = document.createElement('input');
+      tempInput.setAttribute('readonly', 'readonly');
+      tempInput.setAttribute('style', 'position:fixed;top:-100px;left:-100px;width:1px;height:1px;opacity:0');
+      document.body.appendChild(tempInput);
+      tempInput.focus();
+      tempInput.blur();
+      document.body.removeChild(tempInput);
+    }
     switchTab(el.dataset.tab);
     // 移动端切换tab后滚动到顶部
     if (window.innerWidth <= 768) {
