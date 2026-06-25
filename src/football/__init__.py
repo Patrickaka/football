@@ -2201,6 +2201,29 @@ def calibrate_draw_probability(p_home, p_draw, p_away, asian_handicap,
         return p_home, p_draw, p_away
 
 
+def _draw_probability_bounds(asian_handicap) -> Tuple[float, float]:
+    handicap_abs = abs(float(asian_handicap or 0.0))
+    if handicap_abs <= 0.25:
+        return 0.08, 0.42
+    if handicap_abs <= 0.75:
+        return 0.07, 0.36
+    if handicap_abs <= 1.25:
+        return 0.06, 0.31
+    return 0.05, 0.27
+
+
+def _redistribute_draw_probability(p_home, p_draw, p_away, asian_handicap) -> Tuple[float, float, float]:
+    min_draw, max_draw = _draw_probability_bounds(asian_handicap)
+    p_draw_new = max(min_draw, min(max_draw, p_draw))
+    non_draw_total = max(p_home + p_away, 1e-12)
+    p_home_new = p_home / non_draw_total * (1 - p_draw_new)
+    p_away_new = p_away / non_draw_total * (1 - p_draw_new)
+    total = p_home_new + p_draw_new + p_away_new
+    if total > 0:
+        return p_home_new / total, p_draw_new / total, p_away_new / total
+    return p_home, p_draw, p_away
+
+
 def _heuristic_draw_calibration(p_home, p_draw, p_away, asian_handicap, 
                                 home_draw_rate, away_draw_rate, league_draw_rate):
     """
@@ -2228,6 +2251,7 @@ def _heuristic_draw_calibration(p_home, p_draw, p_away, asian_handicap,
     p_draw_new = p_draw * adjustment * draw_tendency / 0.25
     
     # 重新归一化
+    return _redistribute_draw_probability(p_home, p_draw_new, p_away, asian_handicap)
     total = p_home + p_draw_new + p_away
     if total > 0:
         p_home_new = p_home / total
@@ -2938,6 +2962,8 @@ def team_poisson_lambdas(strength, total_target, league_profile=None):
     away_xg_last5 = strength.get('away_xg_last5', 0)
     home_xga_last5 = strength.get('home_xga_last5', 0)
     away_xga_last5 = strength.get('away_xga_last5', 0)
+    home_recent = strength.get('home_recent', {})
+    away_recent = strength.get('away_recent', {})
 
     # 计算 xG 修正因子
     # 原理：如果球队近期 xG 很高但实际进球少，说明运气差，下一场可能反弹
@@ -2984,8 +3010,6 @@ def team_poisson_lambdas(strength, total_target, league_profile=None):
 
     # ========== 近期状态衰减加权 ==========
     # 如果 strength 包含近期数据则应用，否则仅依赖长期均值
-    home_recent = strength.get('home_recent', {})
-    away_recent = strength.get('away_recent', {})
     if home_recent and away_recent:
         home_games = max(1, home_recent.get('games', 10))
         away_games = max(1, away_recent.get('games', 10))
