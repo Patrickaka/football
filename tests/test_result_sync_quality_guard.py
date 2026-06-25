@@ -434,6 +434,33 @@ class ResultSyncQualityGuardTests(unittest.TestCase):
         self.assertTrue(report['diagnostic_suggestions']['suggestions'])
         self.assertTrue(report['diagnostic_suggestions']['bucket_tuning_candidates'])
 
+    def test_backtest_report_includes_real_time_layer_metrics(self):
+        report = run_backtest_report([{
+            'match_id': 'layer-backtest-1',
+            'league': 'Layer League',
+            'home': 'A',
+            'away': 'B',
+            'actual_score': '1-0',
+            'actual_result': 'H',
+            'predicted_scores': {'1-0': 0.55, '0-0': 0.30, '1-1': 0.15},
+            'predicted_1x2': {'H': 0.55, 'D': 0.30, 'A': 0.15},
+            'time_layers': {
+                'T-1h': {'0-0': 0.55, '1-0': 0.30, '1-1': 0.15},
+                'final': {'1-0': 0.55, '0-0': 0.30, '1-1': 0.15},
+            },
+            'asian': 0,
+            'total_line': 2.0,
+        }], verbose=False)
+
+        by_layer = report['by_time_layer']
+        self.assertEqual(by_layer['T-24h']['total'], 0)
+        self.assertEqual(by_layer['T-1h']['total'], 1)
+        self.assertEqual(by_layer['final']['total'], 1)
+        self.assertEqual(by_layer['T-1h']['top1'], 0.0)
+        self.assertEqual(by_layer['T-1h']['top3'], 1.0)
+        self.assertEqual(by_layer['final']['top1'], 1.0)
+        self.assertAlmostEqual(by_layer['T-1h']['weighted_total'], 0.75)
+
     def test_rolling_backtest_report_includes_recent_windows_and_suggestions(self):
         records = []
         actual_scores = ['2-1', '2-0', '3-1', '1-2', '2-2', '3-0', '2-1', '4-1']

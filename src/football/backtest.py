@@ -309,6 +309,8 @@ class BacktestRunner:
             'htf_logloss': htf_logloss,
             'htf_brier': htf_brier,
             'has_htf_data': has_htf_data,
+            '_predicted_scores': predicted_scores,
+            '_time_layers': record.get('time_layers') or {},
         }
         
         self.results.append(result)
@@ -513,11 +515,84 @@ class BacktestRunner:
                 grouped[key_func(row)].append(row)
             return {key: summarize(rows) for key, rows in sorted(grouped.items())}
 
+        def summarize_time_layers():
+            try:
+                from .result_sync import time_layer_weight
+            except Exception:
+                def time_layer_weight(layer):
+                    return 1.0 if layer == 'final' else 0.5
+
+            layers = ['T-24h', 'T-6h', 'T-1h', 'T-15min', 'final']
+            layer_stats = {}
+            for layer in layers:
+                total_layer = 0
+                top1_hits = 0
+                top3_hits = 0
+                top5_hits = 0
+                weighted_total = 0.0
+                weighted_top1_hits = 0.0
+                weighted_top3_hits = 0.0
+                weighted_top5_hits = 0.0
+                score_loglosses = []
+                score_briers = []
+                weight = time_layer_weight(layer)
+
+                for row in self.results:
+                    predicted_scores = (row.get('_time_layers') or {}).get(layer)
+                    if layer == 'final' and not predicted_scores:
+                        predicted_scores = row.get('_predicted_scores') or {}
+                    if not predicted_scores:
+                        continue
+
+                    actual_score = row.get('actual_score')
+                    if not actual_score:
+                        continue
+                    sorted_scores = sorted(predicted_scores.items(), key=lambda item: -item[1])
+                    top1_score = sorted_scores[0][0] if sorted_scores else None
+                    top3_scores = [score for score, _ in sorted_scores[:3]]
+                    top5_scores = [score for score, _ in sorted_scores[:5]]
+
+                    total_layer += 1
+                    weighted_total += weight
+                    if top1_score == actual_score:
+                        top1_hits += 1
+                        weighted_top1_hits += weight
+                    if actual_score in top3_scores:
+                        top3_hits += 1
+                        weighted_top3_hits += weight
+                    if actual_score in top5_scores:
+                        top5_hits += 1
+                        weighted_top5_hits += weight
+
+                    actual_prob = predicted_scores.get(actual_score, 1e-15)
+                    score_loglosses.append(-math.log(max(1e-15, min(1 - 1e-15, actual_prob))))
+                    all_scores = set(predicted_scores.keys()) | {actual_score}
+                    score_briers.append(sum(
+                        (predicted_scores.get(score, 0.0) - (1.0 if score == actual_score else 0.0)) ** 2
+                        for score in all_scores
+                    ))
+
+                layer_stats[layer] = {
+                    'total': total_layer,
+                    'weight': weight,
+                    'top1': top1_hits / total_layer if total_layer else 0.0,
+                    'top3': top3_hits / total_layer if total_layer else 0.0,
+                    'top5': top5_hits / total_layer if total_layer else 0.0,
+                    'weighted_top1': weighted_top1_hits / weighted_total if weighted_total else 0.0,
+                    'weighted_top3': weighted_top3_hits / weighted_total if weighted_total else 0.0,
+                    'weighted_top5': weighted_top5_hits / weighted_total if weighted_total else 0.0,
+                    'weighted_total': round(weighted_total, 3),
+                    'score_logloss': sum(score_loglosses) / len(score_loglosses) if score_loglosses else 0.0,
+                    'score_brier': sum(score_briers) / len(score_briers) if score_briers else 0.0,
+                }
+            return layer_stats
+
         report = {
             'summary': summary,
             'by_league': group_by(lambda r: r.get('league') or 'unknown'),
             'by_total_line': group_by(lambda r: bucket_total_line(r.get('total_line'))),
             'by_asian_bucket': group_by(lambda r: bucket_asian(r.get('asian'))),
+            'by_time_layer': summarize_time_layers(),
         }
         report['diagnostics'] = self.get_bias_diagnostics(report)
         report['diagnostic_suggestions'] = get_diagnostic_tuning_suggestions(report['diagnostics'])
