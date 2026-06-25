@@ -59,6 +59,17 @@ def assess_record_quality(record: Dict) -> Dict:
         reasons.append(f"sync_{record.get('sync_status')}")
         score -= 0.25
 
+    result_quality = record.get('result_quality') or {}
+    result_grade = result_quality.get('grade')
+    result_quality_usable = True
+    if result_grade in {'reject', 'low'}:
+        reasons.append(f"result_quality_{result_grade}")
+        score -= 0.35 if result_grade == 'low' else 0.65
+        result_quality_usable = False
+    elif not result_quality and record.get('settled'):
+        reasons.append('missing_result_quality')
+        score -= 0.12
+
     if _is_friendly(record):
         reasons.append('friendly_match')
         score -= 0.25
@@ -94,7 +105,7 @@ def assess_record_quality(record: Dict) -> Dict:
         'score': round(score, 3),
         'grade': grade,
         'reasons': reasons,
-        'usable_for_calibration': GRADE_RANK[grade] >= GRADE_RANK['medium'],
+        'usable_for_calibration': GRADE_RANK[grade] >= GRADE_RANK['medium'] and result_quality_usable,
     }
 
 

@@ -162,6 +162,96 @@ def calculate_hit(probs: Dict[str, float], actual_result: str) -> bool:
     return predicted == actual_result
 
 
+def _score_to_result(score: str) -> Optional[str]:
+    try:
+        home_goals, away_goals = map(int, str(score).split('-'))
+    except Exception:
+        return None
+    if home_goals > away_goals:
+        return 'H'
+    if home_goals < away_goals:
+        return 'A'
+    return 'D'
+
+
+def _assess_result_quality(record: Dict,
+                           actual_score: str,
+                           actual_result: str,
+                           source: str = None,
+                           actual_half_score: str = None) -> Dict:
+    """Assess whether a fetched result is trustworthy enough for calibration."""
+    reasons = []
+    score = 1.0
+
+    extracted_result = _score_to_result(actual_score)
+    if extracted_result is None:
+        reasons.append('invalid_score_format')
+        score -= 0.60
+    elif extracted_result != actual_result:
+        reasons.append('result_mismatch')
+        score -= 0.45
+
+    try:
+        home_goals, away_goals = map(int, str(actual_score).split('-'))
+        if home_goals > 12 or away_goals > 12:
+            reasons.append('implausible_score')
+            score -= 0.50
+    except Exception:
+        pass
+
+    if not _is_match_settle_due(record.get('match_time'), minutes=180):
+        reasons.append('not_settle_due')
+        score -= 0.70
+
+    source = source or 'unknown'
+    if source == 'live_fid':
+        score += 0.05
+    elif source == 'live_team':
+        score -= 0.05
+    elif source == 'shuju':
+        score -= 0.12
+    else:
+        reasons.append('unknown_source')
+        score -= 0.15
+
+    if actual_score in {'0-0', '1-1'} and source not in {'live_fid', 'live_team'}:
+        reasons.append('low_information_score_without_live_source')
+        score -= 0.18
+
+    if actual_half_score:
+        if _score_to_result(actual_half_score) is None:
+            reasons.append('invalid_half_score_format')
+            score -= 0.12
+
+    if not record.get('match_id'):
+        reasons.append('missing_match_id')
+        score -= 0.10
+
+    score = max(0.0, min(1.0, score))
+    if score >= 0.82:
+        grade = 'high'
+    elif score >= 0.60:
+        grade = 'medium'
+    elif score >= 0.35:
+        grade = 'low'
+    else:
+        grade = 'reject'
+
+    return {
+        'score': round(score, 3),
+        'grade': grade,
+        'source': source,
+        'reasons': reasons,
+        'usable_for_calibration': grade in {'high', 'medium'},
+    }
+
+
+def _is_result_quality_usable(record: Dict, min_grade: str = 'medium') -> bool:
+    rank = {'reject': 0, 'low': 1, 'medium': 2, 'high': 3}
+    quality = record.get('result_quality') or {}
+    return rank.get(quality.get('grade'), 0) >= rank.get(min_grade, 2)
+
+
 def fuse_probabilities(base_probs: Dict[str, float], ml_probs: Dict[str, float], 
                       ml_weight: float = 0.05) -> Dict[str, float]:
     """
@@ -703,8 +793,9 @@ class PredictionHistory:
         
         return statistics
     
-    def update_result(self, match_id: str, actual_score: str, actual_result: str, 
-                      actual_half_score: str = None, error: str = None):
+    def update_result(self, match_id: str, actual_score: str, actual_result: str,
+                      actual_half_score: str = None, error: str = None,
+                      source: str = None):
         """
         更新比赛结果
         
@@ -729,9 +820,25 @@ class PredictionHistory:
                         self._save()
                         return False
 
+                    result_quality = _assess_result_quality(
+                        record,
+                        actual_score,
+                        actual_result,
+                        source=source,
+                        actual_half_score=actual_half_score,
+                    )
+                    if result_quality['grade'] == 'reject':
+                        record['sync_status'] = 'retry'
+                        record['last_sync_error'] = f"赛果可信度过低，拒绝回填: {result_quality['reasons']}"
+                        record['last_sync_at'] = datetime.now().isoformat()
+                        record['next_sync_at'] = (datetime.now() + timedelta(hours=6)).isoformat()
+                        self._save()
+                        return False
+
                     # 成功结算
                     record['actual_score'] = actual_score
                     record['actual_result'] = actual_result
+                    record['result_quality'] = result_quality
                     record['settled'] = True
                     record['settled_at'] = datetime.now().isoformat()
                     record['sync_status'] = 'synced'
@@ -760,14 +867,20 @@ class PredictionHistory:
                     record['evaluation'] = evaluate_ml_prediction(record)
                     
                     # 更新各模块
-                    self._update_calibrator(record)
-                    self._update_market_db(record)
-                    self._update_score_frequency_db(record)
-                    self._update_elo_ratings(record)
-                    self._update_half_time_stats(record)  # 新增：更新半场统计
+                    if _is_result_quality_usable(record):
+                        self._update_calibrator(record)
+                        self._update_market_db(record)
+                        self._update_score_frequency_db(record)
+                        self._update_elo_ratings(record)
+                        self._update_half_time_stats(record)  # 新增：更新半场统计
 
-                    # 最后写入盘口变化库
-                    self._update_market_change_db(record)
+                        # 最后写入盘口变化库
+                        self._update_market_change_db(record)
+                    else:
+                        log.warning(
+                            f"赛果质量不足，仅保存结果不更新训练库: "
+                            f"{record.get('home')} vs {record.get('away')} {record.get('result_quality')}"
+                        )
                     
                     log.info(f"结算比赛: {record['home']} vs {record['away']} -> {actual_score} ({actual_result})")
                 else:
@@ -1667,7 +1780,12 @@ def auto_sync_results():
                 result = fetch_result_by_team_and_date(home, away, match_time)
             
             if result:
-                if _global_history.update_result(match_id, result['score'], result['result']):
+                if _global_history.update_result(
+                    match_id,
+                    result['score'],
+                    result['result'],
+                    source=result.get('source'),
+                ):
                     synced += 1
                     log.info(f"同步成功: {home} vs {away} -> {result['score']}")
                 else:
@@ -1753,14 +1871,20 @@ def fetch_result_by_match_id(match_id: str, match_time: str = '') -> Optional[Di
     if match_time:
         score = _fetch_live_score_by_fid(match_id, match_time)
         if score:
-            return _parse_score_string(score)
+            result = _parse_score_string(score)
+            if result:
+                result['source'] = 'live_fid'
+            return result
 
     try:
         html = _fetch_match_html(match_id)
         score = _parse_shuju_score(html, match_id)
         if score:
             log.info(f"通过 shuju 页面抓取赛果: match_id={match_id} -> {score}")
-            return _parse_score_string(score)
+            result = _parse_score_string(score)
+            if result:
+                result['source'] = 'shuju'
+            return result
     except Exception as e:
         log.debug(f"shuju 页面抓取失败: {e}")
 
@@ -1936,7 +2060,10 @@ def fetch_result_by_team_and_date(home: str, away: str, match_time: str) -> Opti
                 score = _parse_live_row_score(row.group(0), home, away)
                 if score:
                     log.info(f"通过 live 页面(球队)抓取赛果: {home} vs {away}, e={search_date} -> {score}")
-                    return _parse_score_string(score)
+                    result = _parse_score_string(score)
+                    if result:
+                        result['source'] = 'live_team'
+                    return result
 
     except Exception as e:
         log.debug(f"通过球队名+日期抓取失败: {e}")
