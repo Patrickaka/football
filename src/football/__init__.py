@@ -5433,6 +5433,125 @@ def score_pattern(h: int, a: int) -> str:
     return 'away_high'         # 客胜大比分
 
 
+def _score_total_line_factor(h: int, a: int, total_line: float) -> float:
+    """Soft ranking factor for score totals against the closing O/U line."""
+    if total_line is None:
+        return 1.0
+    try:
+        line = float(total_line)
+    except (TypeError, ValueError):
+        return 1.0
+
+    goals = h + a
+    distance = abs(goals - line)
+    factor = 1.06 - min(distance, 2.5) * 0.08
+
+    if line <= 2.25 and goals >= 4:
+        factor *= 0.82
+    elif line <= 2.25 and goals <= 2:
+        factor *= 1.04
+    elif line >= 3.0 and goals <= 1:
+        factor *= 0.84
+    elif line >= 3.0 and goals >= 3:
+        factor *= 1.04
+
+    return max(0.72, min(1.10, factor))
+
+
+def _common_score_overheat_factor(h: int, a: int, prob: float, total_line: float) -> float:
+    """Dampen common scores when their raw probability is too dominant."""
+    baselines = {
+        (0, 0): 0.095,
+        (1, 0): 0.120,
+        (0, 1): 0.110,
+        (1, 1): 0.135,
+    }
+    baseline = baselines.get((h, a))
+    if baseline is None or prob <= baseline * 1.30:
+        return 1.0
+
+    factor = 0.94
+    try:
+        line = float(total_line) if total_line is not None else None
+    except (TypeError, ValueError):
+        line = None
+
+    if line is not None:
+        goals = h + a
+        if line >= 3.0 and goals <= 1:
+            factor *= 0.88
+        elif line <= 2.25 and goals >= 3:
+            factor *= 0.88
+    if prob >= baseline * 1.65:
+        factor *= 0.92
+    return max(0.78, factor)
+
+
+def _normalize_goal_dist(goal_dist: Dict) -> Dict[int, float]:
+    normalized = {}
+    if not isinstance(goal_dist, dict):
+        return normalized
+    for goals, prob in goal_dist.items():
+        try:
+            key = int(goals)
+            value = max(0.0, float(prob or 0.0))
+        except (TypeError, ValueError):
+            continue
+        normalized[key] = normalized.get(key, 0.0) + value
+    total_prob = sum(normalized.values())
+    if total_prob > 0:
+        normalized = {key: value / total_prob for key, value in normalized.items()}
+    return normalized
+
+
+def _anchor_goal_dist_to_total_line(goal_dist: Dict, total: Dict, max_theta: float = 0.18) -> Tuple[Dict[int, float], Dict]:
+    """Tilt total-goals distribution toward the closing O/U line without hard clipping."""
+    normalized = _normalize_goal_dist(goal_dist)
+    if not normalized:
+        return normalized, {'applied': False, 'reason': 'empty_distribution'}
+
+    line = get_close_total_line(total)
+    if line is None:
+        return normalized, {'applied': False, 'reason': 'missing_total_line'}
+
+    expected_before = sum(goals * prob for goals, prob in normalized.items())
+    delta = float(line) - expected_before
+    if abs(delta) < 0.18:
+        return normalized, {
+            'applied': False,
+            'reason': 'already_aligned',
+            'line': float(line),
+            'expected_before': expected_before,
+            'expected_after': expected_before,
+        }
+
+    theta = max(-max_theta, min(max_theta, delta / 4.0))
+    tilted = {goals: prob * math.exp(theta * goals) for goals, prob in normalized.items()}
+    total_prob = sum(tilted.values())
+    if total_prob <= 0:
+        return normalized, {'applied': False, 'reason': 'zero_tilted_total'}
+
+    adjusted = {goals: prob / total_prob for goals, prob in tilted.items()}
+    expected_after = sum(goals * prob for goals, prob in adjusted.items())
+    return adjusted, {
+        'applied': True,
+        'line': float(line),
+        'theta': theta,
+        'expected_before': expected_before,
+        'expected_after': expected_after,
+    }
+
+
+def _goal_over_under_from_line(goal_dist: Dict[int, float], total: Dict) -> Dict[str, float]:
+    line = get_close_total_line(total)
+    if line is None:
+        line = 2.5
+    over = sum(prob for goals, prob in goal_dist.items() if goals > line)
+    under = sum(prob for goals, prob in goal_dist.items() if goals < line)
+    push = max(0.0, 1.0 - over - under)
+    return {'over': over, 'under': under, 'push': push, 'line': line}
+
+
 def _pick_recommendations(candidates, asian, euro, total, n=2, pool=12, confidence=None, league_profile=None, team=None, similar_market=None):
     """Top 池内按 概率×一致性×冷热×置信度×相似盘口 选取（基于比分簇）"""
     if confidence:
@@ -5541,7 +5660,20 @@ def _pick_recommendations(candidates, asian, euro, total, n=2, pool=12, confiden
                 log.debug(f"赔率价值计算失败: {e}")
 
         # 计算最终得分（不含价值投注调整，价值投注单独输出）
-        final_score = prob * (1.0 + 0.45 * align) * w * (0.65 + 0.35 * conf_w) * xg_penalty * upset_penalty * market_bonus * prior_bonus
+        total_line_factor = _score_total_line_factor(h, a, total_line)
+        common_score_factor = _common_score_overheat_factor(h, a, prob, total_line)
+        final_score = (
+            prob
+            * (1.0 + 0.45 * align)
+            * w
+            * (0.65 + 0.35 * conf_w)
+            * xg_penalty
+            * upset_penalty
+            * market_bonus
+            * prior_bonus
+            * total_line_factor
+            * common_score_factor
+        )
         
         # 记录价值信息
         if value_info:
@@ -6160,10 +6292,12 @@ def analyze_match(match, force_refresh=False):
             )
             
             # 保存校准后的分布
+            calibrated_dist, goal_line_anchor = _anchor_goal_dist_to_total_line(calibrated_dist, total)
             goal_dist_after_calibration = calibrated_dist
             
             # 更新结果中的分布
             goal_count_result['distribution_dict'] = calibrated_dist
+            goal_count_result['line_anchor'] = goal_line_anchor
             
             # 重新计算推荐（基于校准后的分布）
             from .ml import recommend_goal_counts_from_dist, get_goal_count_distribution_from_dist
@@ -6176,10 +6310,7 @@ def analyze_match(match, force_refresh=False):
             goal_count_result['distribution'] = get_goal_count_distribution_from_dist(calibrated_dist)
             
             # 更新大小球概率
-            goal_count_result['over_under'] = {
-                'over': sum(v for k, v in calibrated_dist.items() if k >= 3),
-                'under': sum(v for k, v in calibrated_dist.items() if k <= 2)
-            }
+            goal_count_result['over_under'] = _goal_over_under_from_line(calibrated_dist, total)
             
             log.info(f"进球数校准完成: 期望总进球{expected_total:.2f} → 校准后分布已更新")
         except Exception as e:
