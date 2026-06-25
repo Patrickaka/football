@@ -329,6 +329,122 @@
     min-width: 70px;
   }
 
+  /* 快乐8专用样式 */
+  .kl8-select-card {
+    border: 2px solid var(--line);
+    border-radius: 12px;
+    padding: 16px;
+    margin-bottom: 16px;
+    background: var(--card);
+  }
+  .kl8-select-card:hover {
+    border-color: #e53935;
+  }
+  .kl8-select-title {
+    font-size: 16px;
+    font-weight: 700;
+    color: #e53935;
+    margin-bottom: 12px;
+  }
+  .kl8-numbers-row {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    align-items: center;
+  }
+  .kl8-ball {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    font-size: 14px;
+    font-weight: 700;
+    color: #fff;
+    background: #e53935;
+    text-shadow: 0 1px 2px rgba(0,0,0,0.2);
+  }
+  .kl8-ball.highlight-ball {
+    background: #c62828;
+    width: 40px;
+    height: 40px;
+    font-size: 16px;
+    box-shadow: 0 2px 10px rgba(198,40,40,0.45);
+  }
+  .kl8-ball.small-ball {
+    width: 30px;
+    height: 30px;
+    font-size: 12px;
+    background: #ef5350;
+    color: #fff;
+  }
+  .kl8-fushi-header {
+    background: linear-gradient(135deg, #e53935 0%, #c62828 100%);
+    color: #fff;
+    padding: 12px 16px;
+    border-radius: 10px;
+    margin-bottom: 16px;
+    font-weight: 700;
+  }
+  .kl8-fushi-top7 {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 16px;
+    justify-content: center;
+  }
+  .kl8-fushi-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: 8px;
+    margin-top: 12px;
+  }
+  .kl8-combo-item {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 8px 12px;
+    font-size: 14px;
+    font-weight: 600;
+    letter-spacing: 1px;
+    color: #e53935;
+  }
+  .kl8-history-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(40px, 1fr));
+    gap: 4px;
+  }
+  .kl8-history-num {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    font-size: 11px;
+    font-weight: 700;
+    background: #e53935;
+    color: #fff;
+  }
+  .kl8-history-num.hit {
+    background: #c62828;
+    box-shadow: 0 1px 6px rgba(198,40,40,0.45);
+  }
+  .kl8-refresh-btn {
+    background: #e53935;
+    color: #fff;
+    border: none;
+    padding: 10px 20px;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    margin-top: 16px;
+  }
+  .kl8-refresh-btn:hover {
+    background: #c62828;
+  }
+
   /* 移动端响应式优化 */
   @media (max-width: 768px) {
     body {
@@ -547,6 +663,7 @@
     <button type="button" class="tab" data-tab="lottery3d" role="tab">🎲 福彩3D</button>
     <button type="button" class="tab" data-tab="pailie5" role="tab">🔢 排列五</button>
     <button type="button" class="tab" data-tab="lottery" role="tab">🎯 大乐透</button>
+    <button type="button" class="tab" data-tab="kl8" role="tab">🎱 快乐8</button>
   </div>
   <div id="panel-football" class="tab-panel active">
     <div id="search-wrap" style="display:none"></div>
@@ -560,6 +677,9 @@
   </div>
   <div id="panel-lottery" class="tab-panel">
     <div id="app-lottery"></div>
+  </div>
+  <div id="panel-kl8" class="tab-panel">
+    <div id="app-kl8"></div>
   </div>
   <div id="panel-predictions" class="tab-panel">
     <div id="app-predictions"></div>
@@ -1472,7 +1592,7 @@ function switchTab(tab) {
   pageTitle.textContent = meta.title;
   pageDesc.textContent = meta.desc;
   document.getElementById('disclaimer').innerHTML = meta.disclaimer;
-  location.hash = tab === 'lottery3d' ? '3d' : tab === 'pailie5' ? 'pailie5' : tab === 'lottery' ? 'lottery' : tab === 'predictions' ? 'predictions' : 'football';
+  location.hash = tab === 'lottery3d' ? '3d' : tab === 'pailie5' ? 'pailie5' : tab === 'lottery' ? 'lottery' : tab === 'kl8' ? 'kl8' : tab === 'predictions' ? 'predictions' : 'football';
   if (tab === 'football') {
     if (!allMatches.length) loadMatches();
     else showListView();
@@ -1482,6 +1602,8 @@ function switchTab(tab) {
     loadPailie5();
   } else if (tab === 'lottery') {
     loadLottery();
+  } else if (tab === 'kl8') {
+    loadKL8();
   } else if (tab === 'predictions') {
     loadPredictions();
   }
@@ -3142,9 +3264,198 @@ async function fetchLotteryData() {
   }
 }
 
+// ── 快乐8相关函数 ──
+
+let kl8Loaded = false;
+
+async function loadKL8() {
+  if (kl8Loaded) return;
+  const appKL8 = document.getElementById('app-kl8');
+  appKL8.innerHTML = `<div class="status"><span class="spinner"></span>正在加载快乐8数据…</div>`;
+
+  try {
+    const data = await fetchJson('/api/kl8?_=' + Date.now());
+    if (data.error) {
+      appKL8.innerHTML = `<div class="status error">✗ ${esc(data.error)}</div>`;
+      return;
+    }
+    kl8Loaded = true;
+    renderKL8(data.result);
+  } catch (e) {
+    appKL8.innerHTML = `<div class="status error">加载失败：${esc(e.message)}</div>`;
+  }
+}
+
+async function refreshKL8() {
+  const appKL8 = document.getElementById('app-kl8');
+  appKL8.innerHTML = `<div class="status"><span class="spinner"></span>正在刷新快乐8数据…</div>`;
+  try {
+    await fetchJsonPost('/api/kl8-refresh');
+    kl8Loaded = false;
+    await loadKL8();
+  } catch (e) {
+    appKL8.innerHTML = `<div class="status error">刷新失败：${esc(e.message)}</div>`;
+  }
+}
+
+function renderKL8(r) {
+  const appKL8 = document.getElementById('app-kl8');
+  let html = '';
+
+  html += `<div class="section-title">【快乐8数据分析】</div>`;
+  html += `<div class="note" style="color:var(--accent2);margin-bottom:12px">⚠ 快乐8开奖具有随机性，以上分析仅为历史统计参考，不构成任何投注建议。请理性对待！</div>`;
+
+  if (r.using_simulated_data) {
+    html += `<div class="note" style="color:#f85149;margin-bottom:12px">⚠ 当前使用模拟数据，请抓取真实开奖数据以获得更好的预测效果。</div>`;
+  }
+
+  // 版本信息
+  html += `<div class="note" style="margin-bottom:8px">版本: ${esc(r.statistics?.version || 'unknown')} · 分析期数: ${r.statistics?.total_periods || 0}</div>`;
+
+  // 最近开奖结果
+  if (r.recent_results && r.recent_results.length > 0) {
+    html += `<div class="card" style="margin-bottom:16px">`;
+    html += `<div class="section-title" style="font-size:14px;margin-bottom:8px">最近开奖结果</div>`;
+    for (const rec of r.recent_results.slice(0, 5)) {
+      html += `<div class="lottery-row">`;
+      html += `<span class="lottery-issue">${esc(rec.issue)}</span>`;
+      html += `<span class="lottery-numbers" style="font-size:13px;letter-spacing:1px;gap:4px;line-height:1.8">`;
+      // 显示20个号码,用不同颜色区分
+      const nums = rec.numbers || [];
+      const lastSet = new Set(r.statistics?.last_numbers || []);
+      for (const n of nums) {
+        const isHighlight = lastSet.has(n);
+        html += `<span class="kl8-ball small-ball ${isHighlight ? 'highlight-ball' : ''}" style="width:26px;height:26px;font-size:10px;display:inline-flex">${String(n).padStart(2,'0')}</span>`;
+      }
+      html += `</span>`;
+      html += `<span class="lottery-date">${esc(rec.date)}</span>`;
+      html += `</div>`;
+    }
+    html += `</div>`;
+  }
+
+  // 选3/4/5/6/7推荐号码
+  const selectTypes = [3, 4, 5, 6, 7];
+  html += `<div class="card" style="margin-bottom:16px">`;
+  html += `<div class="section-title" style="font-size:15px;margin-bottom:12px">推荐号码</div>`;
+  html += `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px">`;
+
+  for (const st of selectTypes) {
+    const key = `select_${st}`;
+    const sel = r[key];
+    if (!sel) continue;
+
+    html += `<div class="kl8-select-card">`;
+    html += `<div class="kl8-select-title">🎱 ${esc(sel.desc)} — 推荐${sel.pick}个号码</div>`;
+    html += `<div class="kl8-numbers-row">`;
+    for (const n of sel.numbers) {
+      html += `<span class="kl8-ball highlight-ball">${String(n).padStart(2,'0')}</span>`;
+    }
+    html += `</div>`;
+
+    // 候选号码(更多参考)
+    if (sel.candidates && sel.candidates.length > sel.pick) {
+      html += `<div style="margin-top:8px;font-size:12px;color:var(--muted)">候选池: `;
+      for (const item of sel.candidates.slice(0, 10)) {
+        const num = typeof item === 'object' ? item[0] : item;
+        html += `<span class="kl8-ball small-ball">${String(num).padStart(2,'0')}</span> `;
+      }
+      html += `</div>`;
+    }
+
+    html += `</div>`;
+  }
+  html += `</div></div>`;
+
+  // 选5复式7码
+  const fushi = r.fu_shi_7;
+  if (fushi) {
+    html += `<div class="card" style="margin-bottom:16px">`;
+    html += `<div class="kl8-fushi-header">🎱 选5复式 — 7码复式 (共${fushi.total_combinations}组)</div>`;
+
+    // Top7号码
+    html += `<div class="section-title" style="font-size:14px;margin-bottom:8px">7个核心号码</div>`;
+    html += `<div class="kl8-fushi-top7">`;
+    for (let i = 0; i < fushi.top7_numbers.length; i++) {
+      const n = fushi.top7_numbers[i];
+      html += `<span class="kl8-ball highlight-ball" style="width:44px;height:44px;font-size:18px">${String(n).padStart(2,'0')}</span>`;
+    }
+    html += `</div>`;
+
+    // 21组组合
+    html += `<div class="section-title" style="font-size:14px;margin-bottom:8px">全部 C(7,5) = ${fushi.total_combinations} 组组合</div>`;
+    html += `<div class="kl8-fushi-grid">`;
+    for (const combo of fushi.combinations) {
+      html += `<div class="kl8-combo-item">`;
+      for (const n of combo) {
+        html += `<span>${String(n).padStart(2,'0')}</span> `;
+      }
+      html += `</div>`;
+    }
+    html += `</div>`;
+    html += `</div>`;
+  }
+
+  // 号码排名Top20
+  if (r.ranking && r.ranking.length > 0) {
+    html += `<div class="card" style="margin-bottom:16px">`;
+    html += `<div class="section-title" style="font-size:14px;margin-bottom:8px">号码评分排名 (Top20)</div>`;
+    html += `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:6px">`;
+    for (const item of r.ranking) {
+      const score = item.score?.toFixed(3) || '0';
+      html += `<div style="display:flex;align-items:center;gap:8px;padding:4px 8px;background:var(--card);border-radius:6px;font-size:13px">`;
+      html += `<span class="kl8-ball" style="width:28px;height:28px;font-size:11px">${String(item.num).padStart(2,'0')}</span>`;
+      html += `<span style="color:var(--muted)">得分: ${score}</span>`;
+      html += `</div>`;
+    }
+    html += `</div>`;
+    html += `</div>`;
+  }
+
+  // 刷新按钮
+  html += `<div style="display:flex;gap:12px;margin-top:16px">`;
+  html += `<button class="kl8-refresh-btn" onclick="refreshKL8()">↻ 重新计算</button>`;
+  html += `<button class="kl8-refresh-btn" style="background:#4493f8" onclick="fetchKL8Data()">🔄 抓取最新开奖数据</button>`;
+  html += `</div>`;
+
+  appKL8.innerHTML = html;
+}
+
+async function fetchKL8Data() {
+  const appKL8 = document.getElementById('app-kl8');
+  const originalContent = appKL8.innerHTML;
+  appKL8.innerHTML = `<div class="status"><span class="spinner"></span>正在抓取最新快乐8开奖数据…</div>`;
+
+  try {
+    const data = await fetchJson('/api/kl8/fetch');
+    if (data.error) {
+      appKL8.innerHTML = `<div class="status error">✗ ${esc(data.error)}</div>`;
+      return;
+    }
+
+    const success = data.success || false;
+    const message = data.message || '';
+    const latestIssue = data.latest_issue || '';
+
+    if (data.result) {
+      renderKL8(data.result);
+    }
+
+    // Toast
+    const toast = document.createElement('div');
+    toast.style.cssText = `position:fixed;bottom:30px;left:50%;transform:translateX(-50%);background:${success ? '#2ea043' : '#f85149'};color:white;padding:12px 24px;border-radius:8px;font-size:14px;z-index:1000;`;
+    toast.innerHTML = `${success ? '✅' : '❌'} ${message}${latestIssue ? ' · 最新期号: ' + latestIssue : ''}`;
+    document.body.appendChild(toast);
+    setTimeout(() => toast.remove(), 3000);
+  } catch (e) {
+    appKL8.innerHTML = `<div class="status error">抓取失败: ${esc(e.message)}</div>`;
+    setTimeout(() => { appKL8.innerHTML = originalContent; }, 2000);
+  }
+}
+
 function initPage() {
   const hash = location.hash.replace('#', '');
-  switchTab(hash === '3d' ? 'lottery3d' : hash === 'pailie5' ? 'pailie5' : hash === 'lottery' ? 'lottery' : hash === 'predictions' ? 'predictions' : 'football');
+  switchTab(hash === '3d' ? 'lottery3d' : hash === 'pailie5' ? 'pailie5' : hash === 'lottery' ? 'lottery' : hash === 'kl8' ? 'kl8' : hash === 'predictions' ? 'predictions' : 'football');
 }
 
 async function loadPredictions() {

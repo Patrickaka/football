@@ -30,6 +30,7 @@ from src.lottery3d.ml import fetch_data, predict_current
 from src.pailie5 import get_pailie5_analyzer, run_prediction as pailie5_run_prediction
 from src.lottery import get_lottery_analyzer, run_prediction as lottery_run_prediction
 from src.lottery.ml import predict_with_ml, clear_ml_cache
+from src.kl8 import get_kl8_analyzer, run_prediction as kl8_run_prediction, clear_cache as kl8_clear_cache
 from src.common.logger import setup_logger
 
 # 回测模块（延迟导入以加速启动）
@@ -88,6 +89,11 @@ _CACHE = {
         'expire_seconds': 86400  # 24小时缓存（当天有效）
     },
     'pailie5': {
+        'data': None,
+        'timestamp': 0,
+        'expire_seconds': 86400  # 24小时缓存（当天有效）
+    },
+    'kl8': {
         'data': None,
         'timestamp': 0,
         'expire_seconds': 86400  # 24小时缓存（当天有效）
@@ -249,6 +255,12 @@ class Handler(BaseHTTPRequestHandler):
             self._serve_json(self._lottery_ml_payload())
         elif path == '/api/lottery/ml-refresh':
             self._serve_json(self._lottery_ml_refresh_payload())
+        elif path == '/api/kl8':
+            self._serve_json(self._kl8_payload())
+        elif path == '/api/kl8-refresh':
+            self._serve_json(self._kl8_refresh_payload())
+        elif path == '/api/kl8/fetch':
+            self._serve_json(self._kl8_fetch_payload())
         elif path == '/api/calibrate':
             params = parse_qs(route.query)
             self._serve_json(self._calibrate_payload(params))
@@ -1204,6 +1216,81 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:
             self._log.error('大乐透ML重新训练失败: %s', str(e), exc_info=True)
             return {'success': False, 'error': str(e)}
+
+    # ─── 快乐8相关路由 ───
+
+    def _kl8_payload(self):
+        """获取快乐8预测结果"""
+        try:
+            now = time.time()
+            cache = _CACHE['kl8']
+
+            if cache['data'] is not None and _is_cache_valid(cache, now):
+                self._log.info('快乐8使用缓存')
+                return {'result': cache['data']}
+
+            self._log.info('快乐8重新计算')
+            result = kl8_run_prediction(force_refresh=True)
+
+            if 'error' in result:
+                return {'error': result['error']}
+
+            cache['data'] = result
+            cache['timestamp'] = now
+            return {'result': result}
+        except Exception:
+            self._log.error('快乐8预测失败', exc_info=True)
+            return {'error': '快乐8预测失败'}
+
+    def _kl8_refresh_payload(self):
+        """强制刷新快乐8数据缓存"""
+        try:
+            self._log.info('快乐8强制刷新请求到达')
+            kl8_clear_cache()
+            _CACHE['kl8']['data'] = None
+            _CACHE['kl8']['timestamp'] = 0
+
+            result = kl8_run_prediction(force_refresh=True)
+
+            _CACHE['kl8']['data'] = result
+            _CACHE['kl8']['timestamp'] = time.time()
+
+            return {'success': True, 'result': result}
+        except Exception:
+            self._log.error('快乐8刷新失败', exc_info=True)
+            return {'error': '快乐8刷新失败'}
+
+    def _kl8_fetch_payload(self):
+        """抓取最新快乐8开奖数据"""
+        try:
+            self._log.info('快乐8抓取最新数据请求到达')
+            from src.kl8.fetch import fetch_kl8_data, save_kl8_data
+
+            data = fetch_kl8_data(pages=5, per_page=50)
+            if not data:
+                return {'success': False, 'message': '网络抓取失败'}
+
+            # 保存到本地
+            save_kl8_data(data)
+
+            # 清除缓存并重新预测
+            kl8_clear_cache()
+            _CACHE['kl8']['data'] = None
+            _CACHE['kl8']['timestamp'] = 0
+
+            result = kl8_run_prediction(force_refresh=True)
+            _CACHE['kl8']['data'] = result
+            _CACHE['kl8']['timestamp'] = time.time()
+
+            return {
+                'success': True,
+                'message': f'成功抓取 {len(data)} 期数据',
+                'latest_issue': data[0]['issue'] if data else '',
+                'result': result,
+            }
+        except Exception:
+            self._log.error('快乐8抓取失败', exc_info=True)
+            return {'error': '快乐8抓取失败'}
 
     def _send(self, status, content_type, body):
         self.send_response(status)
