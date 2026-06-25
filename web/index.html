@@ -1254,9 +1254,12 @@ function showListView(filter) {
   const search = ensureSearchBox();
   if (search.value !== listFilter) search.value = listFilter;
   renderMatchList();
-  search.focus();
-  const pos = search.value.length;
-  search.setSelectionRange(pos, pos);
+  // 移动端不自动聚焦搜索框，避免拉起输入法
+  if (window.innerWidth > 768) {
+    search.focus();
+    const pos = search.value.length;
+    search.setSelectionRange(pos, pos);
+  }
 }
 
 async function predict(m) {
