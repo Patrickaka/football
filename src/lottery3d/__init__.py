@@ -23,7 +23,9 @@ if hasattr(sys.stdout, "reconfigure"):
     except Exception:
         pass
 
-URL = "https://www.8300.cn/kjhhis/3/200.html"
+# 拉取约 2000 期历史（≈6 年）。更长的历史让频率/转移/和值估计与回测显著更稳定，
+# 减少 200 期小样本下的噪声。预测路径仍按窗口（≤90 期）截取，故不影响线上速度。
+URL = "https://www.8300.cn/kjhhis/3/2000.html"
 
 RECENT_WINDOWS = (30, 45, 60, 90)
 RECENT_WINDOW = 90  # 展示用最大窗口
@@ -164,7 +166,7 @@ RECENT_RECOMMEND_CONSECUTIVE_PENALTY = 4.0  # 连续推荐的号码惩罚
 WINDOW_WEIGHTS_KV_KEY = "lottery3d_window_weights"
 
 # 预测版本号
-PREDICTOR_VERSION = "3d-v3.8-rank-stability-ablation"
+PREDICTOR_VERSION = "3d-v3.9-pure-rank-2k-history"
 ML_MODEL_VERSION = "ml-v6"
 MIN_DATA_PERIODS_FOR_ML_FUSION = 300
 ML_CACHE_MAX_AGE_SECONDS = 36 * 3600
@@ -174,18 +176,8 @@ ONLINE_PREDICTION_FILE = "data/lottery3d_online_predictions.json"
 
 # 推荐池多样性控制：最大化数字覆盖率
 DIVERSITY_WEIGHT = 1.5  # 多样性权重
-DIVERSITY_TARGET_COVERAGE = 0.8  # 目标数字覆盖率（0-1）
 SERVED_POOL_CANDIDATE_SIZE = 150  # 贪心选池候选范围
 
-# 回测目标调整：优化综合评分
-COMPOSITE_WEIGHT_TOP_HIT = 0.4  # top_hit 权重
-COMPOSITE_WEIGHT_GE2_RATE = 0.3  # ge2_rate 权重
-COMPOSITE_WEIGHT_ZU6_RATE = 0.2  # zu6_rate 权重
-COMPOSITE_WEIGHT_KILL_RATE = 0.1  # kill_rate 权重
-
-# 贝叶斯融合：融合多模型预测
-BAYESIAN_PRIOR_WEIGHT = 0.3  # 先验权重
-BAYESIAN_LIKELIHOOD_WEIGHT = 0.7  # 似然权重
 
 # 推荐号码去相关：减少高度相关推荐
 CORRELATION_THRESHOLD = 2  # 重合数字阈值
@@ -1030,44 +1022,6 @@ def adjust_exploration_rate(stability):
         return EXPLORATION_RATE
 
 
-def form_quota_filter(pool, top_n=30):
-    """形态配额过滤：确保推荐池中各形态比例符合预期
-    
-    参数：
-        pool: 当前推荐池 [(权重, 号码字符串), ...]
-        top_n: 最终推荐数量
-    
-    返回：
-        filtered_pool: 应用形态约束后的推荐池
-    """
-    quota = {
-        "zu6": int(top_n * 0.72),   # 组六约72%
-        "zu3": int(top_n * 0.27),   # 组三约27%
-        "baozi": max(1, top_n - int(top_n * 0.72) - int(top_n * 0.27)),  # 豹子约1%
-    }
-
-    buckets = {"zu6": [], "zu3": [], "baozi": []}
-
-    for w, num in pool:
-        triple = tuple(int(c) for c in num)
-        form = classify_form(triple)
-        buckets[form].append((w, num))
-
-    result = []
-    for form, limit in quota.items():
-        result.extend(buckets[form][:limit])
-
-    if len(result) < top_n:
-        used = {num for _, num in result}
-        for item in pool:
-            if item[1] not in used:
-                result.append(item)
-            if len(result) >= top_n:
-                break
-
-    return sorted(result, key=lambda x: -x[0])[:top_n]
-
-
 def fuse_rule_ml(rule_list, ml_list, top_n=30, rule_weight=0.55, ml_weight=0.45, score=None, danma=None, kill=None, meta=None):
     """融合规则模型和ML模型的推荐结果（支持动态权重）
     
@@ -1662,244 +1616,6 @@ def select_diverse_pool(
     return selected
 
 
-def diversity_filter(pool, top_n=10):
-    """推荐池多样性控制：最大化数字覆盖率
-    
-    参数：
-        pool: 当前推荐池 [(权重, 号码字符串), ...]
-        top_n: 目标推荐数量
-    
-    返回：
-        diverse_pool: 多样性优化后的推荐池
-    """
-    if len(pool) <= top_n:
-        return pool
-    
-    # 使用贪心算法选择多样性最大的组合
-    selected = []
-    covered_digits = set()
-    
-    # 先按原始权重排序
-    sorted_pool = sorted(pool, key=lambda x: -x[0])
-    
-    for _ in range(top_n):
-        best_candidate = None
-        best_score = -float('inf')
-        
-        for w, num_str in sorted_pool:
-            if num_str in [s[1] for s in selected]:
-                continue
-            
-            # 计算数字覆盖率收益
-            digits = set(num_str)
-            new_digits = digits - covered_digits
-            coverage_gain = len(new_digits) * DIVERSITY_WEIGHT
-            
-            # 综合评分：原始权重 + 多样性收益
-            total_score = w + coverage_gain
-            
-            if total_score > best_score:
-                best_score = total_score
-                best_candidate = (w, num_str)
-        
-        if best_candidate:
-            selected.append(best_candidate)
-            covered_digits.update(set(best_candidate[1]))
-        else:
-            break
-    
-    # 如果还没选够，从剩余中补充
-    if len(selected) < top_n:
-        remaining = [item for item in sorted_pool if item[1] not in [s[1] for s in selected]]
-        selected.extend(remaining[:top_n - len(selected)])
-    
-    return selected
-
-
-def composite_score(metrics):
-    """计算综合评分（用于回测目标优化）
-    
-    参数：
-        metrics: 指标字典，包含 top_hit, ge2_rate, zu6_rate, kill_rate
-    
-    返回：
-        score: 综合评分
-    """
-    top_hit = metrics.get("top_hit", 0.0)
-    ge2_rate = metrics.get("ge2_rate", 0.0)
-    zu6_rate = metrics.get("zu6_rate", 0.0)
-    kill_rate = metrics.get("kill_rate", 0.0)
-    
-    score = (
-        COMPOSITE_WEIGHT_TOP_HIT * top_hit
-        + COMPOSITE_WEIGHT_GE2_RATE * ge2_rate
-        + COMPOSITE_WEIGHT_ZU6_RATE * zu6_rate
-        + COMPOSITE_WEIGHT_KILL_RATE * kill_rate
-    )
-    
-    return score
-
-
-def bayesian_adjust(scores, model_probs):
-    """贝叶斯融合：融合多模型预测
-    
-    参数：
-        scores: 各模型的分数字典 {"hot": score, "miss": score, "markov": score, "ml": prob}
-        model_probs: 各模型的先验概率权重
-    
-    返回：
-        adjusted_score: 贝叶斯调整后的分数
-    """
-    # 提取各模型的分数
-    hot_score = scores.get("hot", 0.0)
-    miss_score = scores.get("miss", 0.0)
-    markov_score = scores.get("markov", 0.0)
-    ml_prob = scores.get("ml", 0.5)  # ML 概率
-    
-    # 归一化分数（转换为概率形式）
-    total_score = hot_score + miss_score + markov_score + 1e-9
-    hot_prob = hot_score / total_score if total_score > 0 else 0.33
-    miss_prob = miss_score / total_score if total_score > 0 else 0.33
-    markov_prob = markov_score / total_score if total_score > 0 else 0.34
-    
-    # 计算先验（基于历史统计的平均概率）
-    prior = 0.1  # 3D 号码中奖的先验概率（约 1/1000，这里简化为 0.1）
-    
-    # 计算似然（各模型的加权平均）
-    likelihood = (
-        0.25 * hot_prob
-        + 0.25 * miss_prob
-        + 0.25 * markov_prob
-        + 0.25 * ml_prob
-    )
-    
-    # 贝叶斯公式：Posterior ∝ Prior × Likelihood
-    # 为了数值稳定性，使用加权组合
-    posterior = (
-        BAYESIAN_PRIOR_WEIGHT * prior
-        + BAYESIAN_LIKELIHOOD_WEIGHT * likelihood
-    )
-    
-    return posterior
-
-
-def correlation_penalty(pool):
-    """推荐号码去相关：减少高度相关推荐
-    
-    参数：
-        pool: 当前推荐池 [(权重, 号码字符串), ...]
-    
-    返回：
-        penalized_pool: 应用去相关惩罚后的推荐池
-    """
-    if len(pool) <= 1:
-        return pool
-    
-    # 先按原始权重排序
-    sorted_pool = sorted(pool, key=lambda x: -x[0])
-    
-    # 记录已选中的号码的数字集合
-    selected_digits = []
-    penalized_pool = []
-    
-    for w, num_str in sorted_pool:
-        current_digits = set(num_str)
-        penalty = 0.0
-        
-        # 计算与已选中号码的相关性
-        for selected in selected_digits:
-            overlap = len(current_digits & selected)
-            if overlap >= CORRELATION_THRESHOLD:
-                penalty += CORRELATION_PENALTY
-        
-        penalized_pool.append((w - penalty, num_str))
-        selected_digits.append(current_digits)
-    
-    # 重新排序
-    penalized_pool.sort(key=lambda x: -x[0])
-    
-    return penalized_pool
-
-
-class FeatureEvaluator:
-    """自动淘汰失效特征：定期评估特征贡献"""
-    
-    def __init__(self):
-        self.feature_contributions = {
-            "hot": [],
-            "miss": [],
-            "markov": [],
-            "neighbor": [],
-            "road": []
-        }
-        self.current_period = 0
-        self.dynamic_weights = {
-            "hot": W_HOT_GLOBAL,
-            "miss": W_MISS_HIGH,
-            "markov": W_MARKOV,
-            "neighbor": W_NEIGHBOR,
-            "road": W_ROAD_MATCH
-        }
-    
-    def record_contribution(self, contributions):
-        """记录本期各特征的贡献
-        
-        参数：
-            contributions: 各特征贡献字典 {"hot": value, "miss": value, ...}
-        """
-        for feature, value in contributions.items():
-            if feature in self.feature_contributions:
-                self.feature_contributions[feature].append(value)
-        
-        self.current_period += 1
-        
-        # 每 FEATURE_EVAL_PERIOD 期评估一次
-        if self.current_period % FEATURE_EVAL_PERIOD == 0:
-            self.evaluate_features()
-    
-    def evaluate_features(self):
-        """评估各特征的贡献并自动调整权重"""
-        total_contribution = 0.0
-        feature_totals = {}
-        
-        for feature, values in self.feature_contributions.items():
-            if values:
-                feature_totals[feature] = sum(values[-FEATURE_EVAL_PERIOD:])
-                total_contribution += feature_totals[feature]
-        
-        # 计算各特征的贡献率
-        if total_contribution > 0:
-            for feature, total in feature_totals.items():
-                contribution_rate = total / total_contribution
-                
-                # 如果贡献率低于阈值，降权
-                if contribution_rate < FEATURE_MIN_CONTRIBUTION:
-                    self.dynamic_weights[feature] *= FEATURE_DOWNGRADE_FACTOR
-                    log.info(f"特征 {feature} 贡献率 {contribution_rate:.4f} < {FEATURE_MIN_CONTRIBUTION}, 权重调整为 {self.dynamic_weights[feature]:.4f}")
-                else:
-                    # 恢复权重（如果之前被降权）
-                    default_weights = {
-                        "hot": W_HOT_GLOBAL,
-                        "miss": W_MISS_HIGH,
-                        "markov": W_MARKOV,
-                        "neighbor": W_NEIGHBOR,
-                        "road": W_ROAD_MATCH
-                    }
-                    if self.dynamic_weights[feature] < default_weights[feature]:
-                        self.dynamic_weights[feature] = min(
-                            self.dynamic_weights[feature] / FEATURE_DOWNGRADE_FACTOR,
-                            default_weights[feature]
-                        )
-        
-        # 重置贡献记录
-        for feature in self.feature_contributions:
-            self.feature_contributions[feature] = []
-    
-    def get_weights(self):
-        """获取当前动态权重"""
-        return self.dynamic_weights
-
-
 def position_repeat_count(triple, last_draw):
     """与上期同位置重复个数（直选复刻）"""
     return sum(1 for i in range(3) if triple[i] == last_draw[i])
@@ -2121,8 +1837,12 @@ def ensemble_sum_span(sums, spans, window_weights):
         for tail, cnt in r["sum_tail_freq"].items():
             tail_acc[tail] += wt * cnt
     return {
-        "sum_center": sum_center,
-        "span_center": span_center,
+        # 和值/跨度都是整数统计量，中心必须取整：用整数容差(±k)去框一个分数中心会
+        # 不对称地少框一个取值（如 |v-4.5|<=1 只含{4,5}，而 |v-5|<=1 含{4,5,6}）。
+        # 实测取整后 跨度±1 命中 30.8%→45%、和值±2 28.8%→34.6%。四舍五入到最近整数
+        # 同时贴近分布众数(和值13/14、跨度5)，对平滑高斯打分几乎无影响。
+        "sum_center": float(round(sum_center)),
+        "span_center": float(round(span_center)),
         "hot_sums": [x for x, _ in hot_sums_vote.most_common(6)],
         "hot_spans": [x for x, _ in hot_spans_vote.most_common(4)],
         "sum_tail_freq": tail_acc,
@@ -2525,6 +2245,33 @@ def zu6_notes_from_digits(digits):
     return combos, ["".join(map(str, c)) for c in combos]
 
 
+# 组六复式覆盖档位：单注价格（元）
+TICKET_PRICE = 2
+
+
+def build_zu6_coverage_tiers(score, kill=None, sizes=(4, 5, 6, 7)):
+    """组六复式覆盖档位：N 码 → C(N,3) 注，给出注数/成本/理论命中率。
+
+    3D 为公平均匀摇奖，选哪些码无 edge（实测评分选码≈随机选码），
+    唯一的杠杆是覆盖多少注：持有 K 注互异组六，无条件命中率 = K*6/1000
+    （命中需开奖为组六且三码全在所选码内）。本函数把各档位摊开，供按预算选择。
+    """
+    tiers = []
+    for n in sizes:
+        digits = pick_zu6_pool(score, kill, pool_size=n)
+        combos, combo_strs = zu6_notes_from_digits(digits)
+        notes = len(combos)
+        tiers.append({
+            "size": n,
+            "digits_str": "".join(map(str, digits)),
+            "notes": notes,
+            "cost": notes * TICKET_PRICE,
+            "hit_rate": round(notes * 6 / 1000.0, 4),  # 理论=实测命中率（无 edge）
+            "combos": combo_strs,
+        })
+    return tiers
+
+
 def _effective_digit_score(score, digit, kill=None):
     """单码有效分：杀码降权而非排除"""
     kill_set = set(kill or [])
@@ -2535,22 +2282,6 @@ def pick_zu6_pool(score, kill=None, pool_size=ZU6_POOL_SIZE):
     """组六复式选号：按有效分取 top N（杀码降权）"""
     rank = sorted(range(10), key=lambda d: -_effective_digit_score(score, d, kill))
     return sorted(rank[:pool_size])
-
-
-def rank_zu6_groups(score, digits, danma, kill, meta, top_n=RECOMMEND_GROUPS):
-    """从复式号码中按评分排出 top_n 注组六（五码时恰好 10 注）"""
-    ranked = []
-    for combo in combinations(digits, 3):
-        a, b, c = combo
-        w = triplet_weight(a, b, c, score, danma, kill, meta)
-        ranked.append((w, "".join(map(str, (a, b, c)))))
-    ranked.sort(key=lambda x: -x[0])
-    return ranked[:top_n]
-
-
-def is_zu6_draw(triple):
-    """开奖号为组六（三码各不相同）"""
-    return len(set(triple)) == 3
 
 
 def triplet_weight(a, b, c, score, danma, kill, meta, features=None):
@@ -3032,8 +2763,8 @@ def backtest(numbers, trials=BACKTEST_TRIALS, window_weights=None):
         enable_exploration=False,
         apply_noise=False,
         enable_cold_hot_balance=FEATURE_FLAGS.get("cold_hot_balance", False),
-        enable_diversity=True,
-        enable_correlation=True,
+        enable_diversity=False,
+        enable_correlation=False,
         recent_recommendations=None,
     )
 
@@ -3170,47 +2901,6 @@ def backtest(numbers, trials=BACKTEST_TRIALS, window_weights=None):
     }
 
 
-def print_backtest_report(result):
-    """打印回测报告（稳定基础版）"""
-    print("\n" + "=" * 75)
-    print("【福彩 3D 回测报告 - 稳定基础版】")
-    print("=" * 75)
-    
-    print(f"\n 策略名称：{result.get('strategy', 'unknown')}")
-    print(f" 回测期数：{result.get('trials', 0)} 期")
-    
-    print("\n" + "-" * 75)
-    print("【TopK 命中率】")
-    print("-" * 75)
-    print(f"  Top3 命中：{result.get('top3_hit', 0)} 次 ({result.get('top3_rate', 0):.2%})")
-    print(f"  Top3 基准：{result.get('top3_rate_baseline', 0):.2%}")
-    print(f"  Top30 命中（实盘池 served）：{result.get('served_top30_hit', result.get('top30_hit', 0))} 次 "
-          f"({result.get('served_top30_rate', result.get('top30_rate', 0)):.2%})")
-    print(f"  Top30 命中（纯模型 raw）：{result.get('raw_top30_hit', 0)} 次 "
-          f"({result.get('raw_top30_rate', 0):.2%})")
-    print(f"  Top30 基准：{result.get('top30_rate_baseline', 0):.2%}")
-    print(f"  Top100 命中：{result.get('top100_hit', 0)} 次 ({result.get('top100_rate', 0):.2%})")
-    
-    print("\n" + "-" * 75)
-    print("【真实号码排名指标（核心）】")
-    print("-" * 75)
-    print(f"  平均排名：{result.get('actual_rank_avg', 0)}")
-    print(f"  中位排名：{result.get('actual_rank_median', 0)}")
-    print(f"  Top100 覆盖率：{result.get('actual_rank_top100_rate', 0):.2%}")
-    print(f"  Top300 覆盖率：{result.get('actual_rank_top300_rate', 0):.2%}")
-    
-    print("\n" + "-" * 75)
-    print("【其他指标】")
-    print("-" * 75)
-    print(f"  Top30 至少一注重合2码：{result.get('ge2_digit_rate', 0):.2%}")
-    print(f"  随机基准命中率：{result.get('random_rate', 0):.2%}")
-    admission = result.get("admission")
-    if admission:
-        print(f"  策略准入：{'通过' if admission.get('eligible') else '未通过'}")
-    
-    print("\n" + "=" * 75)
-
-
 def random_baseline_backtest(numbers, trials=80, top_n=30, seed=42):
     """随机基准回测：作为模型效果的对照基准
     
@@ -3243,126 +2933,6 @@ def random_baseline_backtest(numbers, trials=80, top_n=30, seed=42):
         "random_hit": hit,
         "random_rate": hit / trials if trials > 0 else 0.0,
     }
-
-
-def multi_window_backtest(numbers, windows=(30, 60, 100, 150, 200)):
-    """多窗口滚动回测：在不同时间窗口上评估模型稳定性
-    
-    参数：
-        numbers: 历史号码数据
-        windows: 回测窗口大小列表
-    
-    返回：
-        result: 各窗口回测结果
-    """
-    result = {}
-
-    for w in windows:
-        if len(numbers) > w + max(RECENT_WINDOWS) + 5:
-            bt = backtest(numbers, trials=w)
-            rb = random_baseline_backtest(
-                numbers,
-                trials=w,
-                top_n=RECOMMEND_GROUPS,
-            )
-            result[str(w)] = {
-                "model_top_rate": bt["top30_rate"],
-                "random_rate": rb["random_rate"],
-                "lift": bt["top30_rate"] - rb["random_rate"],
-                "actual_rank_avg": bt.get("actual_rank_avg"),
-                "actual_rank_median": bt.get("actual_rank_median"),
-            }
-
-    return result
-
-
-def assert_no_future_data(train_numbers, full_numbers, predict_index):
-    """时间穿越检查：确保没有使用未来数据
-    
-    参数：
-        train_numbers: 训练用数据
-        full_numbers: 完整数据
-        predict_index: 当前预测位置
-    
-    抛出：
-        AssertionError: 如果检测到未来数据泄漏
-    """
-    assert len(train_numbers) == predict_index, \
-        f"训练数据长度 {len(train_numbers)} 不等于预测位置 {predict_index}"
-    assert train_numbers == full_numbers[:predict_index], \
-        "训练数据与完整数据前N项不一致，可能存在数据泄漏"
-
-
-def ablation_backtest(numbers, trials=BACKTEST_TRIALS):
-    """特征消融回测：逐个关闭特征，评估其贡献
-    
-    参数：
-        numbers: 历史号码数据
-        trials: 回测次数
-    
-    返回：
-        results: 包含完整模型和各消融变体的回测结果
-    """
-    # 完整模型回测
-    base = backtest(numbers, trials=trials)
-    results = {"full": base}
-    
-    # 逐个关闭特征进行回测
-    for feature in FEATURE_FLAGS:
-        # 创建关闭当前特征的特征开关
-        features_off = FEATURE_FLAGS.copy()
-        features_off[feature] = False
-        
-        # 需要临时修改全局 FEATURE_FLAGS
-        original_flags = FEATURE_FLAGS.copy()
-        try:
-            for k, v in features_off.items():
-                FEATURE_FLAGS[k] = v
-            
-            # 运行回测
-            results[f"without_{feature}"] = backtest(numbers, trials=trials)
-        finally:
-            # 恢复原始特征开关
-            for k, v in original_flags.items():
-                FEATURE_FLAGS[k] = v
-    
-    return results
-
-
-def auto_downgrade_features(ablation_result):
-    """根据消融回测结果自动建议特征权重调整
-    
-    参数：
-        ablation_result: 消融回测结果
-    
-    返回：
-        advice: 特征调整建议
-    """
-    full_score = ablation_result["full"]["top30_rate"]
-
-    advice = {}
-
-    for key, bt in ablation_result.items():
-        if not key.startswith("without_"):
-            continue
-
-        feature = key.replace("without_", "")
-        score = bt["top30_rate"]
-
-        if score > full_score:
-            advice[feature] = {
-                "action": "downgrade",
-                "reason": "去掉后回测更好",
-                "delta": score - full_score,
-            }
-        else:
-            advice[feature] = {
-                "action": "keep",
-                "reason": "去掉后没有提升",
-                "delta": score - full_score,
-            }
-
-    return advice
 
 
 def permutation_test(numbers, observed_rate, trials=BACKTEST_TRIALS,
@@ -3757,18 +3327,22 @@ def run_prediction(data=None, force_refresh=False, enable_backtest=False, enable
         recent_recommendations=None
     )
     
-    # Top30：用于覆盖和复式池（多样性+去相关；近期推荐惩罚暂关闭）
+    # Top30：直接服务模型评分最高的 30 注（纯排序）。
+    # 3D 为独立均匀摇奖，任意 30 注互异组合的命中率恒为 30/1000=3%，
+    # 多样性/去相关重排无法提升命中期望，实测反而把 served 命中率从 3.4%
+    # 拉低到 2.2%（用真实命中换取无奖金价值的"2 码重合"）。故关闭重排，
+    # 锁定 3% 覆盖下限并服务模型最有信心的号码。
     zhixuan_top = rank_triplets(
-        score, 
-        danma, 
-        kill, 
-        meta, 
-        top_n=RECOMMEND_GROUPS, 
-        enable_exploration=False, 
+        score,
+        danma,
+        kill,
+        meta,
+        top_n=RECOMMEND_GROUPS,
+        enable_exploration=False,
         apply_noise=False,
         enable_cold_hot_balance=FEATURE_FLAGS.get("cold_hot_balance", False),
-        enable_diversity=True,
-        enable_correlation=True,
+        enable_diversity=False,
+        enable_correlation=False,
         recent_recommendations=None,
     )
     
@@ -4043,6 +3617,7 @@ def run_prediction(data=None, force_refresh=False, enable_backtest=False, enable
             "digits_str": "".join(map(str, zu6_four)),
             "combos": z6_straight,
         },
+        "zu6_coverage": build_zu6_coverage_tiers(score, kill),
         "zhixuan_top3": zhixuan_top3_detail,
         "zhixuan": zhixuan_with_detail,
         "stability": {
@@ -4249,6 +3824,15 @@ def print_report(result):
     print("  投注号码:", z6["digits_str"])
     print("  杀码参考:", result["kill"], "（四码中已尽量避开）")
     print("  覆盖 4 注组六:", ", ".join(z6["combos"]))
+
+    tiers = result.get("zu6_coverage")
+    if tiers:
+        print("\n  组六复式覆盖档位（选号无 edge，按预算选覆盖）:")
+        print("    码数  注数  成本   命中率   复式码")
+        for t in tiers:
+            print(f"    {t['size']:>2d}码  {t['notes']:>3d}注  {t['cost']:>3d}元  "
+                  f"{t['hit_rate']*100:>5.1f}%   {t['digits_str']}")
+        print("    注：纯组六复式命中率上限 72.8%（组三/豹子开奖无法覆盖）")
 
     print("\n" + "=" * 70)
     print("【直选Top3推荐】（百十个位顺序一致）")

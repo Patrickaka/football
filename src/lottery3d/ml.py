@@ -76,7 +76,7 @@ if hasattr(sys.stdout, "reconfigure"):
     except Exception:
         pass
 
-URL = "https://www.8300.cn/kjhhis/3/200.html"
+URL = "https://www.8300.cn/kjhhis/3/2000.html"  # 与规则模型统一拉取约 2000 期历史
 
 # 模型参数
 BACKTEST_TRIALS = 40  # 临时降低回测期数，适配当前200期数据（最低需要160期）

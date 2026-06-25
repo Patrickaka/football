@@ -29,6 +29,7 @@ from src.lottery3d import run_prediction
 from src.lottery3d.ml import fetch_data, predict_current
 from src.pailie5 import get_pailie5_analyzer, run_prediction as pailie5_run_prediction
 from src.lottery import get_lottery_analyzer, run_prediction as lottery_run_prediction
+from src.lottery.ml import predict_with_ml, clear_ml_cache
 from src.common.logger import setup_logger
 
 # 回测模块（延迟导入以加速启动）
@@ -77,6 +78,11 @@ _CACHE = {
         'expire_seconds': 86400  # 24小时缓存（当天有效）
     },
     'lottery': {
+        'data': None,
+        'timestamp': 0,
+        'expire_seconds': 86400  # 24小时缓存（当天有效）
+    },
+    'lottery_ml': {
         'data': None,
         'timestamp': 0,
         'expire_seconds': 86400  # 24小时缓存（当天有效）
@@ -239,6 +245,10 @@ class Handler(BaseHTTPRequestHandler):
             self._serve_json(self._lottery_backtest_payload(params))
         elif path == '/api/lottery/fetch':
             self._serve_json(self._lottery_fetch_payload())
+        elif path == '/api/lottery/ml':
+            self._serve_json(self._lottery_ml_payload())
+        elif path == '/api/lottery/ml-refresh':
+            self._serve_json(self._lottery_ml_refresh_payload())
         elif path == '/api/calibrate':
             params = parse_qs(route.query)
             self._serve_json(self._calibrate_payload(params))
@@ -1143,6 +1153,57 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:
             self._log.error('大乐透抓取失败', exc_info=True)
             return {'error': '大乐透抓取失败'}
+
+    def _lottery_ml_payload(self):
+        """大乐透 ML 预测结果"""
+        try:
+            now = time.time()
+            cache = _CACHE['lottery_ml']
+
+            if cache['data'] is not None and _is_cache_valid(cache, now):
+                self._log.info('大乐透ML预测使用缓存')
+                return {'result': cache['data']}
+
+            self._log.info('大乐透ML预测重新计算')
+            result = predict_with_ml()
+
+            if 'error' in result:
+                return {'error': result['error']}
+
+            cache['data'] = result
+            cache['timestamp'] = now
+            return {'result': result}
+        except Exception:
+            self._log.error('大乐透ML预测失败', exc_info=True)
+            return {'error': '大乐透ML预测失败'}
+
+    def _lottery_ml_refresh_payload(self):
+        """强制刷新大乐透ML预测（重新训练模型）"""
+        try:
+            clear_ml_cache()
+            _CACHE['lottery_ml']['data'] = None
+            _CACHE['lottery_ml']['timestamp'] = 0
+
+            self._log.info('大乐透ML模型重新训练...')
+            start = time.time()
+            result = predict_with_ml(force_retrain=True)
+            elapsed = time.time() - start
+
+            _CACHE['lottery_ml']['data'] = result
+            _CACHE['lottery_ml']['timestamp'] = time.time()
+
+            return {
+                'success': True,
+                'elapsed': round(elapsed, 2),
+                'models': {
+                    'front': list(result.get('front_model_scores', {}).keys()),
+                    'back': list(result.get('back_model_scores', {}).keys()),
+                },
+                'version': result.get('version', 'unknown'),
+            }
+        except Exception as e:
+            self._log.error('大乐透ML重新训练失败: %s', str(e), exc_info=True)
+            return {'success': False, 'error': str(e)}
 
     def _send(self, status, content_type, body):
         self.send_response(status)
