@@ -46,12 +46,15 @@ def settle_previous_period(old_latest_issue: str):
     from pathlib import Path
     from src.kl8 import data_path
 
-    # 找未结算快照
-    snapshots = list_prediction_snapshots()
-    unsettled = [s for s in snapshots if not s.get('has_settlement', False)]
+    # v9: 只结算 target_issue == old_latest_issue 的快照（不再按 based_on_issue < actual_issue 宽泛匹配）
+    unsettled = [
+        s for s in snapshots
+        if not s.get('has_settlement', False)
+        and s.get('target_issue') == old_latest_issue
+    ]
 
     if not unsettled:
-        log.info('快乐8: 无未结算快照')
+        log.info('快乐8: 无匹配目标期号的未结算快照')
         return
 
     # 获取开奖号码 — old_latest_issue就是最新已开奖期号
@@ -73,24 +76,10 @@ def settle_previous_period(old_latest_issue: str):
 
     actual_numbers = actual_data['numbers']
 
-    # 对每个未结算快照尝试结算
+    # 对每个匹配的未结算快照结算
     settled_count = 0
     for snap_info in unsettled:
-        # 只有based_on_issue < actual_issue的快照才能结算
-        based_on = snap_info.get('based_on_issue', '')
-        if not based_on:
-            continue
-
-        try:
-            based_on_int = int(based_on)
-            actual_int = int(old_latest_issue)
-            if based_on_int >= actual_int:
-                continue  # 快照基准期号不早于开奖期号，不能结算
-        except (ValueError, TypeError):
-            if str(based_on) >= str(old_latest_issue):
-                continue
-
-        # 执行结算
+        # 执行结算（settle_prediction内部会做target_issue严格校验）
         analyzer_instance = get_kl8_analyzer()
         result = analyzer_instance.settle_prediction(
             snap_info['file'],
@@ -121,39 +110,47 @@ def settle_previous_period(old_latest_issue: str):
 
 
 def _check_strategy_degradation():
-    """检查策略是否持续低于随机基线，需要降级
+    """检查策略是否持续低于随机基线（v9改进版）
 
-    v8新增:
-    - 统计最近100期结算结果的平均命中率
-    - 与理论随机基线对比
-    - 如果正式策略持续低于基线，自动降级为黄色参考预测
+    v9改动:
+    - 只统计 is_validated=True 且 strategy_id 完全相同的记录
+    - 按 actual_issue / settled_at 排序
+    - 同一期只取一个 canonical snapshot
+    - 至少100个独立结算期才评估（不再用30期）
+    - 使用置信区间而非"低于随机80%"硬阈值
+    - 降级改为: 黄色观察 → 降低推荐等级 → 人工确认后停用（不再自动清空）
     """
     from src.kl8 import list_prediction_snapshots, data_path, hypergeom_expected, ACTIVE_STRATEGIES
+    from src.kl8 import _strategy_fingerprint, REFERENCE_STRATEGY
     from pathlib import Path
+    import math
 
     settlements_dir = Path(data_path('kl8_settlements'))
     if not settlements_dir.exists():
         return
 
-    # 统计最近100期结算
-    recent_settlements = []
-    for f in sorted(settlements_dir.glob('settlement_*.json'), reverse=True)[:100]:
+    # 加载所有结算记录并按 actual_issue 排序
+    all_settlements = []
+    for f in settlements_dir.glob('settlement_*.json'):
         try:
             s = json.loads(f.read_text(encoding='utf-8'))
-            recent_settlements.append(s)
+            all_settlements.append(s)
         except Exception:
             continue
 
-    if len(recent_settlements) < 30:
-        log.info(f'快乐8: 结算数据不足({len(recent_settlements)}期)，暂不评估策略降级')
+    # 按 actual_issue 排序（不再按文件名排序）
+    all_settlements.sort(key=lambda x: x.get('actual_issue', ''), reverse=True)
+
+    if len(all_settlements) < 100:
+        log.info(f'快乐8: 结算数据不足({len(all_settlements)}期 < 100期)，暂不评估策略降级')
         return
 
-    # 计算各玩法的平均命中率
     for play_type, strategy in ACTIVE_STRATEGIES.items():
-        if not strategy.get('strategy_id', ''):
+        strategy_id = strategy.get('strategy_id', '')
+        if not strategy_id:
             continue  # 空策略不需要检查
 
-        # 提取select_type
+        # 提取 pick_n
         if play_type == 'fu_shi_7':
             pick_n = 7
         elif play_type.startswith('select_'):
@@ -167,33 +164,63 @@ def _check_strategy_degradation():
         expected_random = hypergeom_expected(pick_n)
         hit_key = f'hit_{play_type}' if play_type != 'fu_shi_7' else 'fu_shi_7_pool_hits'
 
-        # 计算最近30期平均命中
-        recent_hits = []
-        for s in recent_settlements[:30]:
+        # v9: 只统计 strategy_id 完全相同的记录
+        # 同一期只取一个 canonical snapshot（避免重复计数）
+        strategy_hits = {}
+        for s in all_settlements:
+            s_strategy_ids = s.get('strategy_ids', {})
+            s_id = s_strategy_ids.get(play_type, '') if isinstance(s_strategy_ids, dict) else ''
+            if s_id != strategy_id:
+                continue  # 不同策略的记录不参与
+
+            actual_issue = s.get('actual_issue', '')
             hits = s.get(hit_key, 0)
             if isinstance(hits, (int, float)):
-                recent_hits.append(hits)
+                # 同一期只取一个（如果有多个结算取第一个）
+                if actual_issue not in strategy_hits:
+                    strategy_hits[actual_issue] = hits
 
-        if len(recent_hits) < 10:
+        if len(strategy_hits) < 100:
+            log.info(f'快乐8: {play_type}策略{strategy_id}结算数据不足({len(strategy_hits)}期 < 100期)')
             continue
 
+        # 计算最近100期的平均命中数和置信区间
+        recent_hits = list(strategy_hits.values())[:100]
         mean_hits = sum(recent_hits) / len(recent_hits)
+        std_dev = math.sqrt(sum((h - mean_hits) ** 2 for h in recent_hits) / len(recent_hits)) if len(recent_hits) > 1 else 0
 
-        # 如果命中率持续低于随机基线的80%，降级
-        if mean_hits < expected_random * 0.8:
-            log.warning(
-                f'快乐8策略降级: {play_type} 最近{len(recent_hits)}期平均命中={mean_hits:.2f}, '
-                f'低于随机基线80%({expected_random * 0.8:.2f}), '
-                f'降级为参考预测'
-            )
-            # 清空策略 → 自动回退到REFERENCE_STRATEGY
-            ACTIVE_STRATEGIES[play_type] = {
-                'strategy_id': '',
-                'feature_weights': {},
-                'model_weights': {},
-                'window_size': 0,
-            }
-            clear_cache()
+        # 95% 置信区间下界
+        ci_lower = mean_hits - 1.96 * std_dev / math.sqrt(len(recent_hits))
+
+        # v9: 使用置信区间判断，而非"低于随机80%"硬阈值
+        # 如果置信区间下界低于随机基线，则进入降级流程
+        if ci_lower < expected_random:
+            # 计算偏离程度
+            deviation = (mean_hits - expected_random) / expected_random
+
+            if deviation < -0.2:
+                # 严重低于随机 → 黄色观察（标记为待确认，不自动清空）
+                log.warning(
+                    f'快乐8策略降级观察: {play_type}策略{strategy_id}, '
+                    f'最近{len(recent_hits)}期平均命中={mean_hits:.2f}, '
+                    f'随机基线={expected_random:.2f}, '
+                    f'偏离={deviation:.2%}, '
+                    f'95%CI下界={ci_lower:.2f}, '
+                    f'标记为黄色观察(需人工确认是否停用)'
+                )
+                # v9: 不自动清空策略，只标记观察状态
+                ACTIVE_STRATEGIES[play_type]['degradation_status'] = 'yellow_watch'
+                ACTIVE_STRATEGIES[play_type]['degradation_deviation'] = round(deviation, 4)
+                ACTIVE_STRATEGIES[play_type]['degradation_ci_lower'] = round(ci_lower, 4)
+                # 持久化
+                from src.kl8 import _persist_active_strategies
+                _persist_active_strategies()
+            else:
+                # 轻微低于随机 → 继续观察
+                log.info(
+                    f'快乐8策略轻微偏离: {play_type}策略{strategy_id}, '
+                    f'偏离={deviation:.2%}, CI下界={ci_lower:.2f}, 继续观察'
+                )
 
 
 def refresh_kl8_and_predict():

@@ -29,7 +29,7 @@ from ..common.logger import setup_logger
 
 log = setup_logger('football')
 
-FOOTBALL_PREDICTION_LOGIC_VERSION = '2026-06-25-score-tempo-v2'
+FOOTBALL_PREDICTION_LOGIC_VERSION = '2026-06-26-time-layer-market-v3'
 
 # ELO 评分系统（延迟导入）
 try:
@@ -4970,6 +4970,7 @@ def predict_scores(asian, euro, total, team_strength=None, league_profile=None,
             prediction_policy = {
                 'static_market_cap': 0.15,
                 'change_market_cap': 0.15,
+                'late_market_weight_bias': 0.0,
             }
 
         model_weight = 0.75
@@ -5127,6 +5128,7 @@ def predict_scores(asian, euro, total, team_strength=None, league_profile=None,
         'market_db_used': market_db_used,
         'market_data_quality': locals().get('market_data_quality', {'score': 1.0, 'grade': 'unknown'}),
         'market_quality_factor': locals().get('market_quality_factor', 1.0),
+        'current_time_layer': current_time_layer,
         'time_layer_market_adjustment': locals().get('time_layer_market_adjustment', {'applied': False}),
         'policy_adjustment': policy_adjustment,
     }

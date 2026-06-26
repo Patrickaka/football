@@ -224,6 +224,57 @@ class PredictionPostprocessTests(unittest.TestCase):
         self.assertEqual(adjustment['layer'], 'T-15min')
         self.assertGreater(adjustment['factor'], 1.0)
 
+    def test_predict_scores_reduces_early_market_weight_with_late_bias(self):
+        with patch('src.football.prediction_policy.get_prediction_policy') as policy:
+            policy.return_value = {
+                'static_market_cap': 0.15,
+                'change_market_cap': 0.15,
+                'late_market_weight_bias': 0.06,
+                'draw_bias': 1.0,
+                'low_score_bias': 1.0,
+                'high_score_bias': 1.0,
+            }
+            _, _, _, meta = football.predict_scores(
+                {
+                    'handicap': 0.0,
+                    'open_handicap': 0.0,
+                    'close_prob': {'home': 0.50, 'away': 0.50},
+                    'open_prob': {'home': 0.50, 'away': 0.50},
+                },
+                {
+                    'close': {'home': 0.42, 'draw': 0.30, 'away': 0.28},
+                    'open': {'home': 0.42, 'draw': 0.30, 'away': 0.28},
+                },
+                {
+                    'close_line': 2.5,
+                    'open_line': 2.5,
+                    'close_prob': {'over': 0.50, 'under': 0.50},
+                    'open_prob': {'over': 0.50, 'under': 0.50},
+                },
+                current_time_layer='T-24h',
+            )
+
+        adjustment = meta['time_layer_market_adjustment']
+        self.assertTrue(adjustment['applied'])
+        self.assertEqual(meta['current_time_layer'], 'T-24h')
+        self.assertLess(adjustment['factor'], 1.0)
+
+    def test_prediction_policy_exposes_late_market_weight_bias_default(self):
+        from src.football.prediction_policy import get_prediction_policy
+
+        policy = get_prediction_policy(league='Test', total_line=2.5, handicap=0.0)
+
+        self.assertIn('late_market_weight_bias', policy)
+        self.assertEqual(policy['late_market_weight_bias'], 0.0)
+
+    def test_prediction_policy_accepts_late_market_weight_alias(self):
+        from src.football.prediction_policy import _canonical_params
+
+        params = _canonical_params({'late_market_weight': 0.03})
+
+        self.assertIn('late_market_weight_bias', params)
+        self.assertEqual(params['late_market_weight_bias'], 0.03)
+
     def test_half_full_context_aligns_with_score_candidates(self):
         half_full = {
             'probs': [

@@ -7,6 +7,7 @@ from src.football.backtest import (
     _objective_score,
     apply_diagnostic_tuning,
     build_diagnostic_tuning_plan,
+    optimize_prediction_parameters,
     rolling_backtest_report,
     run_backtest_report,
 )
@@ -654,6 +655,39 @@ class ResultSyncQualityGuardTests(unittest.TestCase):
         self.assertTrue(result['plan']['ready'])
         self.assertIn('new_params', result)
         self.assertIsNone(result['save_result'])
+
+    def test_parameter_optimizer_default_grid_includes_time_layer_bias(self):
+        records = [{
+            'match_id': 'grid-layer-1',
+            'league': 'Grid League',
+            'home': 'A',
+            'away': 'B',
+            'actual_score': '1-0',
+            'actual_result': 'H',
+            'asian': 0,
+            'total_line': 2.5,
+            'result_quality': {'grade': 'high'},
+        }]
+
+        seen_params = []
+
+        def predict_func(record, **params):
+            seen_params.append(params)
+            return {
+                'predicted_scores': {'1-0': 0.6, '0-0': 0.4},
+                'predicted_1x2': {'H': 0.6, 'D': 0.3, 'A': 0.1},
+            }
+
+        result = optimize_prediction_parameters(
+            records,
+            predict_func,
+            min_samples=1,
+            quality_filter=False,
+            validation_ratio=0.0,
+        )
+
+        self.assertGreater(result['trial_count'], 0)
+        self.assertTrue(any('late_market_weight_bias' in params for params in seen_params))
 
 
 if __name__ == '__main__':

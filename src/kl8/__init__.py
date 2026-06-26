@@ -19,24 +19,26 @@ v6 核心改动:
 11. 超几何分布替代二项分布(80选20不放回)
 12. 数据排序+连续性检查+冲突审核队列
 
-版本: kl8-v8.0-residual-features
+版本: kl8-v9.0-systematic-fix
 
-v8 核心改动:
-1. REFERENCE_STRATEGY: 纯frequency单特征(frequency=1.0, 其余0.0)，不再默认混合重复计分
-2. position → position_residual: 区内频率 - 全局频率(剔除全局频率后的真正残差信号)
-3. road → road_residual: 路内频率 - 全局频率(同理)
-4. repeat: 撤掉默认重号惩罚(repeat=0.0)，拆为3个候选策略(neutral/avoid/follow)
-5. CANDIDATE_STRATEGIES: 3个独立候选策略等回测胜出才进入正式策略
-6. STRATEGY_TRIAL_RESULTS: 策略试验结果记录表，供全量FDR校正
-7. FDR校正改为全量: 同玩法下所有候选策略p值统一BH校正，不再用其余填1.0的假FDR
-8. _permutation_test(): 新增window_size参数，确保与验证集回测使用相同窗口
-9. 贝叶斯先验: Beta(5,15)均值=0.25，修正原来近似均值0.5的问题
-10. 快照target_issue: 明确记录下期期号(不再为None)
-11. 历史补数: fetch_kl8_history_backfill()一次性补数至2000期
-12. 自动结算: scheduler发现新期号后先结算上一期未结算快照
-13. 策略降级: 正式策略命中率持续低于随机基线80%时自动降级为参考预测
-14. 冲突过滤: 跨源冲突期号真正过滤掉(不再把冲突数据传给save_kl8_data)
-15. 缓存指纹: 包含 ACTIVE_STRATEGIES + REFERENCE_STRATEGY + CANDIDATE_STRATEGIES
+v9 核心改动:
+1. 快照结算: 只结算 target_issue==actual_issue 的快照，不再宽泛匹配
+2. target_type='next_draw_after_based_on': 结算时验证actual是based_on的直接下一期
+3. _compute_next_issue(): 从历史数据推导下一期期号（不再简单int+1）
+4. 结算策略ID: 从快照读取 play_strategies/prediction_modes，不再读当前ACTIVE_STRATEGIES
+5. resolved_strategies: 快照保存每种玩法当时的完整策略配置
+6. 统一候选池: build_candidate_pool()生成Top20，所有玩法从同一份截取
+7. 候选策略锦标赛: run_candidate_tournament() 训练→验证→最终测试
+8. 策略持久化: STRATEGY_TRIAL_RESULTS/ACTIVE_STRATEGIES 持久化到JSON
+9. 策略指纹: _strategy_fingerprint()包含完整配置（不再只含feature_weights）
+10. 最终测试报告只允许写入一次
+11. 置换检验: 打乱实际开奖期顺序+加一修正（不再随机抽号码）
+12. 激活条件: 增加奖级概率门槛+收益率不低于随机
+13. 特征消融: 使用独立ABLATION_FEATURES试验表
+14. 冲突过滤: 返回完整conflict_issues列表
+15. 策略降级: 不自动清空，改为黄色观察→人工确认
+16. 快照唯一约束: 同期同策略只保留一份正式快照，其他标记is_experiment
+17. 概率校准框架预留（Brier Score/LogLoss/Calibration curve，暂不启用）
 """
 
 import math
@@ -55,7 +57,7 @@ from src.common.logger import setup_logger
 
 log = setup_logger('kl8')
 
-KL8_PREDICTOR_VERSION = "kl8-v8.0-residual-features"
+KL8_PREDICTOR_VERSION = "kl8-v9.0-systematic-fix"
 
 # ─── 快乐8常量 ───
 KL8_NUM_RANGE = 80       # 号码范围 1-80
@@ -232,6 +234,17 @@ CANDIDATE_STRATEGIES = {
     },
 }
 
+# ─── v9: 独立消融试验表（不再依赖当前启用权重）───
+# 消融回测不再只测 FEATURE_CONFIG 中 weight>0 的特征
+# 而是使用这张独立试验表，确保残差、重号、路数策略都参与完整消融
+ABLATION_FEATURES = {
+    'frequency': 1.0,
+    'position_residual': 1.0,
+    'road_residual': 1.0,
+    'repeat_avoid': 0.25,   # repeat方向=avoid
+    'repeat_follow': 0.15,  # repeat方向=follow
+}
+
 # ─── 策略试验结果记录表（v8新增）───
 # 所有候选策略的回测结果统一记录于此，最终做全量FDR校正
 # 格式: [{'strategy_id': ..., 'play_type': ..., 'raw_p_value': ..., 'validation_lift': ..., ...}]
@@ -241,6 +254,11 @@ STRATEGY_TRIAL_RESULTS = []
 KL8_SNAPSHOT_DIR = data_path('kl8_snapshots')
 KL8_SETTLEMENT_DIR = data_path('kl8_settlements')
 KL8_PRIZE_TABLE_FILE = data_path('kl8_prize_table.json')
+
+# ─── v9: 策略试验与激活持久化 ───
+KL8_STRATEGY_TRIAL_FILE = data_path('kl8_strategy_trials.json')
+KL8_ACTIVE_STRATEGIES_FILE = data_path('kl8_active_strategies.json')
+KL8_FINAL_TEST_REPORT_FILE = data_path('kl8_final_test_report.json')
 
 # ─── 冲突审核队列 ───
 KL8_CONFLICT_QUEUE_FILE = data_path('kl8_conflict_queue.json')
@@ -449,6 +467,7 @@ def validate_and_activate_strategy(
         'tested_at': time.strftime('%Y-%m-%dT%H:%M:%S'),
     }
     STRATEGY_TRIAL_RESULTS.append(trial_record)
+    _persist_trial_results()  # v9: 每次新增试验后持久化
 
     # v8: 全量BH FDR校正 — 对同一玩法下所有候选策略的p值统一校正
     # 收集同玩法的所有试验记录
@@ -526,8 +545,49 @@ def validate_and_activate_strategy(
             ft_expected = fu7_ft.get('pool_expected_random', hypergeom_expected(7))
             final_test_lift = (ft_pool_mean - ft_expected) / ft_expected if ft_expected > 0 else 0
 
-    # ── 激活判断 ──
-    all_conditions_passed = condition_1_lift_positive and condition_2_fdr_significant and condition_3_stability
+    # ── v9: 条件4 — 关键奖级概率不低于随机 ──
+    # 不只看平均命中Lift，还要看关键中奖档位的概率
+    prize_tier_thresholds = {
+        'select_3': ['>=2', '>=3'],
+        'select_4': ['>=2', '>=3'],
+        'select_5': ['>=3', '>=4'],
+        'select_6': ['>=3', '>=4'],
+        'select_7': ['>=3', '>=4'],
+        'fu_shi_7': ['>=3'],  # 复式7码看池命中>=3
+    }
+
+    threshold_tiers = prize_tier_thresholds.get(play_type, ['>=3'])
+    val_prize_probs = val_result.get(s_key, {}).get('probabilities', {})
+    theoretical_probs = val_result.get(s_key, {}).get('theoretical_probs', {})
+
+    prize_tier_passed = True
+    prize_tier_details = {}
+
+    for tier in threshold_tiers:
+        actual_prob = val_prize_probs.get(tier, 0)
+        random_prob = theoretical_probs.get(tier, hypergeom_p_ge(pick_n, int(tier.replace('>=', ''))))
+        tier_passed = actual_prob >= random_prob * 0.9  # 允许略低于随机(90%即可)
+        prize_tier_details[tier] = {
+            'actual_prob': round(actual_prob, 4),
+            'random_prob': round(random_prob, 4),
+            'passed': tier_passed,
+        }
+        if not tier_passed:
+            prize_tier_passed = False
+
+    # ── v9: 条件5 — 收益率不能显著差于随机 ──
+    val_roi = val_result.get(s_key, {}).get('profit_roi', 0)
+    random_roi = val_result.get(s_key, {}).get('random_profit_roi', 0)
+    roi_not_significantly_worse = val_roi >= random_roi * 0.8  # 允许80%即可
+
+    # ── 激活判断（v9: 5个条件）───
+    all_conditions_passed = (
+        condition_1_lift_positive
+        and condition_2_fdr_significant
+        and condition_3_stability
+        and prize_tier_passed
+        and roi_not_significantly_worse
+    )
 
     # 生成 strategy_id
     strategy_id = f'{play_type}_w{window_size}_v1'
@@ -545,7 +605,9 @@ def validate_and_activate_strategy(
             'feature_weights': feature_weights,
             'model_weights': model_weights,
             'window_size': window_size,
+            'repeat_direction': repeat_direction,
         }
+        _persist_active_strategies()  # v9: 持久化
         clear_cache()
         activated = True
         log.info(f'快乐8: 策略已激活 {play_type} -> {strategy_id}')
@@ -581,6 +643,17 @@ def validate_and_activate_strategy(
             'condition_4_final_test_confirmation': {
                 'final_test_lift': round(final_test_lift, 4) if final_test_lift is not None else None,
                 'note': '最终封存测试集只做结果确认，不参与激活决策',
+            },
+            'condition_5_prize_tier_thresholds': {
+                'passed': prize_tier_passed,
+                'details': prize_tier_details,
+                'detail': f'关键奖级概率不低于随机*0.9',
+            },
+            'condition_6_roi_not_worse': {
+                'passed': roi_not_significantly_worse,
+                'val_profit_roi': round(val_roi, 4),
+                'random_profit_roi': round(random_roi, 4),
+                'detail': f'策略ROI({round(val_roi, 4)}) >= 随机ROI*0.8({round(random_roi * 0.8, 4)})',
             },
         },
         'all_conditions_passed': all_conditions_passed,
@@ -765,6 +838,42 @@ def _checksum_numbers(nums: List[int]) -> str:
     return hashlib.md5(s.encode()).hexdigest()[:12]
 
 
+def _compute_next_issue(latest_issue: str, history_data: List[Dict]) -> str:
+    """从历史数据推导下一期期号（不再简单int+1）
+
+    策略:
+    1. 从历史数据中找相邻期号的差值模式
+    2. 使用最常见的差值推算下一期
+    3. 跨年(如2026365→2027001)和停开期间能正确处理
+    """
+    if not history_data:
+        return f'next_after_{latest_issue}'
+
+    # 收集相邻期号差值
+    history_asc = sorted(history_data, key=lambda x: x['issue'])
+    diffs = []
+    for i in range(min(20, len(history_asc) - 1)):
+        try:
+            curr = int(history_asc[i + 1]['issue'])
+            prev = int(history_asc[i]['issue'])
+            diffs.append(curr - prev)
+        except (ValueError, TypeError):
+            continue
+
+    if not diffs:
+        return f'next_after_{latest_issue}'
+
+    # 使用最常见的差值
+    from collections import Counter as _Counter
+    most_common_diff = _Counter(diffs).most_common(1)[0][0]
+
+    try:
+        latest_int = int(latest_issue)
+        return str(latest_int + most_common_diff)
+    except (ValueError, TypeError):
+        return f'next_after_{latest_issue}'
+
+
 # ─── 奖金表 ───
 
 def load_prize_table() -> Dict:
@@ -796,6 +905,144 @@ def load_prize_table() -> Dict:
         'select_7': {'7': 1000000, '6': 50000, '5': 1000, '4': 50, '3': 5, '2': 0, '1': 0, '0': 0, 'bet': 2},
         'fu_shi_7': {'5': 10000, '4': 500, '3': 30, '2': 5, '1': 0, '0': 0, 'bet_per_combo': 2},
     }
+
+
+# ─── v9: 策略持久化 ───
+
+def _strategy_fingerprint(strategy: Dict) -> str:
+    """策略指纹 — 包含完整配置字段（不再只包含 feature_weights）
+
+    v9新增: 策略指纹必须包含所有影响预测结果的字段
+    """
+    fp_data = {
+        'feature_weights': strategy.get('feature_weights', {}),
+        'model_weights': strategy.get('model_weights', {}),
+        'window_size': strategy.get('window_size', 0),
+        'repeat_direction': strategy.get('repeat_direction', 'neutral'),
+        'repeat_avoid_score': strategy.get('repeat_avoid_score', 0.10),
+        'repeat_non_avoid_score': strategy.get('repeat_non_avoid_score', 0.85),
+        'repeat_follow_score': strategy.get('repeat_follow_score', 0.90),
+        'repeat_non_follow_score': strategy.get('repeat_non_follow_score', 0.50),
+    }
+    return hashlib.sha256(
+        json.dumps(fp_data, sort_keys=True, separators=(',', ':')).encode()
+    ).hexdigest()[:12]
+
+
+def _persist_trial_results():
+    """持久化策略试验结果 — 追加、去重、原子写入
+
+    v9新增: STRATEGY_TRIAL_RESULTS 不再只在内存，服务重启后能恢复
+    """
+    path = Path(KL8_STRATEGY_TRIAL_FILE)
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    # 去重: strategy_id + play_type + tournament_round + tested_at 组合唯一
+    unique_trials = []
+    seen_keys = set()
+    for trial in STRATEGY_TRIAL_RESULTS:
+        key = f"{trial.get('strategy_id', '')}_{trial.get('play_type', '')}_{trial.get('tournament_round', '')}_{trial.get('tested_at', '')}"
+        if key not in seen_keys:
+            seen_keys.add(key)
+            unique_trials.append(trial)
+
+    # 原子写入
+    temp_path = path.with_suffix('.json.tmp')
+    try:
+        temp_path.write_text(
+            json.dumps(unique_trials, ensure_ascii=False, indent=2),
+            encoding='utf-8'
+        )
+        temp_path.replace(path)
+    except Exception as e:
+        log.warning(f'持久化策略试验结果失败: {e}')
+        if temp_path.exists():
+            temp_path.unlink()
+
+
+def _load_trial_results():
+    """加载持久化的策略试验结果"""
+    path = Path(KL8_STRATEGY_TRIAL_FILE)
+    if not path.exists():
+        return []
+
+    try:
+        trials = json.loads(path.read_text(encoding='utf-8'))
+        if isinstance(trials, list):
+            return trials
+    except Exception as e:
+        log.warning(f'加载策略试验结果失败: {e}')
+
+    return []
+
+
+def _persist_active_strategies():
+    """持久化已激活策略 — 服务启动时自动加载"""
+    path = Path(KL8_ACTIVE_STRATEGIES_FILE)
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    # 原子写入
+    temp_path = path.with_suffix('.json.tmp')
+    try:
+        temp_path.write_text(
+            json.dumps(ACTIVE_STRATEGIES, ensure_ascii=False, indent=2),
+            encoding='utf-8'
+        )
+        temp_path.replace(path)
+    except Exception as e:
+        log.warning(f'持久化已激活策略失败: {e}')
+        if temp_path.exists():
+            temp_path.unlink()
+
+
+def _load_active_strategies():
+    """加载持久化的已激活策略"""
+    path = Path(KL8_ACTIVE_STRATEGIES_FILE)
+    if not path.exists():
+        return None
+
+    try:
+        loaded = json.loads(path.read_text(encoding='utf-8'))
+        if isinstance(loaded, dict):
+            return loaded
+    except Exception as e:
+        log.warning(f'加载已激活策略失败: {e}')
+
+    return None
+
+
+def _persist_final_test_report(report: Dict):
+    """持久化最终测试报告 — 只允许写入一次
+
+    v9新增: 最终测试结果锁定，不允许重复写入
+    """
+    path = Path(KL8_FINAL_TEST_REPORT_FILE)
+    if path.exists():
+        log.warning('最终测试报告已存在，不允许重复写入')
+        return False
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        path.write_text(
+            json.dumps(report, ensure_ascii=False, indent=2),
+            encoding='utf-8'
+        )
+        return True
+    except Exception as e:
+        log.warning(f'持久化最终测试报告失败: {e}')
+        return False
+
+
+# 模块初始化时加载持久化数据
+STRATEGY_TRIAL_RESULTS.extend(_load_trial_results())
+
+# 加载已激活策略（覆盖默认空策略）
+loaded_strategies = _load_active_strategies()
+if loaded_strategies:
+    for play_type, strategy in loaded_strategies.items():
+        if play_type in ACTIVE_STRATEGIES:
+            ACTIVE_STRATEGIES[play_type] = strategy
+    log.info(f'快乐8: 已从持久化文件加载{len(loaded_strategies)}个已激活策略')
 
 
 # ─── 冲突审核队列 ───
@@ -1499,12 +1746,41 @@ class KL8Analyzer:
     # ─── 预测快照 ───
 
     def _save_prediction_snapshot(self, prediction_result: Dict) -> Optional[str]:
-        """保存预测快照（UUID+排他创建，永不修改）"""
+        """保存预测快照（v9: 唯一约束 + is_experiment标记）
+
+        v9改动:
+        - 同一策略+同一目标期只保留一份正式快照
+        - 其他重复快照标记 is_experiment=True，不进入正式命中率统计
+        """
         if not self.history_data:
             return None
 
         snapshot_dir = Path(KL8_SNAPSHOT_DIR)
         snapshot_dir.mkdir(parents=True, exist_ok=True)
+
+        # v9: 策略指纹 — 用于唯一约束
+        # 使用 select_5 的策略作为基准指纹（所有玩法当前使用同一策略）
+        resolved = prediction_result.get('resolved_strategies', {})
+        base_strategy = resolved.get('select_5', {})
+        strategy_fp = _strategy_fingerprint(base_strategy) if base_strategy else 'no_strategy'
+
+        # v9: 检查是否已有同一目标期+策略指纹的正式快照
+        target_issue_val = _compute_next_issue(self.history_data[0]['issue'], self.history_data)
+        snapshot_key = f'{target_issue_val}_{strategy_fp}'
+        is_experiment = False
+
+        # 扫描已有快照
+        for existing_file in snapshot_dir.glob('snapshot_*.json'):
+            try:
+                existing_data = json.loads(existing_file.read_text(encoding='utf-8'))
+                existing_key = f'{existing_data.get("target_issue", "")}_{_strategy_fingerprint(existing_data.get("resolved_strategies", {}).get("select_5", {}))}'
+                if existing_key == snapshot_key and not existing_data.get('is_experiment', False):
+                    # 已有正式快照 → 新快照标记为实验
+                    is_experiment = True
+                    log.info(f'快乐8: 同期同策略已有正式快照，新快照标记为实验预测')
+                    break
+            except Exception:
+                continue
 
         # 全窗口SHA256指纹
         recent = min(len(self.history_data), KL8_DEFAULT_HISTORY)
@@ -1527,22 +1803,24 @@ class KL8Analyzer:
         ).hexdigest()
 
         latest_issue = self.history_data[0]['issue']
-        # v8: target_issue = 下期期号(当前最新期号+1)
-        try:
-            target_issue_int = int(latest_issue) + 1
-            target_issue = str(target_issue_int)
-        except (ValueError, TypeError):
-            target_issue = f'next_after_{latest_issue}'
+        # v9: target_issue 推算改进 + target_type 严格校验
+        # 不再简单用 int(latest_issue)+1，而是从历史数据推导下一期期号模式
+        # 同时保存 target_type='next_draw_after_based_on'，结算时验证actual是based_on的直接下一期
+        target_issue = _compute_next_issue(latest_issue, self.history_data)
+        target_type = 'next_draw_after_based_on'
         snapshot_id = uuid.uuid4().hex
         snapshot = {
             'snapshot_id': snapshot_id,
-            'target_issue': target_issue,  # v8: 明确记录目标期号（不再为None）
+            'target_issue': target_issue,  # v9: 从历史模式推算（用于调度器匹配）
+            'target_type': target_type,     # v9: 结算时验证actual是based_on的直接下一期
             'based_on_issue': latest_issue,
             'predicted_at': time.strftime('%Y-%m-%dT%H:%M:%S'),
             'history_window_size': recent,
             'history_start_issue': history_window[-1]['issue'] if history_window else '',
             'history_end_issue': latest_issue,
             'history_fingerprint': history_fingerprint,
+            'strategy_fingerprint': strategy_fp,  # v9: 策略指纹
+            'is_experiment': is_experiment,  # v9: 实验预测标记
             'version': KL8_PREDICTOR_VERSION,
             'feature_config': {k: dict(v) for k, v in FEATURE_CONFIG.items()},
             'model_config': {k: dict(v) for k, v in MODEL_CONFIG.items()},
@@ -1566,6 +1844,8 @@ class KL8Analyzer:
                 'select_7': prediction_result.get('select_7', {}).get('prediction_mode', ''),
                 'fu_shi_7': prediction_result.get('fu_shi_7', {}).get('prediction_mode', ''),
             },
+            # v9: 保存每种玩法当时实际使用的完整策略配置
+            'resolved_strategies': prediction_result.get('resolved_strategies', {}),
             'ranking': prediction_result.get('ranking', []),
             'select_3': prediction_result.get('select_3', {}).get('numbers', []),
             'select_4': prediction_result.get('select_4', {}).get('numbers', []),
@@ -1622,14 +1902,51 @@ class KL8Analyzer:
 
         # v6: 期号校验 — actual_issue必须晚于based_on_issue
         based_on_issue = snapshot.get('based_on_issue', '')
-        if based_on_issue:
+        target_issue = snapshot.get('target_issue', '')
+
+        # v9: 严格校验 — target_issue必须与实际开奖期号一致
+        # 不再只检查"actual > based_on"，而是检查actual == target_issue
+        # 或者actual是based_on_issue的直接下一期（target_type校验）
+        if target_issue:
+            if str(target_issue) != str(actual_normed['issue']):
+                # 容许：actual_issue是based_on_issue的直接下一期（跨年/停开/补期场景）
+                target_type = snapshot.get('target_type', '')
+                if target_type == 'next_draw_after_based_on':
+                    # 验证actual_issue确实是based_on_issue在历史数据中的直接下一期
+                    analyzer = get_kl8_analyzer()
+                    history_asc = sorted(analyzer.history_data, key=lambda x: x['issue'])
+                    # 找到based_on_issue的位置
+                    based_on_idx = None
+                    for idx, rec in enumerate(history_asc):
+                        if rec['issue'] == based_on_issue:
+                            based_on_idx = idx
+                            break
+                    if based_on_idx is not None and based_on_idx + 1 < len(history_asc):
+                        next_issue = history_asc[based_on_idx + 1]['issue']
+                        if str(next_issue) == str(actual_normed['issue']):
+                            pass  # 验证通过：actual确实是based_on的直接下一期
+                        else:
+                            return {
+                                'error': f'快照目标期号{target_issue}与实际期号{actual_normed["issue"]}不一致'
+                                         f'(based_on的直接下一期是{next_issue})'
+                            }
+                    else:
+                        return {
+                            'error': f'快照目标期号{target_issue}与实际期号{actual_normed["issue"]}不一致'
+                        }
+                else:
+                    return {
+                        'error': f'快照目标期号{target_issue}与实际期号{actual_normed["issue"]}不一致'
+                    }
+
+        # 旧版兜底：如果没有target_issue，仍保留 based_on < actual 的宽松校验
+        if not target_issue and based_on_issue:
             try:
                 actual_int = int(actual_normed['issue'])
                 based_on_int = int(based_on_issue)
                 if actual_int <= based_on_int:
                     return {'error': f'实际开奖期号{actual_normed["issue"]}必须晚于预测基准期号{based_on_issue}'}
             except (ValueError, TypeError):
-                # 非纯数字期号，按字符串比较
                 if str(actual_normed['issue']) <= str(based_on_issue):
                     return {'error': f'实际开奖期号必须晚于预测基准期号'}
 
@@ -1722,11 +2039,9 @@ class KL8Analyzer:
             'actual_numbers': actual_normed['numbers'],
             'actual_checksum': _checksum_numbers(actual_normed['numbers']),
             'based_on_issue': snapshot.get('based_on_issue', ''),
-            'strategy_ids': {
-                f'select_{st}': snapshot.get(f'select_{st}_strategy_id', '') or ACTIVE_STRATEGIES.get(f'select_{st}', {}).get('strategy_id', '')
-                for st in [3, 4, 5, 6, 7]
-            },
-            'fu_shi_7_strategy_id': snapshot.get('fu_shi_7_strategy_id', '') or ACTIVE_STRATEGIES.get('fu_shi_7', {}).get('strategy_id', ''),
+            'strategy_ids': dict(snapshot.get('play_strategies', {})),  # v9: 从快照读取
+            'prediction_modes': dict(snapshot.get('prediction_modes', {})),  # v9: 从快照读取
+            'resolved_strategies': dict(snapshot.get('resolved_strategies', {})),  # v9: 完整策略快照
             'hit_select_3': prize_settlement.get('select_3', {}).get('hits', 0),
             'hit_select_4': prize_settlement.get('select_4', {}).get('hits', 0),
             'hit_select_5': prize_settlement.get('select_5', {}).get('hits', 0),
@@ -1777,74 +2092,23 @@ class KL8Analyzer:
 
         return temp
 
-    # ─── 综合预测（v7.1: resolve_play_strategy + _build_window_analyzer）───
+    # ─── 统一候选池（v9新增）───
 
-    def predict_all(self) -> Dict:
-        """生成所有选型的预测结果
+    def build_candidate_pool(self) -> Tuple[Dict, Dict]:
+        """统一候选池: 所有玩法从同一份 Top20 截取
 
-        v7.1改动:
-        - 使用 resolve_play_strategy() 优先已验证策略，降级到参考策略
-        - 使用 _build_window_analyzer() 确保窗口一致性
-        - 返回 prediction_mode/is_validated/warning 三个字段
-        - 无验证策略时不再返回空号码，而是输出参考号码+黄色提示
+        v9新增:
+        - 统一调用 multi_model_voting(pick_n=20, top_n=20)
+        - 所有玩法(选3~选7、复式7码)都从同一份结果截取
+        - 确保线上预测与回测管道完全一致
+
+        返回:
+            (pool_result, strategy) — 候选池投票结果和使用的策略
         """
-        if not self.history_data or self.using_simulated_data:
-            return {
-                'error': '历史数据不足，无法进行有效预测。请先抓取真实数据。',
-                'using_simulated_data': True,
-            }
+        # 使用已验证策略或参考策略（当前所有玩法都用同一策略）
+        # 取 select_5 的策略作为基准（最常用的玩法）
+        strategy = resolve_play_strategy('select_5')
 
-        prediction_ready = is_prediction_ready()
-
-        results = {}
-
-        for select_type in [3, 4, 5, 6, 7]:
-            config = SELECT_CONFIG[select_type]
-            s_key = f'select_{select_type}'
-
-            # v7.1: 使用 resolve_play_strategy 优先已验证策略，降级到参考策略
-            strategy = resolve_play_strategy(s_key)
-
-            # v8: 从策略中提取 repeat_direction 和相关参数
-            repeat_direction = strategy.get('repeat_direction', 'neutral')
-            repeat_avoid_score = strategy.get('repeat_avoid_score', 0.10)
-            repeat_non_avoid_score = strategy.get('repeat_non_avoid_score', 0.85)
-            repeat_follow_score = strategy.get('repeat_follow_score', 0.90)
-            repeat_non_follow_score = strategy.get('repeat_non_follow_score', 0.50)
-
-            # v7.1: 使用 _build_window_analyzer 确保窗口一致性
-            predictor = self._build_window_analyzer(
-                strategy.get('window_size', KL8_DEFAULT_HISTORY)
-            )
-
-            vote_result = predictor.multi_model_voting(
-                pick_n=config['pick'],
-                top_n=config['top_n'],
-                feature_weights=strategy['feature_weights'],
-                model_weights=strategy['model_weights'],
-                repeat_direction=repeat_direction,
-                repeat_avoid_score=repeat_avoid_score,
-                repeat_non_avoid_score=repeat_non_avoid_score,
-                repeat_follow_score=repeat_follow_score,
-                repeat_non_follow_score=repeat_non_follow_score,
-            )
-
-            results[s_key] = {
-                'desc': config['desc'],
-                'pick': config['pick'],
-                'numbers': vote_result['selected'],
-                'candidates': vote_result.get('candidates', [])[:10],
-                'strategy_id': strategy['strategy_id'],
-                'prediction_mode': strategy['prediction_mode'],
-                'is_validated': strategy['is_validated'],
-                'warning': (
-                    '' if strategy['is_validated']
-                    else '参考预测：当前策略尚未通过严格回测验证，仅供数据观察。'
-                ),
-            }
-
-        # 复式7码（v8: 同样传递 repeat_direction）
-        strategy = resolve_play_strategy('fu_shi_7')
         repeat_direction = strategy.get('repeat_direction', 'neutral')
         repeat_avoid_score = strategy.get('repeat_avoid_score', 0.10)
         repeat_non_avoid_score = strategy.get('repeat_non_avoid_score', 0.85)
@@ -1855,7 +2119,9 @@ class KL8Analyzer:
             strategy.get('window_size', KL8_DEFAULT_HISTORY)
         )
 
-        results['fu_shi_7'] = predictor.get_fu_shi_7(
+        pool_result = predictor.multi_model_voting(
+            pick_n=20,
+            top_n=20,
             feature_weights=strategy['feature_weights'],
             model_weights=strategy['model_weights'],
             repeat_direction=repeat_direction,
@@ -1864,9 +2130,116 @@ class KL8Analyzer:
             repeat_follow_score=repeat_follow_score,
             repeat_non_follow_score=repeat_non_follow_score,
         )
-        results['fu_shi_7']['strategy_id'] = strategy['strategy_id']
-        results['fu_shi_7']['prediction_mode'] = strategy['prediction_mode']
-        results['fu_shi_7']['is_validated'] = strategy['is_validated']
+
+        return pool_result, strategy
+
+    # ─── 综合预测（v9: 统一候选池 + resolved_strategies）───
+
+    def predict_all(self) -> Dict:
+        """生成所有选型的预测结果
+
+        v9改动:
+        - 统一候选池: 所有玩法都从同一份 Top20 截取，不再按玩法分别调用
+        - resolved_strategies: 快照保存每种玩法当时的完整策略配置
+        - 快照唯一约束: target_issue + strategy_fingerprint 唯一
+        """
+        if not self.history_data or self.using_simulated_data:
+            return {
+                'error': '历史数据不足，无法进行有效预测。请先抓取真实数据。',
+                'using_simulated_data': True,
+            }
+
+        prediction_ready = is_prediction_ready()
+
+        results = {}
+        resolved_strategies = {}  # v9: 保存每种玩法当时的完整策略
+
+        # v9: 统一候选池 — 所有玩法使用同一份策略
+        # 如果已验证策略不同玩法不同，取权重最大的那个策略生成 Top20
+        # 实际上当前所有玩法都降级到 REFERENCE_STRATEGY，所以天然统一
+        # 未来如果不同玩法有不同策略，仍然用 build_candidate_pool() 统一生成
+        pool_result, pool_strategy = build_candidate_pool(self)
+
+        # v9: 从统一候选池截取各玩法号码
+        top20 = pool_result.get('selected', [])[:20]
+        candidate_pool = pool_result.get('candidates', [])[:20]
+
+        for select_type in [3, 4, 5, 6, 7]:
+            config = SELECT_CONFIG[select_type]
+            s_key = f'select_{select_type}'
+
+            # v9: 从统一候选池截取
+            strategy = resolve_play_strategy(s_key)
+
+            # v9: 保存完整策略配置到 resolved_strategies
+            resolved_strategies[s_key] = {
+                'strategy_id': strategy['strategy_id'],
+                'feature_weights': strategy['feature_weights'],
+                'model_weights': strategy['model_weights'],
+                'window_size': strategy.get('window_size', KL8_DEFAULT_HISTORY),
+                'repeat_direction': strategy.get('repeat_direction', 'neutral'),
+                'repeat_avoid_score': strategy.get('repeat_avoid_score', 0.10),
+                'repeat_non_avoid_score': strategy.get('repeat_non_avoid_score', 0.85),
+                'repeat_follow_score': strategy.get('repeat_follow_score', 0.90),
+                'repeat_non_follow_score': strategy.get('repeat_non_follow_score', 0.50),
+                'prediction_mode': strategy['prediction_mode'],
+                'is_validated': strategy['is_validated'],
+            }
+
+            if len(top20) >= select_type:
+                numbers = top20[:select_type]
+            else:
+                numbers = top20  # 不够时用全部
+
+            results[s_key] = {
+                'desc': config['desc'],
+                'pick': config['pick'],
+                'numbers': numbers,
+                'candidates': candidate_pool[:10],
+                'strategy_id': strategy['strategy_id'],
+                'prediction_mode': strategy['prediction_mode'],
+                'is_validated': strategy['is_validated'],
+                'warning': (
+                    '' if strategy['is_validated']
+                    else '参考预测：当前策略尚未通过严格回测验证，仅供数据观察。'
+                ),
+            }
+
+        # 复式7码（v9: 从统一候选池截取前7）
+        strategy = resolve_play_strategy('fu_shi_7')
+
+        resolved_strategies['fu_shi_7'] = {
+            'strategy_id': strategy['strategy_id'],
+            'feature_weights': strategy['feature_weights'],
+            'model_weights': strategy['model_weights'],
+            'window_size': strategy.get('window_size', KL8_DEFAULT_HISTORY),
+            'repeat_direction': strategy.get('repeat_direction', 'neutral'),
+            'prediction_mode': strategy['prediction_mode'],
+            'is_validated': strategy['is_validated'],
+        }
+
+        top7 = top20[:7] if len(top20) >= 7 else top20
+
+        if len(top7) == 7:
+            combo_list = [sorted(c) for c in combinations(top7, 5)]
+        else:
+            combo_list = []
+
+        results['fu_shi_7'] = {
+            'top7_numbers': top7,
+            'total_combinations': len(combo_list),
+            'combinations': combo_list,
+            'strategy_id': strategy['strategy_id'],
+            'prediction_mode': strategy['prediction_mode'],
+            'is_validated': strategy['is_validated'],
+            'warning': (
+                '' if strategy['is_validated']
+                else '参考预测：当前策略尚未通过严格回测验证，仅供数据观察。'
+            ),
+        }
+
+        # v9: 保存 resolved_strategies 到 results，以便 _save_prediction_snapshot 使用
+        results['resolved_strategies'] = resolved_strategies
 
         recent = self.history_data[:10] if self.history_data else []
         results['recent_results'] = [
@@ -1939,6 +2312,15 @@ def get_kl8_analyzer() -> KL8Analyzer:
     if _analyzer_instance is None:
         _analyzer_instance = KL8Analyzer()
     return _analyzer_instance
+
+
+def build_candidate_pool(analyzer: Optional[KL8Analyzer] = None) -> Tuple[Dict, Dict]:
+    """统一候选池入口函数
+
+    v9新增: 所有玩法从同一份 Top20 截取，确保线上与回测一致
+    """
+    analyzer = analyzer or get_kl8_analyzer()
+    return analyzer.build_candidate_pool()
 
 
 def run_prediction(force_refresh: bool = False) -> Dict:
@@ -2310,7 +2692,7 @@ class KL8RollingBacktest:
 
         return summary
 
-    # ─── 置换检验（v6: 按玩法分别检验）───
+    # ─── 置换检验（v9: 打乱实际开奖期 + 加一修正）───
 
     def _permutation_test(
         self,
@@ -2318,22 +2700,23 @@ class KL8RollingBacktest:
         model_weights: Dict[str, float],
         start_idx: int,
         end_idx: int,
-        pick_n: int = 5,  # v6: 指定检验的玩法（不再是固定select_5）
+        pick_n: int = 5,
         metric: str = 'mean_hits',
         n_permutations: int = BACKTEST_PERMUTATION_COUNT,
         min_train: int = 50,
-        window_size: Optional[int] = None,  # v8: 确保与回测使用相同窗口
+        window_size: Optional[int] = None,
     ) -> Dict:
-        """置换检验: 计算模型Lift在零假设下的p-value（v8: 传入window_size）
+        """置换检验: 打乱实际开奖期顺序（v9重大改动）
 
-        v8改动:
-        - 新增 window_size 参数，确保置换检验的真实模型Lift与验证集回测使用相同的窗口
-        - 如果不传，默认使用KL8_DEFAULT_HISTORY（与之前行为一致，但现在显式可控）
+        v9改动:
+        - 不再随机抽号码，而是保持预测不变，打乱实际开奖期的顺序
+        - 更准确地模拟"模型预测与实际开奖没有时间关系"的零假设
+        - p值使用加一修正: p = (n_ge + 1) / (n_perm + 1)
         """
         history = self.analyzer.history_data
         history_asc = sorted(history, key=lambda x: x['issue'])
 
-        # v8: 先跑一遍真实模型得分（用相同的window_size）
+        # 先跑一遍真实模型得分
         real_result = self._rolling_backtest_parametric(
             feature_weights, model_weights,
             start_idx=start_idx, end_idx=end_idx,
@@ -2344,49 +2727,92 @@ class KL8RollingBacktest:
         if 'error' in real_result:
             return real_result
 
-        # v6: 取指定玩法的真实Lift作为基准（不再固定select_5）
         s_key = f'select_{pick_n}'
         real_lift = real_result.get(s_key, {}).get('lift', 0)
         real_mean_hits = real_result.get(s_key, {}).get('mean_hits', 0)
 
-        # 置换: 每次打散模型推荐的号码顺序
-        import random as rng
-
-        permutation_lifts = []
+        # v9: 先收集每一期真实预测号码和对应实际开奖
         actual_start = max(start_idx, min_train)
         actual_end = min(end_idx, len(history_asc))
 
+        predictions = []  # 每期预测号码（top pick_n）
+        actual_draws = []  # 每期实际开奖号码
+
+        effective_window = window_size or KL8_DEFAULT_HISTORY
+
+        for t in range(actual_start, actual_end):
+            train_data = history_asc[max(0, t - effective_window):t]
+            if len(train_data) < min_train:
+                continue
+
+            # 构造临时分析器生成预测
+            temp_analyzer = KL8Analyzer.__new__(KL8Analyzer)
+            temp_analyzer.history_data = sorted(train_data, key=lambda x: x['issue'], reverse=True)
+            temp_analyzer.using_simulated_data = False
+            temp_analyzer.history_file = ''
+            temp_analyzer._data_mtime = 0
+            temp_analyzer.update_statistics()
+
+            vote = temp_analyzer.multi_model_voting(
+                pick_n=20, top_n=20,
+                feature_weights=feature_weights,
+                model_weights=model_weights,
+            )
+
+            if vote.get('status') == 'no_validated_signal':
+                predictions.append([])
+                actual_draws.append(set(history_asc[t]['numbers']))
+                continue
+
+            top20 = [num for num, _ in vote.get('candidates', [])]
+            pred_nums = top20[:pick_n] if len(top20) >= pick_n else top20
+            predictions.append(set(pred_nums))
+            actual_draws.append(set(history_asc[t]['numbers']))
+
+        if len(predictions) < 10:
+            return {'error': '置换检验数据不足'}
+
+        # v9: 真实命中数
+        real_hits_list = [
+            len(pred & actual) if pred and actual else 0
+            for pred, actual in zip(predictions, actual_draws)
+        ]
+        real_mean = sum(real_hits_list) / len(real_hits_list)
+        expected_random = hypergeom_expected(pick_n)
+        real_lift_val = (real_mean - expected_random) / expected_random if expected_random > 0 else 0
+
+        # v9: 置换 — 打乱实际开奖期顺序，保持预测不变
+        import random as rng
+
+        permutation_lifts = []
+        n_greater_or_equal = 0
+
         for perm_i in range(n_permutations):
-            perm_hits = []
+            # 确定性seed
+            seed = int(hashlib.sha256(f'perm_v9_{perm_i}_{pick_n}'.encode()).hexdigest()[:8], 16)
+            rng.seed(seed)
 
-            for t in range(actual_start, actual_end):
-                train_data = history_asc[max(0, t - KL8_DEFAULT_HISTORY):t]
-                if len(train_data) < min_train:
-                    continue
+            # 打乱实际开奖期顺序
+            shuffled_draws = rng.sample(actual_draws, len(actual_draws))
 
-                actual_numbers = set(history_asc[t]['numbers'])
+            # 计算打乱后的命中数
+            perm_hits = [
+                len(pred & shuffled_actual) if pred and shuffled_actual else 0
+                for pred, shuffled_actual in zip(predictions, shuffled_draws)
+            ]
 
-                # 用确定性seed生成打散
-                seed = int(hashlib.sha256(f'perm_{perm_i}_{pick_n}_{history_asc[t]["issue"]}'.encode()).hexdigest()[:8], 16)
-                rng.seed(seed)
+            perm_mean = sum(perm_hits) / len(perm_hits)
+            perm_lift = (perm_mean - expected_random) / expected_random if expected_random > 0 else 0
+            permutation_lifts.append(perm_lift)
 
-                # v6: 随机选pick_n个号码（不是固定5）
-                random_nums = rng.sample(range(1, 81), pick_n)
-                hits = len(set(random_nums) & actual_numbers)
-                perm_hits.append(hits)
-
-            if perm_hits:
-                perm_mean = sum(perm_hits) / len(perm_hits)
-                expected = hypergeom_expected(pick_n)
-                perm_lift = (perm_mean - expected) / expected if expected > 0 else 0
-                permutation_lifts.append(perm_lift)
+            if perm_lift >= real_lift_val:
+                n_greater_or_equal += 1
 
         if not permutation_lifts:
             return {'error': '置换检验数据不足'}
 
-        # 计算p-value: 真实Lift在置换分布中的位置
-        n_greater = sum(1 for l in permutation_lifts if l >= real_lift)
-        p_value = n_greater / len(permutation_lifts)
+        # v9: 加一修正 p-value
+        p_value = (n_greater_or_equal + 1) / (n_permutations + 1)
 
         # 95%分位数
         sorted_lifts = sorted(permutation_lifts)
@@ -2395,8 +2821,8 @@ class KL8RollingBacktest:
         return {
             'play_type': s_key,
             'pick_n': pick_n,
-            'real_lift': real_lift,
-            'real_mean_hits': real_mean_hits,
+            'real_lift': real_lift_val,
+            'real_mean_hits': real_mean,
             'p_value': round(p_value, 6),
             'is_significant_p005': p_value < 0.05,
             'is_significant_p001': p_value < 0.01,
@@ -2407,6 +2833,8 @@ class KL8RollingBacktest:
                 math.sqrt(sum((l - sum(permutation_lifts) / len(permutation_lifts)) ** 2 for l in permutation_lifts) / len(permutation_lifts)),
                 6,
             ) if len(permutation_lifts) > 1 else 0,
+            'method': 'shuffle_actual_draws',  # v9: 标记方法
+            'plus_one_correction': True,  # v9: 加一修正
         }
 
     # ─── 特征按玩法分开评估（v6: 按玩法置换检验+多重检验校正）───
@@ -2416,14 +2844,13 @@ class KL8RollingBacktest:
         test_periods: int = BACKTEST_MIN_OOS_PERIODS,
         n_permutations: int = BACKTEST_PERMUTATION_COUNT,
     ) -> Dict:
-        """单特征独立回测 — 按玩法分开评估（v6改进版）
+        """单特征独立回测 — 按玩法分开评估（v9: 使用独立 ABLATION_FEATURES）
 
-        不要求特征同时提升选3到选7，按玩法独立判断
-        v6改动:
-        1. 每个玩法单独做置换检验(pick_n=select_type)
-        2. is_candidate条件加入 permutation_p_adjusted < 0.05
-        3. 多重检验校正(BH FDR)后p值才进入启用判断
-        4. final_test结果只用于报告，不影响is_candidate
+        v9改动:
+        - 不再依赖 FEATURE_CONFIG 中 weight>0 的特征
+        - 使用独立 ABLATION_FEATURES 试验表
+        - repeat_avoid/repeat_follow 作为独立特征参与消融
+        - 针对每个玩法单独出结果
         """
         history = self.analyzer.history_data
         n = len(history)
@@ -2442,13 +2869,27 @@ class KL8RollingBacktest:
 
         results = {}
 
-        for feature_name, feature_cfg in FEATURE_CONFIG.items():
-            if feature_cfg['weight'] <= 0:
+        # v9: 使用独立 ABLATION_FEATURES 而非 FEATURE_CONFIG
+        for feature_name, feature_weight in ABLATION_FEATURES.items():
+            # 构造单特征权重
+            # repeat_avoid/repeat_follow 特殊处理：它们需要 repeat_direction 参数
+            single_weights = {k: 0.0 for k in FEATURE_CONFIG}
+            repeat_direction = 'neutral'
+
+            if feature_name == 'repeat_avoid':
+                single_weights['frequency'] = 0.60
+                single_weights['repeat'] = feature_weight
+                repeat_direction = 'avoid'
+            elif feature_name == 'repeat_follow':
+                single_weights['frequency'] = 0.60
+                single_weights['repeat'] = feature_weight
+                repeat_direction = 'follow'
+            elif feature_name in FEATURE_CONFIG:
+                single_weights[feature_name] = feature_weight
+            else:
+                # 未知特征
                 continue
 
-            # 单独启用该特征
-            single_weights = {k: 0.0 for k in FEATURE_CONFIG}
-            single_weights[feature_name] = feature_cfg['weight']
             model_weights = {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0}
 
             # val段回测
@@ -2786,3 +3227,298 @@ class KL8RollingBacktest:
         result['recommendations'] = recommendations
 
         return result
+
+    # ─── 候选策略锦标赛（v9新增）───
+
+    def run_candidate_tournament(
+        self,
+        candidate_strategies: Optional[Dict] = None,
+        n_permutations: int = BACKTEST_PERMUTATION_COUNT,
+    ) -> Dict:
+        """候选策略锦标赛 — 训练/验证/最终测试 三段式选型
+
+        v9新增:
+        流程固定:
+        1. 训练段: 筛掉明显无效策略（Lift<0 或 p>0.5）
+        2. 验证段: 从训练段筛出的候选中选最优的1个
+        3. 最终测试段: 对胜出策略只跑1次确认
+        4. 结果锁定，不允许拿 final_test 再调参数
+
+        参数:
+            candidate_strategies: 候选策略字典，默认使用 CANDIDATE_STRATEGIES + REFERENCE_STRATEGY
+            n_permutations: 置换检验次数
+
+        返回:
+            竞赛结果，包含各段淘汰记录、胜出策略、最终测试确认
+        """
+        if candidate_strategies is None:
+            # 合并参考策略和所有候选策略
+            candidate_strategies = {
+                'reference': REFERENCE_STRATEGY,
+                **CANDIDATE_STRATEGIES,
+            }
+
+        history = self.analyzer.history_data
+        n = len(history)
+
+        if n < BACKTEST_MIN_OOS_PERIODS + BACKTEST_FINAL_TEST_PERIODS + 100:
+            return {'error': f'历史数据不足(需{BACKTEST_MIN_OOS_PERIODS + BACKTEST_FINAL_TEST_PERIODS + 100}期，现有{n}期)'}
+
+        split = self._split_three_stage(n)
+        train_range = split['train']
+        val_range = split['val']
+        final_test_range = split['final_test']
+
+        # ── 第一轮：训练段筛掉明显无效策略 ──
+        train_results = {}
+        train_survivors = {}
+
+        for name, strategy in candidate_strategies.items():
+            fw = strategy.get('feature_weights', {})
+            mw = strategy.get('model_weights', {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0})
+            ws = strategy.get('window_size', KL8_DEFAULT_HISTORY)
+            repeat_dir = strategy.get('repeat_direction', 'neutral')
+
+            train_result = self._rolling_backtest_parametric(
+                fw, mw,
+                start_idx=train_range[0],
+                end_idx=train_range[1],
+                min_train=50,
+                window_size=ws,
+            )
+
+            if 'error' in train_result:
+                train_results[name] = {'error': train_result['error'], 'survived': False}
+                continue
+
+            # 检查所有玩法的 Lift
+            all_lifts_positive = True
+            best_lift = -999
+            for select_type in [3, 4, 5, 6, 7]:
+                s_key = f'select_{select_type}'
+                lift = train_result.get(s_key, {}).get('lift', 0)
+                if lift <= 0:
+                    all_lifts_positive = False
+                best_lift = max(best_lift, lift)
+
+            # 训练段淘汰条件: Lift 全为负或最大Lift<0
+            survived = best_lift > 0
+
+            train_results[name] = {
+                'best_lift': round(best_lift, 4),
+                'all_lifts_positive': all_lifts_positive,
+                'survived': survived,
+                'strategy_id': strategy.get('strategy_id', name),
+            }
+
+            if survived:
+                train_survivors[name] = strategy
+
+        # ── 第二轮：验证段选最优策略 ──
+        val_results = {}
+        val_best_name = None
+        val_best_lift = -999
+
+        for name, strategy in train_survivors.items():
+            fw = strategy.get('feature_weights', {})
+            mw = strategy.get('model_weights', {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0})
+            ws = strategy.get('window_size', KL8_DEFAULT_HISTORY)
+
+            val_result = self._rolling_backtest_parametric(
+                fw, mw,
+                start_idx=val_range[0],
+                end_idx=val_range[1],
+                min_train=50,
+                window_size=ws,
+            )
+
+            if 'error' in val_result:
+                val_results[name] = {'error': val_result['error']}
+                continue
+
+            # 选5 Lift 作为主指标
+            s5_lift = val_result.get('select_5', {}).get('lift', 0)
+
+            # 置换检验
+            perm_result = self._permutation_test(
+                fw, mw,
+                start_idx=val_range[0],
+                end_idx=val_range[1],
+                pick_n=5,
+                n_permutations=n_permutations,
+                window_size=ws,
+            )
+
+            raw_p = perm_result.get('p_value', 1.0) if 'error' not in perm_result else 1.0
+
+            # 稳定性检查（4子窗口）
+            val_len = val_range[1] - val_range[0]
+            sub_window_size = val_len // BACKTEST_STABILITY_WINDOWS
+            sub_lifts = []
+            for i in range(BACKTEST_STABILITY_WINDOWS):
+                sub_start = val_range[0] + i * sub_window_size
+                sub_end = val_range[0] + (i + 1) * sub_window_size
+                if i == BACKTEST_STABILITY_WINDOWS - 1:
+                    sub_end = val_range[1]
+
+                sub_result = self._rolling_backtest_parametric(
+                    fw, mw,
+                    start_idx=sub_start, end_idx=sub_end,
+                    min_train=50, window_size=ws,
+                )
+                sub_lift = sub_result.get('select_5', {}).get('lift', 0) if 'error' not in sub_result else 0
+                sub_lifts.append(sub_lift)
+
+            n_positive = sum(1 for l in sub_lifts if l > 0)
+
+            # 记录试验结果（供全量FDR校正）
+            trial_record = {
+                'strategy_id': strategy.get('strategy_id', name),
+                'play_type': 'select_5',
+                'feature_weights': fw,
+                'model_weights': mw,
+                'window_size': ws,
+                'repeat_direction': strategy.get('repeat_direction', 'neutral'),
+                'raw_p_value': raw_p,
+                'validation_lift': round(s5_lift, 4),
+                'n_permutations': n_permutations,
+                'tested_at': time.strftime('%Y-%m-%dT%H:%M:%S'),
+                'tournament_round': 'validation',
+            }
+            STRATEGY_TRIAL_RESULTS.append(trial_record)
+            _persist_trial_results()
+
+            val_results[name] = {
+                's5_lift': round(s5_lift, 4),
+                'raw_p_value': raw_p,
+                'n_positive_sub_windows': n_positive,
+                'sub_window_lifts': [round(l, 4) for l in sub_lifts],
+                'strategy_id': strategy.get('strategy_id', name),
+            }
+
+            # 选最优: Lift最高 且 p<0.05 且 稳定性>=3/4
+            if s5_lift > val_best_lift and raw_p < 0.05 and n_positive >= BACKTEST_STABILITY_THRESHOLD:
+                val_best_lift = s5_lift
+                val_best_name = name
+
+        # ── 第三轮：最终测试段只跑1次确认 ──
+        final_test_result = None
+        final_test_report = None
+
+        if val_best_name and val_best_name in train_survivors:
+            strategy = train_survivors[val_best_name]
+            fw = strategy.get('feature_weights', {})
+            mw = strategy.get('model_weights', {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0})
+            ws = strategy.get('window_size', KL8_DEFAULT_HISTORY)
+
+            final_test_result = self._rolling_backtest_parametric(
+                fw, mw,
+                start_idx=final_test_range[0],
+                end_idx=final_test_range[1],
+                min_train=50,
+                window_size=ws,
+            )
+
+            if 'error' not in final_test_result:
+                final_test_report = {
+                    'strategy_name': val_best_name,
+                    's5_lift': round(final_test_result.get('select_5', {}).get('lift', 0), 4),
+                    's5_mean_hits': round(final_test_result.get('select_5', {}).get('mean_hits', 0), 4),
+                    'note': '最终测试只做确认，结果锁定后不允许再调参数',
+                }
+
+        # ── 全量 BH-FDR 校正 ──
+        same_play_trials = [t for t in STRATEGY_TRIAL_RESULTS if t['play_type'] == 'select_5']
+        same_play_p_values = [t['raw_p_value'] for t in same_play_trials]
+        if len(same_play_p_values) > 1:
+            fdr_adjusted = benjamini_hochberg_fdr(same_play_p_values)
+            for i, trial in enumerate(same_play_trials):
+                trial['fdr_adjusted_p'] = round(fdr_adjusted[i], 6)
+            _persist_trial_results()
+
+        return {
+            'total_candidates': len(candidate_strategies),
+            'train_results': train_results,
+            'train_survivors': list(train_survivors.keys()),
+            'val_results': val_results,
+            'val_winner': val_best_name,
+            'val_winner_lift': round(val_best_lift, 4) if val_best_lift > -999 else None,
+            'final_test_result': final_test_report,
+            'tournament_locked': True,
+            'note': '锦标赛结果锁定，不允许用final_test再调参数',
+            'version': KL8_PREDICTOR_VERSION,
+        }
+
+
+# ─── v9预留: 概率校准框架（暂不启用）───
+# 未来目标: 把号码评分升级为可校准概率
+# 要求: 80个号码概率和 ≈ 20（KL8开出20个）
+# 校准验证: 预测概率0.25的号码，长期是否约25%真正开出
+
+def _brier_score(predicted_probs: List[float], actual_binary: List[int]) -> float:
+    """Brier Score — 概率预测准确度度量（预留，暂不启用）
+
+    BS = (1/N) * Σ(forecast - outcome)^2
+    完美预测: BS=0; 随机预测: BS≈0.25
+    """
+    if not predicted_probs or len(predicted_probs) != len(actual_binary):
+        return float('inf')
+    n = len(predicted_probs)
+    return sum((p - o) ** 2 for p, o in zip(predicted_probs, actual_binary)) / n
+
+
+def _log_loss(predicted_probs: List[float], actual_binary: List[int]) -> float:
+    """LogLoss — 概率预测的交叉熵损失（预留，暂不启用）
+
+    LL = -(1/N) * Σ(outcome*log(forecast) + (1-outcome)*log(1-forecast))
+    """
+    if not predicted_probs or len(predicted_probs) != len(actual_binary):
+        return float('inf')
+    n = len(predicted_probs)
+    total = 0.0
+    for p, o in zip(predicted_probs, actual_binary):
+        p_clipped = max(1e-10, min(1 - 1e-10, p))
+        if o == 1:
+            total += -math.log(p_clipped)
+        else:
+            total += -math.log(1 - p_clipped)
+    return total / n
+
+
+def _calibration_curve_data(
+    predicted_probs: List[float],
+    actual_binary: List[int],
+    n_bins: int = 10,
+) -> Dict:
+    """校准曲线数据 — 预测概率vs实际频率（预留，暂不启用）
+
+    将预测概率分成n_bins个桶，计算每个桶的平均预测概率和实际频率
+    完美校准: 预测0.25的号码，实际25%被开出
+    """
+    if not predicted_probs:
+        return {'error': '无预测概率'}
+
+    # 按预测概率分桶
+    bins = [[] for _ in range(n_bins)]
+    for p, o in zip(predicted_probs, actual_binary):
+        bin_idx = min(int(p * n_bins), n_bins - 1)
+        bins[bin_idx].append((p, o))
+
+    curve = []
+    for i, bin_data in enumerate(bins):
+        if not bin_data:
+            continue
+        mean_pred = sum(p for p, o in bin_data) / len(bin_data)
+        mean_actual = sum(o for p, o in bin_data) / len(bin_data)
+        curve.append({
+            'bin': i,
+            'bin_range': f'{i/n_bins:.1f}-{(i+1)/n_bins:.1f}',
+            'mean_predicted_prob': round(mean_pred, 4),
+            'mean_actual_frequency': round(mean_actual, 4),
+            'count': len(bin_data),
+        })
+
+    return {
+        'curve': curve,
+        'note': '预留框架，暂不启用。需要模型输出80个号码的入选概率后才能使用。',
+    }

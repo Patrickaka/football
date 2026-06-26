@@ -1557,6 +1557,7 @@ def optimize_prediction_parameters(records: List[Dict],
         'change_market_cap': [0.10, 0.15, 0.20],
         'half_full_real_weight': [0.20, 0.25, 0.30],
         'draw_bias': [0.96, 1.00, 1.04],
+        'late_market_weight_bias': [-0.04, 0.00, 0.04],
     }
     param_sets = _expand_param_grid(param_grid or default_grid)
 

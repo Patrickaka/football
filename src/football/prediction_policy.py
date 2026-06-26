@@ -36,6 +36,8 @@ PARAM_ALIASES = {
     'market_change_weight': 'change_market_cap',
     'half_full_history_weight': 'half_full_real_weight',
     'score_draw_bias': 'draw_bias',
+    'late_market_weight': 'late_market_weight_bias',
+    'time_layer_market_weight': 'late_market_weight_bias',
 }
 
 PARAM_RANGES = {
@@ -294,6 +296,7 @@ def get_prediction_policy(league=None, total_line=None, handicap=None, league_pr
     draw_bias = 1.0
     low_score_bias = 1.0
     high_score_bias = 1.0
+    late_market_weight_bias = 0.0
 
     if total_bucket == 'low':
         low_score_bias *= 1.08
@@ -338,6 +341,7 @@ def get_prediction_policy(league=None, total_line=None, handicap=None, league_pr
         'draw_bias': draw_bias,
         'low_score_bias': low_score_bias,
         'high_score_bias': high_score_bias,
+        'late_market_weight_bias': late_market_weight_bias,
     }
     tuning = load_tuning_params(
         league=league_name,

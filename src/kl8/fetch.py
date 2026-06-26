@@ -341,12 +341,13 @@ def fetch_or_load_kl8_data(force_refresh: bool = False) -> Optional[List[Dict]]:
         cross_result = cross_validate_with_second_source(data)
         if cross_result.get('conflict_count', 0) > 0:
             log.error(f'存在跨数据源冲突{cross_result["conflict_count"]}条，过滤冲突期号')
-            # v8: 真正过滤掉冲突期号（不再把冲突数据传给save_kl8_data）
-            conflict_issues = {item['issue'] for item in cross_result.get('conflicts', [])}
-            # 冲突的完整列表在cross_result中只显示前10条，需要从second_source获取完整列表
-            # 但conflicts字段已由cross_validate保存到审核队列，这里用已知冲突过滤
+            # v9: 使用完整冲突期号列表（不再只取前10条的issues）
+            conflict_issues = set(cross_result.get('conflict_issues', []))
+            if not conflict_issues:
+                # 回退：从 conflicts_preview 中提取
+                conflict_issues = {item['issue'] for item in cross_result.get('conflicts_preview', [])}
             data = [row for row in data if row['issue'] not in conflict_issues]
-            log.info(f'过滤冲突期号后，剩余{len(data)}期数据')
+            log.info(f'过滤{len(conflict_issues)}个冲突期号后，剩余{len(data)}期数据')
 
         merged = save_kl8_data(data)
         # v4: 返回合并后的完整历史，不只是本次API数据
@@ -514,7 +515,8 @@ def cross_validate_with_second_source(primary_data: List[Dict]) -> Dict:
         'total_checked': len(common_issues),
         'consistent': consistent,
         'conflict_count': len(conflicts),
-        'conflicts': conflicts[:10],
+        'conflict_issues': [x['issue'] for x in conflicts],  # v9: 完整冲突期号列表
+        'conflicts_preview': conflicts[:10],  # v9: 详情预览只取前10条
         'second_source_available': True,
         'primary_only_issues': len(primary_by_issue) - len(common_issues),
         'second_only_issues': len(second_by_issue) - len(common_issues),
