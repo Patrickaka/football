@@ -693,6 +693,10 @@ def get_active_model_weights() -> Dict[str, float]:
     return {k: v['weight'] if v['enabled'] else 0.0 for k, v in MODEL_CONFIG.items()}
 
 
+FEATURE_WEIGHTS = get_active_feature_weights()
+MODEL_WEIGHTS = get_active_model_weights()
+
+
 # ─── 超几何分布 ───
 
 def hypergeom_pmf(pick_n: int, hits: int) -> float:
@@ -774,6 +778,22 @@ def bonferroni_correction(p_value: float, n_experiments: int) -> float:
     """
     return min(1.0, p_value * n_experiments)
 
+
+def _clean_pick_numbers(numbers, expected_len: int) -> List[int]:
+    """Return a validated pick list, or [] when the pick is malformed."""
+    if not isinstance(numbers, (list, tuple, set)):
+        return []
+    try:
+        nums = [int(n) for n in numbers]
+    except (TypeError, ValueError):
+        return []
+    if len(nums) != expected_len or len(set(nums)) != expected_len:
+        return []
+    if any(n < 1 or n > KL8_NUM_RANGE for n in nums):
+        return []
+    return nums
+
+
 def normalize_record(record, keep_meta: bool = False) -> Optional[Dict]:
     """校验并标准化单条记录
 
@@ -813,11 +833,12 @@ def normalize_record(record, keep_meta: bool = False) -> Optional[Dict]:
     if any(n < 1 or n > 80 for n in nums):
         return None
 
-    if not str(record.get('issue', '')).strip():
+    issue = str(record.get('issue', '')).strip()
+    if not issue:
         return None
 
     result = {
-        'issue': str(record['issue']),
+        'issue': issue,
         'numbers': nums,
         'date': record.get('date') or record.get('draw_date', ''),
     }
@@ -852,11 +873,14 @@ def _compute_next_issue(latest_issue: str, history_data: List[Dict]) -> str:
     # 收集相邻期号差值
     history_asc = sorted(history_data, key=lambda x: x['issue'])
     diffs = []
-    for i in range(min(20, len(history_asc) - 1)):
+    start_idx = max(0, len(history_asc) - 21)
+    for i in range(start_idx, len(history_asc) - 1):
         try:
             curr = int(history_asc[i + 1]['issue'])
             prev = int(history_asc[i]['issue'])
-            diffs.append(curr - prev)
+            diff = curr - prev
+            if diff > 0:
+                diffs.append(diff)
         except (ValueError, TypeError):
             continue
 
@@ -1730,7 +1754,15 @@ class KL8Analyzer:
         top7 = vote_result['selected']
         combo_list = [sorted(c) for c in combinations(top7, 5)]
 
-        ranking_full = self.get_ensemble_ranking(top_n=7, feature_weights=feature_weights)
+        ranking_full = self.get_ensemble_ranking(
+            top_n=7,
+            feature_weights=feature_weights,
+            repeat_direction=repeat_direction,
+            repeat_avoid_score=repeat_avoid_score,
+            repeat_non_avoid_score=repeat_non_avoid_score,
+            repeat_follow_score=repeat_follow_score,
+            repeat_non_follow_score=repeat_non_follow_score,
+        )
         top7_details = [r for r in ranking_full if r['num'] in top7]
         top7_details.sort(key=lambda x: (-x['ranking_score'], x['num']))
 
@@ -1973,7 +2005,10 @@ class KL8Analyzer:
         cumulative_prize = 0
 
         for select_type in [3, 4, 5, 6, 7]:
-            numbers = snapshot.get(f'select_{select_type}', [])
+            numbers = _clean_pick_numbers(
+                snapshot.get(f'select_{select_type}', []),
+                select_type,
+            )
             prize_key = f'select_{select_type}'
             prize_info = prize_table.get(prize_key, {})
 
@@ -2000,7 +2035,7 @@ class KL8Analyzer:
             }
 
         # v6: 复式7码ROI — 每期全部21注组合都计算
-        fu_shi_7_nums = snapshot.get('fu_shi_7', [])
+        fu_shi_7_nums = _clean_pick_numbers(snapshot.get('fu_shi_7', []), 7)
         fu7_placed = len(fu_shi_7_nums) == 7
 
         fu7_prize_info = prize_table.get('fu_shi_7', {})
@@ -2214,6 +2249,10 @@ class KL8Analyzer:
             'model_weights': strategy['model_weights'],
             'window_size': strategy.get('window_size', KL8_DEFAULT_HISTORY),
             'repeat_direction': strategy.get('repeat_direction', 'neutral'),
+            'repeat_avoid_score': strategy.get('repeat_avoid_score', 0.10),
+            'repeat_non_avoid_score': strategy.get('repeat_non_avoid_score', 0.85),
+            'repeat_follow_score': strategy.get('repeat_follow_score', 0.90),
+            'repeat_non_follow_score': strategy.get('repeat_non_follow_score', 0.50),
             'prediction_mode': strategy['prediction_mode'],
             'is_validated': strategy['is_validated'],
         }
@@ -2284,8 +2323,15 @@ class KL8Analyzer:
             ),
         }
 
-        # v5: 无信号时ranking返回空列表
-        results['ranking'] = self.get_ensemble_ranking(top_n=20)
+        results['ranking'] = [
+            {
+                'num': num,
+                'ranking_score': score,
+                'score_type': 'candidate_pool_vote',
+                'is_probability': False,
+            }
+            for num, score in candidate_pool
+        ]
 
         results['using_simulated_data'] = self.using_simulated_data
 
@@ -2393,6 +2439,10 @@ def list_prediction_snapshots() -> List[Dict]:
                 'based_on_issue': data.get('based_on_issue'),
                 'predicted_at': data.get('predicted_at'),
                 'version': data.get('version'),
+                'is_experiment': data.get('is_experiment', False),
+                'strategy_fingerprint': data.get('strategy_fingerprint', ''),
+                'prediction_modes': data.get('prediction_modes', {}),
+                'play_strategies': data.get('play_strategies', {}),
                 'has_settlement': _check_settlement_exists(data.get('snapshot_id', '')),
             })
         except Exception:
@@ -2482,6 +2532,11 @@ class KL8RollingBacktest:
         end_idx: int,
         min_train: int = 50,
         window_size: Optional[int] = None,
+        repeat_direction: str = 'neutral',
+        repeat_avoid_score: float = 0.10,
+        repeat_non_avoid_score: float = 0.85,
+        repeat_follow_score: float = 0.90,
+        repeat_non_follow_score: float = 0.50,
     ) -> Dict:
         """纯参数化滚动回测（v6: 使用multi_model_voting管道，model_weights真正生效）
 
@@ -2536,6 +2591,11 @@ class KL8RollingBacktest:
                 top_n=20,
                 feature_weights=feature_weights,
                 model_weights=model_weights,
+                repeat_direction=repeat_direction,
+                repeat_avoid_score=repeat_avoid_score,
+                repeat_non_avoid_score=repeat_non_avoid_score,
+                repeat_follow_score=repeat_follow_score,
+                repeat_non_follow_score=repeat_non_follow_score,
             )
 
             # 无信号时，该期命中数记录为0
@@ -2705,6 +2765,11 @@ class KL8RollingBacktest:
         n_permutations: int = BACKTEST_PERMUTATION_COUNT,
         min_train: int = 50,
         window_size: Optional[int] = None,
+        repeat_direction: str = 'neutral',
+        repeat_avoid_score: float = 0.10,
+        repeat_non_avoid_score: float = 0.85,
+        repeat_follow_score: float = 0.90,
+        repeat_non_follow_score: float = 0.50,
     ) -> Dict:
         """置换检验: 打乱实际开奖期顺序（v9重大改动）
 
@@ -2722,6 +2787,11 @@ class KL8RollingBacktest:
             start_idx=start_idx, end_idx=end_idx,
             min_train=min_train,
             window_size=window_size,
+            repeat_direction=repeat_direction,
+            repeat_avoid_score=repeat_avoid_score,
+            repeat_non_avoid_score=repeat_non_avoid_score,
+            repeat_follow_score=repeat_follow_score,
+            repeat_non_follow_score=repeat_non_follow_score,
         )
 
         if 'error' in real_result:
@@ -2757,6 +2827,11 @@ class KL8RollingBacktest:
                 pick_n=20, top_n=20,
                 feature_weights=feature_weights,
                 model_weights=model_weights,
+                repeat_direction=repeat_direction,
+                repeat_avoid_score=repeat_avoid_score,
+                repeat_non_avoid_score=repeat_non_avoid_score,
+                repeat_follow_score=repeat_follow_score,
+                repeat_non_follow_score=repeat_non_follow_score,
             )
 
             if vote.get('status') == 'no_validated_signal':
@@ -2898,6 +2973,7 @@ class KL8RollingBacktest:
                 start_idx=val_range[0],
                 end_idx=val_range[1],
                 min_train=50,
+                repeat_direction=repeat_direction,
             )
 
             # final_test段回测（只用于报告，不影响启用判断）
@@ -2906,6 +2982,7 @@ class KL8RollingBacktest:
                 start_idx=final_test_range[0],
                 end_idx=final_test_range[1],
                 min_train=50,
+                repeat_direction=repeat_direction,
             )
 
             # v6: 每个玩法单独做置换检验
@@ -2918,6 +2995,7 @@ class KL8RollingBacktest:
                     pick_n=select_type,
                     metric='mean_hits',
                     n_permutations=n_permutations,
+                    repeat_direction=repeat_direction,
                 )
                 perm_results[f'select_{select_type}'] = perm_r
 
@@ -3278,6 +3356,10 @@ class KL8RollingBacktest:
             mw = strategy.get('model_weights', {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0})
             ws = strategy.get('window_size', KL8_DEFAULT_HISTORY)
             repeat_dir = strategy.get('repeat_direction', 'neutral')
+            repeat_avoid_score = strategy.get('repeat_avoid_score', 0.10)
+            repeat_non_avoid_score = strategy.get('repeat_non_avoid_score', 0.85)
+            repeat_follow_score = strategy.get('repeat_follow_score', 0.90)
+            repeat_non_follow_score = strategy.get('repeat_non_follow_score', 0.50)
 
             train_result = self._rolling_backtest_parametric(
                 fw, mw,
@@ -3285,6 +3367,11 @@ class KL8RollingBacktest:
                 end_idx=train_range[1],
                 min_train=50,
                 window_size=ws,
+                repeat_direction=repeat_dir,
+                repeat_avoid_score=repeat_avoid_score,
+                repeat_non_avoid_score=repeat_non_avoid_score,
+                repeat_follow_score=repeat_follow_score,
+                repeat_non_follow_score=repeat_non_follow_score,
             )
 
             if 'error' in train_result:
@@ -3323,6 +3410,11 @@ class KL8RollingBacktest:
             fw = strategy.get('feature_weights', {})
             mw = strategy.get('model_weights', {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0})
             ws = strategy.get('window_size', KL8_DEFAULT_HISTORY)
+            repeat_dir = strategy.get('repeat_direction', 'neutral')
+            repeat_avoid_score = strategy.get('repeat_avoid_score', 0.10)
+            repeat_non_avoid_score = strategy.get('repeat_non_avoid_score', 0.85)
+            repeat_follow_score = strategy.get('repeat_follow_score', 0.90)
+            repeat_non_follow_score = strategy.get('repeat_non_follow_score', 0.50)
 
             val_result = self._rolling_backtest_parametric(
                 fw, mw,
@@ -3330,6 +3422,11 @@ class KL8RollingBacktest:
                 end_idx=val_range[1],
                 min_train=50,
                 window_size=ws,
+                repeat_direction=repeat_dir,
+                repeat_avoid_score=repeat_avoid_score,
+                repeat_non_avoid_score=repeat_non_avoid_score,
+                repeat_follow_score=repeat_follow_score,
+                repeat_non_follow_score=repeat_non_follow_score,
             )
 
             if 'error' in val_result:
@@ -3347,6 +3444,11 @@ class KL8RollingBacktest:
                 pick_n=5,
                 n_permutations=n_permutations,
                 window_size=ws,
+                repeat_direction=repeat_dir,
+                repeat_avoid_score=repeat_avoid_score,
+                repeat_non_avoid_score=repeat_non_avoid_score,
+                repeat_follow_score=repeat_follow_score,
+                repeat_non_follow_score=repeat_non_follow_score,
             )
 
             raw_p = perm_result.get('p_value', 1.0) if 'error' not in perm_result else 1.0
@@ -3365,6 +3467,11 @@ class KL8RollingBacktest:
                     fw, mw,
                     start_idx=sub_start, end_idx=sub_end,
                     min_train=50, window_size=ws,
+                    repeat_direction=repeat_dir,
+                    repeat_avoid_score=repeat_avoid_score,
+                    repeat_non_avoid_score=repeat_non_avoid_score,
+                    repeat_follow_score=repeat_follow_score,
+                    repeat_non_follow_score=repeat_non_follow_score,
                 )
                 sub_lift = sub_result.get('select_5', {}).get('lift', 0) if 'error' not in sub_result else 0
                 sub_lifts.append(sub_lift)
@@ -3410,6 +3517,11 @@ class KL8RollingBacktest:
             fw = strategy.get('feature_weights', {})
             mw = strategy.get('model_weights', {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0})
             ws = strategy.get('window_size', KL8_DEFAULT_HISTORY)
+            repeat_dir = strategy.get('repeat_direction', 'neutral')
+            repeat_avoid_score = strategy.get('repeat_avoid_score', 0.10)
+            repeat_non_avoid_score = strategy.get('repeat_non_avoid_score', 0.85)
+            repeat_follow_score = strategy.get('repeat_follow_score', 0.90)
+            repeat_non_follow_score = strategy.get('repeat_non_follow_score', 0.50)
 
             final_test_result = self._rolling_backtest_parametric(
                 fw, mw,
@@ -3417,6 +3529,11 @@ class KL8RollingBacktest:
                 end_idx=final_test_range[1],
                 min_train=50,
                 window_size=ws,
+                repeat_direction=repeat_dir,
+                repeat_avoid_score=repeat_avoid_score,
+                repeat_non_avoid_score=repeat_non_avoid_score,
+                repeat_follow_score=repeat_follow_score,
+                repeat_non_follow_score=repeat_non_follow_score,
             )
 
             if 'error' not in final_test_result:

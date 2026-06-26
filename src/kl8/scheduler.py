@@ -46,11 +46,14 @@ def settle_previous_period(old_latest_issue: str):
     from pathlib import Path
     from src.kl8 import data_path
 
+    snapshots = list_prediction_snapshots()
+
     # v9: 只结算 target_issue == old_latest_issue 的快照（不再按 based_on_issue < actual_issue 宽泛匹配）
     unsettled = [
         s for s in snapshots
         if not s.get('has_settlement', False)
         and s.get('target_issue') == old_latest_issue
+        and not s.get('is_experiment', False)
     ]
 
     if not unsettled:
