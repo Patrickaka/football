@@ -20,7 +20,13 @@
 
 import json
 
-from src.kl8.fetch import fetch_or_load_kl8_data, check_need_backfill, fetch_kl8_history_backfill
+from src.kl8.fetch import (
+    fetch_or_load_kl8_data,
+    check_need_backfill,
+    fetch_kl8_history_backfill_batch,  # v9.2: 分批补数
+    fetch_kl8_history_backfill,        # v9.2: 保留给人工全量补数
+    count_valid_history_periods,       # v9.2: 期数统计
+)
 from src.kl8 import get_kl8_analyzer, run_prediction, clear_cache
 from src.common.logger import setup_logger
 
@@ -227,46 +233,26 @@ def _check_strategy_degradation():
 
 
 def refresh_kl8_and_predict():
-    """定时抓取；仅出现新一期时重新预测。
+    """任务1：实时更新开奖数据、结算上一期、生成下一期预测
 
-    v8改动:
-    - 启动时先检查是否需要历史补数(不足1500期时自动补数到2000期)
-    - 发现新期号后，先结算上一期未结算快照，再生成新预测
-    - 新预测快照记录 target_issue = 下一期期号(不再为None)
+    v9.2改动:
+    - 只负责抓最近数据、发现新期号、结算、预测
+    - 不再在这里做历史补数（补数由 backfill_kl8_history_step 负责）
+    - 不再检查 check_need_backfill()
+    - 补数和验证由独立定时任务处理
 
     流程:
-    1. 检查历史补数需求（不足1500期时触发补数）
-    2. 读取当前分析器中的最新期号 (old_issue)
-    3. 强制抓取最新数据 (fetch_or_load_kl8_data(force_refresh=True))
-    4. 比对新旧期号
-    5. 有新期号 → 结算上一期 → 清缓存 + 重新预测
-    6. 无新期号 → 仅记录日志
+    1. 读取当前最新期号 (old_issue)
+    2. 强制抓取最近2页数据
+    3. 比对新旧期号
+    4. 有新期号 → 结算上一期 → 清缓存 + 重新预测
+    5. 无新期号 → 仅记录日志
     """
     global _last_processed_issue
-
-    # v8: 检查是否需要历史补数
-    backfill_check = check_need_backfill()
-    if backfill_check.get('need_backfill', False):
-        log.info(
-            f'快乐8历史数据不足({backfill_check.get("current_periods", 0)}期)，'
-            f'开始自动补数(目标{backfill_check.get("recommended_target", 2000)}期)'
-        )
-        backfill_result = fetch_kl8_history_backfill()
-        if backfill_result.get('success', False):
-            log.info(
-                f'快乐8补数完成: {backfill_result.get("periods_before", 0)}期 -> '
-                f'{backfill_result.get("periods_after", 0)}期'
-            )
-            clear_cache()
-            # 补数后重建分析器
-            analyzer = get_kl8_analyzer()
-        else:
-            log.warning(f'快乐8补数失败: {backfill_result.get("error", "unknown")}')
 
     analyzer = get_kl8_analyzer()
     old_issue = analyzer.history_data[0]['issue'] if analyzer.history_data else ''
 
-    # 如果当前分析器无数据，先尝试加载一次
     if not old_issue:
         log.warning('当前无历史数据，尝试首次加载')
         merged_data = fetch_or_load_kl8_data(force_refresh=True)
@@ -284,8 +270,7 @@ def refresh_kl8_and_predict():
             log.warning('快乐8首次数据加载失败，下次重试')
             return
 
-    # 已有数据 → 检查是否有新期号
-    # v8: 日常只抓最近1-2页（不抓大量数据）
+    # 已有数据 → 检查是否有新期号（只抓最近2页）
     merged_data = fetch_or_load_kl8_data(force_refresh=True)
     if not merged_data:
         log.warning('快乐8自动抓取失败，本次保留旧数据')
@@ -294,7 +279,7 @@ def refresh_kl8_and_predict():
     new_issue = merged_data[0]['issue'] if merged_data else ''
 
     if new_issue != old_issue and new_issue != _last_processed_issue:
-        # v8: 先结算上一期未结算快照
+        # 先结算上一期未结算快照
         try:
             settle_previous_period(old_issue)
         except Exception as e:
@@ -310,30 +295,146 @@ def refresh_kl8_and_predict():
     elif new_issue == old_issue:
         log.info(f'快乐8暂无新期开奖，当前最新期号={new_issue}')
     else:
-        # new_issue == _last_processed_issue 但 != old_issue（理论上不应发生）
         log.info(f'快乐8期号{new_issue}已处理过，跳过重复预测')
 
 
+def backfill_kl8_history_step():
+    """任务2：每10分钟补一批历史数据
+
+    v9.2新增:
+    - 每次只抓5页（约250期），不一次性抓40页
+    - 使用 fetch_kl8_history_backfill_batch() 分批补数
+    - 达到800期后标记完成，触发策略验证
+    """
+    status = check_need_backfill()
+
+    if not status.get('need_backfill'):
+        return
+
+    current = status.get('current_periods', 0)
+    target = status.get('recommended_target', 800)
+
+    log.info(f'快乐8分批补数检查: 当前{current}期，目标{target}期')
+
+    result = fetch_kl8_history_backfill_batch(
+        target_periods=target,
+        pages_per_batch=5,
+    )
+
+    if result.get('success'):
+        log.info(
+            f'快乐8分批补数: '
+            f'{result.get("periods_before", 0)} -> '
+            f'{result.get("periods_after", 0)}期'
+        )
+
+        if result.get('completed'):
+            log.info('快乐8历史数据已达到验证目标，触发策略验证')
+            clear_cache()
+            run_verified_strategy_selection_if_needed()
+    else:
+        log.warning(f'快乐8分批补数失败: {result.get("error", "unknown")}')
+
+
+def run_verified_strategy_selection_if_needed():
+    """任务3：历史满800期后，自动验证一次策略
+
+    v9.2新增:
+    - 每个玩法独立验证（不强制共用 select_5 策略）
+    - 使用固定的 VALIDATION_CANDIDATES 做锦标赛
+    - 验证通过后写入 ACTIVE_STRATEGIES
+    - 验证完成后删除游标文件，不再重复验证
+    """
+    from src.kl8 import (
+        get_kl8_analyzer, ACTIVE_STRATEGIES,
+        KL8RollingBacktest, CANDIDATE_STRATEGIES,
+        activate_verified_strategy, _persist_active_strategies,
+        SELECT_CONFIG,
+    )
+    from pathlib import Path
+    from src.kl8.fetch import KL8_BACKFILL_STATE_FILE
+
+    current_periods = count_valid_history_periods()
+    if current_periods < 800:
+        log.info(f'快乐8: 历史数据不足800期({current_periods}期)，暂不验证策略')
+        return
+
+    # v9.2: 所有支持的玩法类型（不依赖 ACTIVE_STRATEGIES 是否已有条目）
+    all_play_types = [f'select_{st}' for st in [3, 4, 5, 6, 7]] + ['fu_shi_7']
+
+    # 检查是否所有玩法都已有验证策略
+    unverified_play_types = [
+        pt for pt in all_play_types
+        if ACTIVE_STRATEGIES.get(pt, {}).get('status') != 'validated'
+    ]
+
+    if not unverified_play_types:
+        log.info('快乐8: 所有玩法已有验证策略，无需重新验证')
+        return
+
+    log.info(f'快乐8: 开始验证未通过的玩法: {unverified_play_types}')
+
+    analyzer = get_kl8_analyzer()
+    bt = KL8RollingBacktest(analyzer)
+
+    # v9.2: 每个玩法独立验证
+    for play_type in unverified_play_types:
+        log.info(f'快乐8: 开始验证 {play_type}')
+
+        result = bt.run_candidate_tournament_per_play_type(
+            play_type=play_type,
+            candidate_strategies=CANDIDATE_STRATEGIES,
+        )
+
+        if result.get('activated'):
+            log.info(f'快乐8: {play_type} 验证通过，策略已激活')
+        elif result.get('all_failed'):
+            log.info(f'快乐8: {play_type} 所有候选均未通过验证')
+        else:
+            log.info(f'快乐8: {play_type} 验证结果: {result.get("summary", "")}')
+
+    # 验证完成后删除补数游标（如果还存在）
+    state_path = Path(KL8_BACKFILL_STATE_FILE)
+    if state_path.exists():
+        # 不删除 — 可能还需要继续补数给其他玩法
+        pass
+
+    # 清缓存重建
+    clear_cache()
+
+
 def start_kl8_scheduler(interval_hours: int = 1):
-    """启动快乐8定时调度（与 football result_sync 共享 APScheduler 或回退到线程）
+    """启动快乐8定时调度 — 三个独立任务
+
+    v9.2改动:
+    - 任务1: refresh_kl8_and_predict（实时更新+结算+预测，每小时）
+    - 任务2: backfill_kl8_history_step（分批补数，每10分钟）
+    - 任务3: run_verified_strategy_selection_if_needed（验证策略，补数完成后触发）
 
     参数:
         interval_hours: 检查间隔（小时），默认1
     """
     interval_seconds = interval_hours * 3600
 
-    # 启动时立即执行一次
+    # 启动时立即执行一次实时更新
     log.info('快乐8调度器启动，立即执行首次同步')
     try:
         refresh_kl8_and_predict()
     except Exception as e:
         log.error(f'快乐8首次同步异常: {e}')
 
+    # 启动时也立即执行一次补数检查
+    try:
+        backfill_kl8_history_step()
+    except Exception as e:
+        log.error(f'快乐8首次补数检查异常: {e}')
+
     try:
         from apscheduler.schedulers.background import BackgroundScheduler
 
         scheduler = BackgroundScheduler(timezone='Asia/Shanghai')
 
+        # 任务1: 实时更新开奖数据、结算、预测
         scheduler.add_job(
             refresh_kl8_and_predict,
             trigger='interval',
@@ -345,9 +446,34 @@ def start_kl8_scheduler(interval_hours: int = 1):
             misfire_grace_time=300,
         )
 
+        # 任务2: 分批补数（每10分钟）
+        scheduler.add_job(
+            backfill_kl8_history_step,
+            trigger='interval',
+            minutes=10,
+            id='kl8_history_backfill',
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+        )
+
+        # 任务3: 策略验证（每2小时检查一次，但只在需要时才执行）
+        scheduler.add_job(
+            run_verified_strategy_selection_if_needed,
+            trigger='interval',
+            hours=2,
+            id='kl8_strategy_verification',
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+        )
+
         scheduler.start()
         log.info(
-            f'快乐8 APScheduler 调度器已启动，间隔 {interval_hours} 小时'
+            f'快乐8 APScheduler 调度器已启动:'
+            f' 任务1=每{interval_hours}小时更新,'
+            f' 任务2=每10分钟补数,'
+            f' 任务3=每2小时验证策略'
         )
         return scheduler
 
@@ -357,7 +483,7 @@ def start_kl8_scheduler(interval_hours: int = 1):
         import threading
         import time
 
-        def _loop():
+        def _loop_refresh():
             while True:
                 time.sleep(interval_seconds)
                 try:
@@ -365,9 +491,34 @@ def start_kl8_scheduler(interval_hours: int = 1):
                 except Exception as e:
                     log.error(f'快乐8定时调度异常: {e}')
 
-        thread = threading.Thread(target=_loop, daemon=True, name='KL8SchedulerThread')
-        thread.start()
+        def _loop_backfill():
+            while True:
+                time.sleep(600)  # 10分钟
+                try:
+                    backfill_kl8_history_step()
+                except Exception as e:
+                    log.error(f'快乐8补数调度异常: {e}')
+
+        def _loop_verify():
+            while True:
+                time.sleep(7200)  # 2小时
+                try:
+                    run_verified_strategy_selection_if_needed()
+                except Exception as e:
+                    log.error(f'快乐8验证调度异常: {e}')
+
+        thread_refresh = threading.Thread(target=_loop_refresh, daemon=True, name='KL8RefreshThread')
+        thread_backfill = threading.Thread(target=_loop_backfill, daemon=True, name='KL8BackfillThread')
+        thread_verify = threading.Thread(target=_loop_verify, daemon=True, name='KL8VerifyThread')
+
+        thread_refresh.start()
+        thread_backfill.start()
+        thread_verify.start()
+
         log.info(
-            f'快乐8简单线程调度器已启动，间隔 {interval_hours} 小时'
+            f'快乐8简单线程调度器已启动:'
+            f' 更新={interval_hours}小时,'
+            f' 补数=10分钟,'
+            f' 验证=2小时'
         )
-        return thread
+        return (thread_refresh, thread_backfill, thread_verify)

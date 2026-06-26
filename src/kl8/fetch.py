@@ -39,106 +39,133 @@ NUM_FIELDS = [
 ]
 
 
-def fetch_kl8_data(pages: int = 10, per_page: int = 50) -> List[Dict]:
+def fetch_kl8_data(
+    pages: int = 10,
+    per_page: int = 50,
+    start_page: int = 1,
+    page_delay: float = 0.0,
+) -> List[Dict]:
     """从免费API抓取快乐8开奖数据
+
+    v9.2改动:
+    - 新增 start_page 参数，支持分批抓取（不再永远从第1页开始）
+    - 新增 page_delay 参数，每页间隔秒数（不再只在pages>10时才延时）
+    - 每页失败自动重试2次（不再只在401时才重试1次）
+    - 重试之间等待递增（1秒→3秒）
 
     API: http://api.huiniao.top/interface/home/lotteryHistory?type=klb
     返回格式: [{'issue': '2026165', 'numbers': [1,9,10,...], 'date': '2026-06-24'}]
-
-    v4: 对每条记录做normalize_record校验(号码唯一、范围1-80、期号非空)
-    每条记录附加 source/fetched_at/checksum 溯源字段
     """
     import urllib.request
 
     all_results = []
     fetched_at = time.strftime('%Y-%m-%dT%H:%M:%S')
+    max_retries = 2  # 每页最多重试2次（总共最多3次请求）
 
-    for page in range(1, pages + 1):
-        url = f'http://api.huiniao.top/interface/home/lotteryHistory?type=klb&page={page}&limit={per_page}'
-        try:
-            # v8: 补数时增加延时，避免API限流(401)
-            if pages > 10 and page > 5:
-                time.sleep(2)  # 补数抓取时每页间隔2秒
+    for page in range(start_page, start_page + pages):
+        url = (
+            'http://api.huiniao.top/interface/home/lotteryHistory'
+            f'?type=klb&page={page}&limit={per_page}'
+        )
 
-            req = urllib.request.Request(url, headers={
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
-            })
-            with urllib.request.urlopen(req, timeout=15) as resp:
-                raw = json.loads(resp.read().decode('utf-8'))
+        # v9.2: 每页间隔延时（不再只在补数时才延时）
+        if page_delay > 0 and page > start_page:
+            time.sleep(page_delay)
 
-            if raw.get('code') != 1:
-                log.warning(f'API返回错误: code={raw.get("code")}, info={raw.get("info")}')
-                # v8: 401限流时等待后重试一次
-                if raw.get('code') == 401 and pages > 10:
-                    log.info(f'API限流，等待5秒后重试第{page}页')
-                    time.sleep(5)
-                    try:
-                        with urllib.request.urlopen(req, timeout=15) as resp_retry:
-                            raw = json.loads(resp_retry.read().decode('utf-8'))
-                        if raw.get('code') != 1:
-                            log.warning(f'API重试仍失败: code={raw.get("code")}')
+        success = False
+        for attempt in range(max_retries + 1):
+            try:
+                req = urllib.request.Request(url, headers={
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+                })
+                with urllib.request.urlopen(req, timeout=15) as resp:
+                    raw = json.loads(resp.read().decode('utf-8'))
+
+                if raw.get('code') != 1:
+                    log.warning(
+                        f'API返回错误: code={raw.get("code")}, '
+                        f'info={raw.get("info")}, 第{page}页, 第{attempt+1}次尝试'
+                    )
+                    # 401限流时等待更长
+                    if raw.get('code') == 401:
+                        wait_time = 5 * (attempt + 1)
+                        log.info(f'API限流(401)，等待{wait_time}秒后重试')
+                        time.sleep(wait_time)
+                        continue  # 重试
+                    else:
+                        if attempt < max_retries:
+                            time.sleep(1)
                             continue
-                    except Exception as e_retry:
-                        log.warning(f'API重试请求失败: {e_retry}')
-                        continue
-                else:
+                        break  # 非限流错误，不重试
+
+                # 请求成功
+                success = True
+                break
+
+            except Exception as e:
+                log.warning(
+                    f'API第{page}页抓取失败(第{attempt+1}次): {e}'
+                )
+                if attempt < max_retries:
+                    wait_time = 1 + 2 * attempt  # 1秒→3秒递增
+                    time.sleep(wait_time)
                     continue
-
-            data_obj = raw.get('data', {})
-            list_data = data_obj.get('data', {}).get('list', [])
-            if not list_data:
                 break
 
-            for item in list_data:
-                # 提取20个号码
-                nums = []
-                for field in NUM_FIELDS:
-                    val = item.get(field)
-                    if val is not None:
-                        try:
-                            n = int(str(val).strip())
-                            if 1 <= n <= 80:
-                                nums.append(n)
-                        except (ValueError, TypeError):
-                            continue
-
-                record = {
-                    'issue': item.get('code', ''),
-                    'numbers': nums,
-                    'date': item.get('day', ''),
-                }
-
-                normed = normalize_record(record, keep_meta=True)
-                if normed:
-                    # 添加溯源字段（normalize_record已保留，确保完整）
-                    if 'source' not in normed or not normed['source']:
-                        normed['source'] = 'api_huiniao'
-                    if 'fetched_at' not in normed or not normed['fetched_at']:
-                        normed['fetched_at'] = fetched_at
-                    if 'checksum' not in normed or not normed['checksum']:
-                        normed['checksum'] = _checksum_numbers(normed['numbers'])
-                    all_results.append(normed)
-                else:
-                    log.warning(f'期号{item.get("code","?")}数据校验失败(号码数={len(nums)})')
-
-            total_pages = data_obj.get('data', {}).get('totalPage', 0)
-            if page >= total_pages:
-                break
-
-        except Exception as e:
-            log.warning(f'API第{page}页抓取失败: {e}')
+        if not success:
+            log.warning(f'API第{page}页最终失败（已重试{max_retries}次）')
             continue
+
+        # 解析数据（success=True时raw已有合法数据）
+        data_obj = raw.get('data', {})
+        list_data = data_obj.get('data', {}).get('list', [])
+        if not list_data:
+            # 空页 = 已到末尾
+            break
+
+        for item in list_data:
+            nums = []
+            for field in NUM_FIELDS:
+                val = item.get(field)
+                if val is not None:
+                    try:
+                        n = int(str(val).strip())
+                        if 1 <= n <= 80:
+                            nums.append(n)
+                    except (ValueError, TypeError):
+                        continue
+
+            record = {
+                'issue': item.get('code', ''),
+                'numbers': nums,
+                'date': item.get('day', ''),
+            }
+
+            normed = normalize_record(record, keep_meta=True)
+            if normed:
+                if 'source' not in normed or not normed['source']:
+                    normed['source'] = 'api_huiniao'
+                if 'fetched_at' not in normed or not normed['fetched_at']:
+                    normed['fetched_at'] = fetched_at
+                if 'checksum' not in normed or not normed['checksum']:
+                    normed['checksum'] = _checksum_numbers(normed['numbers'])
+                all_results.append(normed)
+            else:
+                log.warning(f'期号{item.get("code","?")}数据校验失败(号码数={len(nums)})')
+
+        total_pages = data_obj.get('data', {}).get('totalPage', 0)
+        if page >= total_pages:
+            break
 
     if all_results:
         all_results.sort(key=lambda x: x['issue'], reverse=True)
-        # 去重(按期号)
         seen = set()
         unique = []
         for r in all_results:
             if r['issue'] not in seen:
                 seen.add(r['issue'])
                 unique.append(r)
-        log.info(f'成功抓取{len(unique)}期快乐8有效数据')
+        log.info(f'成功抓取{len(unique)}期快乐8有效数据(start_page={start_page}, pages={pages})')
         return unique
 
     log.error('所有数据源均抓取失败')
@@ -523,23 +550,20 @@ def cross_validate_with_second_source(primary_data: List[Dict]) -> Dict:
     }
 
 
-# ─── 历史数据补数（v8新增）───
+# ─── 历史数据补数（v8新增, v9.2改为分批）───
 
-KL8_BACKFILL_MIN_PERIODS = 1500  # 最低目标期数
-KL8_BACKFILL_RECOMMENDED_PERIODS = 2000  # 推荐目标期数
-KL8_BACKFILL_PAGES = 40  # 一次补数抓取40页(40*50=2000期)
+KL8_BACKFILL_MIN_PERIODS = 800   # v9.2: 最低目标改为800期（验证所需）
+KL8_BACKFILL_RECOMMENDED_PERIODS = 800  # v9.2: 推荐目标也800期
+KL8_BACKFILL_PAGES = 40  # 全量补数用(人工一次性抓40页)
+KL8_BACKFILL_BATCH_PAGES = 5  # v9.2: 分批补数每批5页
+KL8_BACKFILL_OVERLAP_PAGES = 1  # v9.2: 每批与上一批重叠1页，避免漏期
+KL8_BACKFILL_STATE_FILE = data_path('kl8_backfill_state.json')
 
 
 def check_need_backfill() -> Dict:
     """检查是否需要历史补数
 
-    返回:
-        {
-            'need_backfill': bool,
-            'current_periods': int,
-            'min_target': int,
-            'recommended_target': int,
-        }
+    v9.2改动: 目标改为800期（验证所需）
     """
     path = Path(KL8_HISTORY_FILE)
     if not path.exists():
@@ -581,17 +605,165 @@ def check_need_backfill() -> Dict:
         }
 
 
-def fetch_kl8_history_backfill(target_periods: int = KL8_BACKFILL_RECOMMENDED_PERIODS) -> Dict:
-    """一次性历史补数 — 抓取大量历史数据以满足回测最低要求
+def count_valid_history_periods() -> int:
+    """统计本地历史数据的有效期数"""
+    path = Path(KL8_HISTORY_FILE)
+    if not path.exists():
+        return 0
 
-    v8新增:
-    - 首次初始化或历史不足时自动触发
-    - 抓取足够多的页数(pages=40, per_page=50 ≈ 2000期)
-    - 日常定时任务只抓最近1-2页(50-100期)
-    - 只有首次初始化或历史不足时才抓30-60页补齐历史
+    try:
+        raw = json.loads(path.read_text(encoding='utf-8'))
+        if isinstance(raw, dict):
+            source_list = raw.get('results', raw.get('data', []))
+        else:
+            source_list = raw
+
+        count = 0
+        for r in source_list:
+            if normalize_record(r):
+                count += 1
+        return count
+    except Exception:
+        return 0
+
+
+def _load_json_or_default(path: Path, default) -> any:
+    """安全加载JSON文件，失败返回default"""
+    if not path.exists():
+        return default
+    try:
+        return json.loads(path.read_text(encoding='utf-8'))
+    except Exception:
+        return default
+
+
+def _save_json_atomic(path: Path, data: any):
+    """原子写入JSON文件"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = path.with_suffix('.json.tmp')
+    try:
+        temp_path.write_text(
+            json.dumps(data, ensure_ascii=False, indent=2),
+            encoding='utf-8'
+        )
+        temp_path.replace(path)
+    except Exception as e:
+        log.warning(f'原子写入JSON失败: {e}')
+        if temp_path.exists():
+            temp_path.unlink()
+
+
+def fetch_kl8_history_backfill_batch(
+    target_periods: int = KL8_BACKFILL_RECOMMENDED_PERIODS,
+    pages_per_batch: int = KL8_BACKFILL_BATCH_PAGES,
+) -> Dict:
+    """分批补数 — 每次只抓5页，持久化游标，下次从游标继续
+
+    v9.2新增:
+    - 不再一次抓40页，改为每批5页，每10分钟跑一次
+    - 持久化游标(next_page)，下次从游标位置继续
+    - 每批与上一批重叠1页，避免新开奖插入后分页偏移导致漏期
+    - 达到目标期数后删除游标文件，标记完成
+
+    返回:
+        {
+            'success': bool,
+            'completed': bool,  # 是否已达到目标
+            'start_page': int,
+            'fetched_count': int,
+            'periods_before': int,
+            'periods_after': int,
+            'error': str (if failed),
+        }
+    """
+    import math
+
+    state_path = Path(KL8_BACKFILL_STATE_FILE)
+    current_count = count_valid_history_periods()
+
+    if current_count >= target_periods:
+        # 已达到目标，删除游标文件
+        if state_path.exists():
+            state_path.unlink()
+        return {
+            'success': True,
+            'completed': True,
+            'periods_after': current_count,
+            'message': '历史数据已达到验证目标',
+        }
+
+    # 加载游标状态
+    state = _load_json_or_default(state_path, {})
+
+    # 首次执行：根据当前已有数据估算从第几页继续
+    if not state:
+        estimated_pages = math.ceil(current_count / 50) if current_count > 0 else 1
+        # 从估算位置开始（但至少第1页）
+        next_page = max(1, estimated_pages)
+        # 首次执行时记录started_at
+        state = {
+            'next_page': next_page,
+            'target_periods': target_periods,
+            'started_at': time.strftime('%Y-%m-%dT%H:%M:%S'),
+        }
+    else:
+        next_page = max(1, int(state.get('next_page', 1)))
+
+    # 与上一批重叠1页，避免最新开奖插入后分页偏移造成漏期
+    start_page = max(1, next_page - KL8_BACKFILL_OVERLAP_PAGES)
+
+    # 分批抓取（每页间隔1秒）
+    data = fetch_kl8_data(
+        pages=pages_per_batch,
+        per_page=50,
+        start_page=start_page,
+        page_delay=1.0,
+    )
+
+    if not data:
+        return {
+            'success': False,
+            'completed': False,
+            'error': '本批历史抓取失败',
+            'periods_before': current_count,
+        }
+
+    # 保存并合并
+    merged = save_kl8_data(data)
+    periods_after = len(merged or []) if merged else current_count
+
+    completed = periods_after >= target_periods
+
+    if completed:
+        # 已完成，删除游标文件
+        if state_path.exists():
+            state_path.unlink()
+    else:
+        # 更新游标：下次从本批末页之后继续
+        state['next_page'] = start_page + pages_per_batch
+        state['last_batch_at'] = time.strftime('%Y-%m-%dT%H:%M:%S')
+        _save_json_atomic(state_path, state)
+
+    return {
+        'success': True,
+        'completed': completed,
+        'start_page': start_page,
+        'fetched_count': len(data),
+        'periods_before': current_count,
+        'periods_after': periods_after,
+    }
+
+
+def fetch_kl8_history_backfill(target_periods: int = KL8_BACKFILL_RECOMMENDED_PERIODS) -> Dict:
+    """一次性历史补数 — 仅供人工全量补数，定时任务不再使用
+
+    v9.2改动:
+    - 定时任务改用 fetch_kl8_history_backfill_batch() 分批补数
+    - 此方法保留给人工需要一次性全量补数时使用
+    - 不再由定时任务直接调用
 
     参数:
-        target_periods: 目标期数，默认2000
+        target_periods: 目标期数，默认800
 
     返回:
         {

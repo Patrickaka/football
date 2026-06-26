@@ -3516,76 +3516,77 @@ function renderKL8(r) {
   html += `<div class="section-title">【快乐8数据分析】</div>`;
   html += `<div class="note" style="color:var(--accent2);margin-bottom:12px">⚠ 快乐8开奖具有随机性，以上分析仅为历史统计参考，不构成任何投注建议。请理性对待！</div>`;
 
-  // v7.1: 三种状态 banner
+  // v9.2: 三种状态 — 补数中 / 验证中 / 已验证
   const signalStatus = r.statistics?.signal_status || 'unknown';
+  const backfillProgress = r.statistics?.backfill_progress || {};
+  const isBackfilling = !backfillProgress.is_complete;
+  const currentPeriods = backfillProgress.current_periods || r.statistics?.total_periods || 0;
+  const targetPeriods = backfillProgress.target_periods || 800;
+  const progressPct = backfillProgress.progress_pct || 0;
+
+  // 版本信息 + 补数进度
+  html += `<div class="note" style="margin-bottom:8px">版本: ${esc(r.statistics?.version || 'unknown')} · 分析期数: ${currentPeriods} · 信号状态: ${esc(signalStatus)}</div>`;
+  html += `<div class="note" style="margin-bottom:8px">基于期号: ${esc(r.based_on_issue || r.statistics?.based_on_issue || '-')} · 预测期号: ${esc(r.target_issue || r.statistics?.target_issue || '-')} · 生成时间: ${esc(r.prediction_generated_at || r.statistics?.prediction_generated_at || '-')}</div>`;
+
+  // ── 状态1：历史补数中 ──
+  if (isBackfilling) {
+    html += `<div class="card" style="margin-bottom:16px;background:linear-gradient(135deg,#1a2230,#1a2a3a);border:1px solid #4493f8;padding:16px 18px">`;
+    html += `<div style="font-size:15px;font-weight:700;color:#4493f8;margin-bottom:10px">📥 历史补数中</div>`;
+    html += `<div style="font-size:20px;font-weight:700;color:var(--text);margin-bottom:6px">${currentPeriods} / ${targetPeriods} 期</div>`;
+    // 进度条
+    html += `<div style="width:100%;height:8px;background:var(--card2);border-radius:4px;overflow:hidden;margin-bottom:8px">`;
+    html += `<div style="width:${progressPct}%;height:100%;background:linear-gradient(90deg,#4493f8,#3fb950);border-radius:4px;transition:width .3s"></div>`;
+    html += `</div>`;
+    html += `<div style="font-size:12px;color:var(--muted)">进度: ${progressPct}% · 系统正在分批抓取历史数据，每10分钟自动补一批</div>`;
+    html += `<div style="font-size:12px;color:var(--muted);margin-top:4px">达到${targetPeriods}期后将自动开始策略验证</div>`;
+    html += `</div>`;
+  }
+
+  // ── 状态2：验证中（历史已满800期，但尚无通过验证的策略）───
+  if (!isBackfilling && (signalStatus === 'verification_pending' || signalStatus === 'unknown')) {
+    // 检查是否有任何玩法已验证
+    const allModes = [3,4,5,6,7].map(st => r[`select_${st}`]?.prediction_mode);
+    allModes.push(r.fu_shi_7?.prediction_mode);
+    const anyValidated = allModes.some(m => m === 'validated');
+
+    if (!anyValidated) {
+      // 检查是否全部都未发现可验证策略（所有候选均未通过）
+      const allNotVerified = allModes.every(m => m === 'not_verified' || m === undefined);
+      const anyWarning = [3,4,5,6,7].some(st => r[`select_${st}`]?.warning);
+
+      if (allNotVerified && anyWarning) {
+        // 验证失败状态
+        html += `<div class="card" style="margin-bottom:16px;background:linear-gradient(135deg,#2a1a1a,#1a2230);border:1px solid #f85149;padding:16px 18px">`;
+        html += `<div style="font-size:15px;font-weight:700;color:#f85149;margin-bottom:10px">❌ 未发现可验证策略</div>`;
+        html += `<div style="font-size:13px;color:var(--muted);margin-bottom:6px">当前候选均未超过随机基线</div>`;
+        html += `<div style="font-size:12px;color:var(--muted);margin-top:6px">历史数据: ${currentPeriods} / ${targetPeriods} 期 · 本玩法不输出号码</div>`;
+        html += `</div>`;
+      } else {
+        // 验证中状态
+        html += `<div class="card" style="margin-bottom:16px;background:linear-gradient(135deg,#1a2230,#2a2a1a);border:1px solid #d29922;padding:16px 18px">`;
+        html += `<div style="font-size:15px;font-weight:700;color:#d29922;margin-bottom:10px">⏳ 验证中</div>`;
+        html += `<div style="font-size:13px;color:var(--text);margin-bottom:6px">历史数据已达到 ${currentPeriods} 期，正在运行训练、验证、封存测试</div>`;
+        html += `<div style="font-size:12px;color:var(--muted);margin-top:6px">当前状态: 暂不输出推荐 · 原因: 尚无通过验证的策略</div>`;
+        html += `</div>`;
+      }
+    }
+  }
+
+  // ── 状态3：已验证（至少一个玩法有validated策略）───
   if (signalStatus === 'validated') {
     html += `<div class="note" style="color:#2ea043;margin-bottom:12px;font-weight:700">✅ 已验证策略：当前启用策略已通过严格回测验证。</div>`;
-  } else if (signalStatus === 'reference_unvalidated') {
-    html += `<div class="note" style="color:#9a6700;margin-bottom:12px;font-weight:700">参考预测模式：当前特征未通过严格回测验证，系统仍会输出基础统计参考号码，但不代表策略已验证有效，请勿将其视为高置信度推荐。</div>`;
-  } else if (signalStatus === 'no_data') {
-    html += `<div class="note" style="color:#f85149;margin-bottom:12px;font-weight:700">历史数据不足，无法进行预测。请先抓取真实数据。</div>`;
   }
 
-  if (r.using_simulated_data || r.error) {
-    const errMsg = r.error || '当前使用模拟数据，无法产生有效预测';
-    html += `<div class="note" style="color:#f85149;margin-bottom:12px;font-weight:700">${esc(errMsg)}</div>`;
-    html += `<div class="note" style="margin-bottom:12px">请点击下方"抓取最新开奖数据"按钮获取真实历史数据。</div>`;
-  }
-
-  // 版本信息 + 信号状态
-  html += `<div class="note" style="margin-bottom:8px">版本: ${esc(r.statistics?.version || 'unknown')} · 分析期数: ${r.statistics?.total_periods || 0} · 信号状态: ${esc(signalStatus)}</div>`;
-  html += `<div class="note" style="margin-bottom:8px">基于期号: ${esc(r.based_on_issue || r.statistics?.based_on_issue || '-')} · 预测期号: ${esc(r.target_issue || r.statistics?.target_issue || '-')} · 生成时间: ${esc(r.prediction_generated_at || r.statistics?.prediction_generated_at || '-')} · 最低样本: ${r.statistics?.min_prediction_periods || 50}期</div>`;
-
-  // 无验证信号状态提示（黄色参考模式）
-  if (signalStatus === 'reference_unvalidated') {
-    html += `<div class="card" style="margin-bottom:16px;background:#fff8e1;border:1px solid #ffcc02;padding:12px">`;
-    html += `<div style="font-size:14px;font-weight:700;color:#9a6700;margin-bottom:8px">参考预测模式</div>`;
-    html += `<div style="font-size:13px;color:#7a5800">当前特征未通过严格回测验证，系统仍会输出基础统计参考号码，但不代表策略已验证有效，请勿将其视为高置信度推荐。排名数据仅供回测对照参考，不应作为投注依据。</div>`;
-    html += `<div style="font-size:12px;color:#7a5800;margin-top:6px">可通过 /api/kl8/backtest 接口运行回测，验证各特征有效性后激活正式策略。</div>`;
-    html += `</div>`;
-  }
-
-  // 特征开关展示 — 移动端折叠显示，PC端展开
-  if (r.statistics?.feature_config) {
-    const isMobile = window.innerWidth <= 768;
-    if (isMobile) {
-      // 移动端：折叠面板
-      html += `<details class="kl8-feature-toggle-mobile">`;
-      html += `<summary></summary>`;
-      html += `<div class="kl8-feature-body">`;
-      html += `<div style="display:flex;flex-wrap:wrap;gap:5px">`;
-    } else {
-      // PC端：原有展示
-      html += `<div class="card kl8-feature-toggle" style="margin-bottom:12px;padding:10px 12px">`;
-      html += `<div style="font-size:13px;font-weight:600;margin-bottom:6px">特征开关状态</div>`;
-      html += `<div style="display:flex;flex-wrap:wrap;gap:6px;font-size:11px">`;
-    }
-    const fc = r.statistics.feature_config;
-    for (const [k, v] of Object.entries(fc)) {
-      const enabled = v.enabled;
-      const badge = enabled ? 'ON' : 'OFF';
-      const badgeColor = enabled ? '#2ea043' : '#8b949e';
-      html += `<span style="background:var(--card);padding:3px 8px;border-radius:4px;white-space:nowrap">${esc(k)} <span style="color:${badgeColor};font-weight:700">${badge}</span> w=${v.weight}</span>`;
-    }
-    html += `</div>`;
-    if (isMobile) {
-      html += `</div></div></details>`;
-    } else {
-      html += `</div>`;
-    }
-  }
-
-  // 最近开奖结果
+  // 最近开奖结果（始终显示）
   if (r.recent_results && r.recent_results.length > 0) {
     const isMobile = window.innerWidth <= 768;
-    const showCount = isMobile ? 3 : 5;  // 移动端只显示3期
+    const showCount = isMobile ? 3 : 5;
     html += `<div class="card" style="margin-bottom:16px">`;
     html += `<div class="section-title" style="font-size:14px;margin-bottom:8px">最近开奖结果 ${isMobile ? '(近' + showCount + '期)' : ''}</div>`;
     for (const rec of r.recent_results.slice(0, showCount)) {
       html += `<div class="lottery-row kl8-lottery-row">`;
       html += `<span class="lottery-issue">${esc(rec.issue)}</span>`;
       html += `<span class="lottery-numbers kl8-lottery-balls" style="font-size:13px;letter-spacing:1px;gap:4px">`;
-      // 显示20个号码,用不同颜色区分
       const nums = rec.numbers || [];
       const lastSet = new Set(r.statistics?.last_numbers || []);
       for (const n of nums) {
@@ -3599,72 +3600,125 @@ function renderKL8(r) {
     html += `</div>`;
   }
 
-  // 选3/4/5/6/7推荐号码 — v7.1: 无论是否验证都显示，只是样式不同
   const selectTypes = [3, 4, 5, 6, 7];
 
-  // 候选池单独展示一次（各玩法候选池相同）
-  let sharedCandidates = null;
-  let sharedCandidatesNumbers = [];  // 推荐号码集合，用于高亮
-  for (const st of selectTypes) {
-    const sel = r[`select_${st}`];
-    if (sel && sel.candidates && sel.candidates.length > sel.pick) {
-      sharedCandidates = sel.candidates;
-      sharedCandidatesNumbers = sel.numbers || [];
-      break;
+  // ── 本期变化对比信息（仅在有已验证策略时显示）───
+  const changeInfo = r.change_info || {};
+  if (changeInfo.has_previous && signalStatus === 'validated') {
+    html += `<div class="card" style="margin-bottom:12px;padding:10px 14px;border-left:3px solid #4493f8">`;
+    html += `<div style="font-size:13px;font-weight:600;margin-bottom:6px;color:#4493f8">📊 本期相较上期变化</div>`;
+    html += `<div style="font-size:11px;color:#8b949e;margin-bottom:8px">`;
+    html += `本期基准: ${esc(changeInfo.current_based_on)} · 上期基准: ${esc(changeInfo.previous_based_on)}`;
+    html += `</div>`;
+    const poolChanges = changeInfo.pool_changes || {};
+    if (poolChanges.changed === 0) {
+      html += `<div style="font-size:12px;color:#8b949e;margin-bottom:6px">候选池延续：当前数据更新后，前20排名未发生变化</div>`;
+    } else {
+      html += `<div style="font-size:12px;margin-bottom:6px">`;
+      html += `<span style="color:#4493f8">候选池变化</span>: `;
+      html += `<span style="color:#da3633;font-weight:600">${poolChanges.changed}</span>`;
+      html += ` / <span style="color:#8b949e">${poolChanges.total_pool_size}</span>`;
+      html += ` 号号替换`;
+      html += `</div>`;
     }
-  }
-  if (sharedCandidates) {
-    html += `<div class="card" style="margin-bottom:12px;padding:10px 14px">`;
-    html += `<div style="font-size:13px;font-weight:600;margin-bottom:8px">候选号码池</div>`;
-    html += `<div style="display:flex;flex-wrap:wrap;gap:4px;line-height:1.6">`;
-    for (const item of sharedCandidates.slice(0, 15)) {
-      const num = typeof item === 'object' ? item[0] : item;
-      const isPick = sharedCandidatesNumbers.includes(num);
-      if (isPick) {
-        html += `<span class="kl8-ball highlight-ball" style="width:28px;height:28px;font-size:11px">${String(num).padStart(2,'0')}</span> `;
-      } else {
-        html += `<span class="kl8-ball small-ball">${String(num).padStart(2,'0')}</span> `;
+    const playChanges = changeInfo.play_changes || {};
+    for (const st of selectTypes) {
+      const key = `select_${st}`;
+      const pc = playChanges[key];
+      if (!pc || pc.changed_count === 0) continue;
+      html += `<div style="font-size:11px;margin-bottom:4px">`;
+      html += `<span style="color:#4493f8">选${st}</span>: `;
+      if (pc.removed && pc.removed.length > 0) {
+        html += `<span style="color:#da3633">-${pc.removed.map(n=>String(n).padStart(2,'0')).join(',')}</span> `;
       }
+      if (pc.added && pc.added.length > 0) {
+        html += `<span style="color:#2ea043">+${pc.added.map(n=>String(n).padStart(2,'0')).join(',')}</span>`;
+      }
+      html += `</div>`;
     }
-    html += `</div>`;
-    html += `<div style="font-size:11px;color:var(--muted);margin-top:6px">以上号码为综合统计候选池，各玩法从中选取推荐号码（高亮球为当前推荐号）</div>`;
+    const fu7pc = playChanges.fu_shi_7;
+    if (fu7pc && fu7pc.changed_count > 0) {
+      html += `<div style="font-size:11px;margin-bottom:4px">`;
+      html += `<span style="color:#4493f8">复式7码</span>: `;
+      if (fu7pc.removed && fu7pc.removed.length > 0) {
+        html += `<span style="color:#da3633">-${fu7pc.removed.map(n=>String(n).padStart(2,'0')).join(',')}</span> `;
+      }
+      if (fu7pc.added && fu7pc.added.length > 0) {
+        html += `<span style="color:#2ea043">+${fu7pc.added.map(n=>String(n).padStart(2,'0')).join(',')}</span>`;
+      }
+      html += `</div>`;
+    }
+    html += `<div style="font-size:11px;color:#8b949e;margin-top:4px">变化原因: ${esc(changeInfo.change_reason || '数据更新')}</div>`;
+    html += `<div style="font-size:11px;margin-top:4px">置信等级: <span style="font-weight:600;color:${changeInfo.confidence_level==='低'?'#9a6700':'#2ea043'}">${esc(changeInfo.confidence_level || '低')}</span> · 策略状态: ${esc(changeInfo.strategy_status || '验证中')}</div>`;
     html += `</div>`;
   }
 
-  // 各玩法推荐号码（不再重复显示候选池）
-  html += `<div class="card" style="margin-bottom:16px">`;
-  html += `<div class="section-title" style="font-size:15px;margin-bottom:12px">推荐号码</div>`;
-  html += `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px">`;
-
-  for (const st of selectTypes) {
-    const key = `select_${st}`;
-    const sel = r[key];
-    if (!sel || !sel.numbers || sel.numbers.length === 0) continue;
-
-    const isRef = sel.prediction_mode === 'reference_unvalidated';
-    const borderColor = isRef ? '#ffcc02' : '#2ea043';
-    const badgeText = isRef ? '参考' : '已验证';
-    const badgeColor = isRef ? '#9a6700' : '#2ea043';
-
-    html += `<div class="kl8-select-card" style="border-color:${borderColor}">`;
-    html += `<div class="kl8-select-title">🎱 ${esc(sel.desc)} — 推荐${sel.pick}个号码 <span style="font-size:11px;color:${badgeColor};font-weight:700;margin-left:8px">[${badgeText}]</span></div>`;
-    html += `<div style="font-size:11px;color:#8b949e;margin-bottom:4px">策略: ${esc(sel.strategy_id || '')}</div>`;
-    html += `<div class="kl8-numbers-row">`;
-    for (const n of sel.numbers) {
-      html += `<span class="kl8-ball highlight-ball">${String(n).padStart(2,'0')}</span>`;
+  // 候选池（仅在有已验证策略时显示）
+  if (signalStatus === 'validated') {
+    const sel5 = r.select_5;
+    if (sel5 && sel5.candidates && sel5.candidates.length > 0) {
+      html += `<div class="card" style="margin-bottom:12px;padding:10px 14px">`;
+      html += `<div style="font-size:13px;font-weight:600;margin-bottom:8px">候选号码池 <span style="font-size:11px;color:#8b949e">(基于选5策略)</span></div>`;
+      html += `<div style="display:flex;flex-wrap:wrap;gap:4px;line-height:1.6">`;
+      for (const item of sel5.candidates.slice(0, 15)) {
+        const num = typeof item === 'object' ? item[0] : item;
+        const isAnyPick = selectTypes.some(st => (r[`select_${st}`]?.numbers || []).includes(num));
+        if (isAnyPick) {
+          html += `<span class="kl8-ball highlight-ball" style="width:28px;height:28px;font-size:11px">${String(num).padStart(2,'0')}</span> `;
+        } else {
+          html += `<span class="kl8-ball small-ball">${String(num).padStart(2,'0')}</span> `;
+        }
+      }
+      html += `</div>`;
+      html += `<div style="font-size:11px;color:var(--muted);margin-top:6px">以上号码为候选池排名前15，高亮球为任一玩法的推荐号</div>`;
+      html += `</div>`;
     }
-    html += `</div>`;
-
-    // 参考模式警告
-    if (isRef && sel.warning) {
-      html += `<div style="font-size:11px;color:#9a6700;margin-top:6px">⚠ ${esc(sel.warning)}</div>`;
-    }
-
-    html += `</div>`;
   }
-  html += `</div></div>`;
 
-  // 选5复式7码 — v7.1: 无论是否验证都显示
+  // 各玩法推荐号码 — v9.2: verification_pending状态不显示号码
+  const hasAnyNumbers = selectTypes.some(st => {
+    const sel = r[`select_${st}`];
+    return sel && sel.numbers && sel.numbers.length > 0;
+  });
+
+  if (hasAnyNumbers) {
+    html += `<div class="card" style="margin-bottom:16px">`;
+    html += `<div class="section-title" style="font-size:15px;margin-bottom:12px">推荐号码</div>`;
+    html += `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px">`;
+
+    for (const st of selectTypes) {
+      const key = `select_${st}`;
+      const sel = r[key];
+      if (!sel || !sel.numbers || sel.numbers.length === 0) continue;
+
+      const isRef = sel.prediction_mode === 'reference_unvalidated';
+      const borderColor = isRef ? '#ffcc02' : '#2ea043';
+      const badgeText = isRef ? '参考' : '已验证';
+      const badgeColor = isRef ? '#9a6700' : '#2ea043';
+
+      html += `<div class="kl8-select-card" style="border-color:${borderColor}">`;
+      html += `<div class="kl8-select-title">🎱 ${esc(sel.desc)} — 推荐${sel.pick}个号码 <span style="font-size:11px;color:${badgeColor};font-weight:700;margin-left:8px">[${badgeText}]</span></div>`;
+      html += `<div style="font-size:11px;color:#8b949e;margin-bottom:4px">策略: ${esc(sel.strategy_id || '')}</div>`;
+      html += `<div class="kl8-numbers-row">`;
+      const playChangeInfo = (changeInfo.play_changes || {})[key];
+      const addedSet = new Set(playChangeInfo ? playChangeInfo.added : []);
+      for (const n of sel.numbers) {
+        if (addedSet.has(n)) {
+          html += `<span class="kl8-ball highlight-ball" style="border:2px solid #2ea043;box-shadow:0 0 3px #2ea043">${String(n).padStart(2,'0')}</span>`;
+        } else {
+          html += `<span class="kl8-ball highlight-ball">${String(n).padStart(2,'0')}</span>`;
+        }
+      }
+      html += `</div>`;
+      if (isRef && sel.warning) {
+        html += `<div style="font-size:11px;color:#9a6700;margin-top:6px">⚠ ${esc(sel.warning)}</div>`;
+      }
+      html += `</div>`;
+    }
+    html += `</div></div>`;
+  }
+
+  // 选5复式7码 — 仅在有号码时显示
   const fushi = r.fu_shi_7;
   if (fushi && fushi.top7_numbers && fushi.top7_numbers.length > 0) {
     const fu7IsRef = fushi.prediction_mode === 'reference_unvalidated';
@@ -3677,8 +3731,6 @@ function renderKL8(r) {
     if (fushi.strategy_id) {
       html += `<div style="font-size:11px;color:#8b949e;margin-bottom:4px">策略: ${esc(fushi.strategy_id)}</div>`;
     }
-
-    // Top7号码
     html += `<div class="section-title" style="font-size:14px;margin-bottom:8px">7个核心号码</div>`;
     html += `<div class="kl8-fushi-top7">`;
     for (let i = 0; i < fushi.top7_numbers.length; i++) {
@@ -3686,8 +3738,6 @@ function renderKL8(r) {
       html += `<span class="kl8-ball highlight-ball" style="width:44px;height:44px;font-size:18px">${String(n).padStart(2,'0')}</span>`;
     }
     html += `</div>`;
-
-    // 21组组合
     html += `<div class="section-title" style="font-size:14px;margin-bottom:8px">全部 C(7,5) = ${fushi.total_combinations} 组组合</div>`;
     html += `<div class="kl8-fushi-grid">`;
     for (const combo of fushi.combinations) {
@@ -3698,15 +3748,14 @@ function renderKL8(r) {
       html += `</div>`;
     }
     html += `</div>`;
-    // 参考模式警告
     if (fu7IsRef && fushi.warning) {
       html += `<div style="font-size:11px;color:#9a6700;margin-top:6px">⚠ ${esc(fushi.warning)}</div>`;
     }
     html += `</div>`;
   }
 
-  // 号码排名Top20
-  if (r.ranking && r.ranking.length > 0) {
+  // 号码排名Top20（仅在有已验证策略时显示）
+  if (signalStatus === 'validated' && r.ranking && r.ranking.length > 0) {
     html += `<div class="card" style="margin-bottom:16px">`;
     html += `<div class="section-title" style="font-size:14px;margin-bottom:8px">号码排名 (Top20) — 启发式排序值，非开出概率</div>`;
     html += `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:6px">`;
