@@ -28,6 +28,7 @@ POLICY_PARAM_KEYS = {
     'draw_bias',
     'low_score_bias',
     'high_score_bias',
+    'late_market_weight_bias',
 }
 
 PARAM_ALIASES = {
@@ -45,6 +46,7 @@ PARAM_RANGES = {
     'draw_bias': (0.75, 1.25),
     'low_score_bias': (0.75, 1.30),
     'high_score_bias': (0.75, 1.30),
+    'late_market_weight_bias': (-0.08, 0.08),
 }
 
 

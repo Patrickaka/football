@@ -3987,7 +3987,7 @@ def perturb_parameters(base_params):
 
 
 def ensemble_predict_scores(asian, euro, total, team_strength=None, league_profile=None,
-                          num_models=5, method='average'):
+                          num_models=5, method='average', current_time_layer=None):
     """
     多模型集成预测。
     
@@ -4024,7 +4024,8 @@ def ensemble_predict_scores(asian, euro, total, team_strength=None, league_profi
                 asian, euro, total, 
                 team_strength=team_strength, 
                 league_profile=perturbed['league_params'],
-                model_type=model_types[i % len(model_types)]
+                model_type=model_types[i % len(model_types)],
+                current_time_layer=current_time_layer,
             )
             
             # 将 candidates 转换为矩阵格式
@@ -4038,7 +4039,7 @@ def ensemble_predict_scores(asian, euro, total, team_strength=None, league_profi
     
     if not all_matrices:
         # 如果所有模型都失败，返回基础预测
-        return predict_scores(asian, euro, total, team_strength, league_profile)
+        return predict_scores(asian, euro, total, team_strength, league_profile, current_time_layer=current_time_layer)
     
     # 融合多个矩阵
     if method == 'weighted':
@@ -4741,7 +4742,7 @@ def _half_full_probs_to_dict(half_full_time):
 def predict_scores(asian, euro, total, team_strength=None, league_profile=None, 
                    model_type='poisson', enable_draw_calibration=True,
                    enable_calibration=False, calibration_method='platt',
-                   enable_ensemble=False, ensemble_size=5):
+                   enable_ensemble=False, ensemble_size=5, current_time_layer=None):
     """
     比分预测主函数：支持多种模型类型。
     
@@ -4756,7 +4757,8 @@ def predict_scores(asian, euro, total, team_strength=None, league_profile=None,
     # 如果启用多模型集成，直接调用集成函数
     if enable_ensemble:
         return ensemble_predict_scores(asian, euro, total, team_strength, league_profile,
-                                      num_models=ensemble_size, method='average')
+                                      num_models=ensemble_size, method='average',
+                                      current_time_layer=current_time_layer)
     p_home = euro['close']['home']
     p_draw = euro['close']['draw']
     p_away = euro['close']['away']
@@ -4973,13 +4975,33 @@ def predict_scores(asian, euro, total, team_strength=None, league_profile=None,
         model_weight = 0.75
         static_market_weight = prediction_policy.get('static_market_cap', 0.15)
         change_market_weight = min(0.10, prediction_policy.get('change_market_cap', 0.15))
+        time_layer_market_adjustment = {'applied': False, 'layer': current_time_layer}
+        try:
+            late_bias = float(prediction_policy.get('late_market_weight_bias', 0.0) or 0.0)
+        except (TypeError, ValueError):
+            late_bias = 0.0
+        if abs(late_bias) > 1e-9 and current_time_layer:
+            if current_time_layer in {'T-1h', 'T-15min', 'final'}:
+                layer_factor = 1.0 + late_bias
+            elif current_time_layer in {'T-24h', 'T-6h'}:
+                layer_factor = 1.0 - (late_bias * 0.5)
+            else:
+                layer_factor = 1.0
+            static_market_weight = max(0.0, min(0.30, static_market_weight * layer_factor))
+            change_market_weight = max(0.0, min(0.30, change_market_weight * layer_factor))
+            time_layer_market_adjustment = {
+                'applied': True,
+                'layer': current_time_layer,
+                'late_market_weight_bias': late_bias,
+                'factor': round(layer_factor, 4),
+            }
         market_data_quality = _assess_market_data_quality(asian, euro, total)
         market_quality_factor = market_data_quality.get('weight_factor', 1.0)
         
         # ========== 静态盘口先验 ==========
         if sample_count >= 30 and distance <= 0.5 and market_probs and len(market_probs) >= 3:
             # 计算历史权重：样本越多、盘口越接近，权重越高
-            static_cap = prediction_policy.get('static_market_cap', 0.15)
+            static_cap = static_market_weight
             static_weight = min(static_cap, sample_count / 300 * static_cap) * market_quality_factor
             static_market_weight = static_weight
             
@@ -5020,7 +5042,7 @@ def predict_scores(asian, euro, total, team_strength=None, league_profile=None,
                 # 样本门槛
                 if change_sample_count >= 30:
                     # 计算变化权重：5%～15%
-                    change_cap = prediction_policy.get('change_market_cap', 0.15)
+                    change_cap = change_market_weight
                     change_weight = min(change_cap, change_sample_count / 300 * change_cap) * market_quality_factor
                     change_market_weight = change_weight
                     
@@ -5105,6 +5127,7 @@ def predict_scores(asian, euro, total, team_strength=None, league_profile=None,
         'market_db_used': market_db_used,
         'market_data_quality': locals().get('market_data_quality', {'score': 1.0, 'grade': 'unknown'}),
         'market_quality_factor': locals().get('market_quality_factor', 1.0),
+        'time_layer_market_adjustment': locals().get('time_layer_market_adjustment', {'applied': False}),
         'policy_adjustment': policy_adjustment,
     }
     return candidates, lam_home, lam_away, meta
@@ -6664,6 +6687,12 @@ def analyze_match(match, force_refresh=False):
     except Exception as e:
         log.warning(f"机器学习模型预测失败: {e}")
 
+    try:
+        from .result_sync import infer_time_layer
+        current_time_layer = infer_time_layer(match_time)
+    except Exception:
+        current_time_layer = None
+
     candidates, lam_home, lam_away, meta = predict_scores(
         asian, euro, total, team_strength=team, league_profile=league_profile,
         model_type='negative_binomial',
@@ -6672,6 +6701,7 @@ def analyze_match(match, force_refresh=False):
         calibration_method='platt',
         enable_ensemble=True,
         ensemble_size=5,
+        current_time_layer=current_time_layer,
     )
     meta['prediction_logic_version'] = FOOTBALL_PREDICTION_LOGIC_VERSION
 

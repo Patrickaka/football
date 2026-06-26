@@ -1174,8 +1174,9 @@ def build_diagnostic_tuning_plan(rolling_report: Dict,
             'window_count': len(eligible),
         }
 
-    supported_params = {'draw_bias', 'low_score_bias', 'high_score_bias'}
+    supported_params = {'draw_bias', 'low_score_bias', 'high_score_bias', 'late_market_weight_bias'}
     by_param = defaultdict(list)
+    by_time_layer_action = defaultdict(list)
     for key, report in eligible:
         deltas = report.get('diagnostic_suggestions', {}).get('param_deltas') or {}
         for param, delta in deltas.items():
@@ -1188,6 +1189,10 @@ def build_diagnostic_tuning_plan(rolling_report: Dict,
             if abs(delta_value) < 1e-9:
                 continue
             by_param[param].append((key, delta_value))
+        time_signal = report.get('diagnostic_suggestions', {}).get('time_layer_signal') or {}
+        action = time_signal.get('action')
+        if action in {'raise_late_market_weight', 'lower_late_market_weight'}:
+            by_time_layer_action[action].append((key, time_signal))
 
     planned = {}
     consistency = {}
@@ -1210,11 +1215,50 @@ def build_diagnostic_tuning_plan(rolling_report: Dict,
             'direction': 'up' if avg_delta > 0 else 'down',
         }
 
+    time_layer_action = None
+    time_layer_consistency = {}
+    for action, values in sorted(by_time_layer_action.items()):
+        if len(values) < min_consistent_windows:
+            time_layer_consistency[action] = {
+                'accepted': False,
+                'windows': [key for key, _ in values],
+                'reason': 'not_enough_consistent_windows',
+            }
+            continue
+        opposite = 'lower_late_market_weight' if action == 'raise_late_market_weight' else 'raise_late_market_weight'
+        if by_time_layer_action.get(opposite):
+            time_layer_consistency[action] = {
+                'accepted': False,
+                'windows': [key for key, _ in values],
+                'reason': 'conflicting_time_layer_direction',
+            }
+            continue
+        avg_top3_lift = sum(float(signal.get('top3_lift', 0.0) or 0.0) for _, signal in values) / len(values)
+        avg_logloss_delta = sum(float(signal.get('logloss_delta', 0.0) or 0.0) for _, signal in values) / len(values)
+        time_layer_action = {
+            'action': action,
+            'windows': [key for key, _ in values],
+            'avg_top3_lift': round(avg_top3_lift, 4),
+            'avg_logloss_delta': round(avg_logloss_delta, 4),
+            'confidence': 'medium' if len(values) >= min_consistent_windows else 'low',
+        }
+        delta_sign = 1 if action == 'raise_late_market_weight' else -1
+        planned.setdefault(
+            'late_market_weight_bias',
+            round(delta_sign * min(max_abs_delta, max(0.01, abs(avg_top3_lift) * 0.20)), 4),
+        )
+        time_layer_consistency[action] = {
+            'accepted': True,
+            'windows': [key for key, _ in values],
+        }
+
     return {
-        'ready': bool(planned),
-        'reason': 'ready' if planned else 'no_consistent_param_deltas',
+        'ready': bool(planned or time_layer_action),
+        'reason': 'ready' if (planned or time_layer_action) else 'no_consistent_param_deltas',
         'param_deltas': planned,
         'consistency': consistency,
+        'time_layer_action': time_layer_action,
+        'time_layer_consistency': time_layer_consistency,
         'eligible_windows': [key for key, _ in eligible],
         'window_count': len(eligible),
         'guards': {
@@ -1281,6 +1325,24 @@ def apply_diagnostic_tuning(records: List[Dict],
             new_value = base_value + float(delta)
             low, high = PARAM_RANGES.get(param, (0.0, 10.0))
             new_params[param] = round(max(low, min(high, new_value)), 4)
+
+        if not new_params:
+            return {
+                'applied': False,
+                'dry_run': dry_run,
+                'scope': scope,
+                'target': {
+                    'league': target_league,
+                    'total_line': target_total_line,
+                    'handicap': target_handicap,
+                },
+                'current_params': {},
+                'new_params': {},
+                'save_result': None,
+                'plan': plan,
+                'rolling_report': rolling_report,
+                'reason': 'plan_contains_non_persisted_actions_only',
+            }
 
         save_result = None
         if not dry_run:

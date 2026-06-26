@@ -577,6 +577,48 @@ class ResultSyncQualityGuardTests(unittest.TestCase):
 
         self.assertFalse(blocked['ready'])
 
+    def test_diagnostic_tuning_plan_accepts_consistent_time_layer_action(self):
+        report = {
+            'windows': {
+                '3': {
+                    'sample_count': 3,
+                    'diagnostic_suggestions': {
+                        'param_deltas': {},
+                        'time_layer_signal': {
+                            'available': True,
+                            'action': 'raise_late_market_weight',
+                            'top3_lift': 0.12,
+                            'logloss_delta': 0.08,
+                        },
+                    },
+                },
+                '6': {
+                    'sample_count': 6,
+                    'diagnostic_suggestions': {
+                        'param_deltas': {},
+                        'time_layer_signal': {
+                            'available': True,
+                            'action': 'raise_late_market_weight',
+                            'top3_lift': 0.10,
+                            'logloss_delta': 0.06,
+                        },
+                    },
+                },
+            }
+        }
+
+        plan = build_diagnostic_tuning_plan(
+            report,
+            min_consistent_windows=2,
+            min_window_samples=3,
+        )
+
+        self.assertTrue(plan['ready'])
+        self.assertIn('late_market_weight_bias', plan['param_deltas'])
+        self.assertGreater(plan['param_deltas']['late_market_weight_bias'], 0)
+        self.assertEqual(plan['time_layer_action']['action'], 'raise_late_market_weight')
+        self.assertAlmostEqual(plan['time_layer_action']['avg_top3_lift'], 0.11)
+
     def test_apply_diagnostic_tuning_dry_run_builds_new_params_without_saving(self):
         records = []
         actual_scores = ['2-1', '2-0', '3-1', '1-2', '2-2', '3-0', '2-1', '4-1']
