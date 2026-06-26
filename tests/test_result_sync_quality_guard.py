@@ -461,6 +461,42 @@ class ResultSyncQualityGuardTests(unittest.TestCase):
         self.assertEqual(by_layer['final']['top1'], 1.0)
         self.assertAlmostEqual(by_layer['T-1h']['weighted_total'], 0.75)
 
+    def test_backtest_diagnostics_recommends_late_layer_weight_when_stronger(self):
+        records = []
+        actual_scores = ['1-0', '2-1', '1-1', '2-0', '0-1', '3-1', '1-0', '2-1']
+        for idx, actual in enumerate(actual_scores):
+            home_goals, away_goals = map(int, actual.split('-'))
+            actual_result = 'H' if home_goals > away_goals else 'A' if home_goals < away_goals else 'D'
+            early_scores = {'0-0': 0.50, '0-1': 0.30, '1-1': 0.20}
+            late_scores = {actual: 0.55, '0-0': 0.25, '1-1': 0.20}
+            records.append({
+                'match_id': f'late-layer-{idx}',
+                'league': 'Layer League',
+                'home': 'A',
+                'away': 'B',
+                'actual_score': actual,
+                'actual_result': actual_result,
+                'predicted_scores': late_scores,
+                'predicted_1x2': {'H': 0.45, 'D': 0.30, 'A': 0.25},
+                'time_layers': {
+                    'T-24h': early_scores,
+                    'T-6h': early_scores,
+                    'T-1h': late_scores,
+                    'T-15min': late_scores,
+                    'final': late_scores,
+                },
+                'asian': 0,
+                'total_line': 2.5,
+            })
+
+        report = run_backtest_report(records, verbose=False)
+        signal = report['diagnostics']['time_layer_signal']
+
+        self.assertTrue(signal['available'])
+        self.assertEqual(signal['action'], 'raise_late_market_weight')
+        self.assertGreater(signal['top3_lift'], 0)
+        self.assertEqual(report['diagnostic_suggestions']['time_layer_signal']['action'], 'raise_late_market_weight')
+
     def test_rolling_backtest_report_includes_recent_windows_and_suggestions(self):
         records = []
         actual_scores = ['2-1', '2-0', '3-1', '1-2', '2-2', '3-0', '2-1', '4-1']

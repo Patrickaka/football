@@ -620,6 +620,73 @@ class BacktestRunner:
         weak_buckets = []
         bucket_tuning_candidates = []
 
+        def time_layer_signal(layer_metrics):
+            if not isinstance(layer_metrics, dict):
+                return {'available': False, 'reason': 'missing_time_layer_metrics'}
+
+            early_layers = ['T-24h', 'T-6h']
+            late_layers = ['T-1h', 'T-15min', 'final']
+
+            def weighted_average(layers, field, min_total=1):
+                total_weight = 0.0
+                value_sum = 0.0
+                sample_total = 0
+                for layer in layers:
+                    metrics = layer_metrics.get(layer) or {}
+                    total_count = metrics.get('total', 0) or 0
+                    if total_count < min_total:
+                        continue
+                    weight = metrics.get('weighted_total') or metrics.get('weight') or 1.0
+                    value_sum += (metrics.get(field, 0.0) or 0.0) * weight
+                    total_weight += weight
+                    sample_total += total_count
+                if total_weight <= 0:
+                    return None, sample_total
+                return value_sum / total_weight, sample_total
+
+            early_top3, early_total = weighted_average(early_layers, 'top3')
+            late_top3, late_total = weighted_average(late_layers, 'top3')
+            early_logloss, _ = weighted_average(early_layers, 'score_logloss')
+            late_logloss, _ = weighted_average(late_layers, 'score_logloss')
+
+            if early_top3 is None or late_top3 is None:
+                return {
+                    'available': False,
+                    'reason': 'not_enough_layer_samples',
+                    'early_total': early_total,
+                    'late_total': late_total,
+                }
+
+            top3_lift = late_top3 - early_top3
+            logloss_delta = (early_logloss - late_logloss) if early_logloss is not None and late_logloss is not None else 0.0
+            action = 'keep_time_layer_weights'
+            confidence = 'low'
+            reasons = []
+
+            if top3_lift >= 0.08 and logloss_delta >= -0.05:
+                action = 'raise_late_market_weight'
+                reasons.append('late_layers_score_top3_better')
+                confidence = 'medium' if early_total >= 8 and late_total >= 8 else 'low'
+            elif top3_lift <= -0.08 and logloss_delta <= 0.05:
+                action = 'lower_late_market_weight'
+                reasons.append('early_layers_score_top3_better')
+                confidence = 'medium' if early_total >= 8 and late_total >= 8 else 'low'
+
+            return {
+                'available': True,
+                'action': action,
+                'confidence': confidence,
+                'early_total': early_total,
+                'late_total': late_total,
+                'early_top3': round(early_top3, 3),
+                'late_top3': round(late_top3, 3),
+                'top3_lift': round(top3_lift, 3),
+                'early_logloss': round(early_logloss, 3) if early_logloss is not None else None,
+                'late_logloss': round(late_logloss, 3) if late_logloss is not None else None,
+                'logloss_delta': round(logloss_delta, 3),
+                'reasons': reasons,
+            }
+
         def bucket_candidate(section, key, metrics):
             total_count = metrics.get('total', 0)
             score_top3 = metrics.get('score_top3', 0.0) or 0.0
@@ -731,6 +798,10 @@ class BacktestRunner:
                     -item['total'],
                 ),
             )[:10],
+            'time_layer_signal': time_layer_signal(report.get('by_time_layer', {})) if report else {
+                'available': False,
+                'reason': 'missing_report',
+            },
             'notes': notes,
         }
     
@@ -908,6 +979,7 @@ def get_diagnostic_tuning_suggestions(diagnostics: Dict) -> Dict:
             'param_deltas': {},
             'bucket_reviews': [],
             'bucket_tuning_candidates': [],
+            'time_layer_signal': {},
         }
 
     suggestions = []
@@ -962,6 +1034,7 @@ def get_diagnostic_tuning_suggestions(diagnostics: Dict) -> Dict:
 
     bucket_reviews = diagnostics.get('weak_buckets') or []
     bucket_candidates = diagnostics.get('bucket_tuning_candidates') or []
+    time_signal = diagnostics.get('time_layer_signal') or {}
     if bucket_reviews:
         suggestions.append({
             'area': 'bucket_policy',
@@ -976,12 +1049,20 @@ def get_diagnostic_tuning_suggestions(diagnostics: Dict) -> Dict:
             'reason': 'Weak buckets have conservative candidate deltas for score, goal-count, or half/full-time policy.',
             'confidence': 'medium' if any(c.get('confidence') == 'medium' for c in bucket_candidates) else 'low',
         })
+    if time_signal.get('available') and time_signal.get('action') != 'keep_time_layer_weights':
+        suggestions.append({
+            'area': 'time_layer_policy',
+            'action': time_signal.get('action'),
+            'reason': 'Time-layer backtest shows a meaningful difference between early and late market snapshots.',
+            'confidence': time_signal.get('confidence', 'low'),
+        })
 
     return {
         'suggestions': suggestions,
         'param_deltas': {key: round(value, 4) for key, value in sorted(param_deltas.items())},
         'bucket_reviews': bucket_reviews[:10],
         'bucket_tuning_candidates': bucket_candidates[:10],
+        'time_layer_signal': time_signal,
     }
 
 
