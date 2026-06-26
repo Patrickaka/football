@@ -43,6 +43,22 @@ from src.kl8 import (
 )
 from src.common.logger import setup_logger
 
+
+def _is_kl8_cache_current(cache_entry, now):
+    if not _is_cache_valid(cache_entry, now):
+        return False
+    data = cache_entry.get('data')
+    if not isinstance(data, dict):
+        return False
+    analyzer = get_kl8_analyzer()
+    latest_issue = analyzer.history_data[0]['issue'] if analyzer.history_data else ''
+    if not latest_issue:
+        return False
+    return (
+        data.get('based_on_issue') == latest_issue
+        and data.get('statistics', {}).get('version') == KL8_PREDICTOR_VERSION
+    )
+
 # 回测模块（延迟导入以加速启动）
 backtest = None
 dynamic_threshold = None
@@ -548,7 +564,7 @@ class Handler(BaseHTTPRequestHandler):
                           cache['data'] is not None, cache['timestamp'])
             
             # 检查缓存是否有效（TTL + 跨天双重校验）
-            if cache['data'] is not None and _is_cache_valid(cache, now):
+            if cache['data'] is not None and _is_kl8_cache_current(cache, now):
                 self._log.info('3D 预测使用缓存')
                 return {'result': cache['data']}
             

@@ -794,6 +794,63 @@ def _clean_pick_numbers(numbers, expected_len: int) -> List[int]:
     return nums
 
 
+def _diversify_candidate_pool(
+    candidates: List[Tuple[int, float]],
+    target_size: int,
+    last_numbers: Optional[set] = None,
+) -> List[Tuple[int, float]]:
+    """Lightly diversify candidates when scores are close.
+
+    KL8 draws 20/80 numbers, so an overly concentrated top pool tends to add
+    avoidable structural risk. This keeps score order as the first priority,
+    then limits zone, 012-road and repeat concentration.
+    """
+    if target_size <= 0 or not candidates:
+        return []
+
+    last_numbers = last_numbers or set()
+    max_zone = max(2, math.ceil(target_size / 8) + 1)
+    max_road = max(3, math.ceil(target_size / 3) + 1)
+    max_repeat = max(1, min(target_size, round(target_size * 0.35)))
+
+    selected = []
+    deferred = []
+    zone_counts = Counter()
+    road_counts = Counter()
+    repeat_count = 0
+
+    for num, score in candidates:
+        zone = (num - 1) // 10 + 1
+        road = num % 3
+        is_repeat = num in last_numbers
+
+        if (
+            zone_counts[zone] < max_zone
+            and road_counts[road] < max_road
+            and (not is_repeat or repeat_count < max_repeat)
+        ):
+            selected.append((num, score))
+            zone_counts[zone] += 1
+            road_counts[road] += 1
+            if is_repeat:
+                repeat_count += 1
+            if len(selected) >= target_size:
+                return selected
+        else:
+            deferred.append((num, score))
+
+    seen = {num for num, _ in selected}
+    deferred.sort(key=lambda item: (item[0] in last_numbers, -item[1], item[0]))
+    for num, score in deferred:
+        if num not in seen:
+            selected.append((num, score))
+            seen.add(num)
+        if len(selected) >= target_size:
+            break
+
+    return selected[:target_size]
+
+
 def normalize_record(record, keep_meta: bool = False) -> Optional[Dict]:
     """校验并标准化单条记录
 
@@ -1678,11 +1735,12 @@ class KL8Analyzer:
             }
 
         votes = defaultdict(float)
+        model_top_n = min(KL8_NUM_RANGE, max(top_n, 40))
 
         # 懒加载: 只计算启用模型
         if rank_ready:
             model_result = self._model_rank(
-                top_n=top_n, feature_weights=fw,
+                top_n=model_top_n, feature_weights=fw,
                 repeat_direction=repeat_direction,
                 repeat_avoid_score=repeat_avoid_score,
                 repeat_non_avoid_score=repeat_non_avoid_score,
@@ -1694,25 +1752,31 @@ class KL8Analyzer:
                 votes[num] += vote_weight
 
         if bayesian_ready:
-            model_result = self._model_bayesian(top_n=top_n)
+            model_result = self._model_bayesian(top_n=model_top_n)
             for rank, num in enumerate(model_result):
                 vote_weight = (1.0 - (rank / max(len(model_result), 1))) * bayesian_weight
                 votes[num] += vote_weight
 
         if markov_ready:
-            model_result = self._model_markov(top_n=top_n)
+            model_result = self._model_markov(top_n=model_top_n)
             for rank, num in enumerate(model_result):
                 vote_weight = (1.0 - (rank / max(len(model_result), 1))) * markov_weight
                 votes[num] += vote_weight
 
         candidates = sorted(votes.items(), key=lambda x: (-x[1], x[0]))
-        selected = [num for num, _ in candidates[:pick_n]]
-        candidate_pool = candidates[:max(top_n, 7)]
+        candidate_pool = _diversify_candidate_pool(
+            candidates,
+            max(top_n, 7),
+            self.statistics.get('last_numbers', set()),
+        )
+        selected = [num for num, _ in candidate_pool[:pick_n]]
 
         return {
             'selected': selected,
             'candidates': candidate_pool,
             'votes': dict(votes),
+            'diversified': True,
+            'raw_candidate_count': len(candidates),
             'version': KL8_PREDICTOR_VERSION,
         }
 
@@ -2280,6 +2344,12 @@ class KL8Analyzer:
         # v9: 保存 resolved_strategies 到 results，以便 _save_prediction_snapshot 使用
         results['resolved_strategies'] = resolved_strategies
 
+        latest_issue = self.history_data[0]['issue'] if self.history_data else ''
+        target_issue = _compute_next_issue(latest_issue, self.history_data) if latest_issue else ''
+        results['based_on_issue'] = latest_issue
+        results['target_issue'] = target_issue
+        results['prediction_generated_at'] = time.strftime('%Y-%m-%dT%H:%M:%S')
+
         recent = self.history_data[:10] if self.history_data else []
         results['recent_results'] = [
             {'issue': r['issue'], 'numbers': r['numbers'], 'date': r['date']}
@@ -2301,6 +2371,9 @@ class KL8Analyzer:
         stats = self.statistics
         results['statistics'] = {
             'total_periods': stats.get('total_periods', 0),
+            'based_on_issue': latest_issue,
+            'target_issue': target_issue,
+            'prediction_generated_at': results['prediction_generated_at'],
             'expected_freq': round(stats.get('expected_freq', 2), 2),
             'expected_gap': round(stats.get('expected_gap', 1), 1),
             'last_numbers': sorted(list(stats.get('last_numbers', set()))),
@@ -2399,6 +2472,7 @@ def run_prediction(force_refresh: bool = False) -> Dict:
 
     cache_key = (
         analyzer.history_data[0]['issue'],
+        _checksum_numbers(analyzer.history_data[0]['numbers']),
         len(analyzer.history_data),
         KL8_PREDICTOR_VERSION,
         config_fingerprint,

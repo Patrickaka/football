@@ -4,6 +4,7 @@ from src.kl8 import (
     KL8RollingBacktest,
     KL8Analyzer,
     _clean_pick_numbers,
+    _diversify_candidate_pool,
     _compute_next_issue,
     normalize_record,
 )
@@ -38,6 +39,44 @@ class KL8PredictionGuardTests(unittest.TestCase):
             {'issue': '2026012', 'numbers': list(range(1, 21))},
         ]
         self.assertEqual(_compute_next_issue('2026012', history), '2026013')
+
+    def test_diversify_candidate_pool_limits_basic_concentration(self):
+        candidates = [
+            (1, 100.0), (2, 99.0), (3, 98.0), (4, 97.0), (5, 96.0),
+            (6, 95.0), (7, 94.0), (11, 93.0), (21, 92.0), (31, 91.0),
+            (41, 90.0), (51, 89.0), (61, 88.0), (71, 87.0),
+        ]
+        diversified = _diversify_candidate_pool(candidates, 7, set(range(1, 21)))
+        nums = [n for n, _ in diversified]
+
+        self.assertEqual(len(nums), 7)
+        self.assertLessEqual(sum(1 for n in nums if n <= 20), 2)
+        self.assertLessEqual(max(nums.count(n) for n in nums), 1)
+
+    def test_multi_model_voting_uses_broader_diversified_pool(self):
+        analyzer = KL8Analyzer.__new__(KL8Analyzer)
+        analyzer.statistics = {'last_numbers': set(range(1, 21))}
+
+        original = KL8Analyzer._model_rank
+
+        def fake_rank(self, top_n=20, **kwargs):
+            return list(range(1, top_n + 1))
+
+        try:
+            KL8Analyzer._model_rank = fake_rank
+            result = analyzer.multi_model_voting(
+                pick_n=7,
+                top_n=7,
+                feature_weights={'frequency': 1.0},
+                model_weights={'rank': 1.0},
+            )
+        finally:
+            KL8Analyzer._model_rank = original
+
+        self.assertTrue(result['diversified'])
+        self.assertEqual(result['raw_candidate_count'], 40)
+        self.assertEqual(len(result['selected']), 7)
+        self.assertLessEqual(sum(1 for n in result['selected'] if n <= 20), 2)
 
     def test_backtest_passes_repeat_configuration_to_voting(self):
         analyzer = KL8Analyzer.__new__(KL8Analyzer)
