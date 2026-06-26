@@ -47,10 +47,10 @@ from src.common.logger import setup_logger
 
 log = setup_logger('kl8')
 
-KL8_PREDICTOR_VERSION = "kl8-v9.2-verify-only"
+KL8_PREDICTOR_VERSION = "kl8-v9.2.1-reference-mode"
 
 # ─── v9.2: 只显示已验证策略模式 ───
-VERIFY_ONLY_MODE = True  # True=未验证玩法不输出号码; False=回退参考策略
+VERIFY_ONLY_MODE = False  # True=未验证玩法不输出号码; False=回退参考策略(始终输出号码)
 
 # ─── 快乐8常量 ───
 KL8_NUM_RANGE = 80       # 号码范围 1-80
@@ -322,6 +322,11 @@ def resolve_play_strategy(play_type: str, allow_reference: bool = False) -> Opti
     - allow_reference=True时允许回退（仅供后台影子运行、回测等）
     - 返回None时，predict_all()输出 verification_pending 状态
 
+    v9.2.1改动:
+    - reference模式下，每个玩法使用不同的默认策略配置（小窗口+多特征）
+    - 不再所有玩法共用同一个250期纯频率策略，避免号码每天固定不变
+    - 选3/4用freq_50(50期窗口，变化灵敏)，选5/6/7/复式用不同组合
+
     返回 Dict 包含:
         strategy_id: 策略标识
         feature_weights: 特征权重
@@ -348,9 +353,84 @@ def resolve_play_strategy(play_type: str, allow_reference: bool = False) -> Opti
     if VERIFY_ONLY_MODE and not allow_reference:
         return None
 
-    # 没通过回测时，回退到参考策略（只在 allow_reference=True 时）
-    result = deepcopy(REFERENCE_STRATEGY)
-    result['strategy_id'] = f'{play_type}_reference_heuristic_v1'
+    # v9.2.1: 每个玩法使用不同的默认策略配置（小窗口+多特征组合）
+    # 避免所有玩法共用同一个250期纯频率策略导致号码每天固定不变
+    _REFERENCE_STRATEGIES_BY_PLAY = {
+        'select_3': {
+            'strategy_id': 'select_3_ref_freq50_gap',
+            'feature_weights': {'frequency': 0.6, 'gap': 0.4, 'position_residual': 0.0, 'road_residual': 0.0, 'repeat': 0.0, 'odd_even': 0.0, 'big_small': 0.0},
+            'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
+            'window_size': 50,
+            'repeat_direction': 'avoid',
+            'repeat_avoid_score': 0.10,
+            'repeat_non_avoid_score': 0.85,
+            'prediction_mode': 'reference_unvalidated',
+            'is_validated': False,
+        },
+        'select_4': {
+            'strategy_id': 'select_4_ref_freq100_gap',
+            'feature_weights': {'frequency': 0.5, 'gap': 0.5, 'position_residual': 0.0, 'road_residual': 0.0, 'repeat': 0.0, 'odd_even': 0.0, 'big_small': 0.0},
+            'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
+            'window_size': 100,
+            'repeat_direction': 'avoid',
+            'repeat_avoid_score': 0.10,
+            'repeat_non_avoid_score': 0.85,
+            'prediction_mode': 'reference_unvalidated',
+            'is_validated': False,
+        },
+        'select_5': {
+            'strategy_id': 'select_5_ref_freq150_repeat',
+            'feature_weights': {'frequency': 0.5, 'gap': 0.2, 'position_residual': 0.1, 'road_residual': 0.0, 'repeat': 0.2, 'odd_even': 0.0, 'big_small': 0.0},
+            'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
+            'window_size': 150,
+            'repeat_direction': 'neutral',
+            'repeat_avoid_score': 0.10,
+            'repeat_non_avoid_score': 0.85,
+            'prediction_mode': 'reference_unvalidated',
+            'is_validated': False,
+        },
+        'select_6': {
+            'strategy_id': 'select_6_ref_freq100_position',
+            'feature_weights': {'frequency': 0.4, 'gap': 0.2, 'position_residual': 0.3, 'road_residual': 0.1, 'repeat': 0.0, 'odd_even': 0.0, 'big_small': 0.0},
+            'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
+            'window_size': 100,
+            'repeat_direction': 'avoid',
+            'repeat_avoid_score': 0.08,
+            'repeat_non_avoid_score': 0.88,
+            'prediction_mode': 'reference_unvalidated',
+            'is_validated': False,
+        },
+        'select_7': {
+            'strategy_id': 'select_7_ref_freq150_road',
+            'feature_weights': {'frequency': 0.4, 'gap': 0.2, 'position_residual': 0.1, 'road_residual': 0.3, 'repeat': 0.0, 'odd_even': 0.0, 'big_small': 0.0},
+            'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
+            'window_size': 150,
+            'repeat_direction': 'follow',
+            'repeat_follow_score': 0.90,
+            'repeat_non_follow_score': 0.50,
+            'prediction_mode': 'reference_unvalidated',
+            'is_validated': False,
+        },
+        'fu_shi_7': {
+            'strategy_id': 'fu_shi_7_ref_freq100_mix',
+            'feature_weights': {'frequency': 0.45, 'gap': 0.35, 'position_residual': 0.1, 'road_residual': 0.1, 'repeat': 0.0, 'odd_even': 0.0, 'big_small': 0.0},
+            'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
+            'window_size': 100,
+            'repeat_direction': 'avoid',
+            'repeat_avoid_score': 0.05,
+            'repeat_non_avoid_score': 0.90,
+            'prediction_mode': 'reference_unvalidated',
+            'is_validated': False,
+        },
+    }
+
+    # 使用玩法专属配置，找不到则回退全局默认
+    ref_config = _REFERENCE_STRATEGIES_BY_PLAY.get(play_type)
+    if ref_config:
+        result = deepcopy(ref_config)
+    else:
+        result = deepcopy(REFERENCE_STRATEGY)
+        result['strategy_id'] = f'{play_type}_reference_heuristic_v1'
     return result
 
 
