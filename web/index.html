@@ -3534,6 +3534,7 @@ function renderKL8(r) {
 
   // 版本信息 + 信号状态
   html += `<div class="note" style="margin-bottom:8px">版本: ${esc(r.statistics?.version || 'unknown')} · 分析期数: ${r.statistics?.total_periods || 0} · 信号状态: ${esc(signalStatus)}</div>`;
+  html += `<div class="note" style="margin-bottom:8px">基于期号: ${esc(r.based_on_issue || r.statistics?.based_on_issue || '-')} · 预测期号: ${esc(r.target_issue || r.statistics?.target_issue || '-')} · 生成时间: ${esc(r.prediction_generated_at || r.statistics?.prediction_generated_at || '-')} · 最低样本: ${r.statistics?.min_prediction_periods || 50}期</div>`;
 
   // 无验证信号状态提示（黄色参考模式）
   if (signalStatus === 'reference_unvalidated') {

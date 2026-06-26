@@ -3,6 +3,7 @@ import unittest
 from src.kl8 import (
     KL8RollingBacktest,
     KL8Analyzer,
+    KL8_MIN_PREDICTION_PERIODS,
     _clean_pick_numbers,
     _diversify_candidate_pool,
     _compute_next_issue,
@@ -77,6 +78,18 @@ class KL8PredictionGuardTests(unittest.TestCase):
         self.assertEqual(result['raw_candidate_count'], 40)
         self.assertEqual(len(result['selected']), 7)
         self.assertLessEqual(sum(1 for n in result['selected'] if n <= 20), 2)
+
+    def test_predict_all_blocks_tiny_history(self):
+        analyzer = KL8Analyzer.__new__(KL8Analyzer)
+        analyzer.history_data = [_record(i) for i in range(10, 0, -1)]
+        analyzer.using_simulated_data = False
+        analyzer.statistics = {}
+
+        result = analyzer.predict_all()
+
+        self.assertIn('error', result)
+        self.assertEqual(result['data_quality']['min_required'], KL8_MIN_PREDICTION_PERIODS)
+        self.assertEqual(result['data_quality']['reason'], 'insufficient_history')
 
     def test_backtest_passes_repeat_configuration_to_voting(self):
         analyzer = KL8Analyzer.__new__(KL8Analyzer)

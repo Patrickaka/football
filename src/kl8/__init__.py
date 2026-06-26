@@ -64,6 +64,7 @@ KL8_NUM_RANGE = 80       # 号码范围 1-80
 KL8_DRAW_COUNT = 20      # 每期开出20个号码
 KL8_DEFAULT_HISTORY = 250  # 默认使用最近250期
 KL8_EXPECTED_GAP = (KL8_NUM_RANGE - KL8_DRAW_COUNT) / KL8_DRAW_COUNT  # = 3.0
+KL8_MIN_PREDICTION_PERIODS = 50
 
 # ─── 回测常量 ───
 BACKTEST_MIN_OOS_PERIODS = 300   # 最小样本外期数
@@ -2247,6 +2248,17 @@ class KL8Analyzer:
                 'error': '历史数据不足，无法进行有效预测。请先抓取真实数据。',
                 'using_simulated_data': True,
             }
+        if len(self.history_data) < KL8_MIN_PREDICTION_PERIODS:
+            return {
+                'error': f'历史数据不足，至少需要{KL8_MIN_PREDICTION_PERIODS}期真实数据后再预测。',
+                'using_simulated_data': False,
+                'data_quality': {
+                    'valid': False,
+                    'total_records': len(self.history_data),
+                    'min_required': KL8_MIN_PREDICTION_PERIODS,
+                    'reason': 'insufficient_history',
+                },
+            }
 
         prediction_ready = is_prediction_ready()
 
@@ -2371,6 +2383,7 @@ class KL8Analyzer:
         stats = self.statistics
         results['statistics'] = {
             'total_periods': stats.get('total_periods', 0),
+            'min_prediction_periods': KL8_MIN_PREDICTION_PERIODS,
             'based_on_issue': latest_issue,
             'target_issue': target_issue,
             'prediction_generated_at': results['prediction_generated_at'],

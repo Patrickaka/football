@@ -564,7 +564,7 @@ class Handler(BaseHTTPRequestHandler):
                           cache['data'] is not None, cache['timestamp'])
             
             # 检查缓存是否有效（TTL + 跨天双重校验）
-            if cache['data'] is not None and _is_kl8_cache_current(cache, now):
+            if cache['data'] is not None and _is_cache_valid(cache, now):
                 self._log.info('3D 预测使用缓存')
                 return {'result': cache['data']}
             
@@ -1357,7 +1357,7 @@ class Handler(BaseHTTPRequestHandler):
             now = time.time()
             cache = _CACHE['kl8']
 
-            if cache['data'] is not None and _is_cache_valid(cache, now):
+            if cache['data'] is not None and _is_kl8_cache_current(cache, now):
                 self._log.info('快乐8使用缓存')
                 return {'result': cache['data']}
 
