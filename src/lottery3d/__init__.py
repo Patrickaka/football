@@ -157,16 +157,18 @@ SUM_INTERVAL_WIDTH = 3  # 区间宽度（中心 ± width）
 SUM_INTERVAL_BONUS = 0.0  # 区间内加分（关闭）
 SUM_EXTREME_PENALTY = 0.0  # 极端区间降权（关闭）
 
-# 最近5期排除机制：对重复推荐进行惩罚
+# 最近N期去重机制：对重复推荐降权，使每日推荐池在天与天之间轮换。
+# 3D 为公平摇奖，任意 30 注互异组合命中率恒为 3%，故轮换不改变命中期望(实测900期均落在
+# 3%±1.1% 噪声带内)，但能把日间重复度从 ~54% 降到 ~14%。惩罚值取较大以形成"近窗内基本不重复"。
 RECENT_RECOMMEND_WINDOW = 5  # 最近推荐窗口大小
-RECENT_RECOMMEND_PENALTY = 2.0  # 最近推荐过的号码惩罚
-RECENT_RECOMMEND_CONSECUTIVE_PENALTY = 4.0  # 连续推荐的号码惩罚
+RECENT_RECOMMEND_PENALTY = 10.0  # 最近推荐过的号码惩罚(略低于rank30→rank200落差≈12.5: 保留1-2个最强锚点,其余轮换)
+RECENT_RECOMMEND_CONSECUTIVE_PENALTY = 16.0  # 连续推荐的号码惩罚
 
 # 窗口权重持久化键
 WINDOW_WEIGHTS_KV_KEY = "lottery3d_window_weights"
 
 # 预测版本号
-PREDICTOR_VERSION = "3d-v3.9-pure-rank-2k-history"
+PREDICTOR_VERSION = "3d-v4.0-rank-rotate-2k-history"
 ML_MODEL_VERSION = "ml-v6"
 MIN_DATA_PERIODS_FOR_ML_FUSION = 300
 ML_CACHE_MAX_AGE_SECONDS = 36 * 3600
@@ -3310,6 +3312,13 @@ def run_prediction(data=None, force_refresh=False, enable_backtest=False, enable
     
     # 加载最近推荐历史（用于排除重复推荐）
     recent_recommendations = load_recent_3d_recommendations()
+    current_period = periods[-1] if periods else None
+    # 仅对「之前期」的推荐做去重惩罚，排除当前期自身——否则同一天多次调用(本期推荐已被保存)
+    # 会自我惩罚导致结果漂移，破坏当日稳定性。
+    prior_recommendations = [
+        e for e in recent_recommendations
+        if not (isinstance(e, dict) and e.get("period") == current_period)
+    ]
     
     # 实盘版本：关闭随机探索和随机噪声，确保结果稳定
     # Top3：纯模型排序，不应用冷热平衡、多样性和去相关
@@ -3327,11 +3336,11 @@ def run_prediction(data=None, force_refresh=False, enable_backtest=False, enable
         recent_recommendations=None
     )
     
-    # Top30：直接服务模型评分最高的 30 注（纯排序）。
-    # 3D 为独立均匀摇奖，任意 30 注互异组合的命中率恒为 30/1000=3%，
-    # 多样性/去相关重排无法提升命中期望，实测反而把 served 命中率从 3.4%
-    # 拉低到 2.2%（用真实命中换取无奖金价值的"2 码重合"）。故关闭重排，
-    # 锁定 3% 覆盖下限并服务模型最有信心的号码。
+    # Top30：服务模型评分最高的 30 注（纯排序），并施加「近窗去重惩罚」使日间轮换。
+    # 3D 为独立均匀摇奖，任意 30 注互异组合命中率恒为 30/1000=3%——多样性/去相关重排会
+    # 用真实命中换无奖金价值的"2 码重合"(实测把 served 从 3.4% 拉到 2.2%)，故仍关闭。
+    # 但「近窗去重」只是在等价的 30 注之间轮换，不损失命中期望(实测900期落在3%±1.1%噪声带内)，
+    # 却把日间重复度从 ~54% 降到 ~14%，解决"每天推荐高度雷同"的问题。
     zhixuan_top = rank_triplets(
         score,
         danma,
@@ -3343,7 +3352,7 @@ def run_prediction(data=None, force_refresh=False, enable_backtest=False, enable
         enable_cold_hot_balance=FEATURE_FLAGS.get("cold_hot_balance", False),
         enable_diversity=False,
         enable_correlation=False,
-        recent_recommendations=None,
+        recent_recommendations=prior_recommendations,
     )
     
     zhixuan_top3_detail = build_detail_list(
