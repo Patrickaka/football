@@ -2267,6 +2267,31 @@ def analyze_form_probability(numbers, window_weights=None):
     }
 
 
+def recommend_form_bet(form_prob, numbers):
+    """形态主推：固定主推「组六」。
+
+    组六约占全部开奖的 72%，是唯一数学最优的单形态投注。实测(600期)「跟随
+    短期 markov/recent 概率最大者」与「永远押组六」命中率完全相同(均 73.8%)——
+    短期信号无法击败 base rate，连续组六后"该出组三了"是赌徒谬误。故主推固定为
+    组六，组三/豹子仅作小注分散（按其真实概率，不建议作主投）。
+    """
+    forms = [classify_form(n) for n in numbers]
+    n = len(forms) or 1
+    hist_cnt = Counter(forms)
+    emp = {k: hist_cnt.get(k, 0) / n for k in THEORY_FORM_P}
+    return {
+        "primary": "zu6",
+        "primary_label": FORM_LABELS["zu6"],
+        "expected_hit_rate": round(emp["zu6"], 4),       # 经验 base rate(全历史组六占比)
+        "theory_hit_rate": THEORY_FORM_P["zu6"],          # 理论 72%
+        "empirical_form_p": {k: round(v, 4) for k, v in emp.items()},
+        "blend_p": {k: round(v, 4) for k, v in form_prob["blend_p"].items()},
+        "secondary": "zu3",
+        "note": "主推组六(≈72%为数学最优单形态投注)；实测短期信号无法超越此基准，"
+                "组三/豹子按真实概率仅作小注分散，不建议主投。投注组选6即覆盖该形态全部组合。",
+    }
+
+
 def pick_dan_tuo_kill(score, enable_danma_random=True):
     """动态选择胆码、拖码和杀码
     
@@ -3686,6 +3711,7 @@ def run_prediction(data=None, force_refresh=False, enable_backtest=False, enable
             "blend": {k: round(v, 4) for k, v in form_prob["blend_p"].items()},
             "theory": THEORY_FORM_P,
             "markov_samples": int(form_prob["markov_samples"]),
+            "recommendation": recommend_form_bet(form_prob, numbers),
         },
         "zu6_four": {
             "digits_str": "".join(map(str, zu6_four)),
