@@ -301,6 +301,9 @@ class Handler(BaseHTTPRequestHandler):
         elif path == '/api/kl8/backtest':
             params = parse_qs(route.query)
             self._serve_json(self._kl8_backtest_payload(params))
+        elif path == '/api/kl8/parameter-search':
+            params = parse_qs(route.query)
+            self._serve_json(self._kl8_parameter_search_payload(params))
         elif path == '/api/kl8/integrity':
             self._serve_json(self._kl8_integrity_payload())
         elif path == '/api/kl8/conflicts':
@@ -1475,6 +1478,48 @@ class Handler(BaseHTTPRequestHandler):
             self._log.error('快乐8回测失败', exc_info=True)
             return {'error': f'回测失败: {str(e)}'}
 
+    def _kl8_parameter_search_payload(self, params):
+        try:
+            max_candidates_str = (params.get('max_candidates') or ['80'])[0]
+            top_n_str = (params.get('top_n') or ['5'])[0]
+            play_types_str = (params.get('play_types') or [''])[0]
+
+            try:
+                max_candidates = int(max_candidates_str)
+            except ValueError:
+                return {'error': 'max_candidates must be an integer'}
+
+            try:
+                top_n = int(top_n_str)
+            except ValueError:
+                return {'error': 'top_n must be an integer'}
+
+            if max_candidates <= 0:
+                return {'error': 'max_candidates must be > 0'}
+            if top_n <= 0:
+                return {'error': 'top_n must be > 0'}
+
+            play_types = [
+                item.strip()
+                for item in play_types_str.split(',')
+                if item.strip()
+            ] if play_types_str else None
+
+            analyzer = get_kl8_analyzer()
+            if not analyzer.history_data:
+                return {'error': 'no KL8 history data'}
+
+            bt = KL8RollingBacktest(analyzer)
+            result = bt.run_parameter_search(
+                play_types=play_types,
+                max_candidates=max_candidates,
+                top_n=top_n,
+            )
+            return {'result': result}
+        except Exception as e:
+            self._log.error('KL8 parameter search failed', exc_info=True)
+            return {'error': f'parameter search failed: {str(e)}'}
+
     def _kl8_integrity_payload(self):
         """快乐8数据完整性检查"""
         try:
@@ -1504,6 +1549,11 @@ class Handler(BaseHTTPRequestHandler):
             feature_weights: JSON字符串，如 {"frequency":0.12}
             model_weights: JSON字符串，如 {"rank":1.0,"bayesian":0.0,"markov":0.0}
             window_size: 统计窗口大小，如 250
+            repeat_direction: 重号方向 neutral/avoid/follow
+            repeat_avoid_score/repeat_non_avoid_score: 避免重号分数
+            repeat_follow_score/repeat_non_follow_score: 跟随重号分数
+            pool_diversify: 是否启用候选池分散化
+            pool_max_last_numbers: 候选池最多保留上期号码数量
             auto_activate: 是否自动激活（默认false，需人工确认）
             n_permutations: 置换检验次数（默认1000）
         """
@@ -1512,6 +1562,13 @@ class Handler(BaseHTTPRequestHandler):
             feature_weights_json = (params.get('feature_weights') or [''])[0]
             model_weights_json = (params.get('model_weights') or [''])[0]
             window_size_str = (params.get('window_size') or ['0'])[0]
+            repeat_direction = (params.get('repeat_direction') or ['neutral'])[0].strip().lower()
+            repeat_avoid_score_str = (params.get('repeat_avoid_score') or ['0.10'])[0]
+            repeat_non_avoid_score_str = (params.get('repeat_non_avoid_score') or ['0.85'])[0]
+            repeat_follow_score_str = (params.get('repeat_follow_score') or ['0.90'])[0]
+            repeat_non_follow_score_str = (params.get('repeat_non_follow_score') or ['0.50'])[0]
+            pool_diversify_str = (params.get('pool_diversify') or ['true'])[0]
+            pool_max_last_numbers_str = (params.get('pool_max_last_numbers') or [''])[0]
             auto_activate_str = (params.get('auto_activate') or ['false'])[0]
             n_permutations_str = (params.get('n_permutations') or ['1000'])[0]
 
@@ -1536,6 +1593,27 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError:
                 return {'error': 'window_size必须是整数'}
 
+            if repeat_direction not in ('neutral', 'avoid', 'follow'):
+                return {'error': 'repeat_direction必须是 neutral/avoid/follow'}
+
+            try:
+                repeat_avoid_score = float(repeat_avoid_score_str)
+                repeat_non_avoid_score = float(repeat_non_avoid_score_str)
+                repeat_follow_score = float(repeat_follow_score_str)
+                repeat_non_follow_score = float(repeat_non_follow_score_str)
+            except ValueError:
+                return {'error': 'repeat分数参数必须是数字'}
+
+            pool_diversify = pool_diversify_str.lower() in ('true', '1', 'yes', 'on')
+            pool_max_last_numbers = None
+            if pool_max_last_numbers_str.strip():
+                try:
+                    pool_max_last_numbers = int(pool_max_last_numbers_str)
+                except ValueError:
+                    return {'error': 'pool_max_last_numbers必须是整数'}
+                if pool_max_last_numbers < 0:
+                    return {'error': 'pool_max_last_numbers必须大于等于0'}
+
             auto_activate = auto_activate_str.lower() in ('true', '1', 'yes')
 
             try:
@@ -1548,6 +1626,13 @@ class Handler(BaseHTTPRequestHandler):
                 feature_weights=feature_weights,
                 model_weights=model_weights,
                 window_size=window_size,
+                repeat_direction=repeat_direction,
+                repeat_avoid_score=repeat_avoid_score,
+                repeat_non_avoid_score=repeat_non_avoid_score,
+                repeat_follow_score=repeat_follow_score,
+                repeat_non_follow_score=repeat_non_follow_score,
+                pool_diversify=pool_diversify,
+                pool_max_last_numbers=pool_max_last_numbers,
                 auto_activate=auto_activate,
                 n_permutations=n_permutations,
             )

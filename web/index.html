@@ -3791,12 +3791,76 @@ function renderKL8(r) {
   }
 
   // 刷新按钮
-  html += `<div style="display:flex;gap:12px;margin-top:16px">`;
+  html += `<div id="kl8-parameter-search-result"></div>`;
+  html += `<div style="display:flex;gap:12px;margin-top:16px;flex-wrap:wrap">`;
   html += `<button class="kl8-refresh-btn" onclick="refreshKL8()">↻ 重新计算</button>`;
   html += `<button class="kl8-refresh-btn" style="background:#4493f8" onclick="fetchKL8Data()">🔄 抓取最新开奖数据</button>`;
+  html += `<button class="kl8-refresh-btn" style="background:#8957e5" onclick="runKL8ParameterSearch()">参数搜索</button>`;
   html += `</div>`;
 
   appKL8.innerHTML = html;
+}
+
+function renderKL8ParameterSearch(result) {
+  const target = document.getElementById('kl8-parameter-search-result');
+  if (!target) return;
+
+  if (!result || result.error) {
+    target.innerHTML = `<div class="status error" style="margin-top:16px">${esc(result?.error || '参数搜索失败')}</div>`;
+    return;
+  }
+
+  const bestByPlay = result.best_by_play || {};
+  const playTypes = result.play_types || Object.keys(bestByPlay);
+  let html = `<div class="card" style="margin-top:16px;margin-bottom:16px">`;
+  html += `<div class="section-title" style="font-size:15px;margin-bottom:10px">快乐8参数搜索结果</div>`;
+  html += `<div class="note" style="margin-bottom:10px">候选数: ${esc(result.candidate_count || 0)} · 数据期数: ${esc(result.total_periods || '-')} · 仅展示候选，不自动激活</div>`;
+  html += `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px">`;
+
+  for (const playType of playTypes) {
+    const item = bestByPlay[playType];
+    if (!item) continue;
+    const strategy = item.strategy || {};
+    const label = playType.startsWith('select_') ? `选${playType.replace('select_', '')}` : playType;
+    const valLift = Number(item.validation_lift || 0);
+    const finalLift = Number(item.final_test_lift || 0);
+    const liftColor = valLift > 0 ? '#2ea043' : '#f85149';
+    html += `<div class="kl8-select-card" style="border-color:${liftColor}">`;
+    html += `<div class="kl8-select-title">${esc(label)} · ${esc(item.candidate || '-')}</div>`;
+    html += `<div style="font-size:12px;color:var(--muted);margin-bottom:6px">score ${esc(item.score ?? '-')} · window ${esc(strategy.window_size || '-')}</div>`;
+    html += `<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:12px">`;
+    html += `<div>验证Lift: <span style="color:${liftColor};font-weight:700">${valLift.toFixed(4)}</span></div>`;
+    html += `<div>封存Lift: <span style="color:${finalLift > 0 ? '#2ea043' : '#8b949e'};font-weight:700">${finalLift.toFixed(4)}</span></div>`;
+    html += `<div>均值命中: ${esc(item.validation_mean_hits ?? '-')}</div>`;
+    html += `<div>随机基线: ${esc(item.expected_random ?? '-')}</div>`;
+    html += `<div>重号方向: ${esc(strategy.repeat_direction || 'neutral')}</div>`;
+    html += `<div>重号上限: ${esc(strategy.pool_max_last_numbers ?? 'auto')}</div>`;
+    html += `<div>候选池分散: ${strategy.pool_diversify === false ? '关闭' : '开启'}</div>`;
+    html += `<div>ROI: ${esc(item.validation_profit_roi ?? '-')}</div>`;
+    html += `</div>`;
+    html += `</div>`;
+  }
+
+  html += `</div></div>`;
+  target.innerHTML = html;
+}
+
+async function runKL8ParameterSearch() {
+  const target = document.getElementById('kl8-parameter-search-result');
+  if (target) {
+    target.innerHTML = `<div class="status" style="margin-top:16px"><span class="spinner"></span>正在搜索快乐8参数...</div>`;
+  }
+
+  try {
+    const data = await fetchJson('/api/kl8/parameter-search?max_candidates=80&top_n=5&_=' + Date.now());
+    if (data.error) {
+      renderKL8ParameterSearch({ error: data.error });
+      return;
+    }
+    renderKL8ParameterSearch(data.result);
+  } catch (e) {
+    renderKL8ParameterSearch({ error: e.message });
+  }
 }
 
 async function fetchKL8Data() {

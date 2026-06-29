@@ -1,4 +1,7 @@
 import unittest
+import json
+import tempfile
+from pathlib import Path
 
 import src.kl8 as kl8_module
 from src.kl8 import (
@@ -9,6 +12,7 @@ from src.kl8 import (
     _diversify_candidate_pool,
     _compute_next_issue,
     normalize_record,
+    validate_and_activate_strategy,
 )
 
 
@@ -107,6 +111,34 @@ class KL8PredictionGuardTests(unittest.TestCase):
         self.assertIn('error', result)
         self.assertEqual(result['data_quality']['min_required'], KL8_MIN_PREDICTION_PERIODS)
         self.assertEqual(result['data_quality']['reason'], 'insufficient_history')
+
+    def test_strategy_activation_rejects_invalid_repeat_configuration(self):
+        result = validate_and_activate_strategy(
+            'select_5',
+            {'frequency': 1.0},
+            {'rank': 1.0},
+            50,
+            repeat_direction='sideways',
+        )
+        self.assertIn('repeat_direction', result['error'])
+
+        result = validate_and_activate_strategy(
+            'select_5',
+            {'frequency': 1.0},
+            {'rank': 1.0},
+            50,
+            pool_max_last_numbers=-1,
+        )
+        self.assertIn('pool_max_last_numbers', result['error'])
+
+        result = validate_and_activate_strategy(
+            'select_5',
+            {'frequency': 1.0},
+            {'rank': 1.0},
+            50,
+            pool_max_last_numbers=6,
+        )
+        self.assertIn('pick count', result['error'])
 
     def test_predict_all_includes_select_8_9_10_and_fushi_10_11(self):
         analyzer = KL8Analyzer.__new__(KL8Analyzer)
@@ -226,6 +258,70 @@ class KL8PredictionGuardTests(unittest.TestCase):
         self.assertTrue(all(c['repeat_non_follow_score'] == 0.54 for c in captured))
         self.assertTrue(all(c['pool_diversify'] is False for c in captured))
         self.assertTrue(all(c['pool_max_last_numbers'] == 2 for c in captured))
+
+    def test_parameter_search_ranks_best_candidate_per_play(self):
+        analyzer = KL8Analyzer.__new__(KL8Analyzer)
+        analyzer.history_data = [_record(i) for i in range(820, 0, -1)]
+        analyzer.using_simulated_data = False
+        backtest = KL8RollingBacktest(analyzer)
+
+        backtest._build_parameter_search_candidates = lambda max_candidates=80: {
+            'candidate_a': {
+                'strategy_id': 'candidate_a',
+                'feature_weights': {'marker': 'a'},
+                'model_weights': {'rank': 1.0},
+                'window_size': 50,
+            },
+            'candidate_b': {
+                'strategy_id': 'candidate_b',
+                'feature_weights': {'marker': 'b'},
+                'model_weights': {'rank': 1.0},
+                'window_size': 100,
+            },
+        }
+
+        def fake_rolling(feature_weights, model_weights, **kwargs):
+            marker = feature_weights['marker']
+            is_final = kwargs['start_idx'] >= 600
+            if marker == 'a':
+                select_lift = 0.20 if not is_final else 0.04
+                fushi_mean = 3.1 if not is_final else 2.9
+            else:
+                select_lift = 0.10 if not is_final else 0.30
+                fushi_mean = 3.6 if not is_final else 3.4
+            return {
+                'select_5': {
+                    'lift': select_lift,
+                    'mean_hits': 1.25,
+                    'expected_random': 1.25,
+                    'profit_roi': -0.2,
+                    'random_profit_roi': -0.3,
+                    'return_multiple': 0.8,
+                    'n_tests': 100,
+                },
+                'fu_shi_10_11': {
+                    'pool_mean_hits': fushi_mean,
+                    'pool_expected_random': 2.75,
+                    'profit_roi': -0.1,
+                    'random_profit_roi': -0.4,
+                    'return_multiple': 0.9,
+                    'n_tests': 100,
+                },
+            }
+
+        backtest._rolling_backtest_parametric = fake_rolling
+
+        result = backtest.run_parameter_search(
+            play_types=['select_5', 'fu_shi_10_11'],
+            max_candidates=2,
+            top_n=2,
+        )
+
+        self.assertNotIn('error', result)
+        self.assertEqual(result['candidate_count'], 2)
+        self.assertEqual(result['best_by_play']['select_5']['candidate'], 'candidate_a')
+        self.assertEqual(result['best_by_play']['fu_shi_10_11']['candidate'], 'candidate_b')
+        self.assertEqual(len(result['rankings']['select_5']), 2)
 
     def test_per_play_tournament_final_test_uses_strategy_pool_config(self):
         analyzer = KL8Analyzer.__new__(KL8Analyzer)
@@ -361,6 +457,66 @@ class KL8PredictionGuardTests(unittest.TestCase):
         self.assertEqual(by_marker['first']['pool_max_last_numbers'], 2)
         self.assertTrue(by_marker['second']['pool_diversify'])
         self.assertEqual(by_marker['second']['pool_max_last_numbers'], 7)
+
+    def test_settlement_includes_select_8_9_10_and_fushi_10_11(self):
+        analyzer = KL8Analyzer.__new__(KL8Analyzer)
+        analyzer.history_data = [_record(i) for i in range(20, 0, -1)]
+        analyzer.using_simulated_data = False
+
+        snapshot = {
+            'snapshot_id': 'settle-new-plays',
+            'based_on_issue': '2026001',
+            'select_8': list(range(1, 9)),
+            'select_9': list(range(1, 10)),
+            'select_10': list(range(1, 11)),
+            'fu_shi_10_11': list(range(1, 12)),
+            'play_strategies': {},
+            'prediction_modes': {},
+            'resolved_strategies': {},
+        }
+
+        original_snapshot_dir = kl8_module.KL8_SNAPSHOT_DIR
+        original_settlement_dir = kl8_module.KL8_SETTLEMENT_DIR
+
+        with tempfile.TemporaryDirectory() as tmp:
+            snapshot_dir = Path(tmp) / 'snapshots'
+            settlement_dir = Path(tmp) / 'settlements'
+            snapshot_dir.mkdir()
+            settlement_dir.mkdir()
+            snapshot_path = snapshot_dir / 'snapshot_new_plays.json'
+            snapshot_path.write_text(json.dumps(snapshot), encoding='utf-8')
+
+            try:
+                kl8_module.KL8_SNAPSHOT_DIR = str(snapshot_dir)
+                kl8_module.KL8_SETTLEMENT_DIR = str(settlement_dir)
+
+                result = analyzer.settle_prediction(
+                    snapshot_path.name,
+                    '2026002',
+                    list(range(1, 21)),
+                )
+            finally:
+                kl8_module.KL8_SNAPSHOT_DIR = original_snapshot_dir
+                kl8_module.KL8_SETTLEMENT_DIR = original_settlement_dir
+
+        self.assertTrue(result['success'])
+        settlement = result['settlement']
+
+        self.assertEqual(settlement['hit_select_8'], 8)
+        self.assertEqual(settlement['hit_select_9'], 9)
+        self.assertEqual(settlement['hit_select_10'], 10)
+        self.assertEqual(settlement['prize_settlement']['select_8']['prize'], 1000000)
+        self.assertEqual(settlement['prize_settlement']['select_9']['prize'], 3000000)
+        self.assertEqual(settlement['prize_settlement']['select_10']['prize'], 5000000)
+
+        fushi = settlement['fushi_settlement']['fu_shi_10_11']
+        self.assertTrue(fushi['placed'])
+        self.assertEqual(fushi['pool_hits'], 11)
+        self.assertEqual(fushi['max_combo_hits'], 10)
+        self.assertEqual(fushi['total_combinations'], 11)
+        self.assertEqual(fushi['total_bet'], 22)
+        self.assertEqual(fushi['total_prize'], 55000000)
+        self.assertEqual(fushi['hit_distribution'], {10: 11})
 
 
 if __name__ == '__main__':

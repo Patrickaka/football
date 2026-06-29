@@ -666,6 +666,8 @@ def validate_and_activate_strategy(
         验证报告 Dict，包含各条件是否通过、最终建议、以及（若auto_activate=True且通过）激活结果
     """
     # ── 参数校验 ──
+    repeat_direction = (repeat_direction or 'neutral').strip().lower()
+
     valid_play_types = list(ACTIVE_STRATEGIES.keys())
     if play_type not in valid_play_types:
         return {
@@ -688,6 +690,24 @@ def validate_and_activate_strategy(
         return {'error': 'window_size必须为正整数'}
 
     # ── 获取数据 ──
+    if repeat_direction not in ('neutral', 'avoid', 'follow'):
+        return {'error': 'repeat_direction must be neutral/avoid/follow'}
+
+    repeat_scores = (
+        repeat_avoid_score,
+        repeat_non_avoid_score,
+        repeat_follow_score,
+        repeat_non_follow_score,
+    )
+    if any(not math.isfinite(score) for score in repeat_scores):
+        return {'error': 'repeat score parameters must be finite numbers'}
+
+    if pool_max_last_numbers is not None:
+        if pool_max_last_numbers < 0:
+            return {'error': 'pool_max_last_numbers must be >= 0'}
+        if pool_max_last_numbers > pick_n:
+            return {'error': f'pool_max_last_numbers must be <= pick count ({pick_n})'}
+
     analyzer = get_kl8_analyzer()
     if not analyzer.history_data:
         return {'error': '历史数据不足，无法验证策略'}
@@ -3930,6 +3950,164 @@ class KL8RollingBacktest:
         return results
 
     # ─── 稳定性门槛 ───
+
+    def _build_parameter_search_candidates(
+        self,
+        window_sizes: Optional[List[int]] = None,
+        repeat_directions: Optional[List[str]] = None,
+        repeat_caps: Optional[List[Optional[int]]] = None,
+        pool_diversify_options: Optional[List[bool]] = None,
+        max_candidates: int = 80,
+    ) -> Dict[str, Dict]:
+        window_sizes = window_sizes or [50, 100, 150, 250]
+        repeat_directions = repeat_directions or ['neutral', 'follow', 'avoid']
+        repeat_caps = repeat_caps or [None, 1, 2, 3, 5]
+        pool_diversify_options = pool_diversify_options or [True, False]
+
+        profiles = {
+            'freq': {'frequency': 1.0, 'gap': 0.0, 'position_residual': 0.0, 'road_residual': 0.0, 'repeat': 0.0, 'odd_even': 0.0, 'big_small': 0.0},
+            'freq_gap': {'frequency': 0.55, 'gap': 0.45, 'position_residual': 0.0, 'road_residual': 0.0, 'repeat': 0.0, 'odd_even': 0.0, 'big_small': 0.0},
+            'freq_position': {'frequency': 0.70, 'gap': 0.0, 'position_residual': 0.30, 'road_residual': 0.0, 'repeat': 0.0, 'odd_even': 0.0, 'big_small': 0.0},
+            'freq_road': {'frequency': 0.75, 'gap': 0.0, 'position_residual': 0.0, 'road_residual': 0.25, 'repeat': 0.0, 'odd_even': 0.0, 'big_small': 0.0},
+            'freq_repeat': {'frequency': 0.60, 'gap': 0.0, 'position_residual': 0.0, 'road_residual': 0.0, 'repeat': 0.15, 'odd_even': 0.0, 'big_small': 0.0},
+        }
+
+        candidates = {}
+        for profile_name, feature_weights in profiles.items():
+            for window_size in window_sizes:
+                for repeat_direction in repeat_directions:
+                    for pool_diversify in pool_diversify_options:
+                        for repeat_cap in repeat_caps:
+                            if len(candidates) >= max_candidates:
+                                return candidates
+                            suffix = 'none' if repeat_cap is None else str(repeat_cap)
+                            name = f'{profile_name}_w{window_size}_{repeat_direction}_cap{suffix}_div{int(pool_diversify)}'
+                            candidates[name] = {
+                                'strategy_id': f'grid_{name}',
+                                'feature_weights': dict(feature_weights),
+                                'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
+                                'window_size': window_size,
+                                'repeat_direction': repeat_direction,
+                                'repeat_avoid_score': 0.10,
+                                'repeat_non_avoid_score': 0.85,
+                                'repeat_follow_score': 0.90,
+                                'repeat_non_follow_score': 0.50,
+                                'pool_diversify': pool_diversify,
+                                'pool_max_last_numbers': repeat_cap,
+                            }
+        return candidates
+
+    def run_parameter_search(
+        self,
+        play_types: Optional[List[str]] = None,
+        max_candidates: int = 80,
+        top_n: int = 5,
+    ) -> Dict:
+        history = self.analyzer.history_data
+        n = len(history)
+        if n < BACKTEST_TOTAL_REQUIRED_PERIODS:
+            return {
+                'error': f'not enough history, need {BACKTEST_TOTAL_REQUIRED_PERIODS}, got {n}',
+                'total_periods': n,
+            }
+
+        try:
+            split = self._split_three_stage(n)
+        except ValueError as e:
+            return {'error': str(e), 'total_periods': n}
+
+        requested = play_types or list(SELECT_PLAY_KEYS) + list(FUSHI_PLAY_KEYS)
+        valid = set(SELECT_PLAY_KEYS) | set(FUSHI_PLAY_KEYS)
+        target_play_types = [pt for pt in requested if pt in valid]
+        if not target_play_types:
+            return {'error': 'no valid play_types', 'valid_play_types': sorted(valid)}
+
+        candidates = self._build_parameter_search_candidates(max_candidates=max_candidates)
+        rankings = {pt: [] for pt in target_play_types}
+        val_range = split['val']
+        final_range = split['final_test']
+
+        for name, strategy in candidates.items():
+            fw = strategy.get('feature_weights', {})
+            mw = strategy.get('model_weights', {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0})
+            kwargs = {
+                'min_train': 50,
+                'window_size': strategy.get('window_size', KL8_DEFAULT_HISTORY),
+                'repeat_direction': strategy.get('repeat_direction', 'neutral'),
+                'repeat_avoid_score': strategy.get('repeat_avoid_score', 0.10),
+                'repeat_non_avoid_score': strategy.get('repeat_non_avoid_score', 0.85),
+                'repeat_follow_score': strategy.get('repeat_follow_score', 0.90),
+                'repeat_non_follow_score': strategy.get('repeat_non_follow_score', 0.50),
+                'pool_diversify': strategy.get('pool_diversify', True),
+                'pool_max_last_numbers': strategy.get('pool_max_last_numbers'),
+            }
+            val_result = self._rolling_backtest_parametric(
+                fw,
+                mw,
+                start_idx=val_range[0],
+                end_idx=val_range[1],
+                **kwargs,
+            )
+            if 'error' in val_result:
+                continue
+
+            final_result = self._rolling_backtest_parametric(
+                fw,
+                mw,
+                start_idx=final_range[0],
+                end_idx=final_range[1],
+                **kwargs,
+            )
+            if 'error' in final_result:
+                final_result = {}
+
+            for play_type in target_play_types:
+                val_metrics = val_result.get(play_type, {})
+                final_metrics = final_result.get(play_type, {})
+                val_lift = _play_lift(val_result, play_type)
+                final_lift = _play_lift(final_result, play_type) if final_result else 0
+                val_roi = val_metrics.get('profit_roi', 0)
+                random_roi = val_metrics.get('random_profit_roi', 0)
+                score = val_lift + max(final_lift, 0) * 0.25 + max(val_roi - random_roi, 0) * 0.05
+
+                rankings[play_type].append({
+                    'candidate': name,
+                    'strategy': dict(strategy),
+                    'score': round(score, 6),
+                    'validation_lift': round(val_lift, 6),
+                    'final_test_lift': round(final_lift, 6),
+                    'validation_profit_roi': val_roi,
+                    'random_profit_roi': random_roi,
+                    'validation_mean_hits': val_metrics.get('mean_hits', val_metrics.get('pool_mean_hits')),
+                    'expected_random': val_metrics.get('expected_random', val_metrics.get('pool_expected_random')),
+                    'validation_return_multiple': val_metrics.get('return_multiple'),
+                    'final_test_mean_hits': final_metrics.get('mean_hits', final_metrics.get('pool_mean_hits')),
+                    'n_tests': val_metrics.get('n_tests'),
+                })
+
+        best_by_play = {}
+        for play_type, items in rankings.items():
+            items.sort(
+                key=lambda item: (
+                    item.get('score', 0),
+                    item.get('validation_lift', 0),
+                    item.get('final_test_lift', 0),
+                ),
+                reverse=True,
+            )
+            best_by_play[play_type] = items[0] if items else None
+            rankings[play_type] = items[:top_n]
+
+        return {
+            'total_periods': n,
+            'split': split,
+            'candidate_count': len(candidates),
+            'play_types': target_play_types,
+            'best_by_play': best_by_play,
+            'rankings': rankings,
+            'note': 'parameter search only reports candidates; it does not activate strategies',
+            'version': KL8_PREDICTOR_VERSION,
+        }
 
     def check_stability_gate(
         self,
