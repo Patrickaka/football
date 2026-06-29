@@ -3878,6 +3878,7 @@ function renderFootballDiagnostics(diagnostics) {
   if (!diagnostics || !diagnostics.windows) return '';
 
   const windows = diagnostics.windows || {};
+  const availableSamples = diagnostics.available_samples || 0;
   const latestKey = diagnostics.latest_window && windows[diagnostics.latest_window]
     ? diagnostics.latest_window
     : Object.keys(windows)[0];
@@ -3889,6 +3890,25 @@ function renderFootballDiagnostics(diagnostics) {
   const audit = diagnostics.audit || {};
   const sync = diagnostics.sync || {};
   const hasDeltas = Object.keys(deltas).length > 0;
+
+  if (availableSamples <= 0) {
+    return `<div class="card model-health">
+      <h3>预测诊断与赛后复盘</h3>
+      <div class="diag-panels">
+        <div class="diag-panel">
+          <div class="diag-title">复盘状态</div>
+          <div class="diag-main empty">暂无可复盘样本</div>
+          <div class="diag-line">已回填 ${sync.settled || 0} 场，待同步 ${sync.pending_sync || 0} 场</div>
+          <div class="diag-line">审计问题 ${audit.issue_count || 0} 项</div>
+        </div>
+        <div class="diag-panel">
+          <div class="diag-title">下一步</div>
+          <div class="diag-line">先点击“立即同步一次”更新已完赛比分</div>
+          <div class="diag-line">若仍有大量审计问题，再执行“复盘+修复”</div>
+        </div>
+      </div>
+    </div>`;
+  }
 
   const windowRows = Object.entries(windows).map(([key, report]) => {
     const item = report.summary || {};
@@ -3918,6 +3938,7 @@ function renderFootballDiagnostics(diagnostics) {
   return `<div class="card model-health">
     <h3>预测诊断与赛后复盘</h3>
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px;margin-bottom:12px">
+      <div class="status-item"><span class="status-dot">N</span><div><div class="status-name">可用样本</div><div class="status-desc">${availableSamples} 场</div></div></div>
       <div class="status-item"><span class="status-dot">1</span><div><div class="status-name">Top1</div><div class="status-desc">${fmtPctValue(summary.top1_hit_rate)}</div></div></div>
       <div class="status-item"><span class="status-dot">3</span><div><div class="status-name">Top3</div><div class="status-desc">${fmtPctValue(summary.top3_hit_rate)}</div></div></div>
       <div class="status-item"><span class="status-dot">G</span><div><div class="status-name">进球数</div><div class="status-desc">${fmtPctValue(summary.hit_rate_total)}</div></div></div>
@@ -3969,7 +3990,8 @@ async function loadPredictions() {
     const sync = syncStatus.result || {};
     const records = recordsData.result?.records || [];
     const diagnostics = diagnosticsData.result || {};
-    const syncStamp = formatSyncStamp(sync.last_sync_at);
+    const settledAt = sync.last_settled_at || '';
+    const syncStamp = formatSyncStamp(settledAt);
     
     let html = '';
     
@@ -3997,10 +4019,10 @@ async function loadPredictions() {
           <div class="status-desc">${sync.failed || 0} 场</div>
         </div>
       </div>
-      <div class="status-item sync-stamp ${syncStamp.state}" data-sync-at="${esc(sync.last_sync_at || '')}">
+      <div class="status-item sync-stamp ${syncStamp.state}" data-sync-at="${esc(settledAt)}">
         <span class="status-dot">🕐</span>
         <div>
-          <div class="status-name">最近同步</div>
+          <div class="status-name">最近比分回填</div>
           <div class="status-desc" data-sync-age>${esc(syncStamp.text)}</div>
           <div class="status-desc" data-sync-detail style="font-size:11px">${esc(syncStamp.detail)}</div>
         </div>

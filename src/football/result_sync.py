@@ -874,7 +874,9 @@ class PredictionHistory:
                     record['actual_result'] = actual_result
                     record['result_quality'] = result_quality
                     record['settled'] = True
-                    record['settled_at'] = datetime.now().isoformat()
+                    settled_at = datetime.now().isoformat()
+                    record['settled_at'] = settled_at
+                    record['last_sync_at'] = settled_at
                     record['sync_status'] = 'synced'
                     
                     # 处理半场比分
@@ -1006,6 +1008,7 @@ class PredictionHistory:
         ignored = 0
         
         last_sync = None
+        last_settled = None
         
         for record in self.records:
             status = record.get('sync_status', 'pending')
@@ -1031,6 +1034,16 @@ class PredictionHistory:
                         last_sync = sync_time
                 except:
                     pass
+
+            if status == 'synced':
+                settled_at = record.get('settled_at') or record.get('last_sync_at')
+                if settled_at:
+                    try:
+                        settled_time = datetime.fromisoformat(settled_at)
+                        if last_settled is None or settled_time > last_settled:
+                            last_settled = settled_time
+                    except:
+                        pass
         
         return {
             'total': len(self.records),
@@ -1040,6 +1053,7 @@ class PredictionHistory:
             'failed': failed,
             'ignored': ignored,
             'last_sync_at': last_sync.isoformat() if last_sync else None,
+            'last_settled_at': last_settled.isoformat() if last_settled else None,
         }
 
     def repair_future_settlements(self, minutes: int = 180) -> Dict:
