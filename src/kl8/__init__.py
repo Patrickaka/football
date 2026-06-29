@@ -200,15 +200,6 @@ VALIDATION_CANDIDATES = {
         'window_size': 250,
         'repeat_direction': 'neutral',
     },
-    'repeat_avoid_100': {
-        'strategy_id': 'candidate_repeat_avoid_100',
-        'feature_weights': {'frequency': 0.60, 'position_residual': 0.0, 'road_residual': 0.0, 'repeat': 0.25, 'odd_even': 0.0, 'big_small': 0.0},
-        'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
-        'window_size': 100,
-        'repeat_direction': 'avoid',
-        'repeat_avoid_score': 0.10,
-        'repeat_non_avoid_score': 0.85,
-    },
     'repeat_follow_100': {
         'strategy_id': 'candidate_repeat_follow_100',
         'feature_weights': {'frequency': 0.60, 'position_residual': 0.0, 'road_residual': 0.0, 'repeat': 0.15, 'odd_even': 0.0, 'big_small': 0.0},
@@ -217,6 +208,7 @@ VALIDATION_CANDIDATES = {
         'repeat_direction': 'follow',
         'repeat_follow_score': 0.90,
         'repeat_non_follow_score': 0.50,
+        'pool_max_last_numbers': 7,
     },
     'position_100': {
         'strategy_id': 'candidate_position_100',
@@ -234,6 +226,96 @@ VALIDATION_CANDIDATES = {
     },
 }
 
+# Broaden the fixed validation slate without changing activation gates.
+# These variants let the tournament test gap, mixed features, repeat-follow
+# windows and candidate-pool post-processing instead of relying on one shape.
+VALIDATION_CANDIDATES.update({
+    'gap_50': {
+        'strategy_id': 'candidate_gap_50',
+        'feature_weights': {'frequency': 0.0, 'gap': 1.0, 'position_residual': 0.0, 'road_residual': 0.0, 'repeat': 0.0, 'odd_even': 0.0, 'big_small': 0.0},
+        'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
+        'window_size': 50,
+        'repeat_direction': 'neutral',
+    },
+    'gap_100': {
+        'strategy_id': 'candidate_gap_100',
+        'feature_weights': {'frequency': 0.0, 'gap': 1.0, 'position_residual': 0.0, 'road_residual': 0.0, 'repeat': 0.0, 'odd_even': 0.0, 'big_small': 0.0},
+        'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
+        'window_size': 100,
+        'repeat_direction': 'neutral',
+    },
+    'freq_gap_75': {
+        'strategy_id': 'candidate_freq_gap_75',
+        'feature_weights': {'frequency': 0.55, 'gap': 0.45, 'position_residual': 0.0, 'road_residual': 0.0, 'repeat': 0.0, 'odd_even': 0.0, 'big_small': 0.0},
+        'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
+        'window_size': 75,
+        'repeat_direction': 'neutral',
+    },
+    'freq_gap_150': {
+        'strategy_id': 'candidate_freq_gap_150',
+        'feature_weights': {'frequency': 0.55, 'gap': 0.45, 'position_residual': 0.0, 'road_residual': 0.0, 'repeat': 0.0, 'odd_even': 0.0, 'big_small': 0.0},
+        'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
+        'window_size': 150,
+        'repeat_direction': 'neutral',
+    },
+    'repeat_follow_50': {
+        'strategy_id': 'candidate_repeat_follow_50',
+        'feature_weights': {'frequency': 0.60, 'gap': 0.0, 'position_residual': 0.0, 'road_residual': 0.0, 'repeat': 0.15, 'odd_even': 0.0, 'big_small': 0.0},
+        'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
+        'window_size': 50,
+        'repeat_direction': 'follow',
+        'repeat_follow_score': 0.90,
+        'repeat_non_follow_score': 0.50,
+    },
+    'repeat_follow_150': {
+        'strategy_id': 'candidate_repeat_follow_150',
+        'feature_weights': {'frequency': 0.60, 'gap': 0.0, 'position_residual': 0.0, 'road_residual': 0.0, 'repeat': 0.15, 'odd_even': 0.0, 'big_small': 0.0},
+        'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
+        'window_size': 150,
+        'repeat_direction': 'follow',
+        'repeat_follow_score': 0.90,
+        'repeat_non_follow_score': 0.50,
+    },
+    'position_repeat_follow_100': {
+        'strategy_id': 'candidate_position_repeat_follow_100',
+        'feature_weights': {'frequency': 0.50, 'gap': 0.0, 'position_residual': 0.25, 'road_residual': 0.0, 'repeat': 0.15, 'odd_even': 0.0, 'big_small': 0.0},
+        'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
+        'window_size': 100,
+        'repeat_direction': 'follow',
+        'repeat_follow_score': 0.90,
+        'repeat_non_follow_score': 0.50,
+    },
+    'road_repeat_follow_100': {
+        'strategy_id': 'candidate_road_repeat_follow_100',
+        'feature_weights': {'frequency': 0.50, 'gap': 0.0, 'position_residual': 0.0, 'road_residual': 0.25, 'repeat': 0.15, 'odd_even': 0.0, 'big_small': 0.0},
+        'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
+        'window_size': 100,
+        'repeat_direction': 'follow',
+        'repeat_follow_score': 0.90,
+        'repeat_non_follow_score': 0.50,
+    },
+    'repeat_follow_100_no_diversify': {
+        'strategy_id': 'candidate_repeat_follow_100_no_diversify',
+        'feature_weights': {'frequency': 0.60, 'gap': 0.0, 'position_residual': 0.0, 'road_residual': 0.0, 'repeat': 0.15, 'odd_even': 0.0, 'big_small': 0.0},
+        'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
+        'window_size': 100,
+        'repeat_direction': 'follow',
+        'repeat_follow_score': 0.90,
+        'repeat_non_follow_score': 0.50,
+        'pool_diversify': False,
+    },
+    'repeat_follow_100_repeat_cap3': {
+        'strategy_id': 'candidate_repeat_follow_100_repeat_cap3',
+        'feature_weights': {'frequency': 0.60, 'gap': 0.0, 'position_residual': 0.0, 'road_residual': 0.0, 'repeat': 0.15, 'odd_even': 0.0, 'big_small': 0.0},
+        'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
+        'window_size': 100,
+        'repeat_direction': 'follow',
+        'repeat_follow_score': 0.90,
+        'repeat_non_follow_score': 0.50,
+        'pool_max_last_numbers': 3,
+    },
+})
+
 # v9.2: CANDIDATE_STRATEGIES 保留为 VALIDATION_CANDIDATES 的别名（向后兼容）
 CANDIDATE_STRATEGIES = VALIDATION_CANDIDATES
 
@@ -244,7 +326,6 @@ ABLATION_FEATURES = {
     'frequency': 1.0,
     'position_residual': 1.0,
     'road_residual': 1.0,
-    'repeat_avoid': 0.25,   # repeat方向=avoid
     'repeat_follow': 0.15,  # repeat方向=follow
 }
 
@@ -361,9 +442,7 @@ def resolve_play_strategy(play_type: str, allow_reference: bool = False) -> Opti
             'feature_weights': {'frequency': 0.6, 'gap': 0.4, 'position_residual': 0.0, 'road_residual': 0.0, 'repeat': 0.0, 'odd_even': 0.0, 'big_small': 0.0},
             'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
             'window_size': 50,
-            'repeat_direction': 'avoid',
-            'repeat_avoid_score': 0.10,
-            'repeat_non_avoid_score': 0.85,
+            'repeat_direction': 'neutral',
             'prediction_mode': 'reference_unvalidated',
             'is_validated': False,
         },
@@ -372,9 +451,7 @@ def resolve_play_strategy(play_type: str, allow_reference: bool = False) -> Opti
             'feature_weights': {'frequency': 0.5, 'gap': 0.5, 'position_residual': 0.0, 'road_residual': 0.0, 'repeat': 0.0, 'odd_even': 0.0, 'big_small': 0.0},
             'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
             'window_size': 100,
-            'repeat_direction': 'avoid',
-            'repeat_avoid_score': 0.10,
-            'repeat_non_avoid_score': 0.85,
+            'repeat_direction': 'neutral',
             'prediction_mode': 'reference_unvalidated',
             'is_validated': False,
         },
@@ -394,9 +471,7 @@ def resolve_play_strategy(play_type: str, allow_reference: bool = False) -> Opti
             'feature_weights': {'frequency': 0.4, 'gap': 0.2, 'position_residual': 0.3, 'road_residual': 0.1, 'repeat': 0.0, 'odd_even': 0.0, 'big_small': 0.0},
             'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
             'window_size': 100,
-            'repeat_direction': 'avoid',
-            'repeat_avoid_score': 0.08,
-            'repeat_non_avoid_score': 0.88,
+            'repeat_direction': 'neutral',
             'prediction_mode': 'reference_unvalidated',
             'is_validated': False,
         },
@@ -416,9 +491,7 @@ def resolve_play_strategy(play_type: str, allow_reference: bool = False) -> Opti
             'feature_weights': {'frequency': 0.45, 'gap': 0.35, 'position_residual': 0.1, 'road_residual': 0.1, 'repeat': 0.0, 'odd_even': 0.0, 'big_small': 0.0},
             'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
             'window_size': 100,
-            'repeat_direction': 'avoid',
-            'repeat_avoid_score': 0.05,
-            'repeat_non_avoid_score': 0.90,
+            'repeat_direction': 'neutral',
             'prediction_mode': 'reference_unvalidated',
             'is_validated': False,
         },
@@ -933,16 +1006,28 @@ def _clean_pick_numbers(numbers, expected_len: int) -> List[int]:
     return nums
 
 
+def _default_repeat_cap(target_size: int) -> int:
+    """Default cap for numbers repeated from the previous draw.
+
+    KL8 draws 20 out of 80, so each previous number has about a 25% chance to
+    repeat. The cap allows normal overlap without letting repeats dominate.
+    """
+    if target_size <= 0:
+        return 0
+    return max(1, min(target_size, math.ceil(target_size * 0.40)))
+
+
 def _diversify_candidate_pool(
     candidates: List[Tuple[int, float]],
     target_size: int,
     last_numbers: Optional[set] = None,
+    max_last_numbers: Optional[int] = None,
 ) -> List[Tuple[int, float]]:
     """Lightly diversify candidates when scores are close.
 
-    KL8 draws 20/80 numbers, so an overly concentrated top pool tends to add
-    avoidable structural risk. This keeps score order as the first priority,
-    then limits zone, 012-road and repeat concentration.
+    KL8 naturally repeats numbers from the previous draw. This keeps score
+    order as the first priority, then limits zone, 012-road and repeat
+    concentration without trying to avoid repeats outright.
     """
     if target_size <= 0 or not candidates:
         return []
@@ -950,7 +1035,8 @@ def _diversify_candidate_pool(
     last_numbers = last_numbers or set()
     max_zone = max(2, math.ceil(target_size / 8) + 1)
     max_road = max(3, math.ceil(target_size / 3) + 1)
-    max_repeat = max(1, min(target_size, round(target_size * 0.35)))
+    default_repeat_cap = _default_repeat_cap(target_size)
+    max_repeat = default_repeat_cap if max_last_numbers is None else max(0, min(target_size, int(max_last_numbers)))
 
     selected = []
     deferred = []
@@ -979,7 +1065,7 @@ def _diversify_candidate_pool(
             deferred.append((num, score))
 
     seen = {num for num, _ in selected}
-    deferred.sort(key=lambda item: (item[0] in last_numbers, -item[1], item[0]))
+    deferred.sort(key=lambda item: (-item[1], item[0]))
     for num, score in deferred:
         if num not in seen:
             selected.append((num, score))
@@ -1147,7 +1233,8 @@ def _strategy_fingerprint(strategy: Dict) -> str:
         'repeat_non_avoid_score': strategy.get('repeat_non_avoid_score', 0.85),
         'repeat_follow_score': strategy.get('repeat_follow_score', 0.90),
         'repeat_non_follow_score': strategy.get('repeat_non_follow_score', 0.50),
-        'pool_diversify_enabled': True,  # 当前全局强制开启分散化
+        'pool_diversify_enabled': strategy.get('pool_diversify', True),
+        'pool_max_last_numbers': strategy.get('pool_max_last_numbers'),
         'code_version': KL8_PREDICTOR_VERSION,
     }
     return hashlib.sha256(
@@ -1850,6 +1937,8 @@ class KL8Analyzer:
         repeat_non_avoid_score: float = 0.85,
         repeat_follow_score: float = 0.90,
         repeat_non_follow_score: float = 0.50,
+        pool_diversify: bool = True,
+        pool_max_last_numbers: Optional[int] = None,
     ) -> Dict:
         """多模型集成投票
 
@@ -1909,18 +1998,23 @@ class KL8Analyzer:
                 votes[num] += vote_weight
 
         candidates = sorted(votes.items(), key=lambda x: (-x[1], x[0]))
-        candidate_pool = _diversify_candidate_pool(
-            candidates,
-            max(top_n, 7),
-            self.statistics.get('last_numbers', set()),
-        )
+        if pool_diversify:
+            candidate_pool = _diversify_candidate_pool(
+                candidates,
+                max(top_n, 7),
+                self.statistics.get('last_numbers', set()),
+                max_last_numbers=pool_max_last_numbers,
+            )
+        else:
+            candidate_pool = candidates[:max(top_n, 7)]
         selected = [num for num, _ in candidate_pool[:pick_n]]
 
         return {
             'selected': selected,
             'candidates': candidate_pool,
             'votes': dict(votes),
-            'diversified': True,
+            'diversified': pool_diversify,
+            'pool_max_last_numbers': pool_max_last_numbers,
             'raw_candidate_count': len(candidates),
             'version': KL8_PREDICTOR_VERSION,
         }
@@ -1936,6 +2030,8 @@ class KL8Analyzer:
         repeat_non_avoid_score: float = 0.85,
         repeat_follow_score: float = 0.90,
         repeat_non_follow_score: float = 0.50,
+        pool_diversify: bool = True,
+        pool_max_last_numbers: Optional[int] = None,
     ) -> Dict:
         """选5复式7码"""
         vote_result = self.multi_model_voting(
@@ -2379,6 +2475,8 @@ class KL8Analyzer:
             repeat_non_avoid_score=repeat_non_avoid_score,
             repeat_follow_score=repeat_follow_score,
             repeat_non_follow_score=repeat_non_follow_score,
+            pool_diversify=strategy.get('pool_diversify', True),
+            pool_max_last_numbers=strategy.get('pool_max_last_numbers'),
         )
 
     # ─── 综合预测（v9.1: 各玩法独立候选池 + 本期变化对比）───
@@ -2454,6 +2552,8 @@ class KL8Analyzer:
                 'repeat_non_avoid_score': strategy.get('repeat_non_avoid_score', 0.85),
                 'repeat_follow_score': strategy.get('repeat_follow_score', 0.90),
                 'repeat_non_follow_score': strategy.get('repeat_non_follow_score', 0.50),
+                'pool_diversify': strategy.get('pool_diversify', True),
+                'pool_max_last_numbers': strategy.get('pool_max_last_numbers'),
                 'prediction_mode': strategy['prediction_mode'],
                 'is_validated': strategy['is_validated'],
             }
@@ -2468,10 +2568,20 @@ class KL8Analyzer:
                 'strategy_id': strategy['strategy_id'],
             }
 
-            if len(pool_top) >= select_type:
-                numbers = pool_top[:select_type]
-            else:
-                numbers = pool_top  # 不够时用全部
+            final_repeat_cap = strategy.get(
+                'final_max_last_numbers',
+                min(
+                    strategy.get('pool_max_last_numbers', _default_repeat_cap(select_type)) or _default_repeat_cap(select_type),
+                    _default_repeat_cap(select_type),
+                )
+            )
+            final_pool = _diversify_candidate_pool(
+                pool_candidates,
+                select_type,
+                self.statistics.get('last_numbers', set()),
+                max_last_numbers=final_repeat_cap,
+            )
+            numbers = [num for num, _ in final_pool]
 
             results[s_key] = {
                 'desc': config['desc'],
@@ -2517,6 +2627,8 @@ class KL8Analyzer:
                 'repeat_non_avoid_score': strategy.get('repeat_non_avoid_score', 0.85),
                 'repeat_follow_score': strategy.get('repeat_follow_score', 0.90),
                 'repeat_non_follow_score': strategy.get('repeat_non_follow_score', 0.50),
+                'pool_diversify': strategy.get('pool_diversify', True),
+                'pool_max_last_numbers': strategy.get('pool_max_last_numbers'),
                 'prediction_mode': strategy['prediction_mode'],
                 'is_validated': strategy['is_validated'],
             }
@@ -3002,6 +3114,8 @@ class KL8RollingBacktest:
         repeat_non_avoid_score: float = 0.85,
         repeat_follow_score: float = 0.90,
         repeat_non_follow_score: float = 0.50,
+        pool_diversify: bool = True,
+        pool_max_last_numbers: Optional[int] = None,
     ) -> Dict:
         """纯参数化滚动回测（v6: 使用multi_model_voting管道，model_weights真正生效）
 
@@ -3061,6 +3175,8 @@ class KL8RollingBacktest:
                 repeat_non_avoid_score=repeat_non_avoid_score,
                 repeat_follow_score=repeat_follow_score,
                 repeat_non_follow_score=repeat_non_follow_score,
+                pool_diversify=pool_diversify,
+                pool_max_last_numbers=pool_max_last_numbers,
             )
 
             # 无信号时，该期命中数记录为0
@@ -3072,26 +3188,39 @@ class KL8RollingBacktest:
                 continue
 
             # v6: 从投票结果截取top20（与线上逻辑一致）
-            top20 = [num for num, _ in vote.get('candidates', [])]
+            candidate_items = vote.get('candidates', [])
+            top20 = [num for num, _ in candidate_items]
 
-            if len(top20) < 7:
-                # 号码不足7个，无法做复式
-                for select_type in [3, 4, 5, 6, 7]:
-                    top_nums = top20[:select_type] if len(top20) >= select_type else []
-                    hits = len(set(top_nums) & actual_numbers) if top_nums else 0
-                    all_hits[select_type].append(hits)
-                all_fu_shi_7_pool_hits.append(0)
-                all_fu_shi_7_combo_hits_detail.append([])
-                continue
-
-            # 后续选3/5/7都从同一份top20截取
+            # 后续选3/5/7都从同一份候选池取号，但按各自选型控制上期重号比例
             for select_type in [3, 4, 5, 6, 7]:
-                top_nums = top20[:select_type]
+                final_repeat_cap = min(
+                    pool_max_last_numbers if pool_max_last_numbers is not None else _default_repeat_cap(select_type),
+                    _default_repeat_cap(select_type),
+                )
+                top_nums = [
+                    num for num, _ in _diversify_candidate_pool(
+                        candidate_items,
+                        select_type,
+                        temp_analyzer.statistics.get('last_numbers', set()),
+                        max_last_numbers=final_repeat_cap,
+                    )
+                ]
                 hits = len(set(top_nums) & actual_numbers)
                 all_hits[select_type].append(hits)
 
-            # 复式7码: 从top20截取前7
-            top7 = top20[:7]
+            # 复式7码: 从同一候选池取7码并控制上期重号比例
+            fu7_repeat_cap = min(
+                pool_max_last_numbers if pool_max_last_numbers is not None else _default_repeat_cap(7),
+                _default_repeat_cap(7),
+            )
+            top7 = [
+                num for num, _ in _diversify_candidate_pool(
+                    candidate_items,
+                    7,
+                    temp_analyzer.statistics.get('last_numbers', set()),
+                    max_last_numbers=fu7_repeat_cap,
+                )
+            ]
             pool_hits = len(set(top7) & actual_numbers)
             all_fu_shi_7_pool_hits.append(pool_hits)
 
@@ -3257,6 +3386,8 @@ class KL8RollingBacktest:
             repeat_non_avoid_score=repeat_non_avoid_score,
             repeat_follow_score=repeat_follow_score,
             repeat_non_follow_score=repeat_non_follow_score,
+            pool_diversify=pool_diversify,
+            pool_max_last_numbers=pool_max_last_numbers,
         )
 
         if 'error' in real_result:
@@ -3297,6 +3428,8 @@ class KL8RollingBacktest:
                 repeat_non_avoid_score=repeat_non_avoid_score,
                 repeat_follow_score=repeat_follow_score,
                 repeat_non_follow_score=repeat_non_follow_score,
+                pool_diversify=pool_diversify,
+                pool_max_last_numbers=pool_max_last_numbers,
             )
 
             if vote.get('status') == 'no_validated_signal':
@@ -3304,8 +3437,18 @@ class KL8RollingBacktest:
                 actual_draws.append(set(history_asc[t]['numbers']))
                 continue
 
-            top20 = [num for num, _ in vote.get('candidates', [])]
-            pred_nums = top20[:pick_n] if len(top20) >= pick_n else top20
+            final_repeat_cap = min(
+                pool_max_last_numbers if pool_max_last_numbers is not None else _default_repeat_cap(pick_n),
+                _default_repeat_cap(pick_n),
+            )
+            pred_nums = [
+                num for num, _ in _diversify_candidate_pool(
+                    vote.get('candidates', []),
+                    pick_n,
+                    temp_analyzer.statistics.get('last_numbers', set()),
+                    max_last_numbers=final_repeat_cap,
+                )
+            ]
             predictions.append(set(pred_nums))
             actual_draws.append(set(history_asc[t]['numbers']))
 
@@ -3320,6 +3463,26 @@ class KL8RollingBacktest:
         real_mean = sum(real_hits_list) / len(real_hits_list)
         expected_random = hypergeom_expected(pick_n)
         real_lift_val = (real_mean - expected_random) / expected_random if expected_random > 0 else 0
+
+        # Only positive lift can support activation; non-positive lift has no
+        # evidence of improvement even if it is statistically different.
+        if real_lift_val <= 0:
+            return {
+                'play_type': s_key,
+                'pick_n': pick_n,
+                'real_lift': real_lift_val,
+                'real_mean_hits': real_mean,
+                'p_value': 1.0,
+                'is_significant_p005': False,
+                'is_significant_p001': False,
+                'permutation_count': 0,
+                'percentile_95_lift': 0,
+                'permutation_mean_lift': 0,
+                'permutation_std_lift': 0,
+                'method': 'shuffle_actual_draws_positive_lift_only',
+                'plus_one_correction': True,
+                'direction': 'not_better_than_random',
+            }
 
         # v9: 置换 — 打乱实际开奖期顺序，保持预测不变
         import random as rng
@@ -3375,6 +3538,7 @@ class KL8RollingBacktest:
             ) if len(permutation_lifts) > 1 else 0,
             'method': 'shuffle_actual_draws',  # v9: 标记方法
             'plus_one_correction': True,  # v9: 加一修正
+            'direction': 'better_than_random',
         }
 
     # ─── 特征按玩法分开评估（v6: 按玩法置换检验+多重检验校正）───
@@ -3847,6 +4011,8 @@ class KL8RollingBacktest:
             repeat_non_avoid_score = strategy.get('repeat_non_avoid_score', 0.85)
             repeat_follow_score = strategy.get('repeat_follow_score', 0.90)
             repeat_non_follow_score = strategy.get('repeat_non_follow_score', 0.50)
+            pool_diversify = strategy.get('pool_diversify', True)
+            pool_max_last_numbers = strategy.get('pool_max_last_numbers')
 
             train_result = self._rolling_backtest_parametric(
                 fw, mw,
@@ -3859,6 +4025,8 @@ class KL8RollingBacktest:
                 repeat_non_avoid_score=repeat_non_avoid_score,
                 repeat_follow_score=repeat_follow_score,
                 repeat_non_follow_score=repeat_non_follow_score,
+                pool_diversify=pool_diversify,
+                pool_max_last_numbers=pool_max_last_numbers,
             )
 
             if 'error' in train_result:
@@ -3900,6 +4068,8 @@ class KL8RollingBacktest:
             repeat_non_avoid_score = strategy.get('repeat_non_avoid_score', 0.85)
             repeat_follow_score = strategy.get('repeat_follow_score', 0.90)
             repeat_non_follow_score = strategy.get('repeat_non_follow_score', 0.50)
+            pool_diversify = strategy.get('pool_diversify', True)
+            pool_max_last_numbers = strategy.get('pool_max_last_numbers')
 
             # 验证段回测
             val_result = self._rolling_backtest_parametric(
@@ -3913,6 +4083,8 @@ class KL8RollingBacktest:
                 repeat_non_avoid_score=repeat_non_avoid_score,
                 repeat_follow_score=repeat_follow_score,
                 repeat_non_follow_score=repeat_non_follow_score,
+                pool_diversify=pool_diversify,
+                pool_max_last_numbers=pool_max_last_numbers,
             )
 
             if 'error' in val_result:
@@ -3942,6 +4114,8 @@ class KL8RollingBacktest:
                 repeat_non_avoid_score=repeat_non_avoid_score,
                 repeat_follow_score=repeat_follow_score,
                 repeat_non_follow_score=repeat_non_follow_score,
+                pool_diversify=pool_diversify,
+                pool_max_last_numbers=pool_max_last_numbers,
             )
 
             raw_p = perm_result.get('p_value', 1.0) if 'error' not in perm_result else 1.0
@@ -3965,6 +4139,8 @@ class KL8RollingBacktest:
                     repeat_non_avoid_score=repeat_non_avoid_score,
                     repeat_follow_score=repeat_follow_score,
                     repeat_non_follow_score=repeat_non_follow_score,
+                    pool_diversify=pool_diversify,
+                    pool_max_last_numbers=pool_max_last_numbers,
                 )
 
                 if play_type == 'fu_shi_7':
@@ -4034,6 +4210,8 @@ class KL8RollingBacktest:
                 'model_weights': mw,
                 'window_size': ws,
                 'repeat_direction': strategy.get('repeat_direction', 'neutral'),
+                'pool_diversify': strategy.get('pool_diversify', True),
+                'pool_max_last_numbers': strategy.get('pool_max_last_numbers'),
                 'raw_p_value': raw_p,
                 'validation_lift': round(val_lift, 4),
                 'n_permutations': n_permutations,
@@ -4245,6 +4423,8 @@ class KL8RollingBacktest:
             repeat_non_avoid_score = strategy.get('repeat_non_avoid_score', 0.85)
             repeat_follow_score = strategy.get('repeat_follow_score', 0.90)
             repeat_non_follow_score = strategy.get('repeat_non_follow_score', 0.50)
+            pool_diversify = strategy.get('pool_diversify', True)
+            pool_max_last_numbers = strategy.get('pool_max_last_numbers')
 
             train_result = self._rolling_backtest_parametric(
                 fw, mw,
@@ -4257,6 +4437,8 @@ class KL8RollingBacktest:
                 repeat_non_avoid_score=repeat_non_avoid_score,
                 repeat_follow_score=repeat_follow_score,
                 repeat_non_follow_score=repeat_non_follow_score,
+                pool_diversify=pool_diversify,
+                pool_max_last_numbers=pool_max_last_numbers,
             )
 
             if 'error' in train_result:
@@ -4312,6 +4494,8 @@ class KL8RollingBacktest:
                 repeat_non_avoid_score=repeat_non_avoid_score,
                 repeat_follow_score=repeat_follow_score,
                 repeat_non_follow_score=repeat_non_follow_score,
+                pool_diversify=pool_diversify,
+                pool_max_last_numbers=pool_max_last_numbers,
             )
 
             if 'error' in val_result:
@@ -4334,6 +4518,8 @@ class KL8RollingBacktest:
                 repeat_non_avoid_score=repeat_non_avoid_score,
                 repeat_follow_score=repeat_follow_score,
                 repeat_non_follow_score=repeat_non_follow_score,
+                pool_diversify=pool_diversify,
+                pool_max_last_numbers=pool_max_last_numbers,
             )
 
             raw_p = perm_result.get('p_value', 1.0) if 'error' not in perm_result else 1.0
@@ -4357,6 +4543,8 @@ class KL8RollingBacktest:
                     repeat_non_avoid_score=repeat_non_avoid_score,
                     repeat_follow_score=repeat_follow_score,
                     repeat_non_follow_score=repeat_non_follow_score,
+                    pool_diversify=pool_diversify,
+                    pool_max_last_numbers=pool_max_last_numbers,
                 )
                 sub_lift = sub_result.get('select_5', {}).get('lift', 0) if 'error' not in sub_result else 0
                 sub_lifts.append(sub_lift)
@@ -4371,6 +4559,8 @@ class KL8RollingBacktest:
                 'model_weights': mw,
                 'window_size': ws,
                 'repeat_direction': strategy.get('repeat_direction', 'neutral'),
+                'pool_diversify': strategy.get('pool_diversify', True),
+                'pool_max_last_numbers': strategy.get('pool_max_last_numbers'),
                 'raw_p_value': raw_p,
                 'validation_lift': round(s5_lift, 4),
                 'n_permutations': n_permutations,
@@ -4407,6 +4597,8 @@ class KL8RollingBacktest:
             repeat_non_avoid_score = strategy.get('repeat_non_avoid_score', 0.85)
             repeat_follow_score = strategy.get('repeat_follow_score', 0.90)
             repeat_non_follow_score = strategy.get('repeat_non_follow_score', 0.50)
+            pool_diversify = strategy.get('pool_diversify', True)
+            pool_max_last_numbers = strategy.get('pool_max_last_numbers')
 
             final_test_result = self._rolling_backtest_parametric(
                 fw, mw,
@@ -4419,6 +4611,8 @@ class KL8RollingBacktest:
                 repeat_non_avoid_score=repeat_non_avoid_score,
                 repeat_follow_score=repeat_follow_score,
                 repeat_non_follow_score=repeat_non_follow_score,
+                pool_diversify=pool_diversify,
+                pool_max_last_numbers=pool_max_last_numbers,
             )
 
             if 'error' not in final_test_result:

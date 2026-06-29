@@ -51,8 +51,24 @@ class KL8PredictionGuardTests(unittest.TestCase):
         nums = [n for n, _ in diversified]
 
         self.assertEqual(len(nums), 7)
-        self.assertLessEqual(sum(1 for n in nums if n <= 20), 2)
+        self.assertLessEqual(sum(1 for n in nums if n <= 20), 3)
         self.assertLessEqual(max(nums.count(n) for n in nums), 1)
+
+    def test_diversify_candidate_pool_accepts_repeat_cap(self):
+        candidates = [
+            (1, 100.0), (2, 99.0), (3, 98.0), (4, 97.0), (5, 96.0),
+            (21, 95.0), (31, 94.0), (41, 93.0), (51, 92.0),
+        ]
+        diversified = _diversify_candidate_pool(
+            candidates,
+            5,
+            set(range(1, 21)),
+            max_last_numbers=1,
+        )
+        nums = [n for n, _ in diversified]
+
+        self.assertEqual(len(nums), 5)
+        self.assertLessEqual(sum(1 for n in nums if n <= 20), 1)
 
     def test_multi_model_voting_uses_broader_diversified_pool(self):
         analyzer = KL8Analyzer.__new__(KL8Analyzer)
@@ -77,7 +93,7 @@ class KL8PredictionGuardTests(unittest.TestCase):
         self.assertTrue(result['diversified'])
         self.assertEqual(result['raw_candidate_count'], 40)
         self.assertEqual(len(result['selected']), 7)
-        self.assertLessEqual(sum(1 for n in result['selected'] if n <= 20), 2)
+        self.assertLessEqual(sum(1 for n in result['selected'] if n <= 20), 3)
 
     def test_predict_all_blocks_tiny_history(self):
         analyzer = KL8Analyzer.__new__(KL8Analyzer)
@@ -116,18 +132,22 @@ class KL8PredictionGuardTests(unittest.TestCase):
                 end_idx=70,
                 min_train=50,
                 window_size=50,
-                repeat_direction='avoid',
-                repeat_avoid_score=0.12,
-                repeat_non_avoid_score=0.88,
+                repeat_direction='follow',
+                repeat_follow_score=0.92,
+                repeat_non_follow_score=0.55,
+                pool_diversify=False,
+                pool_max_last_numbers=1,
             )
         finally:
             KL8Analyzer.multi_model_voting = original
 
         self.assertNotIn('error', result)
         self.assertTrue(captured)
-        self.assertTrue(all(c['repeat_direction'] == 'avoid' for c in captured))
-        self.assertTrue(all(c['repeat_avoid_score'] == 0.12 for c in captured))
-        self.assertTrue(all(c['repeat_non_avoid_score'] == 0.88 for c in captured))
+        self.assertTrue(all(c['repeat_direction'] == 'follow' for c in captured))
+        self.assertTrue(all(c['repeat_follow_score'] == 0.92 for c in captured))
+        self.assertTrue(all(c['repeat_non_follow_score'] == 0.55 for c in captured))
+        self.assertTrue(all(c['pool_diversify'] is False for c in captured))
+        self.assertTrue(all(c['pool_max_last_numbers'] == 1 for c in captured))
 
 
 if __name__ == '__main__':
