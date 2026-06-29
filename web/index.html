@@ -171,6 +171,16 @@
   .status-item .status-dot { font-size: 16px; }
   .status-item .status-name { color: var(--text); font-weight: 500; }
   .status-item .status-desc { color: var(--muted); font-size: 12px; margin-top: 2px; }
+  .status-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; }
+  .status-item.sync-stamp { background: rgba(34,45,61,.45); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; }
+  .status-item.sync-stamp.stale .status-desc { color: var(--warn); }
+  .status-item.sync-stamp.missing .status-desc { color: var(--away); }
+  .diag-panels { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; align-items: stretch; }
+  .diag-panel { background: rgba(34,45,61,.28); border: 1px solid rgba(44,58,78,.72); border-radius: 8px; padding: 12px 14px; min-height: 92px; }
+  .diag-panel .diag-title { font-size: 13px; font-weight: 600; color: var(--text); }
+  .diag-panel .diag-main { color: var(--accent2); font-size: 12px; margin-top: 6px; }
+  .diag-panel .diag-main.empty { color: var(--muted); }
+  .diag-panel .diag-line { color: var(--muted); font-size: 12px; margin-top: 4px; }
   .card h3 { font-size: 15px; margin-bottom: 12px; color: var(--accent2);
     display: flex; align-items: center; gap: 6px; }
   .row { display: flex; justify-content: space-between; gap: 12px;
@@ -3824,6 +3834,46 @@ function fmtNumValue(value, digits = 3) {
   return typeof value === 'number' && Number.isFinite(value) ? value.toFixed(digits) : '-';
 }
 
+let syncStampTimer = null;
+
+function formatSyncStamp(value) {
+  if (!value) {
+    return { text: '尚未同步', detail: '点击下方按钮执行一次同步', state: 'missing' };
+  }
+  const normalized = String(value).replace(' ', 'T');
+  const date = new Date(normalized);
+  const display = String(value).replace('T', ' ').slice(0, 19);
+  if (Number.isNaN(date.getTime())) {
+    return { text: display || '-', detail: '时间格式异常', state: 'stale' };
+  }
+  const diffMs = Date.now() - date.getTime();
+  const absMs = Math.abs(diffMs);
+  const minutes = Math.floor(absMs / 60000);
+  let age = '刚刚';
+  if (minutes >= 1440) age = `${Math.floor(minutes / 1440)} 天前`;
+  else if (minutes >= 60) age = `${Math.floor(minutes / 60)} 小时前`;
+  else if (minutes >= 1) age = `${minutes} 分钟前`;
+  const state = diffMs > 24 * 60 * 60 * 1000 ? 'stale' : '';
+  return { text: age, detail: display, state };
+}
+
+function updateSyncStampAges(root = document) {
+  root.querySelectorAll('[data-sync-at]').forEach(el => {
+    const stamp = formatSyncStamp(el.dataset.syncAt);
+    const textEl = el.querySelector('[data-sync-age]');
+    const detailEl = el.querySelector('[data-sync-detail]');
+    if (textEl) textEl.textContent = stamp.text;
+    if (detailEl) detailEl.textContent = stamp.detail;
+    el.classList.toggle('stale', stamp.state === 'stale');
+    el.classList.toggle('missing', stamp.state === 'missing');
+  });
+}
+
+function startSyncStampTimer() {
+  if (syncStampTimer) clearInterval(syncStampTimer);
+  syncStampTimer = setInterval(() => updateSyncStampAges(), 60000);
+}
+
 function renderFootballDiagnostics(diagnostics) {
   if (!diagnostics || !diagnostics.windows) return '';
 
@@ -3838,6 +3888,7 @@ function renderFootballDiagnostics(diagnostics) {
   const deltas = diagnostics.diagnostic_suggestions?.param_deltas || {};
   const audit = diagnostics.audit || {};
   const sync = diagnostics.sync || {};
+  const hasDeltas = Object.keys(deltas).length > 0;
 
   const windowRows = Object.entries(windows).map(([key, report]) => {
     const item = report.summary || {};
@@ -3861,8 +3912,8 @@ function renderFootballDiagnostics(diagnostics) {
     : '<div style="color:var(--muted);font-size:12px;margin-top:4px">暂无明显偏差</div>';
 
   const suggestionHtml = suggestions.length
-    ? suggestions.slice(0, 4).map(item => `<div style="color:var(--muted);font-size:12px;margin-top:4px">${esc(item)}</div>`).join('')
-    : '<div style="color:var(--muted);font-size:12px;margin-top:4px">建议先继续积累样本</div>';
+    ? suggestions.slice(0, 4).map(item => `<div class="diag-line">${esc(item)}</div>`).join('')
+    : '<div class="diag-line">建议先继续积累样本</div>';
 
   return `<div class="card model-health">
     <h3>预测诊断与赛后复盘</h3>
@@ -3890,14 +3941,14 @@ function renderFootballDiagnostics(diagnostics) {
         <tbody>${windowRows || `<tr><td colspan="7" style="padding:10px;color:var(--muted);text-align:center">暂无可用样本</td></tr>`}</tbody>
       </table>
     </div>
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px">
-      <div>
-        <div style="font-size:13px;font-weight:600">偏差提示</div>
+    <div class="diag-panels">
+      <div class="diag-panel">
+        <div class="diag-title">偏差提示</div>
         ${noteHtml}
       </div>
-      <div>
-        <div style="font-size:13px;font-weight:600">调参建议</div>
-        <div style="color:var(--accent);font-size:12px;margin-top:4px">${deltaText}</div>
+      <div class="diag-panel">
+        <div class="diag-title">调参建议</div>
+        <div class="diag-main ${hasDeltas ? '' : 'empty'}">${deltaText}</div>
         ${suggestionHtml}
       </div>
     </div>
@@ -3918,11 +3969,13 @@ async function loadPredictions() {
     const sync = syncStatus.result || {};
     const records = recordsData.result?.records || [];
     const diagnostics = diagnosticsData.result || {};
+    const syncStamp = formatSyncStamp(sync.last_sync_at);
     
     let html = '';
     
     // ── 自动同步状态卡片 ──
     html += `<div class="card model-health"><h3>🔄 自动赛果同步</h3>
+      <div class="status-grid">
       <div class="status-item">
         <span class="status-dot">✅</span>
         <div>
@@ -3944,13 +3997,15 @@ async function loadPredictions() {
           <div class="status-desc">${sync.failed || 0} 场</div>
         </div>
       </div>
-      ${sync.last_sync_at ? `<div class="status-item">
+      <div class="status-item sync-stamp ${syncStamp.state}" data-sync-at="${esc(sync.last_sync_at || '')}">
         <span class="status-dot">🕐</span>
         <div>
           <div class="status-name">最近同步</div>
-          <div class="status-desc">${sync.last_sync_at?.replace('T', ' ').slice(0, 19) || '-'}</div>
+          <div class="status-desc" data-sync-age>${esc(syncStamp.text)}</div>
+          <div class="status-desc" data-sync-detail style="font-size:11px">${esc(syncStamp.detail)}</div>
         </div>
-      </div>` : ''}
+      </div>
+      </div>
     </div>`;
     
     html += renderFootballDiagnostics(diagnostics);
@@ -4036,6 +4091,8 @@ async function loadPredictions() {
     }
     
     app.innerHTML = html;
+    updateSyncStampAges(app);
+    startSyncStampTimer();
   } catch (e) {
     app.innerHTML = `<div class="status error">加载失败：${esc(e.message)}</div>`;
   }
