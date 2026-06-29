@@ -69,6 +69,22 @@ FEATURE_WEIGHTS.update({
     'adjacent': 0.05,      # 消融: 关掉降6% → 有互补(虽信号负), 保持v3.2(提升反降≥3)
 })
 
+# ===================== 公平摇奖理论基准 (诚实标注) =====================
+# 大乐透为均匀摇奖: 前区5/35、后区2/12。模型对「当期实际号码」的预测无法
+# 系统性超过下列随机基准——任何回测中明显高于基准的结果都是小样本噪声/过拟合。
+# 推导(超几何分布):
+#   前区命中(Top5对实际5): P(>=2)=1-C(30,5)/C(35,5)-5C(30,4)/C(35,5)=0.1389
+#                          P(>=3)=[C(5,3)C(30,2)+C(5,4)·30+1]/C(35,5)=0.0139
+#   后区命中(Top3对实际2): P(>=1)=1-C(9,2)/C(12,2)=0.4545
+#                          P(>=2)=C(3,2)/C(12,2)=0.0455
+RANDOM_BASELINE = {
+    'front_ge2_rate': 0.1389,
+    'front_ge3_rate': 0.0139,
+    'front_ge4_rate': 0.00046,
+    'back_ge1_rate': 0.4545,
+    'back_ge2_rate': 0.0455,
+}
+
 # 后区专用权重（v3.3: 保持v3.2配置 — 权重比例极敏感, 微调反而降分）
 # v3.3核心优化在投票模型权重(rank=4.0绝对主导), 而非特征权重
 BACK_FEATURE_WEIGHTS = {
@@ -419,6 +435,9 @@ class LotteryAnalyzer:
             'back_frequency': dict(back_freq_raw),
             'front_frequency_decayed': dict(front_freq_decayed),
             'back_frequency_decayed': dict(back_freq_decayed),
+            # 衰减权重和 W=Σ(0.92^idx)。前/后区相同(每期5前2后号，故Σ衰减频率=5W=2W')。
+            # 频率偏离度评分须以 W 归一化(而非期数 total)，否则 deviation_ratio 被严重压缩→特征退化。
+            'decay_weight_sum': (sum(front_freq_decayed.values()) / 5.0) if front_freq_decayed else 1.0,
             'position_frequency': [dict(pf) for pf in position_freq],
             # 遗漏
             'front_current_gaps': dict(front_gaps),
@@ -593,8 +612,10 @@ class LotteryAnalyzer:
         freq_raw = stats['front_frequency' if is_front else 'back_frequency']
         freq_decayed = stats.get('front_frequency_decayed' if is_front else 'back_frequency_decayed', freq_raw)
 
-        # 实际出现率(衰减版)
-        actual_rate = freq_decayed.get(num, 0) / max(total, 1)
+        # 实际出现率(衰减版): 以衰减权重和 W 归一化，使其与每期期望率 expected_rate 同尺度。
+        # (历史 bug: 误用 total 期数归一化，actual_rate 被压缩 ~total/W 倍，所有号码恒判为冷号→特征退化)
+        decay_w = stats.get('decay_weight_sum', max(total, 1))
+        actual_rate = freq_decayed.get(num, 0) / max(decay_w, 1e-9)
         # 偏离度: 实际率 / 期望率
         deviation_ratio = actual_rate / max(expected_rate, 0.01)
 
@@ -809,13 +830,34 @@ class LotteryAnalyzer:
         self.statistics = saved_stats
 
         n = evaluated or 1
-        return {
-            'trials': n,
+        rates = {
             'front_ge2_rate': front_hit_ge2 / n,
             'front_ge3_rate': front_hit_ge3 / n,
             'front_ge4_rate': front_hit_ge4 / n,
             'back_ge1_rate': back_hit_ge1 / n,
             'back_ge2_rate': back_hit_ge2 / n,
+        }
+
+        # 诚实对照: 附带公平摇奖随机基准 + 提升量 + 噪声带(±1.96·SE)。
+        # |lift| 落在噪声带内即与随机无显著差异——这是公平博弈的预期结果，不应解读为模型有效。
+        baseline_cmp = {}
+        for key, observed in rates.items():
+            base = RANDOM_BASELINE.get(key, 0.0)
+            se = math.sqrt(max(base * (1 - base), 1e-9) / n)
+            baseline_cmp[key] = {
+                'observed': round(observed, 4),
+                'random_baseline': round(base, 4),
+                'lift': round(observed - base, 4),
+                'noise_band': round(1.96 * se, 4),
+                'significant': abs(observed - base) > 1.96 * se,
+            }
+
+        return {
+            'trials': n,
+            **rates,
+            'random_baseline': RANDOM_BASELINE,
+            'baseline_comparison': baseline_cmp,
+            'note': '大乐透为公平摇奖，命中率受随机基准约束；lift 落在 noise_band 内属正常，无法据此判定模型优于随机。',
         }
 
     def rank_model(self, top_n: int = 10, weights: Dict = None) -> Tuple[List, List]:
@@ -876,9 +918,11 @@ class LotteryAnalyzer:
         if not backtest_results:
             return FEATURE_WEIGHTS.copy()
 
-        # 统计每个特征在命中号码中的平均得分
+        # 统计每个特征在命中/未命中号码中的得分(含平方和，用于估计方差→显著性门控)
         feature_hit_scores = defaultdict(float)
+        feature_hit_sq = defaultdict(float)
         feature_miss_scores = defaultdict(float)
+        feature_miss_sq = defaultdict(float)
         hit_count = 0
         miss_count = 0
 
@@ -890,31 +934,45 @@ class LotteryAnalyzer:
             for num in actual_nums:
                 num_key = str(num)
                 num_features = features_map.get(num_key, {})
+                if not num_features:
+                    continue
                 if num in predicted_nums:
                     # 命中的号码：该号码各特征得分加权累积
                     for feature, score in num_features.items():
                         feature_hit_scores[feature] += score
+                        feature_hit_sq[feature] += score * score
                     hit_count += 1
                 else:
                     # 未命中的号码：各特征得分作为"噪音"
                     for feature, score in num_features.items():
                         feature_miss_scores[feature] += score
+                        feature_miss_sq[feature] += score * score
                     miss_count += 1
 
-        if hit_count == 0:
+        # 过拟合护栏: 命中样本过少时，特征间得分差异不可信(公平摇奖下本就是噪声)，
+        # 直接返回基础权重，避免把回测噪声固化进权重(见记忆 lottery3d-fair-game-ceiling)。
+        if hit_count < 60 or miss_count < 60:
             return FEATURE_WEIGHTS.copy()
 
         # 命中/未命中比率作为权重修正因子
         new_weights = {}
         for feature in FEATURE_WEIGHTS:
-            hit_avg = feature_hit_scores.get(feature, 0) / max(hit_count, 1)
-            miss_avg = feature_miss_scores.get(feature, 0) / max(miss_count, 1)
+            base_weight = FEATURE_WEIGHTS[feature]
+            hit_avg = feature_hit_scores.get(feature, 0) / hit_count
+            miss_avg = feature_miss_scores.get(feature, 0) / miss_count
+
+            # 显著性门控: 均分之差落在 ±1.96·SE 噪声带内 → 无可信信号 → 保持基础权重。
+            hit_var = max(feature_hit_sq.get(feature, 0) / hit_count - hit_avg ** 2, 0.0)
+            miss_var = max(feature_miss_sq.get(feature, 0) / miss_count - miss_avg ** 2, 0.0)
+            se = math.sqrt(hit_var / hit_count + miss_var / miss_count) or 1e-9
+            if abs(hit_avg - miss_avg) <= 1.96 * se:
+                new_weights[feature] = base_weight
+                continue
 
             # 信号强度 = 命中得分 / (命中得分 + 未命中得分)
             signal_strength = hit_avg / max(hit_avg + miss_avg, 0.001)
 
             # 新权重 = 基础权重 * (1 + 信号修正)
-            base_weight = FEATURE_WEIGHTS[feature]
             adjustment = 0.3  # 修正幅度限制在30%
             adjusted_weight = base_weight * (1 + adjustment * (signal_strength - 0.5))
             new_weights[feature] = max(0.05, adjusted_weight)
@@ -925,8 +983,8 @@ class LotteryAnalyzer:
 
         return new_weights
 
-    def _run_feature_backtest(self, trials: int = 30) -> List[Dict]:
-        """执行特征级回测，收集每个号码的特征得分"""
+    def _run_feature_backtest(self, trials: int = 100) -> List[Dict]:
+        """执行特征级回测，收集每个号码的特征得分 (数据扩容后默认100期，配合显著性门控)"""
         if len(self.history_data) < trials + 10:
             return []
 
@@ -1904,14 +1962,22 @@ class LotteryAnalyzer:
             }
 
     def _fetch_from_web(self, count: int) -> List[Dict]:
-        """从网络抓取开奖数据"""
+        """从网络抓取开奖数据
+
+        主源 500.com（datachart）：覆盖 2007 年至今全量历史，含开奖日期，最稳定。
+        备源 ip138：仅近 30 期，用于主源失效时兜底。
+        count 控制抓取期数（limit）；传入较大值即可一次性引导全量历史。
+        """
+        c500 = self._fetch_500_history(count)
+        if c500:
+            return c500[:count]
+
         try:
             import urllib.request
             import urllib.error
 
             sources = [
                 ('https://cp.ip138.com/daletou/', 'ip138'),
-                ('https://www.cailele.com/static/new lottery/info/dlt_kaijiang.json', 'cailele'),
             ]
 
             for url, source in sources:
@@ -1933,6 +1999,68 @@ class LotteryAnalyzer:
 
             return []
         except ImportError:
+            return []
+
+    @staticmethod
+    def _normalize_issue_500(raw: str) -> str:
+        """500.com 期号为 5 位(yyNNN，如 26071)，统一为本项目的 7 位(2026071)。"""
+        raw = raw.strip()
+        if len(raw) == 5 and raw.isdigit():
+            return f"20{raw[:2]}{raw[2:]}"
+        return raw
+
+    def _fetch_500_history(self, count: int) -> List[Dict]:
+        """从 500.com 抓取大乐透历史（按期号倒序返回）。"""
+        try:
+            import urllib.request
+            import ssl
+            import re
+
+            limit = max(count, 30)
+            url = (
+                'https://datachart.500.com/dlt/history/newinc/history.php'
+                f'?start=07001&end=99999&limit={limit}'
+            )
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                'Referer': 'https://datachart.500.com/dlt/',
+            }
+            req = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(req, timeout=25, context=ctx) as resp:
+                data = resp.read().decode('gbk', errors='ignore')
+
+            results = []
+            rows = re.findall(r'<tr class="t_tr1">(.*?)</tr>', data, re.DOTALL)
+            for row in rows:
+                tds = [re.sub(r'<[^>]+>', '', x).strip()
+                       for x in re.findall(r'<td[^>]*>(.*?)</td>', row, re.DOTALL)]
+                # 500.com 列布局随 limit 变化（小 limit 多一个前导序号列），
+                # 因此动态定位 5 位期号列，再取其后 5+2 个号码，避免硬编码列下标。
+                idx = next((i for i, v in enumerate(tds) if re.fullmatch(r'\d{5}', v)), None)
+                if idx is None or idx + 7 >= len(tds):
+                    continue
+                try:
+                    nums = [int(x) for x in tds[idx + 1:idx + 8]]
+                except ValueError:
+                    continue
+                front = sorted(nums[:5])
+                back = sorted(nums[5:7])
+                if not (all(1 <= n <= 35 for n in front) and all(1 <= n <= 12 for n in back)):
+                    continue
+                date = tds[-1] if re.fullmatch(r'\d{4}-\d{2}-\d{2}', tds[-1]) else ''
+                results.append({
+                    'issue': self._normalize_issue_500(tds[idx]),
+                    'front': front,
+                    'back': back,
+                    'date': date,
+                })
+            results.sort(key=lambda x: x['issue'], reverse=True)
+            return results
+        except Exception as e:
+            log.debug(f'500.com 抓取失败: {e}')
             return []
 
     def _parse_web_data(self, data: str, source: str) -> List[Dict]:
@@ -2057,10 +2185,13 @@ class LotteryAnalyzer:
         fetched_issues = sorted(fetched_map.keys(), reverse=True)
         earliest_fetched = fetched_issues[-1]
 
+        # 仅保留早于抓取范围的「真实」本地数据。若当前是模拟数据，则全部丢弃，
+        # 避免 100 期随机模拟号码污染统计基底（历史 bug：fetch 后模拟数据仍被保留）。
         preserved_local = []
-        for result in self.history_data:
-            if result['issue'] < earliest_fetched:
-                preserved_local.append(result)
+        if not self.using_simulated_data:
+            for result in self.history_data:
+                if result['issue'] < earliest_fetched and result['issue'] not in fetched_map:
+                    preserved_local.append(result)
 
         merged_results = sorted(fetched_results, key=lambda x: x['issue'], reverse=True) + preserved_local
 
@@ -2118,8 +2249,9 @@ def run_prediction(force_refresh=False):
         recent = analyzer.get_recent_results(10)
         data_quality = analyzer.assess_data_quality()
 
-        # 滚动回测
-        backtest = analyzer.rolling_backtest(trials=50)
+        # 滚动回测 (trials 取较大值: 50期小样本噪声极大，会误报显著性；
+        # 200期更接近真实命中率，使 baseline_comparison 的显著性判断可信)
+        backtest = analyzer.rolling_backtest(trials=200)
 
         # 动态权重调整 (v2.2: 回测驱动)
         optimized_weights = analyzer.dynamic_weight_adjustment()

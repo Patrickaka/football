@@ -49,13 +49,17 @@ def prediction_record_save(records):
 def dlt_load():
     try:
         rows = db.query("SELECT issue, front, back, draw_date FROM dlt_history ORDER BY seq")
-        return [
-            {'issue': r['issue'], 'front': json.loads(r['front']),
-             'back': json.loads(r['back']), 'date': r['draw_date']}
-            for r in rows
-        ]
+        if rows:
+            return [
+                {'issue': r['issue'], 'front': json.loads(r['front']),
+                 'back': json.loads(r['back']), 'date': r['draw_date']}
+                for r in rows
+            ]
     except Exception:
-        records = doc_store._fallback_load_all('dlt_history')
+        pass
+
+    records = doc_store._fallback_load_all('dlt_history')
+    if records:
         return [
             {'issue': r['issue'],
              'front': json.loads(r['front']) if isinstance(r['front'], str) else r['front'],
@@ -63,6 +67,42 @@ def dlt_load():
              'date': r.get('draw_date') or r.get('date')}
             for r in records
         ]
+
+    # 末级降级：读取遗留 JSON（data/lottery_history.json，结构 {'results': [...]}）。
+    # MySQL 未安装且 doc_store 尚未填充时，避免回退到模拟随机数据。
+    return _dlt_load_legacy_json()
+
+
+def _dlt_load_legacy_json():
+    from .paths import data_path
+    import os
+    path = data_path('lottery_history.json')
+    if not os.path.exists(path):
+        return []
+    try:
+        with open(path, encoding='utf-8') as f:
+            payload = json.load(f)
+    except Exception:
+        return []
+    results = payload.get('results') if isinstance(payload, dict) else payload
+    if not isinstance(results, list):
+        return []
+    cleaned = []
+    for r in results:
+        front = r.get('front'); back = r.get('back')
+        if isinstance(front, str):
+            front = json.loads(front)
+        if isinstance(back, str):
+            back = json.loads(back)
+        if not (front and back):
+            continue
+        cleaned.append({
+            'issue': str(r.get('issue', '')),
+            'front': sorted(int(x) for x in front),
+            'back': sorted(int(x) for x in back),
+            'date': r.get('date') or r.get('draw_date') or '',
+        })
+    return cleaned
 
 
 def dlt_save(results):
