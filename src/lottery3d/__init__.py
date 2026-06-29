@@ -81,6 +81,9 @@ RANDOM_POS_REPEAT = 0.10
 RANDOM_DIGIT_REUSE = 1 - (9 / 10) ** 3
 SUM_SOFT_SIGMA = 3.2
 SPAN_SOFT_SIGMA = 1.4
+# 形态先验：按真实形态概率(组六72%/组三27%/豹子1%)给分，使推荐池形态分布贴合真实开奖。
+# 实测原推荐组六偏少(64% vs 真实71%)、组三偏多，此项把组六占比拉回~72%。
+W_FORM_PRIOR = 6.0
 
 # 探索机制：推荐时有一定概率从候选池中随机选择
 # 稳定基础版：关闭探索机制
@@ -173,7 +176,7 @@ ZU6_RECENT_DECAY = 0.6     # 越久远的期惩罚越轻
 WINDOW_WEIGHTS_KV_KEY = "lottery3d_window_weights"
 
 # 预测版本号
-PREDICTOR_VERSION = "3d-v4.0-rank-rotate-2k-history"
+PREDICTOR_VERSION = "3d-v4.1-rank-rotate-formprior"
 ML_MODEL_VERSION = "ml-v6"
 MIN_DATA_PERIODS_FOR_ML_FUSION = 300
 ML_CACHE_MAX_AGE_SECONDS = 36 * 3600
@@ -2413,6 +2416,13 @@ def triplet_weight(a, b, c, score, danma, kill, meta, features=None):
             w += form_bonus.get("zu3", 0.0)
         else:
             w += form_bonus.get("zu6", 0.0)
+
+    # 形态先验：按真实形态概率加分(组六0.72/组三0.27/豹子0.01)，使推荐池形态分布贴合真实开奖。
+    # 选哪些具体号无 edge(直选恒3%)，此项只调整推荐"长得像不像真实开奖"的形态构成。
+    nd = len({a, b, c})
+    w += W_FORM_PRIOR * (THEORY_FORM_P["zu6"] if nd == 3
+                         else THEORY_FORM_P["zu3"] if nd == 2
+                         else THEORY_FORM_P["baozi"])
     
     # 和值区间回归奖励：区间内加分，极端区间降权
     if flags.get("sum_span", True) and len(numbers) >= SUM_INTERVAL_WINDOW:
