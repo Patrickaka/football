@@ -1500,7 +1500,7 @@ class Handler(BaseHTTPRequestHandler):
         """快乐8策略激活（v7: 回测验证后才允许写入ACTIVE_STRATEGIES）
 
         参数:
-            play_type: 玩法名称 (select_3, select_4, select_5, select_6, select_7, fu_shi_7)
+            play_type: 玩法名称 (select_3~select_10, fu_shi_7, fu_shi_10_11)
             feature_weights: JSON字符串，如 {"frequency":0.12}
             model_weights: JSON字符串，如 {"rank":1.0,"bayesian":0.0,"markov":0.0}
             window_size: 统计窗口大小，如 250

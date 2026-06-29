@@ -2,7 +2,7 @@
 import sys
 sys.path.insert(0, 'src')
 
-from src.kl8 import get_kl8_analyzer, run_prediction, KL8_PREDICTOR_VERSION
+from src.kl8 import get_kl8_analyzer, run_prediction, KL8_PREDICTOR_VERSION, SELECT_TYPES
 
 def main():
     print(f"版本: {KL8_PREDICTOR_VERSION}")
@@ -16,7 +16,7 @@ def main():
     result = run_prediction(force_refresh=True)
 
     # 打印各选型结果
-    for st in [3, 4, 5, 6, 7]:
+    for st in SELECT_TYPES:
         key = f'select_{st}'
         sel = result[key]
         print(f"\n选{st}: {sel['numbers']}")

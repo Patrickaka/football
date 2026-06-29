@@ -399,6 +399,7 @@
   }
   .kl8-fushi-top7 {
     display: flex;
+    flex-wrap: wrap;
     gap: 10px;
     margin-bottom: 16px;
     justify-content: center;
@@ -3522,6 +3523,11 @@ async function refreshKL8() {
 function renderKL8(r) {
   const appKL8 = document.getElementById('app-kl8');
   let html = '';
+  const selectTypes = [3, 4, 5, 6, 7, 8, 9, 10];
+  const fushiTypes = [
+    { key: 'fu_shi_7', label: '选5复式 — 7码复式', field: 'top7_numbers', coreLabel: '7个核心号码' },
+    { key: 'fu_shi_10_11', label: '选10复式 — 11码复式', field: 'top11_numbers', coreLabel: '11个核心号码' },
+  ];
 
   html += `<div class="section-title">【快乐8数据分析】</div>`;
   html += `<div class="note" style="color:var(--accent2);margin-bottom:12px">⚠ 快乐8开奖具有随机性，以上分析仅为历史统计参考，不构成任何投注建议。请理性对待！</div>`;
@@ -3555,14 +3561,14 @@ function renderKL8(r) {
   // ── 状态2：验证中（历史已满800期，但尚无通过验证的策略）───
   if (!isBackfilling && (signalStatus === 'verification_pending' || signalStatus === 'unknown')) {
     // 检查是否有任何玩法已验证
-    const allModes = [3,4,5,6,7].map(st => r[`select_${st}`]?.prediction_mode);
-    allModes.push(r.fu_shi_7?.prediction_mode);
+    const allModes = selectTypes.map(st => r[`select_${st}`]?.prediction_mode);
+    for (const f of fushiTypes) allModes.push(r[f.key]?.prediction_mode);
     const anyValidated = allModes.some(m => m === 'validated');
 
     if (!anyValidated) {
       // 检查是否全部都未发现可验证策略（所有候选均未通过）
       const allNotVerified = allModes.every(m => m === 'not_verified' || m === undefined);
-      const anyWarning = [3,4,5,6,7].some(st => r[`select_${st}`]?.warning);
+      const anyWarning = selectTypes.some(st => r[`select_${st}`]?.warning) || fushiTypes.some(f => r[f.key]?.warning);
 
       if (allNotVerified && anyWarning) {
         // 验证失败状态
@@ -3610,8 +3616,6 @@ function renderKL8(r) {
     html += `</div>`;
   }
 
-  const selectTypes = [3, 4, 5, 6, 7];
-
   // ── 本期变化对比信息（仅在有已验证策略时显示）───
   const changeInfo = r.change_info || {};
   if (changeInfo.has_previous && signalStatus === 'validated') {
@@ -3646,17 +3650,19 @@ function renderKL8(r) {
       }
       html += `</div>`;
     }
-    const fu7pc = playChanges.fu_shi_7;
-    if (fu7pc && fu7pc.changed_count > 0) {
-      html += `<div style="font-size:11px;margin-bottom:4px">`;
-      html += `<span style="color:#4493f8">复式7码</span>: `;
-      if (fu7pc.removed && fu7pc.removed.length > 0) {
-        html += `<span style="color:#da3633">-${fu7pc.removed.map(n=>String(n).padStart(2,'0')).join(',')}</span> `;
+    for (const f of fushiTypes) {
+      const fpc = playChanges[f.key];
+      if (fpc && fpc.changed_count > 0) {
+        html += `<div style="font-size:11px;margin-bottom:4px">`;
+        html += `<span style="color:#4493f8">${esc(f.label)}</span>: `;
+        if (fpc.removed && fpc.removed.length > 0) {
+          html += `<span style="color:#da3633">-${fpc.removed.map(n=>String(n).padStart(2,'0')).join(',')}</span> `;
+        }
+        if (fpc.added && fpc.added.length > 0) {
+          html += `<span style="color:#2ea043">+${fpc.added.map(n=>String(n).padStart(2,'0')).join(',')}</span>`;
+        }
+        html += `</div>`;
       }
-      if (fu7pc.added && fu7pc.added.length > 0) {
-        html += `<span style="color:#2ea043">+${fu7pc.added.map(n=>String(n).padStart(2,'0')).join(',')}</span>`;
-      }
-      html += `</div>`;
     }
     html += `<div style="font-size:11px;color:#8b949e;margin-top:4px">变化原因: ${esc(changeInfo.change_reason || '数据更新')}</div>`;
     html += `<div style="font-size:11px;margin-top:4px">置信等级: <span style="font-weight:600;color:${changeInfo.confidence_level==='低'?'#9a6700':'#2ea043'}">${esc(changeInfo.confidence_level || '低')}</span> · 策略状态: ${esc(changeInfo.strategy_status || '验证中')}</div>`;
@@ -3728,29 +3734,33 @@ function renderKL8(r) {
     html += `</div></div>`;
   }
 
-  // 选5复式7码 — 仅在有号码时显示
-  const fushi = r.fu_shi_7;
-  if (fushi && fushi.top7_numbers && fushi.top7_numbers.length > 0) {
-    const fu7IsRef = fushi.prediction_mode === 'reference_unvalidated';
-    const fu7Border = fu7IsRef ? '#ffcc02' : '#2ea043';
-    const fu7Badge = fu7IsRef ? '参考' : '已验证';
-    const fu7BadgeColor = fu7IsRef ? '#9a6700' : '#2ea043';
+  // 复式玩法 — 仅在有号码时显示
+  for (const f of fushiTypes) {
+    const fushi = r[f.key];
+    const coreNumbers = fushi ? (fushi[f.field] || fushi.core_numbers || []) : [];
+    if (!fushi || coreNumbers.length === 0) continue;
 
-    html += `<div class="card" style="margin-bottom:16px;border:2px solid ${fu7Border}">`;
-    html += `<div class="kl8-fushi-header">🎱 选5复式 — 7码复式 (共${fushi.total_combinations}组) <span style="font-size:11px;color:${fu7BadgeColor};font-weight:700;margin-left:8px">[${fu7Badge}]</span></div>`;
+    const isRef = fushi.prediction_mode === 'reference_unvalidated';
+    const border = isRef ? '#ffcc02' : '#2ea043';
+    const badge = isRef ? '参考' : '已验证';
+    const badgeColor = isRef ? '#9a6700' : '#2ea043';
+    const comboPick = fushi.combo_pick || (f.key === 'fu_shi_10_11' ? 10 : 5);
+    const poolSize = fushi.pool_size || coreNumbers.length;
+
+    html += `<div class="card" style="margin-bottom:16px;border:2px solid ${border}">`;
+    html += `<div class="kl8-fushi-header">🎱 ${esc(f.label)} (共${fushi.total_combinations}组) <span style="font-size:11px;color:${badgeColor};font-weight:700;margin-left:8px">[${badge}]</span></div>`;
     if (fushi.strategy_id) {
       html += `<div style="font-size:11px;color:#8b949e;margin-bottom:4px">策略: ${esc(fushi.strategy_id)}</div>`;
     }
-    html += `<div class="section-title" style="font-size:14px;margin-bottom:8px">7个核心号码</div>`;
+    html += `<div class="section-title" style="font-size:14px;margin-bottom:8px">${esc(f.coreLabel)}</div>`;
     html += `<div class="kl8-fushi-top7">`;
-    for (let i = 0; i < fushi.top7_numbers.length; i++) {
-      const n = fushi.top7_numbers[i];
+    for (const n of coreNumbers) {
       html += `<span class="kl8-ball highlight-ball" style="width:44px;height:44px;font-size:18px">${String(n).padStart(2,'0')}</span>`;
     }
     html += `</div>`;
-    html += `<div class="section-title" style="font-size:14px;margin-bottom:8px">全部 C(7,5) = ${fushi.total_combinations} 组组合</div>`;
+    html += `<div class="section-title" style="font-size:14px;margin-bottom:8px">全部 C(${poolSize},${comboPick}) = ${fushi.total_combinations} 组组合</div>`;
     html += `<div class="kl8-fushi-grid">`;
-    for (const combo of fushi.combinations) {
+    for (const combo of fushi.combinations || []) {
       html += `<div class="kl8-combo-item">`;
       for (const n of combo) {
         html += `<span>${String(n).padStart(2,'0')}</span> `;
@@ -3758,7 +3768,7 @@ function renderKL8(r) {
       html += `</div>`;
     }
     html += `</div>`;
-    if (fu7IsRef && fushi.warning) {
+    if (isRef && fushi.warning) {
       html += `<div style="font-size:11px;color:#9a6700;margin-top:6px">⚠ ${esc(fushi.warning)}</div>`;
     }
     html += `</div>`;

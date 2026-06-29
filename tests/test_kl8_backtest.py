@@ -27,6 +27,7 @@ from src.kl8 import (
     KL8Analyzer, KL8_PREDICTOR_VERSION,
     KL8_NUM_RANGE, KL8_DRAW_COUNT,
     FEATURE_WEIGHTS, MODEL_WEIGHTS,
+    SELECT_TYPES,
     normalize_record,
 )
 from src.common.paths import data_path
@@ -165,7 +166,7 @@ def rolling_backtest(
         analyzer.update_statistics()
 
         # 各玩法预测
-        for pick_n in [3, 4, 5, 6, 7]:
+        for pick_n in SELECT_TYPES:
             ranking = analyzer.get_ensemble_ranking(top_n=pick_n)
             predicted = set(r['num'] for r in ranking[:pick_n])
             hits = len(actual & predicted)
@@ -196,7 +197,7 @@ def rolling_backtest(
     print('=' * 70)
 
     baselines = {}
-    for pick_n in [3, 4, 5, 6, 7]:
+    for pick_n in SELECT_TYPES:
         baselines[pick_n] = theoretical_baseline(pick_n)
 
     # 选5复式7码: 7个号码命中>=5的概率基线
@@ -208,7 +209,7 @@ def rolling_backtest(
     )
     fushi_baseline_expected = 7 * 0.25  # = 1.75
 
-    for play_type in [3, 4, 5, 6, 7, 'fushi5_7']:
+    for play_type in [*SELECT_TYPES, 'fushi5_7']:
         r = results_by_type[play_type]
         hits = r['hit_counts']
         n_trials = len(hits)
@@ -299,7 +300,7 @@ if __name__ == '__main__':
 
     # 打印理论基线
     print('=== 理论随机基线 ===')
-    for pick_n in [3, 4, 5, 6, 7]:
+    for pick_n in SELECT_TYPES:
         bl = theoretical_baseline(pick_n)
         print(f'  选{pick_n}: 平均命中={bl["expected_hits"]:.2f}, ≥1={bl["p_ge1"]:.4f}, ≥2={bl["p_ge2"]:.4f}, ≥3={bl["p_ge3"]:.4f}')
     print()

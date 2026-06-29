@@ -68,14 +68,40 @@ BACKTEST_PERMUTATION_COUNT = 1000  # 置换检验次数
 BACKTEST_STABILITY_WINDOWS = 4     # 稳定性检查窗口数
 BACKTEST_STABILITY_THRESHOLD = 3   # 至少3/4窗口Lift>0
 
-# ─── 选型配置：选3~选7各选多少号码 ───
+# ─── 选型配置：选3~选10各选多少号码 ───
 SELECT_CONFIG = {
     3: {'pick': 3, 'top_n': 10,  'desc': '选3'},
     4: {'pick': 4, 'top_n': 12,  'desc': '选4'},
     5: {'pick': 5, 'top_n': 15,  'desc': '选5'},
     6: {'pick': 6, 'top_n': 15,  'desc': '选6'},
     7: {'pick': 7, 'top_n': 18,  'desc': '选7'},
+    8: {'pick': 8, 'top_n': 20,  'desc': '选8'},
+    9: {'pick': 9, 'top_n': 22,  'desc': '选9'},
+    10: {'pick': 10, 'top_n': 24, 'desc': '选10'},
 }
+SELECT_TYPES = tuple(sorted(SELECT_CONFIG))
+SELECT_PLAY_KEYS = tuple(f'select_{st}' for st in SELECT_TYPES)
+FUSHI_CONFIG = {
+    'fu_shi_7': {
+        'desc': '选5复式7码',
+        'base_pick': 5,
+        'pool_size': 7,
+        'numbers_field': 'top7_numbers',
+        'scores_field': 'top7_scores',
+        'pool_label': '7个核心号码',
+        'prize_key': 'fu_shi_7',
+    },
+    'fu_shi_10_11': {
+        'desc': '选10复式11码',
+        'base_pick': 10,
+        'pool_size': 11,
+        'numbers_field': 'top11_numbers',
+        'scores_field': 'top11_scores',
+        'pool_label': '11个核心号码',
+        'prize_key': 'select_10',
+    },
+}
+FUSHI_PLAY_KEYS = tuple(FUSHI_CONFIG)
 
 # ─── 特征开关配置（v5：所有特征默认停用，需回测验证才能启用）───
 # 按玩法分开评估: 每个特征可以有per-play-type的enabled状态
@@ -134,7 +160,31 @@ ACTIVE_STRATEGIES = {
         'model_weights': {},
         'window_size': 0,
     },
+    'select_8': {
+        'strategy_id': '',
+        'feature_weights': {},
+        'model_weights': {},
+        'window_size': 0,
+    },
+    'select_9': {
+        'strategy_id': '',
+        'feature_weights': {},
+        'model_weights': {},
+        'window_size': 0,
+    },
+    'select_10': {
+        'strategy_id': '',
+        'feature_weights': {},
+        'model_weights': {},
+        'window_size': 0,
+    },
     'fu_shi_7': {
+        'strategy_id': '',
+        'feature_weights': {},
+        'model_weights': {},
+        'window_size': 0,
+    },
+    'fu_shi_10_11': {
         'strategy_id': '',
         'feature_weights': {},
         'model_weights': {},
@@ -486,9 +536,47 @@ def resolve_play_strategy(play_type: str, allow_reference: bool = False) -> Opti
             'prediction_mode': 'reference_unvalidated',
             'is_validated': False,
         },
+        'select_8': {
+            'strategy_id': 'select_8_ref_freq150_mix',
+            'feature_weights': {'frequency': 0.45, 'gap': 0.25, 'position_residual': 0.15, 'road_residual': 0.15, 'repeat': 0.0, 'odd_even': 0.0, 'big_small': 0.0},
+            'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
+            'window_size': 150,
+            'repeat_direction': 'neutral',
+            'prediction_mode': 'reference_unvalidated',
+            'is_validated': False,
+        },
+        'select_9': {
+            'strategy_id': 'select_9_ref_freq100_mix',
+            'feature_weights': {'frequency': 0.40, 'gap': 0.30, 'position_residual': 0.15, 'road_residual': 0.15, 'repeat': 0.0, 'odd_even': 0.0, 'big_small': 0.0},
+            'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
+            'window_size': 100,
+            'repeat_direction': 'neutral',
+            'prediction_mode': 'reference_unvalidated',
+            'is_validated': False,
+        },
+        'select_10': {
+            'strategy_id': 'select_10_ref_freq100_repeat',
+            'feature_weights': {'frequency': 0.45, 'gap': 0.25, 'position_residual': 0.10, 'road_residual': 0.10, 'repeat': 0.10, 'odd_even': 0.0, 'big_small': 0.0},
+            'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
+            'window_size': 100,
+            'repeat_direction': 'follow',
+            'repeat_follow_score': 0.90,
+            'repeat_non_follow_score': 0.50,
+            'prediction_mode': 'reference_unvalidated',
+            'is_validated': False,
+        },
         'fu_shi_7': {
             'strategy_id': 'fu_shi_7_ref_freq100_mix',
             'feature_weights': {'frequency': 0.45, 'gap': 0.35, 'position_residual': 0.1, 'road_residual': 0.1, 'repeat': 0.0, 'odd_even': 0.0, 'big_small': 0.0},
+            'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
+            'window_size': 100,
+            'repeat_direction': 'neutral',
+            'prediction_mode': 'reference_unvalidated',
+            'is_validated': False,
+        },
+        'fu_shi_10_11': {
+            'strategy_id': 'fu_shi_10_11_ref_freq100_mix',
+            'feature_weights': {'frequency': 0.40, 'gap': 0.30, 'position_residual': 0.15, 'road_residual': 0.15, 'repeat': 0.0, 'odd_even': 0.0, 'big_small': 0.0},
             'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
             'window_size': 100,
             'repeat_direction': 'neutral',
@@ -553,6 +641,8 @@ def validate_and_activate_strategy(
     repeat_non_avoid_score: float = 0.85,
     repeat_follow_score: float = 0.90,
     repeat_non_follow_score: float = 0.50,
+    pool_diversify: bool = True,
+    pool_max_last_numbers: Optional[int] = None,
     auto_activate: bool = False,
     n_permutations: int = BACKTEST_PERMUTATION_COUNT,
 ) -> Dict:
@@ -583,15 +673,9 @@ def validate_and_activate_strategy(
             'valid_play_types': valid_play_types,
         }
 
-    # 确定 select_type（用于置换检验和Lift计算）
-    if play_type == 'fu_shi_7':
-        pick_n = 7
-    elif play_type.startswith('select_'):
-        try:
-            pick_n = int(play_type.split('_')[1])
-        except (ValueError, IndexError):
-            return {'error': f'无法解析玩法select_type: {play_type}'}
-    else:
+    # 确定选号数量（用于置换检验和Lift计算）
+    pick_n = _parse_play_pick_n(play_type)
+    if pick_n is None:
         return {'error': f'无法解析玩法: {play_type}'}
 
     # 至少有一个有效权重
@@ -628,19 +712,20 @@ def validate_and_activate_strategy(
         end_idx=val_range[1],
         min_train=50,
         window_size=window_size,
+        repeat_direction=repeat_direction,
+        repeat_avoid_score=repeat_avoid_score,
+        repeat_non_avoid_score=repeat_non_avoid_score,
+        repeat_follow_score=repeat_follow_score,
+        repeat_non_follow_score=repeat_non_follow_score,
+        pool_diversify=pool_diversify,
+        pool_max_last_numbers=pool_max_last_numbers,
     )
 
     if 'error' in val_result:
         return {'error': f'验证集回测失败: {val_result["error"]}'}
 
-    s_key = f'select_{pick_n}' if play_type != 'fu_shi_7' else 'fu_shi_7'
-    val_lift = val_result.get(s_key, {}).get('lift', 0)
-    # fu_shi_7 用 pool_mean_hits 的 lift
-    if play_type == 'fu_shi_7':
-        fu7_val = val_result.get('fu_shi_7', {})
-        pool_mean = fu7_val.get('pool_mean_hits', 0)
-        expected_random = fu7_val.get('pool_expected_random', hypergeom_expected(7))
-        val_lift = (pool_mean - expected_random) / expected_random if expected_random > 0 else 0
+    s_key = play_type
+    val_lift = _play_lift(val_result, play_type)
 
     condition_1_lift_positive = val_lift > 0
 
@@ -656,6 +741,13 @@ def validate_and_activate_strategy(
         metric='mean_hits',
         n_permutations=n_permutations,
         window_size=window_size,  # v8: 确保与回测使用相同窗口
+        repeat_direction=repeat_direction,
+        repeat_avoid_score=repeat_avoid_score,
+        repeat_non_avoid_score=repeat_non_avoid_score,
+        repeat_follow_score=repeat_follow_score,
+        repeat_non_follow_score=repeat_non_follow_score,
+        pool_diversify=pool_diversify,
+        pool_max_last_numbers=pool_max_last_numbers,
     )
 
     if 'error' in perm_result:
@@ -718,18 +810,20 @@ def validate_and_activate_strategy(
             end_idx=sub_end,
             min_train=50,
             window_size=window_size,
+            repeat_direction=repeat_direction,
+            repeat_avoid_score=repeat_avoid_score,
+            repeat_non_avoid_score=repeat_non_avoid_score,
+            repeat_follow_score=repeat_follow_score,
+            repeat_non_follow_score=repeat_non_follow_score,
+            pool_diversify=pool_diversify,
+            pool_max_last_numbers=pool_max_last_numbers,
         )
 
         if 'error' in sub_result:
             sub_window_lifts.append(0)  # 出错视为0
             continue
 
-        sub_lift = sub_result.get(s_key, {}).get('lift', 0)
-        if play_type == 'fu_shi_7':
-            fu7_sub = sub_result.get('fu_shi_7', {})
-            sub_pool_mean = fu7_sub.get('pool_mean_hits', 0)
-            sub_expected = fu7_sub.get('pool_expected_random', hypergeom_expected(7))
-            sub_lift = (sub_pool_mean - sub_expected) / sub_expected if sub_expected > 0 else 0
+        sub_lift = _play_lift(sub_result, play_type)
 
         sub_window_lifts.append(sub_lift)
 
@@ -743,29 +837,22 @@ def validate_and_activate_strategy(
         end_idx=final_test_range[1],
         min_train=50,
         window_size=window_size,
+        repeat_direction=repeat_direction,
+        repeat_avoid_score=repeat_avoid_score,
+        repeat_non_avoid_score=repeat_non_avoid_score,
+        repeat_follow_score=repeat_follow_score,
+        repeat_non_follow_score=repeat_non_follow_score,
+        pool_diversify=pool_diversify,
+        pool_max_last_numbers=pool_max_last_numbers,
     )
 
     final_test_lift = None
     if 'error' not in final_test_result:
-        final_test_lift = final_test_result.get(s_key, {}).get('lift', 0)
-        if play_type == 'fu_shi_7':
-            fu7_ft = final_test_result.get('fu_shi_7', {})
-            ft_pool_mean = fu7_ft.get('pool_mean_hits', 0)
-            ft_expected = fu7_ft.get('pool_expected_random', hypergeom_expected(7))
-            final_test_lift = (ft_pool_mean - ft_expected) / ft_expected if ft_expected > 0 else 0
+        final_test_lift = _play_lift(final_test_result, play_type)
 
     # ── v9: 条件4 — 关键奖级概率不低于随机 ──
     # 不只看平均命中Lift，还要看关键中奖档位的概率
-    prize_tier_thresholds = {
-        'select_3': ['>=2', '>=3'],
-        'select_4': ['>=2', '>=3'],
-        'select_5': ['>=3', '>=4'],
-        'select_6': ['>=3', '>=4'],
-        'select_7': ['>=3', '>=4'],
-        'fu_shi_7': ['>=3'],  # 复式7码看池命中>=3
-    }
-
-    threshold_tiers = prize_tier_thresholds.get(play_type, ['>=3'])
+    threshold_tiers = _prize_tier_thresholds(play_type)
     val_prize_probs = val_result.get(s_key, {}).get('probabilities', {})
     theoretical_probs = val_result.get(s_key, {}).get('theoretical_probs', {})
 
@@ -806,25 +893,7 @@ def validate_and_activate_strategy(
     ).hexdigest()[:6]
     strategy_id = f'{play_type}_w{window_size}_{fw_hash}'
 
-    # ── 激活（若条件通过 + auto_activate=True）───
     activated = False
-    if all_conditions_passed and auto_activate:
-        strategy_dict = {
-            'strategy_id': strategy_id,
-            'feature_weights': feature_weights,
-            'model_weights': model_weights,
-            'window_size': window_size,
-            'repeat_direction': repeat_direction,
-            'repeat_avoid_score': repeat_avoid_score,
-            'repeat_non_avoid_score': repeat_non_avoid_score,
-            'repeat_follow_score': repeat_follow_score,
-            'repeat_non_follow_score': repeat_non_follow_score,
-        }
-        activate_verified_strategy(play_type, strategy_dict, report)
-        activated = True
-        log.info(f'快乐8: 策略已激活 {play_type} -> {strategy_id}')
-    elif all_conditions_passed and not auto_activate:
-        log.info(f'快乐8: 策略验证通过 {play_type}，但auto_activate=False，需人工确认')
 
     # ── 返回验证报告 ──
     report = {
@@ -833,6 +902,13 @@ def validate_and_activate_strategy(
         'window_size': window_size,
         'feature_weights': feature_weights,
         'model_weights': model_weights,
+        'repeat_direction': repeat_direction,
+        'repeat_avoid_score': repeat_avoid_score,
+        'repeat_non_avoid_score': repeat_non_avoid_score,
+        'repeat_follow_score': repeat_follow_score,
+        'repeat_non_follow_score': repeat_non_follow_score,
+        'pool_diversify': pool_diversify,
+        'pool_max_last_numbers': pool_max_last_numbers,
         'conditions': {
             'condition_1_lift_positive': {
                 'passed': condition_1_lift_positive,
@@ -892,6 +968,28 @@ def validate_and_activate_strategy(
             }
         }
 
+    # ── 激活（若条件通过 + auto_activate=True）───
+    if all_conditions_passed and auto_activate:
+        strategy_dict = {
+            'strategy_id': strategy_id,
+            'feature_weights': feature_weights,
+            'model_weights': model_weights,
+            'window_size': window_size,
+            'repeat_direction': repeat_direction,
+            'repeat_avoid_score': repeat_avoid_score,
+            'repeat_non_avoid_score': repeat_non_avoid_score,
+            'repeat_follow_score': repeat_follow_score,
+            'repeat_non_follow_score': repeat_non_follow_score,
+            'pool_diversify': pool_diversify,
+            'pool_max_last_numbers': pool_max_last_numbers,
+        }
+        activate_verified_strategy(play_type, strategy_dict, report)
+        activated = True
+        report['activated'] = True
+        log.info(f'快乐8: 策略已激活 {play_type} -> {strategy_id}')
+    elif all_conditions_passed and not auto_activate:
+        log.info(f'快乐8: 策略验证通过 {play_type}，但auto_activate=False，需人工确认')
+
     return report
 
 
@@ -935,6 +1033,42 @@ def hypergeom_p_ge(pick_n: int, min_hits: int) -> float:
 def hypergeom_expected(pick_n: int) -> float:
     """超几何分布期望命中数 = pick_n * 20/80"""
     return pick_n * KL8_DRAW_COUNT / KL8_NUM_RANGE
+
+
+def _parse_play_pick_n(play_type: str) -> Optional[int]:
+    """解析玩法用于置换检验的选号数量。"""
+    if play_type in FUSHI_CONFIG:
+        return FUSHI_CONFIG[play_type]['pool_size']
+    if play_type.startswith('select_'):
+        try:
+            return int(play_type.split('_')[1])
+        except (ValueError, IndexError):
+            return None
+    return None
+
+
+def _play_lift(result: Dict, play_type: str) -> float:
+    """从回测结果中取出标准玩法或复式玩法的Lift。"""
+    if play_type in FUSHI_CONFIG:
+        fushi_result = result.get(play_type, {})
+        pool_mean = fushi_result.get('pool_mean_hits', 0)
+        expected = fushi_result.get(
+            'pool_expected_random',
+            hypergeom_expected(FUSHI_CONFIG[play_type]['pool_size']),
+        )
+        return (pool_mean - expected) / expected if expected > 0 else 0
+    return result.get(play_type, {}).get('lift', 0)
+
+
+def _prize_tier_thresholds(play_type: str) -> List[str]:
+    if play_type in FUSHI_CONFIG:
+        return ['>=3'] if FUSHI_CONFIG[play_type]['pool_size'] <= 7 else ['>=4', '>=5']
+    pick_n = _parse_play_pick_n(play_type) or 5
+    if pick_n <= 4:
+        return ['>=2', '>=3']
+    if pick_n <= 7:
+        return ['>=3', '>=4']
+    return ['>=4', '>=5']
 
 
 # ─── 多重检验校正（v6新增）───
@@ -1209,7 +1343,11 @@ def load_prize_table() -> Dict:
         'select_5': {'5': 10000, '4': 500, '3': 30, '2': 5, '1': 0, '0': 0, 'bet': 2},
         'select_6': {'6': 300000, '5': 5000, '4': 100, '3': 10, '2': 0, '1': 0, '0': 0, 'bet': 2},
         'select_7': {'7': 1000000, '6': 50000, '5': 1000, '4': 50, '3': 5, '2': 0, '1': 0, '0': 0, 'bet': 2},
+        'select_8': {'8': 1000000, '7': 50000, '6': 5000, '5': 500, '4': 50, '3': 5, '2': 0, '1': 0, '0': 0, 'bet': 2},
+        'select_9': {'9': 3000000, '8': 100000, '7': 10000, '6': 1000, '5': 100, '4': 5, '3': 0, '2': 0, '1': 0, '0': 0, 'bet': 2},
+        'select_10': {'10': 5000000, '9': 200000, '8': 20000, '7': 2000, '6': 200, '5': 10, '4': 0, '3': 0, '2': 0, '1': 0, '0': 0, 'bet': 2},
         'fu_shi_7': {'5': 10000, '4': 500, '3': 30, '2': 5, '1': 0, '0': 0, 'bet_per_combo': 2},
+        'fu_shi_10_11': {'prize_key': 'select_10', 'base_pick': 10, 'pool_size': 11, 'bet_per_combo': 2},
     }
 
 
@@ -2166,31 +2304,25 @@ class KL8Analyzer:
             'candidate_strategies': {k: dict(v) for k, v in CANDIDATE_STRATEGIES.items()},
             # v7.1: 每个玩法记录strategy_id和prediction_mode
             'play_strategies': {
-                'select_3': prediction_result.get('select_3', {}).get('strategy_id', ''),
-                'select_4': prediction_result.get('select_4', {}).get('strategy_id', ''),
-                'select_5': prediction_result.get('select_5', {}).get('strategy_id', ''),
-                'select_6': prediction_result.get('select_6', {}).get('strategy_id', ''),
-                'select_7': prediction_result.get('select_7', {}).get('strategy_id', ''),
-                'fu_shi_7': prediction_result.get('fu_shi_7', {}).get('strategy_id', ''),
+                key: prediction_result.get(key, {}).get('strategy_id', '')
+                for key in (*SELECT_PLAY_KEYS, *FUSHI_PLAY_KEYS)
             },
             'prediction_modes': {
-                'select_3': prediction_result.get('select_3', {}).get('prediction_mode', ''),
-                'select_4': prediction_result.get('select_4', {}).get('prediction_mode', ''),
-                'select_5': prediction_result.get('select_5', {}).get('prediction_mode', ''),
-                'select_6': prediction_result.get('select_6', {}).get('prediction_mode', ''),
-                'select_7': prediction_result.get('select_7', {}).get('prediction_mode', ''),
-                'fu_shi_7': prediction_result.get('fu_shi_7', {}).get('prediction_mode', ''),
+                key: prediction_result.get(key, {}).get('prediction_mode', '')
+                for key in (*SELECT_PLAY_KEYS, *FUSHI_PLAY_KEYS)
             },
             # v9: 保存每种玩法当时实际使用的完整策略配置
             'resolved_strategies': prediction_result.get('resolved_strategies', {}),
             'ranking': prediction_result.get('ranking', []),
-            'select_3': prediction_result.get('select_3', {}).get('numbers', []),
-            'select_4': prediction_result.get('select_4', {}).get('numbers', []),
-            'select_5': prediction_result.get('select_5', {}).get('numbers', []),
-            'select_6': prediction_result.get('select_6', {}).get('numbers', []),
-            'select_7': prediction_result.get('select_7', {}).get('numbers', []),
-            'fu_shi_7': prediction_result.get('fu_shi_7', {}).get('top7_numbers', []),
         }
+        for select_type in SELECT_TYPES:
+            key = f'select_{select_type}'
+            snapshot[key] = prediction_result.get(key, {}).get('numbers', [])
+        for fushi_key, fushi_cfg in FUSHI_CONFIG.items():
+            snapshot[fushi_key] = prediction_result.get(fushi_key, {}).get(
+                fushi_cfg['numbers_field'],
+                prediction_result.get(fushi_key, {}).get('core_numbers', []),
+            )
 
         snapshot_file = snapshot_dir / f'snapshot_{snapshot_id}.json'
 
@@ -2309,7 +2441,7 @@ class KL8Analyzer:
         cumulative_bet = 0
         cumulative_prize = 0
 
-        for select_type in [3, 4, 5, 6, 7]:
+        for select_type in SELECT_TYPES:
             numbers = _clean_pick_numbers(
                 snapshot.get(f'select_{select_type}', []),
                 select_type,
@@ -2339,32 +2471,46 @@ class KL8Analyzer:
                 'profit_roi': round(profit_roi, 4),
             }
 
-        # v6: 复式7码ROI — 每期全部21注组合都计算
-        fu_shi_7_nums = _clean_pick_numbers(snapshot.get('fu_shi_7', []), 7)
-        fu7_placed = len(fu_shi_7_nums) == 7
+        # 复式玩法ROI — 每期全部组合都计算
+        fushi_settlement = {}
+        for fushi_key, fushi_cfg in FUSHI_CONFIG.items():
+            pool_size = fushi_cfg['pool_size']
+            base_pick = fushi_cfg['base_pick']
+            core_numbers = _clean_pick_numbers(snapshot.get(fushi_key, []), pool_size)
+            placed = len(core_numbers) == pool_size
 
-        fu7_prize_info = prize_table.get('fu_shi_7', {})
-        bet_per_combo = fu7_prize_info.get('bet_per_combo', 2)
+            fushi_prize_info = prize_table.get(fushi_key, {})
+            prize_key = fushi_prize_info.get('prize_key', fushi_cfg.get('prize_key', fushi_key))
+            combo_prize_info = prize_table.get(prize_key, fushi_prize_info)
+            bet_per_combo = fushi_prize_info.get('bet_per_combo', combo_prize_info.get('bet', 2))
 
-        pool_hits = 0
-        combo_hits = []
-        fu7_total_bet = 0
-        fu7_total_prize = 0
+            pool_hits = 0
+            combo_hits = []
+            total_bet = 0
+            total_prize = 0
 
-        if fu7_placed and fu_shi_7_nums:
-            pool_hits = len(set(fu_shi_7_nums) & actual_set)
-            # v6: 每期全部21注组合都计算（无论命中率）
-            fu7_total_bet = math.comb(7, 5) * bet_per_combo  # = 21 * 2 = 42
-            for combo in combinations(fu_shi_7_nums, 5):
-                combo_h = len(set(combo) & actual_set)
-                combo_hits.append(combo_h)
-                fu7_total_prize += fu7_prize_info.get(str(combo_h), 0)
+            if placed and core_numbers:
+                pool_hits = len(set(core_numbers) & actual_set)
+                total_bet = math.comb(pool_size, base_pick) * bet_per_combo
+                for combo in combinations(core_numbers, base_pick):
+                    combo_h = len(set(combo) & actual_set)
+                    combo_hits.append(combo_h)
+                    total_prize += combo_prize_info.get(str(combo_h), 0)
 
-        cumulative_bet += fu7_total_bet
-        cumulative_prize += fu7_total_prize
+            cumulative_bet += total_bet
+            cumulative_prize += total_prize
 
-        hit_distribution = dict(Counter(combo_hits)) if combo_hits else {}
-        max_combo_hits = max(combo_hits, default=0)
+            fushi_settlement[fushi_key] = {
+                'placed': placed,
+                'pool_hits': pool_hits,
+                'max_combo_hits': max(combo_hits, default=0),
+                'hit_distribution': dict(Counter(combo_hits)) if combo_hits else {},
+                'combo_pick': base_pick,
+                'pool_size': pool_size,
+                'total_combinations': math.comb(pool_size, base_pick) if placed else 0,
+                'total_bet': total_bet,
+                'total_prize': total_prize,
+            }
 
         # v6: 累计ROI统一
         cumulative_return_multiple = cumulative_prize / max(cumulative_bet, 1)
@@ -2382,17 +2528,18 @@ class KL8Analyzer:
             'strategy_ids': dict(snapshot.get('play_strategies', {})),  # v9: 从快照读取
             'prediction_modes': dict(snapshot.get('prediction_modes', {})),  # v9: 从快照读取
             'resolved_strategies': dict(snapshot.get('resolved_strategies', {})),  # v9: 完整策略快照
-            'hit_select_3': prize_settlement.get('select_3', {}).get('hits', 0),
-            'hit_select_4': prize_settlement.get('select_4', {}).get('hits', 0),
-            'hit_select_5': prize_settlement.get('select_5', {}).get('hits', 0),
-            'hit_select_6': prize_settlement.get('select_6', {}).get('hits', 0),
-            'hit_select_7': prize_settlement.get('select_7', {}).get('hits', 0),
-            'fu_shi_7_pool_hits': pool_hits,
-            'hit_fu_shi_7_max': max_combo_hits,
-            'fu_shi_7_hit_distribution': hit_distribution,
+            **{
+                f'hit_select_{select_type}': prize_settlement.get(f'select_{select_type}', {}).get('hits', 0)
+                for select_type in SELECT_TYPES
+            },
             'prize_settlement': prize_settlement,
-            'fu7_total_bet': fu7_total_bet,
-            'fu7_total_prize': fu7_total_prize,
+            'fushi_settlement': fushi_settlement,
+            'fu_shi_7_pool_hits': fushi_settlement.get('fu_shi_7', {}).get('pool_hits', 0),
+            'hit_fu_shi_7_max': fushi_settlement.get('fu_shi_7', {}).get('max_combo_hits', 0),
+            'fu_shi_7_hit_distribution': fushi_settlement.get('fu_shi_7', {}).get('hit_distribution', {}),
+            'fu_shi_10_11_pool_hits': fushi_settlement.get('fu_shi_10_11', {}).get('pool_hits', 0),
+            'hit_fu_shi_10_11_max': fushi_settlement.get('fu_shi_10_11', {}).get('max_combo_hits', 0),
+            'fu_shi_10_11_hit_distribution': fushi_settlement.get('fu_shi_10_11', {}).get('hit_distribution', {}),
             'cumulative_bet': cumulative_bet,
             'cumulative_prize': cumulative_prize,
             'cumulative_return_multiple': round(cumulative_return_multiple, 4),
@@ -2517,7 +2664,7 @@ class KL8Analyzer:
 
         # v9.2: 各玩法按自己的策略独立生成候选池
         # VERIFY_ONLY_MODE: 没有validated策略时不输出号码
-        for select_type in [3, 4, 5, 6, 7]:
+        for select_type in SELECT_TYPES:
             config = SELECT_CONFIG[select_type]
             s_key = f'select_{select_type}'
 
@@ -2597,27 +2744,36 @@ class KL8Analyzer:
                 ),
             }
 
-        # 复式7码（v9.2: 也按自己的策略独立验证）
-        strategy = resolve_play_strategy('fu_shi_7')
+        # 复式玩法（v9.2: 也按自己的策略独立验证）
+        for fushi_key, fushi_cfg in FUSHI_CONFIG.items():
+            strategy = resolve_play_strategy(fushi_key)
+            numbers_field = fushi_cfg['numbers_field']
+            pool_size = fushi_cfg['pool_size']
+            base_pick = fushi_cfg['base_pick']
 
-        # v9.2: VERIFY_ONLY_MODE — 没有已验证策略时不输出号码
-        if strategy is None:
-            results['fu_shi_7'] = {
-                'top7_numbers': [],
-                'total_combinations': 0,
-                'combinations': [],
-                'status': 'verification_pending',
-                'prediction_mode': 'not_verified',
-                'is_validated': False,
-                'warning': '当前没有通过验证的策略，本玩法暂不输出推荐号码。',
-            }
-            resolved_strategies['fu_shi_7'] = {
-                'strategy_id': '',
-                'prediction_mode': 'not_verified',
-                'is_validated': False,
-            }
-        else:
-            resolved_strategies['fu_shi_7'] = {
+            # v9.2: VERIFY_ONLY_MODE — 没有已验证策略时不输出号码
+            if strategy is None:
+                results[fushi_key] = {
+                    numbers_field: [],
+                    'core_numbers': [],
+                    'total_combinations': 0,
+                    'combinations': [],
+                    'combo_pick': base_pick,
+                    'pool_size': pool_size,
+                    'desc': fushi_cfg['desc'],
+                    'status': 'verification_pending',
+                    'prediction_mode': 'not_verified',
+                    'is_validated': False,
+                    'warning': '当前没有通过验证的策略，本玩法暂不输出推荐号码。',
+                }
+                resolved_strategies[fushi_key] = {
+                    'strategy_id': '',
+                    'prediction_mode': 'not_verified',
+                    'is_validated': False,
+                }
+                continue
+
+            resolved_strategies[fushi_key] = {
                 'strategy_id': strategy['strategy_id'],
                 'feature_weights': strategy['feature_weights'],
                 'model_weights': strategy['model_weights'],
@@ -2633,23 +2789,28 @@ class KL8Analyzer:
                 'is_validated': strategy['is_validated'],
             }
 
-            fu_pool_result = self.build_pool_by_strategy(strategy, pool_size=7)
-            fu_top7 = fu_pool_result.get('selected', [])[:7]
+            fu_pool_result = self.build_pool_by_strategy(strategy, pool_size=pool_size)
+            core_numbers = fu_pool_result.get('selected', [])[:pool_size]
 
-            all_candidate_pools['fu_shi_7'] = {
-                'top7': fu_top7,
+            all_candidate_pools[fushi_key] = {
+                f'top{pool_size}': core_numbers,
+                'core_numbers': core_numbers,
                 'strategy_id': strategy['strategy_id'],
             }
 
-            if len(fu_top7) == 7:
-                combo_list = [sorted(c) for c in combinations(fu_top7, 5)]
+            if len(core_numbers) == pool_size:
+                combo_list = [sorted(c) for c in combinations(core_numbers, base_pick)]
             else:
                 combo_list = []
 
-            results['fu_shi_7'] = {
-                'top7_numbers': fu_top7,
+            results[fushi_key] = {
+                numbers_field: core_numbers,
+                'core_numbers': core_numbers,
                 'total_combinations': len(combo_list),
                 'combinations': combo_list,
+                'combo_pick': base_pick,
+                'pool_size': pool_size,
+                'desc': fushi_cfg['desc'],
                 'strategy_id': strategy['strategy_id'],
                 'prediction_mode': strategy['prediction_mode'],
                 'is_validated': strategy['is_validated'],
@@ -2678,8 +2839,8 @@ class KL8Analyzer:
 
         # v9.2: 状态分三种: validated / verification_pending / no_data
         # 判断整体预测模式
-        all_modes = [results.get(f'select_{st}', {}).get('prediction_mode', '') for st in [3,4,5,6,7]]
-        all_modes.append(results.get('fu_shi_7', {}).get('prediction_mode', ''))
+        all_modes = [results.get(f'select_{st}', {}).get('prediction_mode', '') for st in SELECT_TYPES]
+        all_modes.extend(results.get(key, {}).get('prediction_mode', '') for key in FUSHI_PLAY_KEYS)
 
         if any(m == 'validated' for m in all_modes):
             overall_status = 'validated'
@@ -2861,7 +3022,7 @@ def _compute_prediction_changes(
 
     # ── 各玩法推荐号码变化 ──
     play_changes = {}
-    for play_type in ['select_3', 'select_4', 'select_5', 'select_6', 'select_7']:
+    for play_type in SELECT_PLAY_KEYS:
         current_nums = set(current_results.get(play_type, {}).get('numbers', []))
         prev_nums = set()
 
@@ -2882,21 +3043,23 @@ def _compute_prediction_changes(
             'unchanged_count': len(current_nums & prev_nums),
         }
 
-    # 复式7码
-    current_fu7 = set(current_results.get('fu_shi_7', {}).get('top7_numbers', []))
-    prev_fu7 = set()
-    prev_fu7_nums = last_snapshot.get('fu_shi_7', [])
-    if isinstance(prev_fu7_nums, list):
-        prev_fu7 = set(prev_fu7_nums)
-    elif isinstance(prev_fu7_nums, dict) and prev_fu7_nums.get('top7_numbers'):
-        prev_fu7 = set(prev_fu7_nums['top7_numbers'])
+    # 复式玩法
+    for fushi_key, fushi_cfg in FUSHI_CONFIG.items():
+        field = fushi_cfg['numbers_field']
+        current_fu = set(current_results.get(fushi_key, {}).get(field, current_results.get(fushi_key, {}).get('core_numbers', [])))
+        prev_fu = set()
+        prev_fu_nums = last_snapshot.get(fushi_key, [])
+        if isinstance(prev_fu_nums, list):
+            prev_fu = set(prev_fu_nums)
+        elif isinstance(prev_fu_nums, dict):
+            prev_fu = set(prev_fu_nums.get(field, prev_fu_nums.get('core_numbers', [])))
 
-    play_changes['fu_shi_7'] = {
-        'added': sorted(current_fu7 - prev_fu7),
-        'removed': sorted(prev_fu7 - current_fu7),
-        'changed_count': len(current_fu7 - prev_fu7) + len(prev_fu7 - current_fu7),
-        'unchanged_count': len(current_fu7 & prev_fu7),
-    }
+        play_changes[fushi_key] = {
+            'added': sorted(current_fu - prev_fu),
+            'removed': sorted(prev_fu - current_fu),
+            'changed_count': len(current_fu - prev_fu) + len(prev_fu - current_fu),
+            'unchanged_count': len(current_fu & prev_fu),
+        }
 
     # ── 变化原因 ──
     if pool_changed == 0 and all(pc['changed_count'] == 0 for pc in play_changes.values()):
@@ -3142,8 +3305,8 @@ class KL8RollingBacktest:
         effective_window = window_size or KL8_DEFAULT_HISTORY
 
         all_hits = defaultdict(list)
-        all_fu_shi_7_pool_hits = []
-        all_fu_shi_7_combo_hits_detail = []  # v6: 每期所有组合命中详情（用于ROI）
+        all_fushi_pool_hits = defaultdict(list)
+        all_fushi_combo_hits_detail = defaultdict(list)  # 每期所有组合命中详情（用于ROI）
 
         for t in range(actual_start, actual_end):
             # 只用t期之前的历史，限制窗口大小
@@ -3181,18 +3344,19 @@ class KL8RollingBacktest:
 
             # 无信号时，该期命中数记录为0
             if vote.get('status') == 'no_validated_signal':
-                for select_type in [3, 4, 5, 6, 7]:
+                for select_type in SELECT_TYPES:
                     all_hits[select_type].append(0)
-                all_fu_shi_7_pool_hits.append(0)
-                all_fu_shi_7_combo_hits_detail.append([])
+                for fushi_key in FUSHI_PLAY_KEYS:
+                    all_fushi_pool_hits[fushi_key].append(0)
+                    all_fushi_combo_hits_detail[fushi_key].append([])
                 continue
 
             # v6: 从投票结果截取top20（与线上逻辑一致）
             candidate_items = vote.get('candidates', [])
             top20 = [num for num, _ in candidate_items]
 
-            # 后续选3/5/7都从同一份候选池取号，但按各自选型控制上期重号比例
-            for select_type in [3, 4, 5, 6, 7]:
+            # 后续各选型都从同一份候选池取号，但按各自选型控制上期重号比例
+            for select_type in SELECT_TYPES:
                 final_repeat_cap = min(
                     pool_max_last_numbers if pool_max_last_numbers is not None else _default_repeat_cap(select_type),
                     _default_repeat_cap(select_type),
@@ -3208,32 +3372,34 @@ class KL8RollingBacktest:
                 hits = len(set(top_nums) & actual_numbers)
                 all_hits[select_type].append(hits)
 
-            # 复式7码: 从同一候选池取7码并控制上期重号比例
-            fu7_repeat_cap = min(
-                pool_max_last_numbers if pool_max_last_numbers is not None else _default_repeat_cap(7),
-                _default_repeat_cap(7),
-            )
-            top7 = [
-                num for num, _ in _diversify_candidate_pool(
-                    candidate_items,
-                    7,
-                    temp_analyzer.statistics.get('last_numbers', set()),
-                    max_last_numbers=fu7_repeat_cap,
+            # 复式玩法: 从同一候选池取核心码并控制上期重号比例
+            for fushi_key, fushi_cfg in FUSHI_CONFIG.items():
+                pool_size = fushi_cfg['pool_size']
+                base_pick = fushi_cfg['base_pick']
+                repeat_cap = min(
+                    pool_max_last_numbers if pool_max_last_numbers is not None else _default_repeat_cap(pool_size),
+                    _default_repeat_cap(pool_size),
                 )
-            ]
-            pool_hits = len(set(top7) & actual_numbers)
-            all_fu_shi_7_pool_hits.append(pool_hits)
+                core_numbers = [
+                    num for num, _ in _diversify_candidate_pool(
+                        candidate_items,
+                        pool_size,
+                        temp_analyzer.statistics.get('last_numbers', set()),
+                        max_last_numbers=repeat_cap,
+                    )
+                ]
+                pool_hits = len(set(core_numbers) & actual_numbers)
+                all_fushi_pool_hits[fushi_key].append(pool_hits)
 
-            # v6: 每期所有21组合命中详情（用于ROI精确计算）
-            combo_hits = []
-            for combo in combinations(top7, 5):
-                combo_hits.append(len(set(combo) & actual_numbers))
-            all_fu_shi_7_combo_hits_detail.append(combo_hits)
+                combo_hits = []
+                for combo in combinations(core_numbers, base_pick):
+                    combo_hits.append(len(set(combo) & actual_numbers))
+                all_fushi_combo_hits_detail[fushi_key].append(combo_hits)
 
         # 统计结果（使用超几何基线）
         summary = {}
 
-        for select_type in [3, 4, 5, 6, 7]:
+        for select_type in SELECT_TYPES:
             hits_list = all_hits[select_type]
             n_tests = len(hits_list)
             if n_tests == 0:
@@ -3300,48 +3466,62 @@ class KL8RollingBacktest:
                 'random_profit_roi': round(random_profit_roi, 4),
             }
 
-        # 复式7码ROI（v6: 每期全部21注组合都计算，无论命中率）
-        if all_fu_shi_7_pool_hits:
-            pool_mean = sum(all_fu_shi_7_pool_hits) / len(all_fu_shi_7_pool_hits)
+        # 复式玩法ROI（每期全部组合都计算，无论命中率）
+        prize_table = load_prize_table()
+        for fushi_key, fushi_cfg in FUSHI_CONFIG.items():
+            pool_hits_list = all_fushi_pool_hits[fushi_key]
+            if not pool_hits_list:
+                continue
 
-            prize_table = load_prize_table()
-            fu7_prize_info = prize_table.get('fu_shi_7', {})
-            bet_per_combo = fu7_prize_info.get('bet_per_combo', 2)
+            pool_size = fushi_cfg['pool_size']
+            base_pick = fushi_cfg['base_pick']
+            pool_mean = sum(pool_hits_list) / len(pool_hits_list)
+            probabilities = {}
+            theoretical_probs = {}
+            for k in range(1, pool_size + 1):
+                probabilities[f'>={k}'] = sum(1 for h in pool_hits_list if h >= k) / len(pool_hits_list)
+                theoretical_probs[f'>={k}'] = hypergeom_p_ge(pool_size, k)
 
-            # v6: 每期投注= 21注 * 单注金额（无论命中率）
-            n_fu7_tests = len(all_fu_shi_7_pool_hits)
-            fu7_total_bet = n_fu7_tests * math.comb(7, 5) * bet_per_combo
+            fushi_prize_info = prize_table.get(fushi_key, {})
+            prize_key = fushi_prize_info.get('prize_key', fushi_cfg.get('prize_key', fushi_key))
+            combo_prize_info = prize_table.get(prize_key, fushi_prize_info)
+            bet_per_combo = fushi_prize_info.get('bet_per_combo', combo_prize_info.get('bet', 2))
 
-            # v6: 每期奖金= 所有21组组合的奖金之和
-            fu7_total_prize = 0
-            for combo_hits_list in all_fu_shi_7_combo_hits_detail:
+            n_tests = len(pool_hits_list)
+            total_bet = n_tests * math.comb(pool_size, base_pick) * bet_per_combo
+
+            total_prize = 0
+            for combo_hits_list in all_fushi_combo_hits_detail[fushi_key]:
                 if combo_hits_list:
-                    fu7_total_prize += sum(
-                        fu7_prize_info.get(str(h), 0)
+                    total_prize += sum(
+                        combo_prize_info.get(str(h), 0)
                         for h in combo_hits_list
                     )
 
-            fu7_return_multiple = fu7_total_prize / max(fu7_total_bet, 1)
-            fu7_profit_roi = (fu7_total_prize - fu7_total_bet) / max(fu7_total_bet, 1)
+            return_multiple = total_prize / max(total_bet, 1)
+            profit_roi = (total_prize - total_bet) / max(total_bet, 1)
 
-            # 理论随机ROI（7码随机选5命中）
-            random_fu7_expected_prize_per_combo = sum(
-                hypergeom_pmf(5, k) * fu7_prize_info.get(str(k), 0)
-                for k in range(0, 6)
+            random_expected_prize_per_combo = sum(
+                hypergeom_pmf(base_pick, k) * combo_prize_info.get(str(k), 0)
+                for k in range(0, base_pick + 1)
             )
-            random_fu7_return_multiple = random_fu7_expected_prize_per_combo / max(bet_per_combo, 1)
-            random_fu7_profit_roi = (random_fu7_expected_prize_per_combo - bet_per_combo) / max(bet_per_combo, 1)
+            random_return_multiple = random_expected_prize_per_combo / max(bet_per_combo, 1)
+            random_profit_roi = (random_expected_prize_per_combo - bet_per_combo) / max(bet_per_combo, 1)
 
-            summary['fu_shi_7'] = {
+            summary[fushi_key] = {
                 'pool_mean_hits': round(pool_mean, 4),
-                'pool_expected_random': round(hypergeom_expected(7), 4),
-                'n_tests': n_fu7_tests,
-                'total_bet': fu7_total_bet,
-                'total_prize': fu7_total_prize,
-                'return_multiple': round(fu7_return_multiple, 4),
-                'profit_roi': round(fu7_profit_roi, 4),
-                'random_return_multiple': round(random_fu7_return_multiple, 4),
-                'random_profit_roi': round(random_fu7_profit_roi, 4),
+                'pool_expected_random': round(hypergeom_expected(pool_size), 4),
+                'probabilities': probabilities,
+                'theoretical_probs': theoretical_probs,
+                'combo_pick': base_pick,
+                'pool_size': pool_size,
+                'n_tests': n_tests,
+                'total_bet': total_bet,
+                'total_prize': total_prize,
+                'return_multiple': round(return_multiple, 4),
+                'profit_roi': round(profit_roi, 4),
+                'random_return_multiple': round(random_return_multiple, 4),
+                'random_profit_roi': round(random_profit_roi, 4),
             }
 
         return summary
@@ -3364,6 +3544,8 @@ class KL8RollingBacktest:
         repeat_non_avoid_score: float = 0.85,
         repeat_follow_score: float = 0.90,
         repeat_non_follow_score: float = 0.50,
+        pool_diversify: bool = True,
+        pool_max_last_numbers: Optional[int] = None,
     ) -> Dict:
         """置换检验: 打乱实际开奖期顺序（v9重大改动）
 
@@ -3616,7 +3798,7 @@ class KL8RollingBacktest:
 
             # v6: 每个玩法单独做置换检验
             perm_results = {}
-            for select_type in [3, 4, 5, 6, 7]:
+            for select_type in SELECT_TYPES:
                 perm_r = self._permutation_test(
                     single_weights, model_weights,
                     start_idx=val_range[0],
@@ -3631,7 +3813,7 @@ class KL8RollingBacktest:
             # v6: 多重检验校正 — 每个玩法的5个特征p值做BH FDR
             # 收集当前特征在所有玩法下的原始p值
             all_p_values_for_correction = []
-            for select_type in [3, 4, 5, 6, 7]:
+            for select_type in SELECT_TYPES:
                 perm_r = perm_results.get(f'select_{select_type}', {})
                 p_val = perm_r.get('p_value', 1.0)
                 all_p_values_for_correction.append(p_val)
@@ -3641,7 +3823,7 @@ class KL8RollingBacktest:
 
             # 按玩法判断有效性（v6: is_candidate条件更严格）
             play_type_recommendations = {}
-            for i, select_type in enumerate([3, 4, 5, 6, 7]):
+            for i, select_type in enumerate(SELECT_TYPES):
                 s_key = f'select_{select_type}'
 
                 val_s = val_result.get(s_key, {})
@@ -3686,7 +3868,7 @@ class KL8RollingBacktest:
                 'permutation_tests': perm_results,
                 'bh_fdr_adjusted_p_values': {
                     f'select_{st}': adjusted_p_values[i]
-                    for i, st in enumerate([3, 4, 5, 6, 7])
+                    for i, st in enumerate(SELECT_TYPES)
                     if i < len(adjusted_p_values)
                 },
                 'play_type_recommendations': play_type_recommendations,
@@ -3879,7 +4061,7 @@ class KL8RollingBacktest:
 
         # 2. 超几何随机基线
         baseline = {}
-        for select_type in [3, 4, 5, 6, 7]:
+        for select_type in SELECT_TYPES:
             baseline[f'select_{select_type}'] = self.hypergeom_baseline(select_type)
         result['random_baseline'] = baseline
 
@@ -3969,14 +4151,8 @@ class KL8RollingBacktest:
             candidate_strategies = VALIDATION_CANDIDATES
 
         # 解析 pick_n
-        if play_type == 'fu_shi_7':
-            pick_n = 7
-        elif play_type.startswith('select_'):
-            try:
-                pick_n = int(play_type.split('_')[1])
-            except (ValueError, IndexError):
-                return {'error': f'无法解析玩法: {play_type}', 'all_failed': True}
-        else:
+        pick_n = _parse_play_pick_n(play_type)
+        if pick_n is None:
             return {'error': f'无效玩法: {play_type}', 'all_failed': True}
 
         history = self.analyzer.history_data
@@ -4035,13 +4211,7 @@ class KL8RollingBacktest:
 
             # 该玩法的 Lift
             s_key = play_type
-            if play_type == 'fu_shi_7':
-                fu7 = train_result.get('fu_shi_7', {})
-                pool_mean = fu7.get('pool_mean_hits', 0)
-                expected = fu7.get('pool_expected_random', hypergeom_expected(7))
-                lift = (pool_mean - expected) / expected if expected > 0 else 0
-            else:
-                lift = train_result.get(s_key, {}).get('lift', 0)
+            lift = _play_lift(train_result, play_type)
 
             survived = lift > 0
 
@@ -4093,13 +4263,7 @@ class KL8RollingBacktest:
 
             # 该玩法的验证 Lift
             s_key = play_type
-            if play_type == 'fu_shi_7':
-                fu7 = val_result.get('fu_shi_7', {})
-                pool_mean = fu7.get('pool_mean_hits', 0)
-                expected = fu7.get('pool_expected_random', hypergeom_expected(7))
-                val_lift = (pool_mean - expected) / expected if expected > 0 else 0
-            else:
-                val_lift = val_result.get(s_key, {}).get('lift', 0)
+            val_lift = _play_lift(val_result, play_type)
 
             # 置换检验
             perm_result = self._permutation_test(
@@ -4143,27 +4307,13 @@ class KL8RollingBacktest:
                     pool_max_last_numbers=pool_max_last_numbers,
                 )
 
-                if play_type == 'fu_shi_7':
-                    fu7_sub = sub_result.get('fu_shi_7', {})
-                    sub_pool_mean = fu7_sub.get('pool_mean_hits', 0)
-                    sub_expected = fu7_sub.get('pool_expected_random', hypergeom_expected(7))
-                    sub_lift = (sub_pool_mean - sub_expected) / sub_expected if sub_expected > 0 else 0
-                else:
-                    sub_lift = sub_result.get(s_key, {}).get('lift', 0) if 'error' not in sub_result else 0
+                sub_lift = _play_lift(sub_result, play_type) if 'error' not in sub_result else 0
                 sub_lifts.append(sub_lift)
 
             n_positive = sum(1 for l in sub_lifts if l > 0)
 
             # 关键奖级概率不低于随机
-            prize_tier_thresholds = {
-                'select_3': ['>=2', '>=3'],
-                'select_4': ['>=2', '>=3'],
-                'select_5': ['>=3', '>=4'],
-                'select_6': ['>=3', '>=4'],
-                'select_7': ['>=3', '>=4'],
-                'fu_shi_7': ['>=3'],
-            }
-            threshold_tiers = prize_tier_thresholds.get(play_type, ['>=3'])
+            threshold_tiers = _prize_tier_thresholds(play_type)
             val_prize_probs = val_result.get(s_key, {}).get('probabilities', {})
             theoretical_probs = val_result.get(s_key, {}).get('theoretical_probs', {})
 
@@ -4278,6 +4428,8 @@ class KL8RollingBacktest:
         repeat_non_avoid_score = strategy.get('repeat_non_avoid_score', 0.85)
         repeat_follow_score = strategy.get('repeat_follow_score', 0.90)
         repeat_non_follow_score = strategy.get('repeat_non_follow_score', 0.50)
+        pool_diversify = strategy.get('pool_diversify', True)
+        pool_max_last_numbers = strategy.get('pool_max_last_numbers')
 
         final_test_result = self._rolling_backtest_parametric(
             fw, mw,
@@ -4290,6 +4442,8 @@ class KL8RollingBacktest:
             repeat_non_avoid_score=repeat_non_avoid_score,
             repeat_follow_score=repeat_follow_score,
             repeat_non_follow_score=repeat_non_follow_score,
+            pool_diversify=pool_diversify,
+            pool_max_last_numbers=pool_max_last_numbers,
         )
 
         if 'error' in final_test_result:
@@ -4302,13 +4456,7 @@ class KL8RollingBacktest:
             }
 
         # 该玩法的最终测试Lift
-        if play_type == 'fu_shi_7':
-            fu7_ft = final_test_result.get('fu_shi_7', {})
-            ft_pool_mean = fu7_ft.get('pool_mean_hits', 0)
-            ft_expected = fu7_ft.get('pool_expected_random', hypergeom_expected(7))
-            final_test_lift = (ft_pool_mean - ft_expected) / ft_expected if ft_expected > 0 else 0
-        else:
-            final_test_lift = final_test_result.get(play_type, {}).get('lift', 0)
+        final_test_lift = _play_lift(final_test_result, play_type)
 
         # 最终测试关键奖级不低于随机
         ft_prize_probs = final_test_result.get(play_type, {}).get('probabilities', {})
@@ -4448,7 +4596,7 @@ class KL8RollingBacktest:
             # 检查所有玩法的 Lift
             all_lifts_positive = True
             best_lift = -999
-            for select_type in [3, 4, 5, 6, 7]:
+            for select_type in SELECT_TYPES:
                 s_key = f'select_{select_type}'
                 lift = train_result.get(s_key, {}).get('lift', 0)
                 if lift <= 0:
@@ -4482,6 +4630,8 @@ class KL8RollingBacktest:
             repeat_non_avoid_score = strategy.get('repeat_non_avoid_score', 0.85)
             repeat_follow_score = strategy.get('repeat_follow_score', 0.90)
             repeat_non_follow_score = strategy.get('repeat_non_follow_score', 0.50)
+            pool_diversify = strategy.get('pool_diversify', True)
+            pool_max_last_numbers = strategy.get('pool_max_last_numbers')
 
             val_result = self._rolling_backtest_parametric(
                 fw, mw,
