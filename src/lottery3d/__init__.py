@@ -164,6 +164,11 @@ RECENT_RECOMMEND_WINDOW = 5  # 最近推荐窗口大小
 RECENT_RECOMMEND_PENALTY = 10.0  # 最近推荐过的号码惩罚(略低于rank30→rank200落差≈12.5: 保留1-2个最强锚点,其余轮换)
 RECENT_RECOMMEND_CONSECUTIVE_PENALTY = 16.0  # 连续推荐的号码惩罚
 
+# 组六四码逐期轮换：对近期已选数字按新近度降权，使每期四码不同(选码无 edge，轮换零命中代价)
+ZU6_RECENT_WINDOW = 5      # 组六四码去重窗口
+ZU6_RECENT_PENALTY = 6.0   # 近期数字惩罚基数(>top4→top6评分落差~2.5, 确保逐期轮换)
+ZU6_RECENT_DECAY = 0.6     # 越久远的期惩罚越轻
+
 # 窗口权重持久化键
 WINDOW_WEIGHTS_KV_KEY = "lottery3d_window_weights"
 
@@ -748,6 +753,47 @@ def load_recent_3d_recommendations():
     except Exception as e:
         log.error(f"加载推荐历史失败: {e}")
         return []
+
+
+def recent_zu6_digit_penalty(score, recent_zu6, base=ZU6_RECENT_PENALTY, decay=ZU6_RECENT_DECAY):
+    """对近期组六四码用过的数字按新近度降权，返回调整后的数字评分列表。
+
+    3D 选哪些码无 edge（任意 4 互异码组六覆盖率恒为 4*6/1000），故轮换零命中代价。
+    最近一期惩罚最重，越久远越轻；连续多期出现的数字累计惩罚最大，优先被换出。
+    """
+    adj = list(score)
+    if not recent_zu6:
+        return adj
+    for age, entry in enumerate(reversed(recent_zu6[-ZU6_RECENT_WINDOW:])):
+        digits = entry.get("digits", []) if isinstance(entry, dict) else entry
+        w = base * (decay ** age)
+        for d in digits:
+            if 0 <= d < len(adj):
+                adj[d] -= w
+    return adj
+
+
+def load_recent_zu6_four():
+    """加载最近组六四码历史"""
+    try:
+        return kv_store.load('lottery3d_recent_zu6', [])
+    except Exception as e:
+        log.error(f"加载组六四码历史失败: {e}")
+        return []
+
+
+def save_recent_zu6_four(period, digits):
+    """保存组六四码历史（按期号去重，仅保留最近 N 期）"""
+    try:
+        history = load_recent_zu6_four()
+        if history and isinstance(history[-1], dict) and history[-1].get("period") == period:
+            history[-1]["digits"] = list(digits)
+        else:
+            history.append({"period": period, "digits": list(digits)})
+        history = history[-ZU6_RECENT_WINDOW:]
+        kv_store.save('lottery3d_recent_zu6', history)
+    except Exception as e:
+        log.error(f"保存组六四码历史失败: {e}")
 
 
 def save_recent_3d_recommendations(period, recommendations):
@@ -3307,8 +3353,17 @@ def run_prediction(data=None, force_refresh=False, enable_backtest=False, enable
     # 实盘版本：关闭胆码随机选择
     danma, tuoma, kill, rank = pick_dan_tuo_kill(score, enable_danma_random=False)
     form_prob = analyze_form_probability(numbers, window_weights=window_weights)
-    zu6_four = pick_zu6_four(score, kill)
+    # 组六四码：对近期已选数字降权，使其逐期轮换（选码无 edge，轮换不损失覆盖命中率）。
+    # 排除当前期自身，保证同一期内多次调用稳定。
+    current_period_zu6 = periods[-1] if periods else None
+    recent_zu6 = [
+        e for e in load_recent_zu6_four()
+        if not (isinstance(e, dict) and e.get("period") == current_period_zu6)
+    ]
+    zu6_score = recent_zu6_digit_penalty(score, recent_zu6)
+    zu6_four = pick_zu6_four(zu6_score, kill)
     _, z6_straight = zu6_notes_from_digits(zu6_four)
+    save_recent_zu6_four(current_period_zu6, zu6_four)
     
     # 加载最近推荐历史（用于排除重复推荐）
     recent_recommendations = load_recent_3d_recommendations()
@@ -3626,7 +3681,7 @@ def run_prediction(data=None, force_refresh=False, enable_backtest=False, enable
             "digits_str": "".join(map(str, zu6_four)),
             "combos": z6_straight,
         },
-        "zu6_coverage": build_zu6_coverage_tiers(score, kill),
+        "zu6_coverage": build_zu6_coverage_tiers(zu6_score, kill),
         "zhixuan_top3": zhixuan_top3_detail,
         "zhixuan": zhixuan_with_detail,
         "stability": {
