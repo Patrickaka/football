@@ -3797,7 +3797,7 @@ function renderKL8(r) {
   html += `<div style="display:flex;gap:12px;margin-top:16px;flex-wrap:wrap">`;
   html += `<button class="kl8-refresh-btn" onclick="refreshKL8()">↻ 重新计算</button>`;
   html += `<button class="kl8-refresh-btn" style="background:#4493f8" onclick="fetchKL8Data()">🔄 抓取最新开奖数据</button>`;
-  html += `<button class="kl8-refresh-btn" style="background:#8957e5" onclick="runKL8ParameterSearch()">参数搜索</button>`;
+  html += `<button class="kl8-refresh-btn" style="background:#8957e5" onclick="runKL8ParameterSearch()">快速参数搜索</button>`;
   html += `</div>`;
 
   appKL8.innerHTML = html;
@@ -3816,7 +3816,8 @@ function renderKL8ParameterSearch(result) {
   const playTypes = result.play_types || Object.keys(bestByPlay);
   let html = `<div class="card" style="margin-top:16px;margin-bottom:16px">`;
   html += `<div class="section-title" style="font-size:15px;margin-bottom:10px">快乐8参数搜索结果</div>`;
-  html += `<div class="note" style="margin-bottom:10px">候选数: ${esc(result.candidate_count || 0)} · 数据期数: ${esc(result.total_periods || '-')} · 仅展示候选，不自动激活</div>`;
+  html += `<div class="note" style="margin-bottom:10px">用途: 自动回测不同窗口、重号方向、候选池分散等参数，按玩法找历史表现更好的候选策略；它不直接预测开奖，也不会自动激活。</div>`;
+  html += `<div class="note" style="margin-bottom:10px">候选数: ${esc(result.candidate_count || 0)} · 数据期数: ${esc(result.total_periods || '-')} · 两阶段快速搜索：先验证段筛选，再给优先候选补封存测试</div>`;
   if (result.report_file) {
     html += `<div class="note" style="margin-bottom:10px">报告文件: ${esc(result.report_file)}</div>`;
   }
@@ -3887,7 +3888,7 @@ async function runKL8ParameterSearch() {
   }
 
   try {
-    const data = await fetchJson('/api/kl8/parameter-search/start?max_candidates=80&top_n=5&_=' + Date.now());
+    const data = await fetchJson('/api/kl8/parameter-search/start?max_candidates=24&top_n=3&_=' + Date.now());
     if (data.error) {
       renderKL8ParameterSearch({ error: data.error });
       return;

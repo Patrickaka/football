@@ -3957,12 +3957,12 @@ class KL8RollingBacktest:
         repeat_directions: Optional[List[str]] = None,
         repeat_caps: Optional[List[Optional[int]]] = None,
         pool_diversify_options: Optional[List[bool]] = None,
-        max_candidates: int = 80,
+        max_candidates: int = 24,
     ) -> Dict[str, Dict]:
-        window_sizes = window_sizes or [50, 100, 150, 250]
-        repeat_directions = repeat_directions or ['neutral', 'follow', 'avoid']
-        repeat_caps = repeat_caps or [None, 1, 2, 3, 5]
-        pool_diversify_options = pool_diversify_options or [True, False]
+        window_sizes = window_sizes or [50, 100, 150]
+        repeat_directions = repeat_directions or ['neutral', 'follow']
+        repeat_caps = repeat_caps or [None, 2, 5]
+        pool_diversify_options = pool_diversify_options or [True]
 
         profiles = {
             'freq': {'frequency': 1.0, 'gap': 0.0, 'position_residual': 0.0, 'road_residual': 0.0, 'repeat': 0.0, 'odd_even': 0.0, 'big_small': 0.0},
@@ -3973,11 +3973,11 @@ class KL8RollingBacktest:
         }
 
         candidates = {}
-        for profile_name, feature_weights in profiles.items():
-            for window_size in window_sizes:
-                for repeat_direction in repeat_directions:
+        for window_size in window_sizes:
+            for repeat_direction in repeat_directions:
+                for repeat_cap in repeat_caps:
                     for pool_diversify in pool_diversify_options:
-                        for repeat_cap in repeat_caps:
+                        for profile_name, feature_weights in profiles.items():
                             if len(candidates) >= max_candidates:
                                 return candidates
                             suffix = 'none' if repeat_cap is None else str(repeat_cap)
@@ -4000,7 +4000,7 @@ class KL8RollingBacktest:
     def run_parameter_search(
         self,
         play_types: Optional[List[str]] = None,
-        max_candidates: int = 80,
+        max_candidates: int = 24,
         top_n: int = 5,
     ) -> Dict:
         history = self.analyzer.history_data
@@ -4026,6 +4026,7 @@ class KL8RollingBacktest:
         rankings = {pt: [] for pt in target_play_types}
         val_range = split['val']
         final_range = split['final_test']
+        candidate_runtime = {}
 
         for name, strategy in candidates.items():
             fw = strategy.get('feature_weights', {})
@@ -4041,6 +4042,7 @@ class KL8RollingBacktest:
                 'pool_diversify': strategy.get('pool_diversify', True),
                 'pool_max_last_numbers': strategy.get('pool_max_last_numbers'),
             }
+            candidate_runtime[name] = (fw, mw, kwargs)
             val_result = self._rolling_backtest_parametric(
                 fw,
                 mw,
@@ -4051,6 +4053,45 @@ class KL8RollingBacktest:
             if 'error' in val_result:
                 continue
 
+            for play_type in target_play_types:
+                val_metrics = val_result.get(play_type, {})
+                val_lift = _play_lift(val_result, play_type)
+                val_roi = val_metrics.get('profit_roi', 0)
+                random_roi = val_metrics.get('random_profit_roi', 0)
+                score = val_lift + max(val_roi - random_roi, 0) * 0.05
+
+                rankings[play_type].append({
+                    'candidate': name,
+                    'strategy': dict(strategy),
+                    'score': round(score, 6),
+                    'validation_lift': round(val_lift, 6),
+                    'final_test_lift': None,
+                    'validation_profit_roi': val_roi,
+                    'random_profit_roi': random_roi,
+                    'validation_mean_hits': val_metrics.get('mean_hits', val_metrics.get('pool_mean_hits')),
+                    'expected_random': val_metrics.get('expected_random', val_metrics.get('pool_expected_random')),
+                    'validation_return_multiple': val_metrics.get('return_multiple'),
+                    'final_test_mean_hits': None,
+                    'n_tests': val_metrics.get('n_tests'),
+                })
+
+        final_candidate_names = set()
+        for items in rankings.values():
+            items.sort(
+                key=lambda item: (
+                    item.get('score', 0),
+                    item.get('validation_lift', 0),
+                ),
+                reverse=True,
+            )
+            final_candidate_names.update(item['candidate'] for item in items[:min(top_n, 3)])
+
+        final_results = {}
+        for name in final_candidate_names:
+            runtime = candidate_runtime.get(name)
+            if not runtime:
+                continue
+            fw, mw, kwargs = runtime
             final_result = self._rolling_backtest_parametric(
                 fw,
                 mw,
@@ -4058,32 +4099,24 @@ class KL8RollingBacktest:
                 end_idx=final_range[1],
                 **kwargs,
             )
-            if 'error' in final_result:
-                final_result = {}
+            if 'error' not in final_result:
+                final_results[name] = final_result
 
-            for play_type in target_play_types:
-                val_metrics = val_result.get(play_type, {})
+        for play_type, items in rankings.items():
+            for item in items:
+                final_result = final_results.get(item['candidate'])
+                if not final_result:
+                    continue
                 final_metrics = final_result.get(play_type, {})
-                val_lift = _play_lift(val_result, play_type)
-                final_lift = _play_lift(final_result, play_type) if final_result else 0
-                val_roi = val_metrics.get('profit_roi', 0)
-                random_roi = val_metrics.get('random_profit_roi', 0)
-                score = val_lift + max(final_lift, 0) * 0.25 + max(val_roi - random_roi, 0) * 0.05
-
-                rankings[play_type].append({
-                    'candidate': name,
-                    'strategy': dict(strategy),
-                    'score': round(score, 6),
-                    'validation_lift': round(val_lift, 6),
-                    'final_test_lift': round(final_lift, 6),
-                    'validation_profit_roi': val_roi,
-                    'random_profit_roi': random_roi,
-                    'validation_mean_hits': val_metrics.get('mean_hits', val_metrics.get('pool_mean_hits')),
-                    'expected_random': val_metrics.get('expected_random', val_metrics.get('pool_expected_random')),
-                    'validation_return_multiple': val_metrics.get('return_multiple'),
-                    'final_test_mean_hits': final_metrics.get('mean_hits', final_metrics.get('pool_mean_hits')),
-                    'n_tests': val_metrics.get('n_tests'),
-                })
+                final_lift = _play_lift(final_result, play_type)
+                item['final_test_lift'] = round(final_lift, 6)
+                item['final_test_mean_hits'] = final_metrics.get('mean_hits', final_metrics.get('pool_mean_hits'))
+                item['score'] = round(
+                    item.get('validation_lift', 0)
+                    + max(final_lift, 0) * 0.25
+                    + max(item.get('validation_profit_roi', 0) - item.get('random_profit_roi', 0), 0) * 0.05,
+                    6,
+                )
 
         best_by_play = {}
         for play_type, items in rankings.items():

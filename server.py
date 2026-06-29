@@ -1572,9 +1572,9 @@ class Handler(BaseHTTPRequestHandler):
 
             bt = KL8RollingBacktest(analyzer)
             result = bt.run_parameter_search(
-                play_types=play_types,
-                max_candidates=max_candidates,
-                top_n=top_n,
+                play_types=options.get('play_types'),
+                max_candidates=options.get('max_candidates', 24),
+                top_n=options.get('top_n', 5),
             )
             job_id = uuid.uuid4().hex
             report_file = _save_kl8_parameter_search_report(job_id, result, options)
@@ -1588,7 +1588,7 @@ class Handler(BaseHTTPRequestHandler):
             return {'error': f'parameter search failed: {str(e)}'}
 
     def _parse_kl8_parameter_search_options(self, params):
-        max_candidates_str = (params.get('max_candidates') or ['80'])[0]
+        max_candidates_str = (params.get('max_candidates') or ['24'])[0]
         top_n_str = (params.get('top_n') or ['5'])[0]
         play_types_str = (params.get('play_types') or [''])[0]
 
