@@ -18,6 +18,8 @@ import socket
 import time
 import webbrowser
 import importlib
+import threading
+import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 from pathlib import Path
@@ -42,6 +44,12 @@ from src.kl8 import (
     validate_and_activate_strategy, resolve_play_strategy,
 )
 from src.common.logger import setup_logger
+from src.common.paths import data_path
+
+
+KL8_PARAMETER_SEARCH_JOBS = {}
+KL8_PARAMETER_SEARCH_LOCK = threading.Lock()
+KL8_PARAMETER_SEARCH_REPORT_DIR = Path(data_path('kl8_parameter_search_reports'))
 
 
 def _is_kl8_cache_current(cache_entry, now):
@@ -188,6 +196,69 @@ def _sanitize_json(obj):
     return obj
 
 
+def _set_kl8_parameter_search_job(job_id, updates):
+    with KL8_PARAMETER_SEARCH_LOCK:
+        job = KL8_PARAMETER_SEARCH_JOBS.setdefault(job_id, {})
+        job.update(updates)
+        return dict(job)
+
+
+def _get_kl8_parameter_search_job(job_id):
+    with KL8_PARAMETER_SEARCH_LOCK:
+        job = KL8_PARAMETER_SEARCH_JOBS.get(job_id)
+        return dict(job) if job else None
+
+
+def _save_kl8_parameter_search_report(job_id, result, options):
+    KL8_PARAMETER_SEARCH_REPORT_DIR.mkdir(parents=True, exist_ok=True)
+    report = {
+        'job_id': job_id,
+        'created_at': time.strftime('%Y-%m-%dT%H:%M:%S'),
+        'options': options,
+        'result': result,
+    }
+    report_file = KL8_PARAMETER_SEARCH_REPORT_DIR / f'kl8_parameter_search_{job_id}.json'
+    report_file.write_text(
+        json.dumps(_sanitize_json(report), ensure_ascii=False, indent=2),
+        encoding='utf-8',
+    )
+    return str(report_file)
+
+
+def _run_kl8_parameter_search_job(job_id, options):
+    _set_kl8_parameter_search_job(job_id, {
+        'status': 'running',
+        'started_at': time.time(),
+        'message': 'running parameter search',
+    })
+    try:
+        analyzer = get_kl8_analyzer()
+        if not analyzer.history_data:
+            raise RuntimeError('no KL8 history data')
+        bt = KL8RollingBacktest(analyzer)
+        result = bt.run_parameter_search(
+            play_types=options.get('play_types'),
+            max_candidates=options.get('max_candidates', 80),
+            top_n=options.get('top_n', 5),
+        )
+        report_file = _save_kl8_parameter_search_report(job_id, result, options)
+        _set_kl8_parameter_search_job(job_id, {
+            'status': 'completed',
+            'finished_at': time.time(),
+            'message': 'completed',
+            'result': result,
+            'report_file': report_file,
+        })
+    except Exception as e:
+        _set_kl8_parameter_search_job(job_id, {
+            'status': 'failed',
+            'finished_at': time.time(),
+            'message': str(e),
+            'error': str(e),
+        })
+        log.exception('KL8 parameter search job failed')
+
+
 class Handler(BaseHTTPRequestHandler):
     _log = log
 
@@ -304,6 +375,12 @@ class Handler(BaseHTTPRequestHandler):
         elif path == '/api/kl8/parameter-search':
             params = parse_qs(route.query)
             self._serve_json(self._kl8_parameter_search_payload(params))
+        elif path == '/api/kl8/parameter-search/start':
+            params = parse_qs(route.query)
+            self._serve_json(self._kl8_parameter_search_start_payload(params))
+        elif path == '/api/kl8/parameter-search/status':
+            params = parse_qs(route.query)
+            self._serve_json(self._kl8_parameter_search_status_payload(params))
         elif path == '/api/kl8/integrity':
             self._serve_json(self._kl8_integrity_payload())
         elif path == '/api/kl8/conflicts':
@@ -1480,30 +1557,14 @@ class Handler(BaseHTTPRequestHandler):
 
     def _kl8_parameter_search_payload(self, params):
         try:
-            max_candidates_str = (params.get('max_candidates') or ['80'])[0]
-            top_n_str = (params.get('top_n') or ['5'])[0]
-            play_types_str = (params.get('play_types') or [''])[0]
+            options_or_error = self._parse_kl8_parameter_search_options(params)
+            if 'error' in options_or_error:
+                return options_or_error
+            options = options_or_error['options']
+            async_str = (params.get('async') or ['false'])[0]
 
-            try:
-                max_candidates = int(max_candidates_str)
-            except ValueError:
-                return {'error': 'max_candidates must be an integer'}
-
-            try:
-                top_n = int(top_n_str)
-            except ValueError:
-                return {'error': 'top_n must be an integer'}
-
-            if max_candidates <= 0:
-                return {'error': 'max_candidates must be > 0'}
-            if top_n <= 0:
-                return {'error': 'top_n must be > 0'}
-
-            play_types = [
-                item.strip()
-                for item in play_types_str.split(',')
-                if item.strip()
-            ] if play_types_str else None
+            if async_str.lower() in ('true', '1', 'yes', 'on'):
+                return {'result': self._start_kl8_parameter_search_job(options)}
 
             analyzer = get_kl8_analyzer()
             if not analyzer.history_data:
@@ -1515,10 +1576,92 @@ class Handler(BaseHTTPRequestHandler):
                 max_candidates=max_candidates,
                 top_n=top_n,
             )
+            job_id = uuid.uuid4().hex
+            report_file = _save_kl8_parameter_search_report(job_id, result, options)
+            if isinstance(result, dict):
+                result = dict(result)
+                result['report_file'] = report_file
+                result['job_id'] = job_id
             return {'result': result}
         except Exception as e:
             self._log.error('KL8 parameter search failed', exc_info=True)
             return {'error': f'parameter search failed: {str(e)}'}
+
+    def _parse_kl8_parameter_search_options(self, params):
+        max_candidates_str = (params.get('max_candidates') or ['80'])[0]
+        top_n_str = (params.get('top_n') or ['5'])[0]
+        play_types_str = (params.get('play_types') or [''])[0]
+
+        try:
+            max_candidates = int(max_candidates_str)
+        except ValueError:
+            return {'error': 'max_candidates must be an integer'}
+
+        try:
+            top_n = int(top_n_str)
+        except ValueError:
+            return {'error': 'top_n must be an integer'}
+
+        if max_candidates <= 0:
+            return {'error': 'max_candidates must be > 0'}
+        if top_n <= 0:
+            return {'error': 'top_n must be > 0'}
+
+        play_types = [
+            item.strip()
+            for item in play_types_str.split(',')
+            if item.strip()
+        ] if play_types_str else None
+
+        return {
+            'options': {
+                'max_candidates': max_candidates,
+                'top_n': top_n,
+                'play_types': play_types,
+            }
+        }
+
+    def _start_kl8_parameter_search_job(self, options):
+        job_id = uuid.uuid4().hex
+        now = time.time()
+        _set_kl8_parameter_search_job(job_id, {
+            'job_id': job_id,
+            'status': 'queued',
+            'created_at': now,
+            'started_at': None,
+            'finished_at': None,
+            'options': options,
+            'message': 'queued',
+        })
+        thread = threading.Thread(
+            target=_run_kl8_parameter_search_job,
+            args=(job_id, options),
+            daemon=True,
+            name=f'KL8ParameterSearch-{job_id[:8]}',
+        )
+        thread.start()
+        return _get_kl8_parameter_search_job(job_id)
+
+    def _kl8_parameter_search_start_payload(self, params):
+        options_or_error = self._parse_kl8_parameter_search_options(params)
+        if 'error' in options_or_error:
+            return options_or_error
+        return {'result': self._start_kl8_parameter_search_job(options_or_error['options'])}
+
+    def _kl8_parameter_search_status_payload(self, params):
+        job_id = (params.get('job_id') or [''])[0]
+        if not job_id:
+            return {'error': 'missing job_id'}
+
+        job = _get_kl8_parameter_search_job(job_id)
+        if not job:
+            return {'error': f'job not found: {job_id}'}
+
+        now = time.time()
+        started_at = job.get('started_at') or job.get('created_at') or now
+        finished_at = job.get('finished_at') or now
+        job['elapsed_seconds'] = round(max(0, finished_at - started_at), 1)
+        return {'result': job}
 
     def _kl8_integrity_payload(self):
         """快乐8数据完整性检查"""

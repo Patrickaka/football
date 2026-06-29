@@ -1099,7 +1099,9 @@ async function fetchJson(path) {
   const r = await fetch(url);
   const text = await r.text();
   if (!r.ok) {
-    throw new Error(r.status === 404 ? `接口不存在: ${url}` : text.slice(0, 120));
+    const htmlTitle = text.match(/<h1[^>]*>(.*?)<\/h1>/i) || text.match(/<title[^>]*>(.*?)<\/title>/i);
+    const serverMessage = htmlTitle ? htmlTitle[1].replace(/<[^>]+>/g, '') : text.slice(0, 120);
+    throw new Error(r.status === 404 ? `接口不存在: ${url}` : `HTTP ${r.status}: ${serverMessage}`);
   }
   try {
     return JSON.parse(text);
@@ -3815,6 +3817,9 @@ function renderKL8ParameterSearch(result) {
   let html = `<div class="card" style="margin-top:16px;margin-bottom:16px">`;
   html += `<div class="section-title" style="font-size:15px;margin-bottom:10px">快乐8参数搜索结果</div>`;
   html += `<div class="note" style="margin-bottom:10px">候选数: ${esc(result.candidate_count || 0)} · 数据期数: ${esc(result.total_periods || '-')} · 仅展示候选，不自动激活</div>`;
+  if (result.report_file) {
+    html += `<div class="note" style="margin-bottom:10px">报告文件: ${esc(result.report_file)}</div>`;
+  }
   html += `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px">`;
 
   for (const playType of playTypes) {
@@ -3845,21 +3850,59 @@ function renderKL8ParameterSearch(result) {
   target.innerHTML = html;
 }
 
-async function runKL8ParameterSearch() {
+async function pollKL8ParameterSearch(jobId) {
   const target = document.getElementById('kl8-parameter-search-result');
-  if (target) {
-    target.innerHTML = `<div class="status" style="margin-top:16px"><span class="spinner"></span>正在搜索快乐8参数...</div>`;
-  }
-
-  try {
-    const data = await fetchJson('/api/kl8/parameter-search?max_candidates=80&top_n=5&_=' + Date.now());
+  for (let attempt = 0; attempt < 900; attempt++) {
+    const data = await fetchJson('/api/kl8/parameter-search/status?job_id=' + encodeURIComponent(jobId) + '&_=' + Date.now());
     if (data.error) {
       renderKL8ParameterSearch({ error: data.error });
       return;
     }
-    renderKL8ParameterSearch(data.result);
+
+    const job = data.result || {};
+    if (job.status === 'completed') {
+      const result = job.result || {};
+      result.report_file = job.report_file;
+      renderKL8ParameterSearch(result);
+      return;
+    }
+
+    if (job.status === 'failed') {
+      renderKL8ParameterSearch({ error: job.error || job.message || '参数搜索失败' });
+      return;
+    }
+
+    if (target) {
+      target.innerHTML = `<div class="status" style="margin-top:16px"><span class="spinner"></span>参数搜索${esc(job.status || 'running')} · 已用 ${esc(job.elapsed_seconds ?? 0)} 秒</div>`;
+    }
+    await new Promise(resolve => setTimeout(resolve, 2000));
+  }
+  renderKL8ParameterSearch({ error: '参数搜索超时' });
+}
+
+async function runKL8ParameterSearch() {
+  const target = document.getElementById('kl8-parameter-search-result');
+  if (target) {
+    target.innerHTML = `<div class="status" style="margin-top:16px"><span class="spinner"></span>正在启动快乐8参数搜索...</div>`;
+  }
+
+  try {
+    const data = await fetchJson('/api/kl8/parameter-search/start?max_candidates=80&top_n=5&_=' + Date.now());
+    if (data.error) {
+      renderKL8ParameterSearch({ error: data.error });
+      return;
+    }
+    const job = data.result || {};
+    if (!job.job_id) {
+      renderKL8ParameterSearch({ error: '未返回任务ID' });
+      return;
+    }
+    await pollKL8ParameterSearch(job.job_id);
   } catch (e) {
-    renderKL8ParameterSearch({ error: e.message });
+    const msg = /504|Gateway Time-out|接口不存在/.test(e.message)
+      ? `${e.message}；请确认后端服务已重启到最新版本，然后再点参数搜索`
+      : e.message;
+    renderKL8ParameterSearch({ error: msg });
   }
 }
 
