@@ -2330,7 +2330,8 @@ function renderMLResult(r) {
 
   // 模型信息显示
   const modelInfo = r.model_info || (r.model_type === 'lightgbm' ? 'LightGBM (快)' : '纯 Python 随机森林 (慢)');
-  const speedInfo = r.model_type === 'lightgbm' ? '⚡ 3-8 秒 | 准确率 15-22%' : '🐢 15-30 秒 | 准确率 12-18%';
+  // 性能仅标注速度；不写死"准确率"——3D为公平摇奖，真实命中以下方回测面板(对比随机基线+置换p值)为准。
+  const speedInfo = r.model_type === 'lightgbm' ? '⚡ 3-8 秒' : '🐢 15-30 秒';
 
   // ── ML 预测标题 ──
   html += `<div class="section-title">【福彩 3D ML 预测结果】</div>`;
