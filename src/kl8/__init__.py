@@ -1872,7 +1872,9 @@ class KL8Analyzer:
         else:
             scores['frequency'] = max(0.15, 0.55 * math.exp(-1.8 * (deviation_ratio - 1.0)))
 
-        # 2. 遗漏偏离度 -- 仅展示
+        # 2. 遗漏偏离度（间隔均值回归）。注意：当策略给 gap 赋权时，此分会进入
+        #    get_ensemble_ranking 的加权和并影响选号(参考策略即用它产生日间变化)。
+        #    对公平摇奖它与频率一样无预测 edge，仅改变"挑到哪些等概率号码"，不改变期望命中。
         actual_gap_val = gap.get(num, 0)
         gap_ratio = actual_gap_val / max(expected_gap, 0.01)
         if gap_ratio <= 1.0:
@@ -2897,6 +2899,11 @@ class KL8Analyzer:
             'is_prediction_ready': prediction_ready,
             'signal_status': overall_status,
             'verify_only_mode': VERIFY_ONLY_MODE,
+            'fairness_disclaimer': (
+                '快乐8为公平均匀摇奖(80选20)。任意选号的命中数期望恒为 pick_n×0.25，'
+                '与选哪些号无关——任何"预测"都无法系统性提高命中率。未通过验证的参考号码'
+                '与随机选号期望命中完全相同，仅供参考，不预示中奖，请理性购彩。'
+            ),
             'backfill_progress': {
                 'current_periods': current_periods,
                 'target_periods': backfill_target,
@@ -2908,7 +2915,8 @@ class KL8Analyzer:
                 if overall_status == 'validated'
                 else '验证中：历史数据不足或尚无通过验证的策略，本玩法暂不输出推荐号码。'
                 if overall_status == 'verification_pending'
-                else '参考预测模式（仅后台影子运行，不对外展示）。'
+                else '参考号码：基于频率/间隔等启发式，未通过回测验证。快乐8为公平摇奖，'
+                '此类号码与随机选号的期望命中完全相同，仅供参考、不预示中奖。'
                 if overall_status == 'reference_unvalidated'
                 else '历史数据不足，无法进行预测。'
             ),
@@ -4058,13 +4066,16 @@ class KL8RollingBacktest:
                 val_lift = _play_lift(val_result, play_type)
                 val_roi = val_metrics.get('profit_roi', 0)
                 random_roi = val_metrics.get('random_profit_roi', 0)
-                score = val_lift + max(val_roi - random_roi, 0) * 0.05
+                # 公平摇奖下 lift 真值为 0；ROI 依赖奖金表(可能为占位值)且同属噪声，
+                # 不参与打分，仅作展示。排名只是候选排序，不构成"有预测优势"的证据。
+                score = val_lift
 
                 rankings[play_type].append({
                     'candidate': name,
                     'strategy': dict(strategy),
                     'score': round(score, 6),
                     'validation_lift': round(val_lift, 6),
+                    'validation_is_significant': bool(val_metrics.get('is_significant', False)),
                     'final_test_lift': None,
                     'validation_profit_roi': val_roi,
                     'random_profit_roi': random_roi,
@@ -4113,12 +4124,12 @@ class KL8RollingBacktest:
                 item['final_test_mean_hits'] = final_metrics.get('mean_hits', final_metrics.get('pool_mean_hits'))
                 item['score'] = round(
                     item.get('validation_lift', 0)
-                    + max(final_lift, 0) * 0.25
-                    + max(item.get('validation_profit_roi', 0) - item.get('random_profit_roi', 0), 0) * 0.05,
+                    + max(final_lift, 0) * 0.25,
                     6,
                 )
 
         best_by_play = {}
+        any_significant = False
         for play_type, items in rankings.items():
             items.sort(
                 key=lambda item: (
@@ -4128,7 +4139,12 @@ class KL8RollingBacktest:
                 ),
                 reverse=True,
             )
-            best_by_play[play_type] = items[0] if items else None
+            best = items[0] if items else None
+            if best is not None:
+                # 排名第一只是候选排序，不等于有 edge：未通过显著性即视为噪声。
+                best['likely_noise'] = not best.get('validation_is_significant', False)
+                any_significant = any_significant or best.get('validation_is_significant', False)
+            best_by_play[play_type] = best
             rankings[play_type] = items[:top_n]
 
         return {
@@ -4138,7 +4154,16 @@ class KL8RollingBacktest:
             'play_types': target_play_types,
             'best_by_play': best_by_play,
             'rankings': rankings,
+            'any_significant': any_significant,
             'note': 'parameter search only reports candidates; it does not activate strategies',
+            'honest_note': (
+                '快乐8为公平均匀摇奖：任意 pick_n 个号码的命中数服从超几何分布，'
+                '期望恒为 pick_n×0.25，与具体选哪些号无关。因此 lift 的真值为 0，'
+                '下面的排名只是候选排序，并不构成"有预测优势"的证据——绝大多数 '
+                'validation_is_significant 应为 False。只有通过 validate_and_activate_strategy '
+                '的 6 道门(含置换检验 + BH-FDR + 四窗稳定性)才能激活；ROI 依赖奖金表'
+                '(可能为占位值)且同属噪声，已不参与打分。'
+            ),
             'version': KL8_PREDICTOR_VERSION,
         }
 
