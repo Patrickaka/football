@@ -131,3 +131,23 @@ def load_cache(key):
         return json.loads(row['json_value'])
     except Exception:
         return _fallback_load(key, None, check_today=True)
+
+
+def load_cache_stale(key):
+    """读取缓存项，忽略「今天」失效语义；返回 (data, cache_date)。
+
+    用于上游抓取失败时的兜底：宁可用上一次缓存的真实历史，也不要硬失败。
+    无任何缓存时返回 (None, None)。
+    """
+    try:
+        row = db.query_one(
+            "SELECT json_value, cache_date FROM kv_store WHERE k=%s", (key,)
+        )
+        if row is None or row['json_value'] is None:
+            return None, None
+        return json.loads(row['json_value']), row['cache_date']
+    except Exception:
+        entry = _fallback_load_all().get(key)
+        if not entry or entry.get('json_value') is None:
+            return None, None
+        return json.loads(entry['json_value']), entry.get('cache_date')

@@ -4,10 +4,13 @@
 用于所有彩票模块的历史开奖数据缓存。
 持久化后端为 MySQL kv_store（带 cache_date 失效语义），公共接口保持不变。
 """
+import logging
 from datetime import datetime
 
 from . import db
 from . import kv_store
+
+log = logging.getLogger(__name__)
 
 
 def get_today_str():
@@ -46,11 +49,25 @@ def cached_fetch(module_name, fetch_func, force_refresh=False):
         if cached is not None:
             return cached
 
-    data = fetch_func()
+    try:
+        data = fetch_func()
+    except Exception:
+        # 上游抓取失败：兜底使用上一次缓存的真实历史，而不是硬失败。
+        stale, stale_date = kv_store.load_cache_stale(module_name)
+        if stale is not None:
+            log.warning('%s 抓取失败，回退到 %s 的缓存数据', module_name, stale_date)
+            return stale
+        raise
 
     if data is not None:
         save_cached_data(module_name, data)
+        return data
 
+    # 抓取返回空：同样尝试回退到旧缓存。
+    stale, stale_date = kv_store.load_cache_stale(module_name)
+    if stale is not None:
+        log.warning('%s 抓取结果为空，回退到 %s 的缓存数据', module_name, stale_date)
+        return stale
     return data
 
 

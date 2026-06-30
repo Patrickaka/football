@@ -250,11 +250,22 @@ def patch_weights(weights):
             globals()[k] = v
 
 
-def _fetch_data_internal(url=URL):
-    """内部数据抓取函数"""
+def _fetch_data_internal(url=URL, retries=3, timeout=30):
+    """内部数据抓取函数（带重试，应对上游瞬时超时）"""
     log.debug('fetch 3D data')
-    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-    html = urllib.request.urlopen(req, timeout=20).read().decode("utf-8", "ignore")
+    last_err = None
+    for attempt in range(retries):
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            html = urllib.request.urlopen(req, timeout=timeout).read().decode("utf-8", "ignore")
+            break
+        except Exception as e:
+            last_err = e
+            log.warning('3D 抓取第 %d/%d 次失败: %s', attempt + 1, retries, e)
+            time.sleep(2 * (attempt + 1))
+    else:
+        # 全部重试失败，向上抛出由 cached_fetch 兜底（旧缓存）或 run_prediction 处理。
+        raise last_err
     compact = re.sub(r"\s+", " ", html)
     pattern = re.compile(
         r'<td>(\d{7})期</td>\s*<td>(\d{4}-\d{2}-\d{2})</td>\s*<td>'
