@@ -4122,9 +4122,9 @@ class KL8RollingBacktest:
         for play_type, items in rankings.items():
             items.sort(
                 key=lambda item: (
-                    item.get('score', 0),
-                    item.get('validation_lift', 0),
-                    item.get('final_test_lift', 0),
+                    item.get('score') or 0,
+                    item.get('validation_lift') or 0,
+                    item.get('final_test_lift') or 0,
                 ),
                 reverse=True,
             )
