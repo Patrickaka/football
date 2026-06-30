@@ -3595,6 +3595,14 @@ function renderKL8(r) {
     html += `<div class="note" style="color:#2ea043;margin-bottom:12px;font-weight:700">✅ 已验证策略：当前启用策略已通过严格回测验证。</div>`;
   }
 
+  // ── 参考模式：展示的是未通过验证的参考号码，须明确标注与随机等价 ──
+  if (signalStatus === 'reference_unvalidated') {
+    html += `<div class="card" style="margin-bottom:16px;background:linear-gradient(135deg,#241a0f,#1a2230);border:1px solid #d29922;padding:14px 16px">`;
+    html += `<div style="font-size:14px;font-weight:700;color:#d29922;margin-bottom:8px">ℹ 参考号码（未通过回测验证）</div>`;
+    html += `<div style="font-size:12px;color:var(--muted);line-height:1.6">${esc(r.statistics?.fairness_disclaimer || r.statistics?.note || '快乐8为公平摇奖，参考号码与随机选号期望命中相同，仅供参考、不预示中奖。')}</div>`;
+    html += `</div>`;
+  }
+
   // 最近开奖结果（始终显示）
   if (r.recent_results && r.recent_results.length > 0) {
     const isMobile = window.innerWidth <= 768;
@@ -3818,6 +3826,12 @@ function renderKL8ParameterSearch(result) {
   html += `<div class="section-title" style="font-size:15px;margin-bottom:10px">快乐8参数搜索结果</div>`;
   html += `<div class="note" style="margin-bottom:10px">用途: 自动回测不同窗口、重号方向、候选池分散等参数，按玩法找历史表现更好的候选策略；它不直接预测开奖，也不会自动激活。</div>`;
   html += `<div class="note" style="margin-bottom:10px">候选数: ${esc(result.candidate_count || 0)} · 数据期数: ${esc(result.total_periods || '-')} · 两阶段快速搜索：先验证段筛选，再给优先候选补封存测试</div>`;
+  if (result.honest_note) {
+    html += `<div class="note" style="margin-bottom:10px;color:var(--accent2);border-left:3px solid var(--accent2);padding-left:8px">⚠ ${esc(result.honest_note)}</div>`;
+  }
+  if (result.any_significant === false) {
+    html += `<div class="note" style="margin-bottom:10px;color:#8b949e">本轮无任一候选在验证段显著高于随机基线（与随机不可区分）——属公平摇奖的预期结果，排名仅供参考。</div>`;
+  }
   if (result.report_file) {
     html += `<div class="note" style="margin-bottom:10px">报告文件: ${esc(result.report_file)}</div>`;
   }
@@ -3830,13 +3844,18 @@ function renderKL8ParameterSearch(result) {
     const label = playType.startsWith('select_') ? `选${playType.replace('select_', '')}` : playType;
     const valLift = Number(item.validation_lift || 0);
     const finalLift = Number(item.final_test_lift || 0);
-    const liftColor = valLift > 0 ? '#2ea043' : '#f85149';
+    // 公平摇奖下正 lift 多为噪声：仅当验证段显著高于随机才标绿，否则一律按噪声呈现(灰色)。
+    const isSignificant = item.validation_is_significant === true;
+    const liftColor = isSignificant ? '#2ea043' : '#8b949e';
+    const noiseTag = (item.likely_noise !== false && !isSignificant)
+      ? `<span style="font-size:10px;color:#8b949e;border:1px solid #8b949e;border-radius:3px;padding:0 4px;margin-left:6px">≈随机噪声</span>`
+      : '';
     html += `<div class="kl8-select-card" style="border-color:${liftColor}">`;
-    html += `<div class="kl8-select-title">${esc(label)} · ${esc(item.candidate || '-')}</div>`;
-    html += `<div style="font-size:12px;color:var(--muted);margin-bottom:6px">score ${esc(item.score ?? '-')} · window ${esc(strategy.window_size || '-')}</div>`;
+    html += `<div class="kl8-select-title">${esc(label)} · ${esc(item.candidate || '-')}${noiseTag}</div>`;
+    html += `<div style="font-size:12px;color:var(--muted);margin-bottom:6px">score ${esc(item.score ?? '-')} · window ${esc(strategy.window_size || '-')} · 显著: ${isSignificant ? '是' : '否'}</div>`;
     html += `<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:12px">`;
     html += `<div>验证Lift: <span style="color:${liftColor};font-weight:700">${valLift.toFixed(4)}</span></div>`;
-    html += `<div>封存Lift: <span style="color:${finalLift > 0 ? '#2ea043' : '#8b949e'};font-weight:700">${finalLift.toFixed(4)}</span></div>`;
+    html += `<div>封存Lift: <span style="color:${finalLift > 0 && isSignificant ? '#2ea043' : '#8b949e'};font-weight:700">${finalLift.toFixed(4)}</span></div>`;
     html += `<div>均值命中: ${esc(item.validation_mean_hits ?? '-')}</div>`;
     html += `<div>随机基线: ${esc(item.expected_random ?? '-')}</div>`;
     html += `<div>重号方向: ${esc(strategy.repeat_direction || 'neutral')}</div>`;
