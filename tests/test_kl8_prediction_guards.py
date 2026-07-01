@@ -371,6 +371,70 @@ class KL8PredictionGuardTests(unittest.TestCase):
         self.assertEqual(result['best_by_play']['fu_shi_10_11']['candidate'], 'candidate_b')
         self.assertEqual(len(result['rankings']['select_5']), 2)
 
+    def test_parameter_search_prioritizes_key_hit_rates(self):
+        analyzer = KL8Analyzer.__new__(KL8Analyzer)
+        analyzer.history_data = [_record(i) for i in range(820, 0, -1)]
+        analyzer.using_simulated_data = False
+        backtest = KL8RollingBacktest(analyzer)
+
+        backtest._build_parameter_search_candidates = lambda max_candidates=80: {
+            'mean_lift_only': {
+                'strategy_id': 'mean_lift_only',
+                'feature_weights': {'marker': 'mean'},
+                'model_weights': {'rank': 1.0},
+                'window_size': 50,
+            },
+            'hit_rate_first': {
+                'strategy_id': 'hit_rate_first',
+                'feature_weights': {'marker': 'hit'},
+                'model_weights': {'rank': 1.0},
+                'window_size': 50,
+            },
+        }
+
+        def fake_rolling(feature_weights, model_weights, **kwargs):
+            marker = feature_weights['marker']
+            if marker == 'hit':
+                return {
+                    'select_5': {
+                        'lift': 0.05,
+                        'mean_hits': 1.31,
+                        'expected_random': 1.25,
+                        'probabilities': {'>=2': 0.35, '>=3': 0.08},
+                        'theoretical_probs': {'>=2': 0.30, '>=3': 0.07},
+                        'profit_roi': -0.2,
+                        'random_profit_roi': -0.3,
+                        'return_multiple': 0.8,
+                        'n_tests': 100,
+                    },
+                }
+            return {
+                'select_5': {
+                    'lift': 0.10,
+                    'mean_hits': 1.38,
+                    'expected_random': 1.25,
+                    'probabilities': {'>=2': 0.31, '>=3': 0.07},
+                    'theoretical_probs': {'>=2': 0.30, '>=3': 0.07},
+                    'profit_roi': -0.2,
+                    'random_profit_roi': -0.3,
+                    'return_multiple': 0.8,
+                    'n_tests': 100,
+                },
+            }
+
+        backtest._rolling_backtest_parametric = fake_rolling
+
+        result = backtest.run_parameter_search(
+            play_types=['select_5'],
+            max_candidates=2,
+            top_n=2,
+        )
+
+        self.assertNotIn('error', result)
+        best = result['best_by_play']['select_5']
+        self.assertEqual(best['candidate'], 'hit_rate_first')
+        self.assertGreater(best['validation_hit_rate_score'], 0)
+
     def test_per_play_tournament_final_test_uses_strategy_pool_config(self):
         analyzer = KL8Analyzer.__new__(KL8Analyzer)
         analyzer.history_data = [_record(i) for i in range(820, 0, -1)]

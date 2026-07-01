@@ -3845,6 +3845,14 @@ function renderKL8ParameterSearch(result) {
     const label = playType.startsWith('select_') ? `选${playType.replace('select_', '')}` : playType;
     const valLift = Number(item.validation_lift || 0);
     const finalLift = Number(item.final_test_lift || 0);
+    const valHitScore = Number(item.validation_hit_rate_score || 0);
+    const finalHitScore = Number(item.final_test_hit_rate_score || 0);
+    const formatHitLifts = (lifts) => {
+      if (!lifts || typeof lifts !== 'object') return '-';
+      return Object.entries(lifts)
+        .map(([k, v]) => `${esc(k)}:${Number(v || 0).toFixed(3)}`)
+        .join(' / ') || '-';
+    };
     // 公平摇奖下正 lift 多为噪声：仅当验证段显著高于随机才标绿，否则一律按噪声呈现(灰色)。
     const isSignificant = item.validation_is_significant === true;
     const liftColor = isSignificant ? '#2ea043' : '#8b949e';
@@ -3855,6 +3863,10 @@ function renderKL8ParameterSearch(result) {
     html += `<div class="kl8-select-title">${esc(label)} · ${esc(item.candidate || '-')}${noiseTag}</div>`;
     html += `<div style="font-size:12px;color:var(--muted);margin-bottom:6px">score ${esc(item.score ?? '-')} · window ${esc(strategy.window_size || '-')} · 显著: ${isSignificant ? '是' : '否'}</div>`;
     html += `<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:12px">`;
+    html += `<div>命中率评分: <span style="color:#2ea043;font-weight:700">${valHitScore.toFixed(4)}</span></div>`;
+    html += `<div>封存命中率: <span style="color:${finalHitScore > 0 ? '#2ea043' : '#8b949e'};font-weight:700">${finalHitScore.toFixed(4)}</span></div>`;
+    html += `<div style="grid-column:1/-1;color:var(--muted)">验证关键档: ${formatHitLifts(item.validation_hit_rate_lifts)}</div>`;
+    html += `<div style="grid-column:1/-1;color:var(--muted)">封存关键档: ${formatHitLifts(item.final_test_hit_rate_lifts)}</div>`;
     html += `<div>验证Lift: <span style="color:${liftColor};font-weight:700">${valLift.toFixed(4)}</span></div>`;
     html += `<div>封存Lift: <span style="color:${finalLift > 0 && isSignificant ? '#2ea043' : '#8b949e'};font-weight:700">${finalLift.toFixed(4)}</span></div>`;
     html += `<div>均值命中: ${esc(item.validation_mean_hits ?? '-')}</div>`;

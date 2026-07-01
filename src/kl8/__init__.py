@@ -47,7 +47,7 @@ from src.common.logger import setup_logger
 
 log = setup_logger('kl8')
 
-KL8_PREDICTOR_VERSION = "kl8-v9.2.2-adaptive-repeat"
+KL8_PREDICTOR_VERSION = "kl8-v9.2.3-hit-rate-priority"
 
 # ─── v9.2: 只显示已验证策略模式 ───
 VERIFY_ONLY_MODE = False  # True=未验证玩法不输出号码; False=回退参考策略(始终输出号码)
@@ -1089,6 +1089,37 @@ def _prize_tier_thresholds(play_type: str) -> List[str]:
     if pick_n <= 7:
         return ['>=3', '>=4']
     return ['>=4', '>=5']
+
+
+def _hit_rate_priority_thresholds(play_type: str) -> List[str]:
+    """Thresholds used to rank candidates for practical hit-rate goals."""
+    if play_type in FUSHI_CONFIG:
+        return ['>=3', '>=4'] if FUSHI_CONFIG[play_type]['pool_size'] <= 7 else ['>=4', '>=5']
+    pick_n = _parse_play_pick_n(play_type) or 5
+    if pick_n <= 4:
+        return ['>=2']
+    if pick_n <= 6:
+        return ['>=2', '>=3']
+    return ['>=3', '>=4']
+
+
+def _hit_rate_priority_score(metrics: Dict, play_type: str) -> Tuple[float, Dict[str, float]]:
+    """Score candidates by key hit thresholds instead of only mean hits."""
+    probabilities = metrics.get('probabilities') or {}
+    theoretical = metrics.get('theoretical_probs') or {}
+    thresholds = _hit_rate_priority_thresholds(play_type)
+    weights = [0.70, 0.30] if len(thresholds) > 1 else [1.0]
+
+    detail = {}
+    score = 0.0
+    for threshold, weight in zip(thresholds, weights):
+        actual = float(probabilities.get(threshold, 0) or 0)
+        baseline = float(theoretical.get(threshold, 0) or 0)
+        lift = (actual - baseline) / baseline if baseline > 0 else 0.0
+        detail[threshold] = round(lift, 6)
+        score += weight * lift
+
+    return score, detail
 
 
 # ─── 多重检验校正（v6新增）───
@@ -4119,17 +4150,22 @@ class KL8RollingBacktest:
                 val_lift = _play_lift(val_result, play_type)
                 val_roi = val_metrics.get('profit_roi', 0)
                 random_roi = val_metrics.get('random_profit_roi', 0)
+                hit_rate_score, hit_rate_detail = _hit_rate_priority_score(val_metrics, play_type)
                 # 公平摇奖下 lift 真值为 0；ROI 依赖奖金表(可能为占位值)且同属噪声，
                 # 不参与打分，仅作展示。排名只是候选排序，不构成"有预测优势"的证据。
-                score = val_lift
+                score = hit_rate_score + val_lift * 0.35
 
                 rankings[play_type].append({
                     'candidate': name,
                     'strategy': dict(strategy),
                     'score': round(score, 6),
                     'validation_lift': round(val_lift, 6),
+                    'validation_hit_rate_score': round(hit_rate_score, 6),
+                    'validation_hit_rate_lifts': hit_rate_detail,
                     'validation_is_significant': bool(val_metrics.get('is_significant', False)),
                     'final_test_lift': None,
+                    'final_test_hit_rate_score': None,
+                    'final_test_hit_rate_lifts': None,
                     'validation_profit_roi': val_roi,
                     'random_profit_roi': random_roi,
                     'validation_mean_hits': val_metrics.get('mean_hits', val_metrics.get('pool_mean_hits')),
@@ -4144,6 +4180,7 @@ class KL8RollingBacktest:
             items.sort(
                 key=lambda item: (
                     item.get('score', 0),
+                    item.get('validation_hit_rate_score', 0),
                     item.get('validation_lift', 0),
                 ),
                 reverse=True,
@@ -4173,11 +4210,16 @@ class KL8RollingBacktest:
                     continue
                 final_metrics = final_result.get(play_type, {})
                 final_lift = _play_lift(final_result, play_type)
+                final_hit_rate_score, final_hit_rate_detail = _hit_rate_priority_score(final_metrics, play_type)
                 item['final_test_lift'] = round(final_lift, 6)
+                item['final_test_hit_rate_score'] = round(final_hit_rate_score, 6)
+                item['final_test_hit_rate_lifts'] = final_hit_rate_detail
                 item['final_test_mean_hits'] = final_metrics.get('mean_hits', final_metrics.get('pool_mean_hits'))
                 item['score'] = round(
-                    item.get('validation_lift', 0)
-                    + max(final_lift, 0) * 0.25,
+                    item.get('validation_hit_rate_score', 0)
+                    + item.get('validation_lift', 0) * 0.35
+                    + max(final_hit_rate_score, 0) * 0.20
+                    + max(final_lift, 0) * 0.10,
                     6,
                 )
 
@@ -4187,6 +4229,8 @@ class KL8RollingBacktest:
             items.sort(
                 key=lambda item: (
                     item.get('score') or 0,
+                    item.get('validation_hit_rate_score') or 0,
+                    item.get('final_test_hit_rate_score') or 0,
                     item.get('validation_lift') or 0,
                     item.get('final_test_lift') or 0,
                 ),
