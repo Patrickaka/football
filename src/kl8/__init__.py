@@ -2831,6 +2831,41 @@ class KL8Analyzer:
 
         return {'error': f'无效玩法: {play_type}'}
 
+    def _candidate_variants(
+        self,
+        candidates: List[Tuple[int, float]],
+        target_size: int,
+        repeat_cap: int,
+    ) -> Dict[str, List[int]]:
+        """Build a few practical alternatives from the same candidate pool."""
+        if not candidates or target_size <= 0:
+            return {}
+
+        last_numbers = self.statistics.get('last_numbers', set())
+        concentrated = [num for num, _ in candidates[:target_size]]
+        balanced = [
+            num for num, _ in _diversify_candidate_pool(
+                candidates,
+                target_size,
+                last_numbers,
+                max_last_numbers=repeat_cap,
+            )
+        ]
+        low_repeat = [
+            num for num, _ in _diversify_candidate_pool(
+                candidates,
+                target_size,
+                last_numbers,
+                max_last_numbers=max(0, repeat_cap - 1),
+            )
+        ]
+
+        return {
+            'balanced': balanced,
+            'concentrated': concentrated,
+            'low_repeat': low_repeat,
+        }
+
     # ─── 综合预测（v9.1: 各玩法独立候选池 + 本期变化对比）───
 
     def predict_all(self) -> Dict:
@@ -2935,11 +2970,13 @@ class KL8Analyzer:
                 max_last_numbers=final_repeat_cap,
             )
             numbers = [num for num, _ in final_pool]
+            variants = self._candidate_variants(pool_candidates, select_type, final_repeat_cap)
 
             results[s_key] = {
                 'desc': config['desc'],
                 'pick': config['pick'],
                 'numbers': numbers,
+                'variants': variants,
                 'candidates': pool_candidates[:10],
                 'strategy_id': strategy['strategy_id'],
                 'prediction_mode': strategy['prediction_mode'],
@@ -2995,8 +3032,15 @@ class KL8Analyzer:
                 'is_validated': strategy['is_validated'],
             }
 
-            fu_pool_result = self.build_pool_by_strategy(strategy, pool_size=pool_size)
+            fu_pool_result = self.build_pool_by_strategy(strategy, pool_size=max(20, pool_size))
+            fu_candidates = fu_pool_result.get('candidates', [])[:20]
             core_numbers = fu_pool_result.get('selected', [])[:pool_size]
+            fushi_repeat_cap = (
+                strategy.get('pool_max_last_numbers')
+                if strategy.get('pool_max_last_numbers') is not None
+                else _adaptive_repeat_cap(self.history_data, pool_size)
+            )
+            variants = self._candidate_variants(fu_candidates, pool_size, fushi_repeat_cap)
 
             all_candidate_pools[fushi_key] = {
                 f'top{pool_size}': core_numbers,
@@ -3012,6 +3056,7 @@ class KL8Analyzer:
             results[fushi_key] = {
                 numbers_field: core_numbers,
                 'core_numbers': core_numbers,
+                'variants': variants,
                 'total_combinations': len(combo_list),
                 'combinations': combo_list,
                 'combo_pick': base_pick,

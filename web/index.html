@@ -3739,6 +3739,9 @@ function renderKL8(r) {
         }
       }
       html += `</div>`;
+      if (sel.variants) {
+        html += renderKL8VariantRows(sel.variants);
+      }
       if (isRef && sel.warning) {
         html += `<div style="font-size:11px;color:#9a6700;margin-top:6px">⚠ ${esc(sel.warning)}</div>`;
       }
@@ -3771,6 +3774,9 @@ function renderKL8(r) {
       html += `<span class="kl8-ball highlight-ball" style="width:44px;height:44px;font-size:18px">${String(n).padStart(2,'0')}</span>`;
     }
     html += `</div>`;
+    if (fushi.variants) {
+      html += renderKL8VariantRows(fushi.variants);
+    }
     html += `<div class="section-title" style="font-size:14px;margin-bottom:8px">全部 C(${poolSize},${comboPick}) = ${fushi.total_combinations} 组组合</div>`;
     html += `<div class="kl8-fushi-grid">`;
     for (const combo of fushi.combinations || []) {
@@ -3831,6 +3837,26 @@ function renderKL8Balls(numbers, size = 36) {
   ).join('');
 }
 
+function renderKL8VariantRows(variants) {
+  if (!variants || typeof variants !== 'object') return '';
+  const labels = {
+    balanced: '均衡',
+    concentrated: '集中',
+    low_repeat: '少重号',
+  };
+  let html = `<div style="margin-top:8px;display:grid;gap:5px">`;
+  for (const key of ['balanced', 'concentrated', 'low_repeat']) {
+    const nums = variants[key] || [];
+    if (!nums.length) continue;
+    html += `<div style="font-size:11px;color:var(--muted);display:flex;align-items:center;gap:6px;flex-wrap:wrap">`;
+    html += `<span style="min-width:42px;color:#8b949e">${labels[key] || key}</span>`;
+    html += nums.map(n => `<span>${String(n).padStart(2,'0')}</span>`).join(' ');
+    html += `</div>`;
+  }
+  html += `</div>`;
+  return html;
+}
+
 function openKL8ExcludeModal() {
   const target = document.getElementById('kl8-exclude-modal');
   if (!target) return;
@@ -3876,7 +3902,7 @@ async function runKL8ExcludeRecalculate() {
   const option = getKL8ExcludeOptions().find(item => item.key === selected.value);
   if (!option) return;
 
-  resultTarget.innerHTML = `<div class="status"><span class="spinner"></span>正在剔除 ${esc(option.label)} 当前号码并重新计算...</div>`;
+  resultTarget.innerHTML = `<div class="status"><span class="spinner"></span>正在剔除 ${esc(option.label)} 当前全部号码并重新计算...</div>`;
   try {
     const url = '/api/kl8/exclude-recalculate?play_type='
       + encodeURIComponent(option.key)
