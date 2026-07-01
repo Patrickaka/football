@@ -47,7 +47,7 @@ from src.common.logger import setup_logger
 
 log = setup_logger('kl8')
 
-KL8_PREDICTOR_VERSION = "kl8-v9.2.1-reference-mode"
+KL8_PREDICTOR_VERSION = "kl8-v9.2.2-adaptive-repeat"
 
 # ─── v9.2: 只显示已验证策略模式 ───
 VERIFY_ONLY_MODE = False  # True=未验证玩法不输出号码; False=回退参考策略(始终输出号码)
@@ -1171,6 +1171,42 @@ def _default_repeat_cap(target_size: int) -> int:
     return max(1, min(target_size, math.ceil(target_size * 0.40)))
 
 
+def _adaptive_repeat_cap(history_data: List[Dict], target_size: int, lookback: int = 20) -> int:
+    """Adapt the final repeat cap to recent draw-to-draw overlap.
+
+    The static cap is intentionally conservative. When recent draws have a
+    higher-than-normal overlap, small plays such as select 5/6 should not be
+    forced to throw away otherwise strong candidates from the latest draw.
+    """
+    base_cap = _default_repeat_cap(target_size)
+    if target_size <= 0 or len(history_data or []) < 2:
+        return base_cap
+
+    recent = history_data[:lookback + 1]
+    overlaps = []
+    for idx in range(len(recent) - 1):
+        newer = set(recent[idx].get('numbers', []))
+        older = set(recent[idx + 1].get('numbers', []))
+        if newer and older:
+            overlaps.append(len(newer & older))
+
+    if not overlaps:
+        return base_cap
+
+    mean_overlap = sum(overlaps) / len(overlaps)
+    if mean_overlap >= 6.5:
+        adjustment = 0.15
+    elif mean_overlap >= 5.5:
+        adjustment = 0.10
+    elif mean_overlap <= 3.5:
+        adjustment = -0.10
+    else:
+        adjustment = 0.0
+
+    ratio = max(0.25, min(0.55, 0.40 + adjustment))
+    return max(1, min(target_size, math.ceil(target_size * ratio)))
+
+
 def _diversify_candidate_pool(
     candidates: List[Tuple[int, float]],
     target_size: int,
@@ -1193,21 +1229,25 @@ def _diversify_candidate_pool(
     max_repeat = default_repeat_cap if max_last_numbers is None else max(0, min(target_size, int(max_last_numbers)))
 
     selected = []
+    protected = []
     deferred = []
     zone_counts = Counter()
     road_counts = Counter()
     repeat_count = 0
+    best_score = float(candidates[0][1]) if candidates else 0.0
+    score_floor = best_score * 0.90 if best_score > 0 else best_score - 0.10
 
     for num, score in candidates:
         zone = (num - 1) // 10 + 1
         road = num % 3
         is_repeat = num in last_numbers
+        violates = (
+            zone_counts[zone] >= max_zone
+            or road_counts[road] >= max_road
+            or (is_repeat and repeat_count >= max_repeat)
+        )
 
-        if (
-            zone_counts[zone] < max_zone
-            and road_counts[road] < max_road
-            and (not is_repeat or repeat_count < max_repeat)
-        ):
+        if not violates:
             selected.append((num, score))
             zone_counts[zone] += 1
             road_counts[road] += 1
@@ -1215,12 +1255,15 @@ def _diversify_candidate_pool(
                 repeat_count += 1
             if len(selected) >= target_size:
                 return selected
+        elif score >= score_floor:
+            protected.append((num, score))
         else:
             deferred.append((num, score))
 
     seen = {num for num, _ in selected}
-    deferred.sort(key=lambda item: (-item[1], item[0]))
-    for num, score in deferred:
+    fallback = protected + deferred
+    fallback.sort(key=lambda item: (-item[1], item[0]))
+    for num, score in fallback:
         if num not in seen:
             selected.append((num, score))
             seen.add(num)
@@ -2203,6 +2246,8 @@ class KL8Analyzer:
             repeat_non_avoid_score=repeat_non_avoid_score,
             repeat_follow_score=repeat_follow_score,
             repeat_non_follow_score=repeat_non_follow_score,
+            pool_diversify=pool_diversify,
+            pool_max_last_numbers=pool_max_last_numbers,
         )
 
         if vote_result.get('status') == 'no_validated_signal':
@@ -2645,7 +2690,11 @@ class KL8Analyzer:
             repeat_follow_score=repeat_follow_score,
             repeat_non_follow_score=repeat_non_follow_score,
             pool_diversify=strategy.get('pool_diversify', True),
-            pool_max_last_numbers=strategy.get('pool_max_last_numbers'),
+            pool_max_last_numbers=(
+                strategy.get('pool_max_last_numbers')
+                if strategy.get('pool_max_last_numbers') is not None
+                else _adaptive_repeat_cap(predictor.history_data, pool_size)
+            ),
         )
 
     # ─── 综合预测（v9.1: 各玩法独立候选池 + 本期变化对比）───
@@ -2740,8 +2789,9 @@ class KL8Analyzer:
             final_repeat_cap = strategy.get(
                 'final_max_last_numbers',
                 min(
-                    strategy.get('pool_max_last_numbers', _default_repeat_cap(select_type)) or _default_repeat_cap(select_type),
-                    _default_repeat_cap(select_type),
+                    strategy.get('pool_max_last_numbers', _adaptive_repeat_cap(self.history_data, select_type))
+                    or _adaptive_repeat_cap(self.history_data, select_type),
+                    _adaptive_repeat_cap(self.history_data, select_type),
                 )
             )
             final_pool = _diversify_candidate_pool(
@@ -3385,9 +3435,10 @@ class KL8RollingBacktest:
 
             # 后续各选型都从同一份候选池取号，但按各自选型控制上期重号比例
             for select_type in SELECT_TYPES:
+                adaptive_cap = _adaptive_repeat_cap(temp_analyzer.history_data, select_type)
                 final_repeat_cap = min(
-                    pool_max_last_numbers if pool_max_last_numbers is not None else _default_repeat_cap(select_type),
-                    _default_repeat_cap(select_type),
+                    pool_max_last_numbers if pool_max_last_numbers is not None else adaptive_cap,
+                    adaptive_cap,
                 )
                 top_nums = [
                     num for num, _ in _diversify_candidate_pool(
@@ -3404,9 +3455,10 @@ class KL8RollingBacktest:
             for fushi_key, fushi_cfg in FUSHI_CONFIG.items():
                 pool_size = fushi_cfg['pool_size']
                 base_pick = fushi_cfg['base_pick']
+                adaptive_cap = _adaptive_repeat_cap(temp_analyzer.history_data, pool_size)
                 repeat_cap = min(
-                    pool_max_last_numbers if pool_max_last_numbers is not None else _default_repeat_cap(pool_size),
-                    _default_repeat_cap(pool_size),
+                    pool_max_last_numbers if pool_max_last_numbers is not None else adaptive_cap,
+                    adaptive_cap,
                 )
                 core_numbers = [
                     num for num, _ in _diversify_candidate_pool(
@@ -3647,9 +3699,10 @@ class KL8RollingBacktest:
                 actual_draws.append(set(history_asc[t]['numbers']))
                 continue
 
+            adaptive_cap = _adaptive_repeat_cap(temp_analyzer.history_data, pick_n)
             final_repeat_cap = min(
-                pool_max_last_numbers if pool_max_last_numbers is not None else _default_repeat_cap(pick_n),
-                _default_repeat_cap(pick_n),
+                pool_max_last_numbers if pool_max_last_numbers is not None else adaptive_cap,
+                adaptive_cap,
             )
             pred_nums = [
                 num for num, _ in _diversify_candidate_pool(

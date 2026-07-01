@@ -13,6 +13,7 @@ from src.kl8 import (
     _compute_next_issue,
     normalize_record,
     validate_and_activate_strategy,
+    _adaptive_repeat_cap,
 )
 
 
@@ -74,6 +75,53 @@ class KL8PredictionGuardTests(unittest.TestCase):
 
         self.assertEqual(len(nums), 5)
         self.assertLessEqual(sum(1 for n in nums if n <= 20), 1)
+
+    def test_adaptive_repeat_cap_relaxes_when_recent_overlap_is_high(self):
+        history = [_record(i) for i in range(40, 0, -1)]
+
+        self.assertEqual(_adaptive_repeat_cap(history, 5), 3)
+        self.assertEqual(_adaptive_repeat_cap(history, 7), 4)
+
+    def test_build_pool_by_strategy_uses_adaptive_repeat_cap(self):
+        analyzer = KL8Analyzer.__new__(KL8Analyzer)
+        analyzer.history_data = [_record(i) for i in range(40, 0, -1)]
+        analyzer.history_file = ''
+        analyzer._data_mtime = 0
+        analyzer.using_simulated_data = False
+
+        captured = {}
+
+        def fake_voting(**kwargs):
+            captured.update(kwargs)
+            return {
+                'selected': list(range(1, 8)),
+                'candidates': [(n, float(80 - n)) for n in range(1, 21)],
+                'votes': {},
+            }
+
+        original_build = KL8Analyzer._build_window_analyzer
+        try:
+            KL8Analyzer._build_window_analyzer = lambda self, window_size: type(
+                'TempAnalyzer',
+                (),
+                {
+                    'history_data': analyzer.history_data[:window_size],
+                    'multi_model_voting': staticmethod(fake_voting),
+                },
+            )()
+            analyzer.build_pool_by_strategy(
+                {
+                    'feature_weights': {'frequency': 1.0},
+                    'model_weights': {'rank': 1.0},
+                    'window_size': 40,
+                    'repeat_direction': 'neutral',
+                },
+                pool_size=7,
+            )
+        finally:
+            KL8Analyzer._build_window_analyzer = original_build
+
+        self.assertEqual(captured['pool_max_last_numbers'], 4)
 
     def test_multi_model_voting_uses_broader_diversified_pool(self):
         analyzer = KL8Analyzer.__new__(KL8Analyzer)
