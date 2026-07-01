@@ -2728,6 +2728,109 @@ class KL8Analyzer:
             ),
         )
 
+    def recalculate_play_excluding(self, play_type: str, exclude_numbers: List[int]) -> Dict:
+        """临时剔除指定号码后重算单个玩法，不写入正式快照/缓存。"""
+        if not self.history_data or self.using_simulated_data:
+            return {'error': '历史数据不足，无法重新计算'}
+
+        excluded = sorted({
+            int(n) for n in (exclude_numbers or [])
+            if isinstance(n, int) or str(n).isdigit()
+        })
+        excluded = [n for n in excluded if 1 <= n <= KL8_NUM_RANGE]
+        excluded_set = set(excluded)
+
+        if play_type in SELECT_PLAY_KEYS:
+            try:
+                pick_n = int(play_type.split('_')[1])
+            except (ValueError, IndexError):
+                return {'error': f'无效玩法: {play_type}'}
+
+            strategy = resolve_play_strategy(play_type)
+            if strategy is None:
+                return {'error': '当前玩法没有可用策略'}
+
+            pool_result = self.build_pool_by_strategy(
+                strategy,
+                pool_size=min(KL8_NUM_RANGE, max(40, pick_n + len(excluded) + 20)),
+            )
+            candidates = [
+                (num, score)
+                for num, score in pool_result.get('candidates', [])
+                if num not in excluded_set
+            ]
+            adaptive_cap = _adaptive_repeat_cap(self.history_data, pick_n)
+            repeat_cap = min(
+                strategy.get('pool_max_last_numbers') if strategy.get('pool_max_last_numbers') is not None else adaptive_cap,
+                adaptive_cap,
+            )
+            final_pool = _diversify_candidate_pool(
+                candidates,
+                pick_n,
+                self.statistics.get('last_numbers', set()),
+                max_last_numbers=repeat_cap,
+            )
+            return {
+                'play_type': play_type,
+                'numbers': [num for num, _ in final_pool],
+                'excluded_numbers': excluded,
+                'candidates': candidates[:12],
+                'strategy_id': strategy.get('strategy_id', ''),
+                'prediction_mode': strategy.get('prediction_mode', ''),
+                'is_validated': strategy.get('is_validated', False),
+                'source': 'exclude_recalculate',
+                'version': KL8_PREDICTOR_VERSION,
+            }
+
+        if play_type in FUSHI_CONFIG:
+            fushi_cfg = FUSHI_CONFIG[play_type]
+            strategy = resolve_play_strategy(play_type)
+            if strategy is None:
+                return {'error': '当前玩法没有可用策略'}
+
+            pool_size = fushi_cfg['pool_size']
+            base_pick = fushi_cfg['base_pick']
+            pool_result = self.build_pool_by_strategy(
+                strategy,
+                pool_size=min(KL8_NUM_RANGE, max(40, pool_size + len(excluded) + 20)),
+            )
+            candidates = [
+                (num, score)
+                for num, score in pool_result.get('candidates', [])
+                if num not in excluded_set
+            ]
+            adaptive_cap = _adaptive_repeat_cap(self.history_data, pool_size)
+            repeat_cap = min(
+                strategy.get('pool_max_last_numbers') if strategy.get('pool_max_last_numbers') is not None else adaptive_cap,
+                adaptive_cap,
+            )
+            final_pool = _diversify_candidate_pool(
+                candidates,
+                pool_size,
+                self.statistics.get('last_numbers', set()),
+                max_last_numbers=repeat_cap,
+            )
+            core_numbers = [num for num, _ in final_pool]
+            combo_list = [sorted(c) for c in combinations(core_numbers, base_pick)] if len(core_numbers) == pool_size else []
+            return {
+                'play_type': play_type,
+                fushi_cfg['numbers_field']: core_numbers,
+                'core_numbers': core_numbers,
+                'excluded_numbers': excluded,
+                'candidates': candidates[:12],
+                'combinations': combo_list,
+                'total_combinations': len(combo_list),
+                'combo_pick': base_pick,
+                'pool_size': pool_size,
+                'strategy_id': strategy.get('strategy_id', ''),
+                'prediction_mode': strategy.get('prediction_mode', ''),
+                'is_validated': strategy.get('is_validated', False),
+                'source': 'exclude_recalculate',
+                'version': KL8_PREDICTOR_VERSION,
+            }
+
+        return {'error': f'无效玩法: {play_type}'}
+
     # ─── 综合预测（v9.1: 各玩法独立候选池 + 本期变化对比）───
 
     def predict_all(self) -> Dict:

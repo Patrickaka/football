@@ -123,6 +123,28 @@ class KL8PredictionGuardTests(unittest.TestCase):
 
         self.assertEqual(captured['pool_max_last_numbers'], 4)
 
+    def test_recalculate_play_excluding_removes_current_numbers(self):
+        analyzer = KL8Analyzer.__new__(KL8Analyzer)
+        analyzer.history_data = [_record(i) for i in range(80, 0, -1)]
+        analyzer.using_simulated_data = False
+        analyzer.statistics = {'last_numbers': set(range(1, 21))}
+
+        original_build = KL8Analyzer.build_pool_by_strategy
+        try:
+            KL8Analyzer.build_pool_by_strategy = lambda self, strategy, pool_size=20: {
+                'selected': list(range(1, min(pool_size, 40) + 1)),
+                'candidates': [(n, float(100 - n)) for n in range(1, 41)],
+                'votes': {},
+            }
+            result = analyzer.recalculate_play_excluding('select_5', [1, 2, 3, 4, 5])
+        finally:
+            KL8Analyzer.build_pool_by_strategy = original_build
+
+        self.assertNotIn('error', result)
+        self.assertEqual(len(result['numbers']), 5)
+        self.assertFalse(set(result['numbers']) & {1, 2, 3, 4, 5})
+        self.assertEqual(result['excluded_numbers'], [1, 2, 3, 4, 5])
+
     def test_multi_model_voting_uses_broader_diversified_pool(self):
         analyzer = KL8Analyzer.__new__(KL8Analyzer)
         analyzer.statistics = {'last_numbers': set(range(1, 21))}

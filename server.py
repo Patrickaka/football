@@ -364,6 +364,9 @@ class Handler(BaseHTTPRequestHandler):
             self._serve_json(self._kl8_refresh_payload())
         elif path == '/api/kl8/fetch':
             self._serve_json(self._kl8_fetch_payload())
+        elif path == '/api/kl8/exclude-recalculate':
+            params = parse_qs(route.query)
+            self._serve_json(self._kl8_exclude_recalculate_payload(params))
         elif path == '/api/kl8/snapshots':
             self._serve_json(self._kl8_snapshots_payload())
         elif path == '/api/kl8/settle':
@@ -1504,6 +1507,30 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:
             self._log.error('快乐8抓取失败', exc_info=True)
             return {'error': '快乐8抓取失败'}
+
+    def _kl8_exclude_recalculate_payload(self, params):
+        """剔除指定玩法当前号码后临时重算，不覆盖正式预测。"""
+        try:
+            play_type = (params.get('play_type') or [''])[0]
+            numbers_str = (params.get('numbers') or [''])[0]
+            if not play_type:
+                return {'error': '缺少play_type参数'}
+
+            try:
+                exclude_numbers = [
+                    int(x.strip())
+                    for x in numbers_str.split(',')
+                    if x.strip()
+                ] if numbers_str else []
+            except ValueError:
+                return {'error': 'numbers格式错误，应为逗号分隔的1-80整数'}
+
+            analyzer = get_kl8_analyzer()
+            result = analyzer.recalculate_play_excluding(play_type, exclude_numbers)
+            return {'result': result}
+        except Exception as e:
+            self._log.error('快乐8剔除重算失败', exc_info=True)
+            return {'error': f'剔除重算失败: {str(e)}'}
 
     def _kl8_snapshots_payload(self):
         """快乐8预测快照列表"""

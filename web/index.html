@@ -3492,6 +3492,7 @@ async function fetchLotteryData() {
 // ── 快乐8相关函数 ──
 
 let kl8Loaded = false;
+let kl8LastData = null;
 
 async function loadKL8() {
   if (kl8Loaded) return;
@@ -3524,6 +3525,7 @@ async function refreshKL8() {
 }
 
 function renderKL8(r) {
+  kl8LastData = r;
   const appKL8 = document.getElementById('app-kl8');
   let html = '';
   const selectTypes = [3, 4, 5, 6, 7, 8, 9, 10];
@@ -3805,11 +3807,103 @@ function renderKL8(r) {
   html += `<div id="kl8-parameter-search-result"></div>`;
   html += `<div style="display:flex;gap:12px;margin-top:16px;flex-wrap:wrap">`;
   html += `<button class="kl8-refresh-btn" onclick="refreshKL8()">↻ 重新计算</button>`;
+  html += `<button class="kl8-refresh-btn" style="background:#d29922" onclick="openKL8ExcludeModal()">剔除号码重新计算</button>`;
   html += `<button class="kl8-refresh-btn" style="background:#4493f8" onclick="fetchKL8Data()">🔄 抓取最新开奖数据</button>`;
   html += `<button class="kl8-refresh-btn" style="background:#8957e5" onclick="runKL8ParameterSearch()">快速参数搜索</button>`;
   html += `</div>`;
+  html += `<div id="kl8-exclude-modal"></div>`;
 
   appKL8.innerHTML = html;
+}
+
+function getKL8ExcludeOptions() {
+  const r = kl8LastData || {};
+  return [
+    { key: 'select_5', label: '选5', numbers: r.select_5?.numbers || [], resultField: 'numbers' },
+    { key: 'select_6', label: '选6', numbers: r.select_6?.numbers || [], resultField: 'numbers' },
+    { key: 'fu_shi_7', label: '选5复式7码', numbers: r.fu_shi_7?.top7_numbers || r.fu_shi_7?.core_numbers || [], resultField: 'top7_numbers' },
+  ].filter(item => item.numbers && item.numbers.length > 0);
+}
+
+function renderKL8Balls(numbers, size = 36) {
+  return (numbers || []).map(n =>
+    `<span class="kl8-ball highlight-ball" style="width:${size}px;height:${size}px;font-size:${size >= 40 ? 16 : 13}px">${String(n).padStart(2,'0')}</span>`
+  ).join('');
+}
+
+function openKL8ExcludeModal() {
+  const target = document.getElementById('kl8-exclude-modal');
+  if (!target) return;
+  const options = getKL8ExcludeOptions();
+  if (!options.length) {
+    target.innerHTML = `<div class="status error" style="margin-top:12px">当前没有可剔除重算的快乐8号码</div>`;
+    return;
+  }
+
+  let html = `<div style="position:fixed;inset:0;background:rgba(1,4,9,.72);z-index:9999;display:flex;align-items:center;justify-content:center;padding:18px">`;
+  html += `<div class="card" style="width:min(720px,96vw);max-height:86vh;overflow:auto;border:1px solid #d29922">`;
+  html += `<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px">`;
+  html += `<div class="section-title" style="font-size:16px;margin:0">剔除号码重新计算</div>`;
+  html += `<button class="kl8-refresh-btn" style="padding:6px 10px;background:#30363d" onclick="closeKL8ExcludeModal()">关闭</button>`;
+  html += `</div>`;
+  html += `<div class="note" style="margin-bottom:12px">选择玩法后，会剔除该玩法当前推荐的几个号码，用同一策略临时重算一组。不会覆盖正式预测和快照。</div>`;
+  html += `<div style="display:grid;gap:10px">`;
+  for (const item of options) {
+    html += `<label class="kl8-select-card" style="cursor:pointer;margin:0">`;
+    html += `<div class="kl8-select-title"><input type="radio" name="kl8-exclude-play" value="${esc(item.key)}" ${item.key === options[0].key ? 'checked' : ''}> ${esc(item.label)}</div>`;
+    html += `<div class="kl8-numbers-row" style="margin-top:8px">${renderKL8Balls(item.numbers, 32)}</div>`;
+    html += `</label>`;
+  }
+  html += `</div>`;
+  html += `<div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:14px">`;
+  html += `<button class="kl8-refresh-btn" style="background:#d29922" onclick="runKL8ExcludeRecalculate()">剔除并重新计算</button>`;
+  html += `<button class="kl8-refresh-btn" style="background:#30363d" onclick="closeKL8ExcludeModal()">取消</button>`;
+  html += `</div>`;
+  html += `<div id="kl8-exclude-result" style="margin-top:14px"></div>`;
+  html += `</div></div>`;
+  target.innerHTML = html;
+}
+
+function closeKL8ExcludeModal() {
+  const target = document.getElementById('kl8-exclude-modal');
+  if (target) target.innerHTML = '';
+}
+
+async function runKL8ExcludeRecalculate() {
+  const resultTarget = document.getElementById('kl8-exclude-result');
+  const selected = document.querySelector('input[name="kl8-exclude-play"]:checked');
+  if (!resultTarget || !selected) return;
+  const option = getKL8ExcludeOptions().find(item => item.key === selected.value);
+  if (!option) return;
+
+  resultTarget.innerHTML = `<div class="status"><span class="spinner"></span>正在剔除 ${esc(option.label)} 当前号码并重新计算...</div>`;
+  try {
+    const url = '/api/kl8/exclude-recalculate?play_type='
+      + encodeURIComponent(option.key)
+      + '&numbers=' + encodeURIComponent(option.numbers.join(','))
+      + '&_=' + Date.now();
+    const data = await fetchJson(url);
+    if (data.error) throw new Error(data.error);
+    const result = data.result || {};
+    if (result.error) throw new Error(result.error);
+    const newNumbers = result.numbers || result.top7_numbers || result.core_numbers || [];
+    const candidates = (result.candidates || []).map(item => Array.isArray(item) ? item[0] : item).slice(0, 12);
+
+    let html = `<div class="kl8-select-card" style="border-color:#d29922">`;
+    html += `<div class="kl8-select-title">${esc(option.label)} 剔除后重算结果</div>`;
+    html += `<div style="font-size:12px;color:var(--muted);margin-bottom:8px">已剔除: ${option.numbers.map(n => String(n).padStart(2,'0')).join(', ')}</div>`;
+    html += `<div class="kl8-numbers-row">${renderKL8Balls(newNumbers, 40)}</div>`;
+    if (candidates.length) {
+      html += `<div style="font-size:12px;color:var(--muted);margin-top:8px">候补池: ${candidates.map(n => String(n).padStart(2,'0')).join(', ')}</div>`;
+    }
+    if (result.total_combinations) {
+      html += `<div style="font-size:12px;color:var(--muted);margin-top:6px">组合数: ${esc(result.total_combinations)}</div>`;
+    }
+    html += `</div>`;
+    resultTarget.innerHTML = html;
+  } catch (e) {
+    resultTarget.innerHTML = `<div class="status error">${esc(e.message)}</div>`;
+  }
 }
 
 function renderKL8ParameterSearch(result) {
