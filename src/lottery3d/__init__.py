@@ -176,7 +176,7 @@ ZU6_RECENT_DECAY = 0.6     # 越久远的期惩罚越轻
 WINDOW_WEIGHTS_KV_KEY = "lottery3d_window_weights"
 
 # 预测版本号
-PREDICTOR_VERSION = "3d-v4.1-rank-rotate-formprior"
+PREDICTOR_VERSION = "3d-v4.2-zu6-coverage-variants"
 ML_MODEL_VERSION = "ml-v6"
 MIN_DATA_PERIODS_FOR_ML_FUSION = 300
 ML_CACHE_MAX_AGE_SECONDS = 36 * 3600
@@ -775,6 +775,7 @@ def recent_zu6_digit_penalty(score, recent_zu6, base=ZU6_RECENT_PENALTY, decay=Z
     3D 选哪些码无 edge（任意 4 互异码组六覆盖率恒为 4*6/1000），故轮换零命中代价。
     最近一期惩罚最重，越久远越轻；连续多期出现的数字累计惩罚最大，优先被换出。
     """
+    base = min(float(base), 3.0)
     adj = list(score)
     if not recent_zu6:
         return adj
@@ -2359,6 +2360,84 @@ def build_zu6_coverage_tiers(score, kill=None, sizes=(4, 5, 6, 7)):
     return tiers
 
 
+def _zu6_four_payload(label, digits):
+    digits = sorted(int(d) for d in digits)
+    combos, combo_strs = zu6_notes_from_digits(digits)
+    return {
+        "label": label,
+        "digits": digits,
+        "digits_str": "".join(map(str, digits)),
+        "notes": len(combos),
+        "cost": len(combos) * TICKET_PRICE,
+        "hit_rate": round(len(combos) * 6 / 1000.0, 4),
+        "combos": combo_strs,
+    }
+
+
+def _zu6_four_balance_score(combo, score, kill=None):
+    digits = tuple(sorted(combo))
+    kill_set = set(kill or [])
+    base = sum(_effective_digit_score(score, d, kill) for d in digits)
+    odd = sum(1 for d in digits if d % 2)
+    big = sum(1 for d in digits if d >= 5)
+    span = digits[-1] - digits[0]
+    adjacent_pairs = sum(1 for a, b in zip(digits, digits[1:]) if b - a == 1)
+    kill_count = sum(1 for d in digits if d in kill_set)
+    return (
+        base
+        - abs(odd - 2) * 1.0
+        - abs(big - 2) * 0.8
+        + min(span, 8) * 0.15
+        - adjacent_pairs * 0.35
+        - kill_count * 1.2
+    )
+
+
+def build_zu6_four_variants(score, kill=None, limit=4):
+    """Build several deterministic four-digit zu6 groups for coverage comparison."""
+    rank = sorted(range(10), key=lambda d: -_effective_digit_score(score, d, kill))
+    candidate_pool = rank[:8]
+    primary = tuple(pick_zu6_four(score, kill))
+    variants = []
+    seen = set()
+
+    def add(label, digits):
+        key = tuple(sorted(digits))
+        if key in seen or len(key) != 4:
+            return
+        seen.add(key)
+        variants.append(_zu6_four_payload(label, key))
+
+    add("主推", primary)
+    balanced = max(
+        combinations(candidate_pool, 4),
+        key=lambda c: _zu6_four_balance_score(c, score, kill),
+    )
+    add("均衡", balanced)
+
+    kill_set = set(kill or [])
+    no_kill_pool = [d for d in rank if d not in kill_set][:6]
+    if len(no_kill_pool) >= 4:
+        add("避杀", no_kill_pool[:4])
+
+    wide = max(
+        combinations(candidate_pool, 4),
+        key=lambda c: _zu6_four_balance_score(c, score, kill) + (max(c) - min(c)) * 0.3,
+    )
+    add("扩散", wide)
+
+    for combo in sorted(
+        combinations(candidate_pool, 4),
+        key=lambda c: _zu6_four_balance_score(c, score, kill),
+        reverse=True,
+    ):
+        add("备选", combo)
+        if len(variants) >= limit:
+            break
+
+    return variants[:limit]
+
+
 def _effective_digit_score(score, digit, kill=None):
     """单码有效分：杀码降权而非排除"""
     kill_set = set(kill or [])
@@ -3728,6 +3807,7 @@ def run_prediction(data=None, force_refresh=False, enable_backtest=False, enable
             "digits_str": "".join(map(str, zu6_four)),
             "combos": z6_straight,
         },
+        "zu6_four_variants": build_zu6_four_variants(zu6_score, kill),
         "zu6_coverage": build_zu6_coverage_tiers(zu6_score, kill),
         "zhixuan_top3": zhixuan_top3_detail,
         "zhixuan": zhixuan_with_detail,

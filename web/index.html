@@ -1852,6 +1852,8 @@ function renderLottery3d(r) {
   const f = r.form;
   const ss = r.sum_span;
   const z6 = r.zu6_four;
+  const z6Variants = Array.isArray(r.zu6_four_variants) ? r.zu6_four_variants : [];
+  const z6Coverage = Array.isArray(r.zu6_coverage) ? r.zu6_coverage : [];
   const bt = r.backtest || {};
   const maxScore = r.zhixuan[0]?.score || 1;
   const n = r.zhixuan.length;
@@ -1886,6 +1888,7 @@ function renderLottery3d(r) {
     </div>
     <div class="row"><span class="k">组六四码</span><span class="v" style="letter-spacing:3px;font-weight:700;color:var(--accent2)">${esc(z6.digits_str)}</span></div>
     <div class="row"><span class="k">覆盖组六</span><span class="v">${esc(z6.combos.join(', '))}</span></div>
+    ${z6Coverage[1] ? `<div class="row"><span class="k">增强五码</span><span class="v" style="letter-spacing:2px;font-weight:700;color:var(--accent2)">${esc(z6Coverage[1].digits_str)}（${z6Coverage[1].notes}注）</span></div>` : ''}
     ${r.window_weights ? `<div class="row"><span class="k">动态窗口</span><span class="v">${
       Object.entries(r.window_weights).map(([k,v]) => k + '期 ' + pct(parseFloat(v))).join(' · ')
     }</span></div>` : ''}
@@ -2047,6 +2050,28 @@ function renderLottery3d(r) {
     <div class="tags">${z6.combos.map(c => `<span class="tag">${esc(c)}</span>`).join('')}</div>
     <div class="note">对应直选形态：${esc(z6.combos.join(', '))}</div>
   </div>`;
+
+  if (z6Variants.length > 1) {
+    html += `<div class="card">
+      <h3>组六四码备选</h3>
+      <div class="note" style="margin-bottom:10px">同样是 4 码，每组覆盖 4 注组六；备选组用于分散单一四码长期不中的风险。</div>
+      ${z6Variants.map(v => `<div class="row">
+        <span class="k">${esc(v.label || '备选')}</span>
+        <span class="v"><b style="letter-spacing:3px;color:var(--accent2)">${esc(v.digits_str)}</b> <span class="muted">(${esc((v.combos || []).join(', '))})</span></span>
+      </div>`).join('')}
+    </div>`;
+  }
+
+  if (z6Coverage.length) {
+    html += `<div class="card">
+      <h3>组六覆盖增强</h3>
+      <div class="note" style="margin-bottom:10px">四码完整命中面很窄；预算允许时优先看 5 码或 6 码覆盖池。</div>
+      ${z6Coverage.map(t => `<div class="row">
+        <span class="k">${t.size}码</span>
+        <span class="v"><b style="letter-spacing:2px">${esc(t.digits_str)}</b> · ${t.notes}注 · ${t.cost}元 · 理论${pct(t.hit_rate)}</span>
+      </div>`).join('')}
+    </div>`;
+  }
 
   // ── 直选 ──
   html += `<div class="section-title">【直选推荐 ${n} 注】（百十个位顺序一致）</div>`;
