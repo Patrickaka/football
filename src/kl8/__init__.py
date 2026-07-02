@@ -2759,6 +2759,14 @@ class KL8Analyzer:
                 for num, score in pool_result.get('candidates', [])
                 if num not in excluded_set
             ]
+            if len(candidates) < pick_n:
+                return {
+                    'error': f'剔除后候选号码不足，{play_type} 至少需要 {pick_n} 个号码，当前仅剩 {len(candidates)} 个',
+                    'play_type': play_type,
+                    'excluded_numbers': excluded,
+                    'remaining_count': len(candidates),
+                    'required_count': pick_n,
+                }
             adaptive_cap = _adaptive_repeat_cap(self.history_data, pick_n)
             repeat_cap = min(
                 strategy.get('pool_max_last_numbers') if strategy.get('pool_max_last_numbers') is not None else adaptive_cap,
@@ -2799,6 +2807,14 @@ class KL8Analyzer:
                 for num, score in pool_result.get('candidates', [])
                 if num not in excluded_set
             ]
+            if len(candidates) < pool_size:
+                return {
+                    'error': f'剔除后候选号码不足，{play_type} 至少需要 {pool_size} 个号码，当前仅剩 {len(candidates)} 个',
+                    'play_type': play_type,
+                    'excluded_numbers': excluded,
+                    'remaining_count': len(candidates),
+                    'required_count': pool_size,
+                }
             adaptive_cap = _adaptive_repeat_cap(self.history_data, pool_size)
             repeat_cap = min(
                 strategy.get('pool_max_last_numbers') if strategy.get('pool_max_last_numbers') is not None else adaptive_cap,
