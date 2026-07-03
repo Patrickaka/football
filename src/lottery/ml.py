@@ -61,28 +61,32 @@ log = setup_logger('lottery_ml')
 try:
     import lightgbm as lgb
     HAS_LIGHTGBM = True
-except ImportError:
+except Exception as e:
     HAS_LIGHTGBM = False
     lgb = None
+    log_import_lightgbm_error = e
 
 try:
     from catboost import CatBoostClassifier
     HAS_CATBOOST = True
-except ImportError:
+except Exception as e:
     HAS_CATBOOST = False
+    log_import_catboost_error = e
 
 try:
     from xgboost import XGBClassifier
     HAS_XGBOOST = True
-except ImportError:
+except Exception as e:
     HAS_XGBOOST = False
+    log_import_xgboost_error = e
 
 try:
     from sklearn.feature_selection import mutual_info_classif, VarianceThreshold
     from sklearn.calibration import CalibratedClassifierCV
     HAS_SKLEARN = True
-except ImportError:
+except Exception as e:
     HAS_SKLEARN = False
+    log_import_sklearn_error = e
 
 if hasattr(sys.stdout, "reconfigure"):
     try:

@@ -194,7 +194,7 @@ class LotteryAnalyzer:
         issues = [str(x.get('issue', '')) for x in self.history_data if x.get('issue')]
         dates = [str(x.get('date', '')) for x in self.history_data if x.get('date')]
         duplicate_issues = len(issues) - len(set(issues))
-        issue_gaps = 0  # 期号间隔(仅记录，不用于ranking判断)
+        issue_gaps = 0
 
         ordered = list(reversed(issues))
         for prev, curr in zip(ordered, ordered[1:]):
@@ -208,8 +208,9 @@ class LotteryAnalyzer:
             elif curr_year == prev_year + 1 and curr_seq != 1:
                 issue_gaps += 1
 
-        # 日期连续性检查(大乐透每周3期，间隔2-4天)
+        # 日期连续性检查(大乐透每周3期，通常间隔2-4天)
         date_gaps = 0
+        date_anomalies = 0
         if len(dates) >= 2:
             import datetime
             date_objs = []
@@ -220,9 +221,13 @@ class LotteryAnalyzer:
                     continue
             for prev_d, curr_d in zip(date_objs, date_objs[1:]):
                 diff = (curr_d - prev_d).days
-                # 大乐透间隔通常2-4天，超过7天视为缺数据
                 if diff > 7:
                     date_gaps += 1
+                elif diff < 2:
+                    date_anomalies += 1
+
+        date_gap_tolerance = max(3, int(len(dates) * 0.02))
+        date_anomaly_tolerance = max(3, int(len(dates) * 0.02))
 
         warnings = []
         if self.using_simulated_data:
@@ -231,8 +236,12 @@ class LotteryAnalyzer:
             warnings.append('history_too_short')
         if duplicate_issues:
             warnings.append('duplicate_issues')
-        if date_gaps > 3:  # v3: 仅日期间隔过多时警告
+        if issue_gaps > 3:
+            warnings.append('issue_gaps')
+        if date_gaps > date_gap_tolerance:
             warnings.append('date_gaps')
+        if date_anomalies > date_anomaly_tolerance:
+            warnings.append('date_anomalies')
 
         return {
             'issues': len(issues),
@@ -241,14 +250,19 @@ class LotteryAnalyzer:
             'latest_date': dates[0] if dates else None,
             'oldest_date': dates[-1] if dates else None,
             'duplicate_issues': duplicate_issues,
-            'issue_gaps': issue_gaps,  # 期号间隔(参考用)
-            'date_gaps': date_gaps,     # v3: 日期间隔(关键指标)
+            'issue_gaps': issue_gaps,
+            'date_gaps': date_gaps,
+            'date_anomalies': date_anomalies,
+            'date_gap_tolerance': date_gap_tolerance,
+            'date_anomaly_tolerance': date_anomaly_tolerance,
             'using_simulated_data': self.using_simulated_data,
             'ranking_allowed': (
                 not self.using_simulated_data
                 and len(issues) >= MIN_REAL_HISTORY_FOR_RANKING
                 and duplicate_issues == 0
-                and date_gaps <= 3  # v3: 用日期连续性替代期号连续性
+                and issue_gaps <= 3
+                and date_gaps <= date_gap_tolerance
+                and date_anomalies <= date_anomaly_tolerance
             ),
             'warnings': warnings,
         }
@@ -266,6 +280,7 @@ class LotteryAnalyzer:
         front_freq_decayed = defaultdict(float)
         back_freq_decayed = defaultdict(float)
         position_freq = [defaultdict(float) for _ in range(5)]
+        back_position_freq = [defaultdict(float) for _ in range(2)]
 
         # ---- 遗漏统计 (真实遗漏期数) ----
         last_seen_front = {}   # num -> index (0=most recent)
@@ -280,6 +295,8 @@ class LotteryAnalyzer:
         size_dist = defaultdict(int)
         road_dist = defaultdict(int)
         road_total = [0, 0, 0]
+        back_road_dist = defaultdict(int)
+        back_road_total = [0.0, 0.0, 0.0]
         zone_dist = defaultdict(int)   # 区间分布: key="z1,z2,z3"
 
         # AC值统计
@@ -304,9 +321,10 @@ class LotteryAnalyzer:
                 position_freq[i][num] += decay
                 last_seen_front[num] = idx
 
-            for num in back:
+            for i, num in enumerate(back):
                 back_freq_raw[num] += 1
                 back_freq_decayed[num] += decay
+                back_position_freq[i][num] += decay
                 last_seen_back[num] = idx
 
             # 和值
@@ -327,8 +345,15 @@ class LotteryAnalyzer:
             for n in front:
                 r = n % 3
                 rc[r] += 1
-                road_total[r] += int(decay)
+                road_total[r] += decay
             road_dist[f'{rc[0]}:{rc[1]}:{rc[2]}'] += 1
+
+            back_rc = [0, 0, 0]
+            for n in back:
+                r = n % 3
+                back_rc[r] += 1
+                back_road_total[r] += decay
+            back_road_dist[f'{back_rc[0]}:{back_rc[1]}:{back_rc[2]}'] += 1
 
             # 区间分布 (zone 1:1-12, zone 2:13-24, zone 3:25-35)
             z = [0, 0, 0]
@@ -423,7 +448,8 @@ class LotteryAnalyzer:
         sum_trend = self._analyze_sum_trend(sum_list)
 
         # ---- 升温降温轨迹 ----
-        temp_trajectory = self._calc_temperature_trajectory()
+        temp_trajectory = self._calc_temperature_trajectory(is_front=True)
+        back_temp_trajectory = self._calc_temperature_trajectory(is_front=False)
 
         # ---- 重号率 ----
         dup_rate = sum(duplicate_counts) / len(duplicate_counts) if duplicate_counts else 0
@@ -439,6 +465,7 @@ class LotteryAnalyzer:
             # 频率偏离度评分须以 W 归一化(而非期数 total)，否则 deviation_ratio 被严重压缩→特征退化。
             'decay_weight_sum': (sum(front_freq_decayed.values()) / 5.0) if front_freq_decayed else 1.0,
             'position_frequency': [dict(pf) for pf in position_freq],
+            'back_position_frequency': [dict(pf) for pf in back_position_freq],
             # 遗漏
             'front_current_gaps': dict(front_gaps),
             'back_current_gaps': dict(back_gaps),
@@ -459,6 +486,11 @@ class LotteryAnalyzer:
                 '0': {}, '1': {}, '2': {},
                 'distribution': dict(road_dist),
                 'total': {0: road_total[0], 1: road_total[1], 2: road_total[2]}
+            },
+            'back_road_analysis': {
+                '0': {}, '1': {}, '2': {},
+                'distribution': dict(back_road_dist),
+                'total': {0: back_road_total[0], 1: back_road_total[1], 2: back_road_total[2]}
             },
             # 奇偶/大小
             'odd_even_analysis': {
@@ -500,6 +532,7 @@ class LotteryAnalyzer:
             },
             # 新增: 升温降温轨迹
             'temperature_trajectory': temp_trajectory,
+            'back_temperature_trajectory': back_temp_trajectory,
         }
 
     # ==================== 新增分析功能 ====================
@@ -551,19 +584,21 @@ class LotteryAnalyzer:
             'current_sum': sum_list[0] if sum_list else 0,
         }
 
-    def _calc_temperature_trajectory(self) -> Dict:
+    def _calc_temperature_trajectory(self, is_front: bool = True) -> Dict:
         """计算升温降温轨迹 (最近N期的热度变化)"""
         if len(self.history_data) < 5:
             return {}
 
         recent_span = min(10, len(self.history_data))
         trajectory = {}
+        numbers = FRONT_NUMBERS if is_front else BACK_NUMBERS
+        key = 'front' if is_front else 'back'
 
-        for num in FRONT_NUMBERS:
+        for num in numbers:
             # 分两个窗口: 最近5期 vs 之前5期
             m = min(5, recent_span // 2)
-            recent_hits = sum(1 for r in self.history_data[:m] if num in r['front'])
-            prior_hits = sum(1 for r in self.history_data[m:m*2] if num in r['front'])
+            recent_hits = sum(1 for r in self.history_data[:m] if num in r[key])
+            prior_hits = sum(1 for r in self.history_data[m:m*2] if num in r[key])
 
             if recent_hits > prior_hits:
                 direction = 'rising'
@@ -576,7 +611,7 @@ class LotteryAnalyzer:
                 'direction': direction,
                 'recent_hits': recent_hits,
                 'prior_hits': prior_hits,
-                'current_gap': self._get_current_gap(num, is_front=True),
+                'current_gap': self._get_current_gap(num, is_front=is_front),
             }
 
         return trajectory
@@ -1368,7 +1403,8 @@ class LotteryAnalyzer:
         expected_rate = 2.0 / 12.0  # 后区期望频率
         freq_raw = stats['back_frequency']
         freq_decayed = stats.get('back_frequency_decayed', freq_raw)
-        actual_rate = freq_decayed.get(num, 0) / max(total, 1)
+        decay_w = stats.get('decay_weight_sum', max(total, 1))
+        actual_rate = freq_decayed.get(num, 0) / max(decay_w, 1e-9)
         deviation_ratio = actual_rate / max(expected_rate, 0.01)
 
         if deviation_ratio <= 1.0:
@@ -1393,7 +1429,7 @@ class LotteryAnalyzer:
             scores['gap'] *= 0.85
 
         # ---- 趋势得分 ----
-        trajectory = stats.get('temperature_trajectory', {})
+        trajectory = stats.get('back_temperature_trajectory', {})
         traj = trajectory.get(num, {})
         if traj.get('direction') == 'rising':
             scores['trend'] = 0.75
@@ -1404,7 +1440,7 @@ class LotteryAnalyzer:
 
         # ---- 012路得分 ----
         road = num % 3
-        road_data = stats.get('road_analysis', {}).get('total', {})
+        road_data = stats.get('back_road_analysis', {}).get('total', {})
         road_all_max = max(road_data.values()) if road_data else 1
         scores['road'] = road_data.get(road, 0) / road_all_max if road_all_max > 0 else 0
 
@@ -1446,7 +1482,7 @@ class LotteryAnalyzer:
 
         # ---- 位置得分 (后区2位) ----
         # 后区号码的位置分布: 第一位vs第二位
-        position_freq = stats.get('position_frequency', [{}, {}])
+        position_freq = stats.get('back_position_frequency', [{}, {}])
         if len(position_freq) >= 2:
             pos_scores = []
             for i in range(2):
@@ -1632,11 +1668,12 @@ class LotteryAnalyzer:
 
         # 获取每个候选的评分
         scored = []
+        weights = FEATURE_WEIGHTS if is_front else BACK_FEATURE_WEIGHTS
         for num in candidates:
-            features = self._calculate_feature_score(num, is_front)
+            features = self._calculate_feature_score(num, is_front=True) if is_front else self._calculate_back_feature_score(num)
             score = sum(
-                features.get(k, 0) * FEATURE_WEIGHTS.get(k, 0)
-                for k in FEATURE_WEIGHTS
+                features.get(k, 0) * weights.get(k, 0)
+                for k in weights
             )
             scored.append((num, score))
 
@@ -1852,6 +1889,8 @@ class LotteryAnalyzer:
         results = []
         total_front_matched = 0
         total_back_matched = 0
+        front_match_distribution = {i: 0 for i in range(6)}
+        back_match_distribution = {i: 0 for i in range(3)}
 
         saved_data = list(self.history_data)
         saved_stats = dict(self.statistics) if self.statistics else {}
@@ -1873,6 +1912,8 @@ class LotteryAnalyzer:
 
             front_match = len(front_pred & front_actual)
             back_match = len(back_pred & back_actual)
+            front_match_distribution[front_match] += 1
+            back_match_distribution[back_match] += 1
 
             results.append({
                 'issue': actual['issue'],
@@ -1892,12 +1933,45 @@ class LotteryAnalyzer:
         self.history_data = saved_data
         self.statistics = saved_stats
 
+        n = test_periods or 1
+
+        def _hypergeom_distribution(population, winners, picks):
+            dist = {}
+            denom = math.comb(population, picks)
+            for k in range(0, min(winners, picks) + 1):
+                if picks - k <= population - winners:
+                    dist[k] = math.comb(winners, k) * math.comb(population - winners, picks - k) / denom
+            return dist
+
+        front_random = _hypergeom_distribution(35, 5, 5)
+        back_random = _hypergeom_distribution(12, 2, 2)
+        front_ge2 = sum(v for k, v in front_match_distribution.items() if k >= 2) / n
+        front_ge3 = sum(v for k, v in front_match_distribution.items() if k >= 3) / n
+        back_ge1 = sum(v for k, v in back_match_distribution.items() if k >= 1) / n
+        back_ge2 = back_match_distribution.get(2, 0) / n
+
         return {
             'method': method,
             'test_periods': test_periods,
             'total_matched': 0,  # full match保持兼容
             'front_accuracy': total_front_matched / (test_periods * 5),
             'back_accuracy': total_back_matched / (test_periods * 2),
+            'front_match_distribution': front_match_distribution,
+            'back_match_distribution': back_match_distribution,
+            'rates': {
+                'front_ge2_rate': front_ge2,
+                'front_ge3_rate': front_ge3,
+                'back_ge1_rate': back_ge1,
+                'back_ge2_rate': back_ge2,
+            },
+            'random_baseline': {
+                'front_match_distribution': {k: round(v, 6) for k, v in front_random.items()},
+                'back_match_distribution': {k: round(v, 6) for k, v in back_random.items()},
+                'front_ge2_rate': round(sum(v for k, v in front_random.items() if k >= 2), 6),
+                'front_ge3_rate': round(sum(v for k, v in front_random.items() if k >= 3), 6),
+                'back_ge1_rate': round(sum(v for k, v in back_random.items() if k >= 1), 6),
+                'back_ge2_rate': round(back_random.get(2, 0.0), 6),
+            },
             'detailed_results': results
         }
 
@@ -2291,6 +2365,28 @@ def run_prediction(force_refresh=False):
                 'back_model_scores': ml_prediction.get('back_model_scores', {}),
             }
 
+        algorithm_summary = {
+            'version': LOTTERY_PREDICTOR_VERSION,
+            'history_source': '500.com 全量历史 + 本地 doc_store 缓存',
+            'history_issues': data_quality.get('issues'),
+            'latest_issue': data_quality.get('latest_issue'),
+            'latest_date': data_quality.get('latest_date'),
+            'ranking_allowed': data_quality.get('ranking_allowed'),
+            'scoring': [
+                '前区使用衰减频率、遗漏、位置、012路、和值、趋势、区间、重号、邻号综合排名。',
+                '后区使用独立的衰减频率、遗漏、位置、012路、趋势、重号、邻号与和值评分。',
+                '012路统计使用浮点衰减权重，避免旧版整数截断只统计最新一期。',
+                '推荐与排名均以排名模型为主导，ML 仅在可用且验证分数有效时弱权重辅助。',
+            ],
+            'front_weights': FEATURE_WEIGHTS,
+            'back_weights': BACK_FEATURE_WEIGHTS,
+            'rolling_backtest': {
+                'trials': backtest.get('trials'),
+                'baseline_comparison': backtest.get('baseline_comparison'),
+                'note': backtest.get('note'),
+            },
+        }
+
         result = {
             'statistics': stats,
             'recent_results': recent,
@@ -2298,6 +2394,7 @@ def run_prediction(force_refresh=False):
             'voting': voting,
             'recommendations': recommendations,
             'data_quality': data_quality,
+            'algorithm_summary': algorithm_summary,
             'optimized_weights': optimized_weights,
             'weight_adjustment': weight_diff,
             'ml_prediction': ml_prediction,

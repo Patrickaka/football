@@ -915,7 +915,7 @@ const TAB_META = {
   },
   lottery: {
     title: '🎯 大乐透分析',
-    desc: '数据来源：官方开奖数据 · 多模型集成投票 + 周期识别 + 特征贡献度分析',
+    desc: '数据来源：500.com 全量历史 · 排名主导 + 前后区独立特征 + 随机基线回测',
     disclaimer: '⚠ 大乐透开奖具有随机性，以上分析仅为历史统计参考，不构成任何投注建议。请理性对待！',
   },
   predictions: {
@@ -928,6 +928,8 @@ const TAB_META = {
 const pct = x => x != null ? (x * 100).toFixed(1) + '%' : '0%';
 const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c =>
   ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+const fmtNum = (x, digits = 2) => x != null && !Number.isNaN(Number(x)) ? Number(x).toFixed(digits) : '-';
 
 function renderModelStatus(status) {
   if (!status) return '';
@@ -2971,6 +2973,47 @@ async function getPailie5Ensemble() {
 // ── 大乐透相关函数 ──
 let lotteryLoaded = false;
 
+function lotteryWeightBars(weights, labels) {
+  const entries = Object.entries(weights || {});
+  if (!entries.length) return '<div class="note">暂无权重数据</div>';
+  const maxWeight = Math.max(...entries.map(([, v]) => Number(v) || 0), 0.01);
+  return entries.map(([name, weight]) => {
+    const val = Number(weight) || 0;
+    const percent = Math.max(val / maxWeight * 100, 2);
+    return `<div class="zhixuan">
+      <span class="rank">${esc(labels[name] || name)}</span>
+      <span class="num">${val.toFixed(3)}</span>
+      <span class="bar"><i style="width:${percent.toFixed(0)}%"></i></span>
+      <span class="score">${percent.toFixed(0)}%</span>
+    </div>`;
+  }).join('');
+}
+
+function lotteryBaselineRows(comparison) {
+  const labels = {
+    front_ge2_rate: '前区 Top5 ≥2',
+    front_ge3_rate: '前区 Top5 ≥3',
+    front_ge4_rate: '前区 Top5 ≥4',
+    back_ge1_rate: '后区 Top3 ≥1',
+    back_ge2_rate: '后区 Top3 ≥2',
+  };
+  return Object.entries(labels).map(([key, label]) => {
+    const row = comparison?.[key] || {};
+    const lift = Number(row.lift || 0);
+    const sig = row.significant === true;
+    const color = sig ? (lift >= 0 ? 'var(--accent2)' : 'var(--away)') : 'var(--muted)';
+    return `<div class="row">
+      <span class="k">${label}</span>
+      <span class="v" style="color:${color}">${pct(row.observed)} / 随机 ${pct(row.random_baseline)} / ${lift >= 0 ? '+' : ''}${pct(lift)}</span>
+    </div>`;
+  }).join('');
+}
+
+function lotteryRoadText(total) {
+  const t = total || {};
+  return `0路(${fmtNum(t[0])}) · 1路(${fmtNum(t[1])}) · 2路(${fmtNum(t[2])})`;
+}
+
 async function loadLottery() {
   if (lotteryLoaded) return;
   const appLottery = document.getElementById('app-lottery');
@@ -2992,6 +3035,18 @@ function renderLottery(r) {
   const appLottery = document.getElementById('app-lottery');
   const stats = r.statistics || {};
   const recent = r.recent_results || [];
+  const algo = r.algorithm_summary || {};
+  const weightLabels = {
+    frequency: '频率',
+    gap: '遗漏',
+    position: '位置',
+    road: '012路',
+    sum: '和值',
+    trend: '趋势',
+    zone: '区间',
+    repeat: '重号',
+    adjacent: '邻号',
+  };
   
   let html = '';
   
@@ -3032,6 +3087,24 @@ function renderLottery(r) {
       <div class="row"><span class="k">排名准入</span><span class="v" style="color:${qualityColor}">${dq.ranking_allowed ? '可用' : '谨慎'}</span></div>
       ${dq.using_simulated_data ? `<div class="row"><span class="k">数据来源</span><span class="v" style="color:var(--warn)">模拟数据</span></div>` : ''}
       ${warnings.length ? `<div class="note" style="margin-top:8px">警告：${esc(warnings.join(' / '))}</div>` : ''}
+    </div>`;
+  }
+
+  if (algo.version) {
+    html += `<div class="section-title">当前算法</div>`;
+    html += `<div class="card">
+      <div class="row"><span class="k">版本</span><span class="v">${esc(algo.version)}</span></div>
+      <div class="row"><span class="k">历史数据</span><span class="v">${esc(algo.history_source || '-')}</span></div>
+      <div class="row"><span class="k">最新样本</span><span class="v">${esc(algo.latest_issue || '-')} · ${esc(algo.latest_date || '-')}</span></div>
+      <div class="row"><span class="k">模型状态</span><span class="v" style="color:${algo.ranking_allowed ? 'var(--accent2)' : 'var(--warn)'}">${algo.ranking_allowed ? '全量真实数据，排名可用' : '数据质量不足，结果谨慎'}</span></div>
+      <div class="note" style="margin-top:8px">${(algo.scoring || []).map(x => esc(x)).join('<br>')}</div>
+    </div>`;
+    html += `<div class="section-title">特征权重（前区 / 后区）</div>`;
+    html += `<div class="card">
+      <div class="section-title" style="font-size:13px;margin:0 0 8px">前区评分权重</div>
+      ${lotteryWeightBars(algo.front_weights, weightLabels)}
+      <div class="section-title" style="font-size:13px;margin:12px 0 8px">后区独立评分权重</div>
+      ${lotteryWeightBars(algo.back_weights, weightLabels)}
     </div>`;
   }
   
@@ -3111,6 +3184,9 @@ function renderLottery(r) {
       <div class="row"><span class="k">前区 Top5 至少中 4 个</span><span class="v">${bt.front_ge4_rate ? (bt.front_ge4_rate * 100).toFixed(1) : '0'}%</span></div>
       <div class="row"><span class="k">后区 Top3 至少中 1 个</span><span class="v">${bt.back_ge1_rate ? (bt.back_ge1_rate * 100).toFixed(1) : '0'}%</span></div>
       <div class="row"><span class="k">后区 Top3 至少中 2 个</span><span class="v">${bt.back_ge2_rate ? (bt.back_ge2_rate * 100).toFixed(1) : '0'}%</span></div>
+      <div class="section-title" style="font-size:13px;margin:12px 0 8px">随机基线对照</div>
+      ${lotteryBaselineRows(bt.baseline_comparison || algo.rolling_backtest?.baseline_comparison)}
+      <div class="note" style="margin-top:8px">${esc(bt.note || algo.rolling_backtest?.note || '回测只用于观察候选池表现，不能保证未来开奖。')}</div>
     </div>`;
   }
   
@@ -3129,9 +3205,11 @@ function renderLottery(r) {
   const oddEven = stats.odd_even_analysis || {};
   const size = stats.size_analysis || {};
   const road = stats.road_analysis || {};
+  const backRoad = stats.back_road_analysis || {};
   html += `<div class="row"><span class="k">奇偶分布</span><span class="v">${Object.entries(oddEven.distribution || {}).map(([k, v]) => k + ':' + v).join(' · ') || '无'}</span></div>`;
   html += `<div class="row"><span class="k">大小分布</span><span class="v">${Object.entries(size.distribution || {}).map(([k, v]) => k + ':' + v).join(' · ') || '无'}</span></div>`;
-  html += `<div class="row"><span class="k">012路</span><span class="v">0路(${road.total?.[0] || 0}) · 1路(${road.total?.[1] || 0}) · 2路(${road.total?.[2] || 0})</span></div>`;
+  html += `<div class="row"><span class="k">前区012路（衰减）</span><span class="v">${lotteryRoadText(road.total)}</span></div>`;
+  html += `<div class="row"><span class="k">后区012路（独立）</span><span class="v">${lotteryRoadText(backRoad.total)}</span></div>`;
   html += `</div>`;
   
   // ── 快速推荐 ──
@@ -3350,25 +3428,30 @@ async function getLotteryContribution() {
     }
     const result = data.result || {};
     const weights = result.weights || {};
+    const backWeights = result.back_weights || {};
+    const labels = {
+      frequency: '频率',
+      gap: '遗漏',
+      position: '位置',
+      road: '012路',
+      sum: '和值',
+      trend: '趋势',
+      zone: '区间',
+      repeat: '重号',
+      adjacent: '邻号',
+    };
     
     let html = '';
-    html += `<div class="row"><span class="k">频率特征</span><span class="v">权重: ${(weights.frequency || 0).toFixed(3)}</span></div>`;
-    html += `<div class="row"><span class="k">遗漏特征</span><span class="v">权重: ${(weights.gap || 0).toFixed(3)}</span></div>`;
-    html += `<div class="row"><span class="k">位置特征</span><span class="v">权重: ${(weights.position || 0).toFixed(3)}</span></div>`;
-    html += `<div class="row"><span class="k">012路特征</span><span class="v">权重: ${(weights.road || 0).toFixed(3)}</span></div>`;
+    html += `<div class="row"><span class="k">前区权重组</span><span class="v">${Object.keys(weights).length} 项</span></div>`;
+    html += `<div class="row"><span class="k">后区权重组</span><span class="v">${Object.keys(backWeights).length} 项，独立于前区</span></div>`;
     
     // 特征重要性条形图
-    html += `<div class="section-title" style="font-size:13px;margin:12px 0 8px">特征重要性</div>`;
-    const maxWeight = Math.max(...Object.values(weights), 1);
-    for (const [name, weight] of Object.entries(weights)) {
-      const percent = (weight / maxWeight * 100).toFixed(0);
-      const label = { frequency: '频率', gap: '遗漏', position_residual: '区位残差', road_residual: '路数残差', repeat: '重号', odd_even: '奇偶', big_small: '大小' }[name] || name;
-      html += `<div class="zhixuan">
-        <span class="rank">${label}</span>
-        <span class="num">${weight.toFixed(3)}</span>
-        <span class="bar"><i style="width:${percent}%"></i></span>
-        <span class="score">${percent}%</span>
-      </div>`;
+    html += `<div class="section-title" style="font-size:13px;margin:12px 0 8px">前区特征权重</div>`;
+    html += lotteryWeightBars(weights, labels);
+    html += `<div class="section-title" style="font-size:13px;margin:12px 0 8px">后区特征权重</div>`;
+    html += lotteryWeightBars(backWeights, labels);
+    if (result.description) {
+      html += `<div class="note" style="margin-top:8px">${Object.entries(result.description).map(([k, v]) => `${esc(labels[k] || k)}：${esc(v)}`).join('<br>')}</div>`;
     }
     
     contribDiv.innerHTML = html;
@@ -4132,7 +4215,8 @@ async function runKL8ParameterSearch() {
     }
     await pollKL8ParameterSearch(job.job_id);
   } catch (e) {
-    const msg = /504|Gateway Time-out|接口不存在/.test(e.message)
+    const errText = String(e.message || '');
+    const msg = errText.includes('504') || errText.includes('Gateway Time-out') || errText.includes('接口不存在')
       ? `${e.message}；请确认后端服务已重启到最新版本，然后再点参数搜索`
       : e.message;
     renderKL8ParameterSearch({ error: msg });
