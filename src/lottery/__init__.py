@@ -53,6 +53,8 @@ FEATURE_WEIGHTS = {
 TIME_DECAY_FACTOR = 0.92
 MIN_REAL_HISTORY_FOR_RANKING = 80  # 降低阈值: 120期真实数据足够支撑统计模型
 LOTTERY_PREDICTOR_VERSION = "dlt-v3.3-rank-dominant"
+FULL_HISTORY_FETCH_COUNT = 5000
+MIN_FULL_HISTORY_ISSUES = 500
 
 # v3.3: 消融验证 — 特征互补性比正信号本身更重要
 # 消融: zone关掉降10%(最关键), road降8%, sum降8%, repeat降6%, adjacent降6%(虽信号负但有互补)
@@ -130,6 +132,18 @@ def clear_cache():
     _prediction_cache = None
     _cache_time = 0
     log.info("大乐透模块缓存已清除")
+
+
+def _needs_full_history_bootstrap(data_quality: Dict[str, Any]) -> bool:
+    """生产环境未提交运行时 JSON 时，自动引导全量历史。"""
+    warnings = set(data_quality.get('warnings') or [])
+    return (
+        data_quality.get('using_simulated_data')
+        or int(data_quality.get('issues') or 0) < MIN_FULL_HISTORY_ISSUES
+        or 'issue_gaps' in warnings
+        or 'date_anomalies' in warnings
+        or not data_quality.get('ranking_allowed', False)
+    )
 
 
 class LotteryAnalyzer:
@@ -2315,8 +2329,22 @@ def run_prediction(force_refresh=False):
     try:
         analyzer = get_lottery_analyzer()
 
-        # 抓取最新开奖数据
-        analyzer.fetch_latest_results(count=20, force_refresh=force_refresh)
+        # 生产环境可能没有随版本提交运行时 doc_store JSON。若检测到短历史、
+        # 期号断层或模拟数据，直接全量引导，避免只抓近20期后仍保留脏基底。
+        initial_quality = analyzer.assess_data_quality()
+        full_bootstrap = force_refresh or _needs_full_history_bootstrap(initial_quality)
+        fetch_count = FULL_HISTORY_FETCH_COUNT if full_bootstrap else 20
+        fetch_result = analyzer.fetch_latest_results(
+            count=fetch_count,
+            force_refresh=full_bootstrap,
+        )
+        if full_bootstrap:
+            log.info(
+                "大乐透全量历史引导完成: source=%s count=%s latest=%s",
+                fetch_result.get('source'),
+                fetch_result.get('count'),
+                fetch_result.get('latest_issue'),
+            )
 
         # 获取统计数据
         stats = analyzer.get_statistics()

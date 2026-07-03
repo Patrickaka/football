@@ -1222,7 +1222,7 @@ class Handler(BaseHTTPRequestHandler):
             # 立即重新抓取并计算
             self._log.info('大乐透强制刷新：重新抓取数据...')
             start = time.time()
-            result = lottery_run_prediction()
+            result = lottery_run_prediction(force_refresh=True)
             elapsed = time.time() - start
             
             # 更新缓存
@@ -1235,7 +1235,7 @@ class Handler(BaseHTTPRequestHandler):
                 'success': True,
                 'message': '缓存已刷新',
                 'elapsed': round(elapsed, 2),
-                'data_count': len(result)
+                'data_count': result.get('data_quality', {}).get('issues') if isinstance(result, dict) else 0
             }
         except Exception as e:
             self._log.error('大乐透强制刷新失败: %s', str(e), exc_info=True)
@@ -1351,12 +1351,15 @@ class Handler(BaseHTTPRequestHandler):
             _CACHE['lottery']['timestamp'] = 0
             
             # 清除模块级缓存
-            from src.lottery import clear_cache
+            from src.lottery import FULL_HISTORY_FETCH_COUNT, clear_cache
             clear_cache()
             
             # 强制抓取最新数据
             analyzer = get_lottery_analyzer()
-            fetch_result = analyzer.fetch_latest_results(force_refresh=True)
+            fetch_result = analyzer.fetch_latest_results(
+                count=FULL_HISTORY_FETCH_COUNT,
+                force_refresh=True,
+            )
             
             # 重新分析
             self._log.info('大乐透抓取完成，开始重新分析...')

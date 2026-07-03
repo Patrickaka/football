@@ -23,6 +23,8 @@ data/dynamic_threshold_config.json
 # 运行时动态写入的历史缓存（可从网络重抓）
 data/lottery_history.json
 data/pailie5_history.json
+data/doc_store_*.json
+data/kv_store_fallback.json
 
 # 预测缓存（运行时生成，重启自动重建）
 data/*_cache.json
