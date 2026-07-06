@@ -2047,7 +2047,7 @@ function renderLottery3d(r) {
   html += `<div class="section-title">【组六四码推荐】（选 4 个号打组六复式即可）</div>`;
   html += `<div class="highlight">
     <div class="big" style="color:#f85149">${esc(z6.digits_str)}</div>
-    <div class="sub">杀码参考 ${esc(r.kill.join(', '))}（组六选号时杀码降权）</div>
+    <div class="sub">组六选号已改用专用评分（全局热号 + 组六历史），不再使用杀码降权</div>
     <div class="sub">覆盖 4 注组六</div>
     <div class="tags">${z6.combos.map(c => `<span class="tag">${esc(c)}</span>`).join('')}</div>
     <div class="note">对应直选形态：${esc(z6.combos.join(', '))}</div>
@@ -2135,8 +2135,11 @@ function renderLottery3d(r) {
       ${bt.significance ? `<div class="row"><span class="k">置换检验 p 值</span><span class="v" style="color:${bt.significance.significant ? 'var(--accent2)' : 'var(--muted)'}">${bt.significance.pvalue.toFixed(3)} · ${bt.significance.significant ? '显著优于随机' : '未显著优于随机（打乱均值 ' + pct(bt.significance.shuffled_mean_rate) + '）'}</span></div>` : ''}
       <div class="row"><span class="k">推荐池至少一注重合2码</span><span class="v">${pct(bt.ge2_digit_rate)}</span></div>
       ${bt.sum_band_rate != null ? `<div class="row"><span class="k">和值落在预测带±4</span><span class="v">${pct(bt.sum_band_rate)}</span></div>` : ''}
-      <div class="row"><span class="k">组六四码命中</span><span class="v">${bt.zu6_draws ? pct(bt.zu6_four_rate) + ' (' + bt.zu6_four_hit + '/' + bt.zu6_draws + '，开奖为组六时)' : '—'}</span></div>
+      <div class="row"><span class="k">组六四码命中</span><span class="v">${bt.zu6_draws ? pct(bt.zu6_four_rate) + ' (' + bt.zu6_four_hit + '/' + bt.zu6_draws + '，组六期)' : '—'}</span></div>
       <div class="row"><span class="k">五码组六池含开奖三码</span><span class="v">${bt.zu6_draws ? pct(bt.zu6_pool_rate) + ' (' + bt.zu6_pool_hit + '/' + bt.zu6_draws + ')' : '—'}</span></div>
+      ${bt.zu6_ge2_rate != null ? `<div class="row"><span class="k">四码至少中2个开奖数字</span><span class="v">${bt.zu6_draws ? pct(bt.zu6_ge2_rate) + ' (' + bt.zu6_ge2_hit + '/' + bt.zu6_draws + ')' : '—'}</span></div>` : ''}
+      ${bt.zu6_random_four_rate != null ? `<div class="row"><span class="k">随机四码基准（组六期）</span><span class="v">${bt.zu6_draws ? pct(bt.zu6_random_four_rate) : '—'}</span></div>` : ''}
+      ${bt.zu6_random_pool_rate != null ? `<div class="row"><span class="k">随机五码基准（组六期）</span><span class="v">${bt.zu6_draws ? pct(bt.zu6_random_pool_rate) : '—'}</span></div>` : ''}
     </div>`;
 
     // 诊断区 3: 真实号码排名统计

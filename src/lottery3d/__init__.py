@@ -72,7 +72,7 @@ W_LAST_APPEAR = 2.5
 W_NEIGHBOR = 2.0
 W_ROAD_MATCH = 1.5
 W_DANMA_HIT = 4.0
-W_KILL_PENALTY = 6.0  # 杀码出现在组合中时每码扣分（软约束，非硬杀）
+W_KILL_PENALTY = 4.0  # 杀码软降权（原6.0过强，易误伤开奖数字）
 W_CONSECUTIVE = 1.5   # 含相邻连号（如 12、67）
 W_POS_REPEAT = 1.2    # 与上期同位重复（直选复刻），每码；实际强度由 lag1 动态缩放
 W_RATIO_MATCH = 1.8   # 奇偶比 / 大小比与近期热门匹配
@@ -84,6 +84,11 @@ SPAN_SOFT_SIGMA = 1.4
 # 形态先验：按真实形态概率(组六72%/组三27%/豹子1%)给分，使推荐池形态分布贴合真实开奖。
 # 实测原推荐组六偏少(64% vs 真实71%)、组三偏多，此项把组六占比拉回~72%。
 W_FORM_PRIOR = 6.0
+
+# 直选组合：分位评分为主、全局评分为辅（直选带顺序，分位信号更关键）
+W_TRIPLET_POS = 1.0
+W_TRIPLET_GLOBAL = 0.30
+ZHXUAN_POS_TOPK = 5  # Top3/Top5 分位候选池每位置取前 N 码
 
 # 探索机制：推荐时有一定概率从候选池中随机选择
 # 稳定基础版：关闭探索机制
@@ -122,7 +127,7 @@ FEATURE_FLAGS = {
     "neighbor": False,     # 邻号加分（关闭：待消融回测验证有效性）
     "road": False,         # 012 路匹配（关闭：待消融回测验证有效性）
     "sum_span": True,      # 和值跨度
-    "pair": False,         # 数字配对（关闭：待消融回测验证有效性）
+    "pair": True,          # 数字配对（high_pairs 已在 meta 预计算）
     "form_switch": False,  # 形态切换（关闭：避免赌徒谬误）
     "cold_hot_balance": False,  # 冷热平衡（关闭：避免干扰模型排序）
     "consecutive": True,   # 连号奖励（开启：待消融回测验证有效性）
@@ -164,19 +169,30 @@ SUM_EXTREME_PENALTY = 0.0  # 极端区间降权（关闭）
 # 3D 为公平摇奖，任意 30 注互异组合命中率恒为 3%，故轮换不改变命中期望(实测900期均落在
 # 3%±1.1% 噪声带内)，但能把日间重复度从 ~54% 降到 ~14%。惩罚值取较大以形成"近窗内基本不重复"。
 RECENT_RECOMMEND_WINDOW = 5  # 最近推荐窗口大小
-RECENT_RECOMMEND_PENALTY = 10.0  # 最近推荐过的号码惩罚(略低于rank30→rank200落差≈12.5: 保留1-2个最强锚点,其余轮换)
+RECENT_RECOMMEND_PENALTY = 5.0  # 日间轮换惩罚（略降，减少对 Top30 命中率的干扰）
 RECENT_RECOMMEND_CONSECUTIVE_PENALTY = 16.0  # 连续推荐的号码惩罚
 
-# 组六四码逐期轮换：对近期已选数字按新近度降权，使每期四码不同(选码无 edge，轮换零命中代价)
-ZU6_RECENT_WINDOW = 5      # 组六四码去重窗口
-ZU6_RECENT_PENALTY = 6.0   # 近期数字惩罚基数(>top4→top6评分落差~2.5, 确保逐期轮换)
-ZU6_RECENT_DECAY = 0.6     # 越久远的期惩罚越轻
+# 组六四码逐期轮换（默认关闭：轮换不为命中率服务，会主动换掉相对高分码）
+ZU6_RECENT_WINDOW = 5
+ZU6_RECENT_PENALTY = 0.0
+ZU6_RECENT_DECAY = 0.6
+
+# 组六选码：不用杀码降权（杀码误伤开奖数字的风险大于收益）
+ZU6_USE_KILL = False
+ZU6_CANDIDATE_SIZE = 8
+
+# 组六专用单码评分权重
+W_ZU6_HOT = 3.0
+W_ZU6_MISS = 1.5
+W_ZU6_POS = 1.2
+W_ZU6_PAIR = 2.0
+W_ZU6_BLEND = 1.5
 
 # 窗口权重持久化键
 WINDOW_WEIGHTS_KV_KEY = "lottery3d_window_weights"
 
 # 预测版本号
-PREDICTOR_VERSION = "3d-v4.2-zu6-coverage-variants"
+PREDICTOR_VERSION = "3d-v4.4-zhixuan-pos"
 ML_MODEL_VERSION = "ml-v6"
 MIN_DATA_PERIODS_FOR_ML_FUSION = 300
 ML_CACHE_MAX_AGE_SECONDS = 36 * 3600
@@ -2005,6 +2021,31 @@ def ensemble_digit_scores(numbers, window_weights, dynamic=None):
     return combined, freq_combined
 
 
+def zu6_digit_scores(numbers, window_weights=None, dynamic=None):
+    """组六单码评分：全局模型为主，叠加组六历史频率（回测优于纯组六特征）。"""
+    if window_weights is None:
+        window_weights = default_window_weights()
+
+    score, _ = ensemble_digit_scores(numbers, window_weights, dynamic=dynamic)
+
+    zu6_draws = [n for n in numbers if classify_form(n) == "zu6"]
+    if zu6_draws:
+        recent_zu6 = _recent_slice(zu6_draws, min(90, len(zu6_draws)))
+        freq = exp_weighted_counts([d for n in recent_zu6 for d in set(n)])
+        peak = max(freq.values()) if freq else 1.0
+        for d, cnt in freq.items():
+            score[d] += W_ZU6_HOT * 0.35 * (cnt / peak)
+
+        for pos in range(3):
+            pos_sc = ensemble_position_digit_scores(
+                numbers, pos, window_weights, dynamic=dynamic
+            )
+            for d, _ in sorted(enumerate(pos_sc), key=lambda x: -x[1])[:3]:
+                score[d] += W_ZU6_POS * 0.25
+
+    return score
+
+
 def position_digit_scores(numbers, position, window=RECENT_WINDOW, dynamic=None):
     """单码分位评分（百/十/个），与主模型共用 FEATURE_FLAGS"""
     recent = [n[position] for n in _recent_slice(numbers, window)]
@@ -2322,9 +2363,12 @@ def pick_dan_tuo_kill(score, enable_danma_random=True):
     return danma, tuoma, kill, rank
 
 
-def pick_zu6_four(score, kill=None):
-    """组六四码：按有效分选 4 个号（杀码降权）"""
-    return pick_zu6_pool(score, kill, pool_size=ZU6_FOUR_SIZE)
+def pick_zu6_four(score, kill=None, use_kill=ZU6_USE_KILL, numbers=None, pair_freq=None):
+    """组六四码：在 Top 候选中组合优化选 4 码"""
+    return pick_zu6_pool(
+        score, kill, pool_size=ZU6_FOUR_SIZE,
+        use_kill=use_kill, numbers=numbers, pair_freq=pair_freq,
+    )
 
 
 def zu6_notes_from_digits(digits):
@@ -2337,7 +2381,7 @@ def zu6_notes_from_digits(digits):
 TICKET_PRICE = 2
 
 
-def build_zu6_coverage_tiers(score, kill=None, sizes=(4, 5, 6, 7)):
+def build_zu6_coverage_tiers(score, kill=None, sizes=(4, 5, 6, 7), numbers=None):
     """组六复式覆盖档位：N 码 → C(N,3) 注，给出注数/成本/理论命中率。
 
     3D 为公平均匀摇奖，选哪些码无 edge（实测评分选码≈随机选码），
@@ -2346,7 +2390,7 @@ def build_zu6_coverage_tiers(score, kill=None, sizes=(4, 5, 6, 7)):
     """
     tiers = []
     for n in sizes:
-        digits = pick_zu6_pool(score, kill, pool_size=n)
+        digits = pick_zu6_pool(score, kill, pool_size=n, numbers=numbers)
         combos, combo_strs = zu6_notes_from_digits(digits)
         notes = len(combos)
         tiers.append({
@@ -2393,11 +2437,12 @@ def _zu6_four_balance_score(combo, score, kill=None):
     )
 
 
-def build_zu6_four_variants(score, kill=None, limit=4):
+def build_zu6_four_variants(score, kill=None, limit=4, numbers=None):
     """Build several deterministic four-digit zu6 groups for coverage comparison."""
-    rank = sorted(range(10), key=lambda d: -_effective_digit_score(score, d, kill))
+    kill_eff = kill if ZU6_USE_KILL else None
+    rank = sorted(range(10), key=lambda d: -_effective_digit_score(score, d, kill_eff))
     candidate_pool = rank[:8]
-    primary = tuple(pick_zu6_four(score, kill))
+    primary = tuple(pick_zu6_four(score, kill, numbers=numbers))
     variants = []
     seen = set()
 
@@ -2444,10 +2489,50 @@ def _effective_digit_score(score, digit, kill=None):
     return score[digit] - (W_KILL_PENALTY if digit in kill_set else 0.0)
 
 
-def pick_zu6_pool(score, kill=None, pool_size=ZU6_POOL_SIZE):
-    """组六复式选号：按有效分取 top N（杀码降权）"""
-    rank = sorted(range(10), key=lambda d: -_effective_digit_score(score, d, kill))
+def _zu6_combo_score(combo, score, kill=None, pair_freq=None):
+    """组六 N 码组合得分：单码分 + 对内共现 + 奇偶大小均衡。"""
+    digits = tuple(sorted(combo))
+    val = sum(_effective_digit_score(score, d, kill) for d in digits)
+    if pair_freq:
+        for i in range(len(digits)):
+            for j in range(i + 1, len(digits)):
+                val += pair_freq.get((digits[i], digits[j]), 0.0) * W_ZU6_PAIR
+    odd = sum(1 for d in digits if d % 2)
+    big = sum(1 for d in digits if d >= 5)
+    val -= abs(odd - len(digits) / 2) * 0.5
+    val -= abs(big - len(digits) / 2) * 0.4
+    return val
+
+
+def pick_zu6_pool(
+    score, kill=None, pool_size=ZU6_POOL_SIZE,
+    use_kill=ZU6_USE_KILL, pair_freq=None, numbers=None,
+):
+    """组六复式选号：按组六专用分取 Top N（默认不用杀码）。"""
+    kill_eff = kill if use_kill else None
+    rank = sorted(range(10), key=lambda d: -_effective_digit_score(score, d, kill_eff))
     return sorted(rank[:pool_size])
+
+
+def _blend_dan_score(score, meta):
+    """胆码/杀码用分位融合评分，与直选分位排序一致。"""
+    dan_score = list(score)
+    if meta.get("pos_scores"):
+        for d in range(10):
+            pos_sum = sum(meta["pos_scores"][p][d] for p in range(3))
+            dan_score[d] = score[d] * 0.45 + pos_sum * 0.55
+    return dan_score
+
+
+def _triplet_digit_base(a, b, c, score, meta):
+    """直选三位基础分：分位评分为主，全局评分为辅。"""
+    pos_scores = meta.get("pos_scores")
+    if pos_scores and len(pos_scores) == 3:
+        return (
+            W_TRIPLET_POS * (pos_scores[0][a] + pos_scores[1][b] + pos_scores[2][c])
+            + W_TRIPLET_GLOBAL * (score[a] + score[b] + score[c])
+        )
+    return score[a] + score[b] + score[c]
 
 
 def triplet_weight(a, b, c, score, danma, kill, meta, features=None):
@@ -2466,7 +2551,7 @@ def triplet_weight(a, b, c, score, danma, kill, meta, features=None):
     flags = features if features is not None else FEATURE_FLAGS
     numbers = meta.get("numbers", [])
 
-    w = score[a] + score[b] + score[c]
+    w = _triplet_digit_base(a, b, c, score, meta)
     for x in (a, b, c):
         if x in danma:
             w += W_DANMA_HIT
@@ -2561,7 +2646,7 @@ def triplet_weight_detail(a, b, c, score, danma, kill, meta):
         detail: 包含各特征得分的字典
     """
     detail = {
-        "base_digit": score[a] + score[b] + score[c],
+        "base_digit": _triplet_digit_base(a, b, c, score, meta),
         "danma": 0.0,
         "kill": 0.0,
         "sum_span": 0.0,
@@ -2693,6 +2778,35 @@ def select_danma(score_rank, enable_random=True):
         return top6_digits[:2]
 
 
+def _position_constrained_pool(score, danma, kill, meta, per_pos=ZHXUAN_POS_TOPK):
+    """百/十/个分位 Top 码笛卡尔积，用于精炼 Top3/Top5。"""
+    pos_scores = meta.get("pos_scores")
+    if not pos_scores:
+        return []
+    tops = [
+        sorted(range(10), key=lambda d: -pos_scores[i][d])[:per_pos]
+        for i in range(3)
+    ]
+    pool = []
+    for a, b, c in product(*tops):
+        w = triplet_weight(a, b, c, score, danma, kill, meta)
+        pool.append((w, f"{a}{b}{c}"))
+    pool.sort(key=lambda x: -x[0])
+    return pool
+
+
+def _merge_rank_pools(*pools, top_n):
+    seen = set()
+    merged = []
+    for pool in pools:
+        for item in pool:
+            if item[1] not in seen:
+                seen.add(item[1])
+                merged.append(item)
+    merged.sort(key=lambda x: -x[0])
+    return merged[:top_n]
+
+
 def rank_triplets(score, danma, kill, meta, top_n=20, enable_exploration=True, apply_noise=True, enable_cold_hot_balance=True, recent_recommendations=None, enable_diversity=True, enable_correlation=True):
     """对三位数组合进行评分排序，支持探索机制、随机扰动和冷热平衡
     
@@ -2797,14 +2911,29 @@ def rank_triplets(score, danma, kill, meta, top_n=20, enable_exploration=True, a
     
     # 正常模式：贪心选池或纯排序
     if enable_diversity or enable_correlation:
-        return select_diverse_pool(
+        result = select_diverse_pool(
             pool,
             top_n=top_n,
             candidate_size=max(top_n * 5, SERVED_POOL_CANDIDATE_SIZE),
             use_diversity=enable_diversity,
             use_correlation=enable_correlation,
         )
-    return pool[:top_n]
+    else:
+        result = pool[:top_n]
+
+    # Top3/Top5：合并分位候选池，避免全量排序漏掉「分位热号组合」
+    if (
+        top_n <= 5
+        and meta.get("pos_scores")
+        and not enable_exploration
+        and not enable_diversity
+        and not enable_correlation
+    ):
+        pos_pool = _position_constrained_pool(score, danma, kill, meta)
+        if pos_pool:
+            result = _merge_rank_pools(pos_pool, pool, top_n=top_n)
+
+    return result
 
 
 def _meta_from_raw(meta_raw, tail_top=5):
@@ -2831,6 +2960,12 @@ def build_ranking_meta(numbers, window_weights, sums=None, spans=None, tail_top=
     meta["last_draw"] = numbers[-1]
     meta["numbers"] = numbers  # 用于冷热平衡模型
     meta["high_pairs"] = high_freq_pairs(numbers) if len(numbers) >= 50 else set()
+    meta["pos_scores"] = [
+        ensemble_position_digit_scores(
+            numbers, pos, window_weights, dynamic=meta.get("dynamic")
+        )
+        for pos in range(3)
+    ]
     
     # 和值趋势模型：仅在开启调整时才融合，否则保留多窗口中心
     base_sum_center = meta["sum_center"]
@@ -2918,6 +3053,9 @@ def backtest(numbers, trials=BACKTEST_TRIALS, window_weights=None):
     raw_top30_hits = []
     served_top30_hits = []
     actual_ranks = []
+    zu6_four_hit = zu6_pool_hit = zu6_draws = zu6_ge2_hit = 0
+    random_zu6_four_hit = random_zu6_pool_hit = 0
+    rng_zu6 = random.Random(42)
     start = len(numbers) - trials
     
     # 如果传入了固定窗口权重，使用它（用于参数搜索）
@@ -2960,7 +3098,7 @@ def backtest(numbers, trials=BACKTEST_TRIALS, window_weights=None):
         spans = [calc_span(x) for x in train]
         meta = build_ranking_meta(train, ww, sums, spans, tail_top=4)
         sc, _ = ensemble_digit_scores(train, ww, dynamic=meta.get("dynamic"))
-        dan, _, kill, _ = pick_dan_tuo_kill(sc, enable_danma_random=False)
+        dan, _, kill, _ = pick_dan_tuo_kill(_blend_dan_score(sc, meta), enable_danma_random=False)
         
         # 纯模型排名（1000 候选）
         all_ranked = rank_triplets(
@@ -3014,6 +3152,23 @@ def backtest(numbers, trials=BACKTEST_TRIALS, window_weights=None):
         if max_digit_overlap(act_s, served_top30_nums) >= 2:
             hit_ge2 += 1
 
+        if classify_form(actual) == "zu6":
+            zu6_draws += 1
+            actual_set = set(actual)
+            z6_sc = zu6_digit_scores(train, ww, dynamic=meta.get("dynamic"))
+            z4 = set(pick_zu6_four(z6_sc, numbers=train))
+            z5 = set(pick_zu6_pool(z6_sc, pool_size=ZU6_POOL_SIZE, numbers=train))
+            if actual_set <= z4:
+                zu6_four_hit += 1
+            if actual_set <= z5:
+                zu6_pool_hit += 1
+            if len(actual_set & z4) >= 2:
+                zu6_ge2_hit += 1
+            if actual_set <= set(rng_zu6.sample(range(10), ZU6_FOUR_SIZE)):
+                random_zu6_four_hit += 1
+            if actual_set <= set(rng_zu6.sample(range(10), ZU6_POOL_SIZE)):
+                random_zu6_pool_hit += 1
+
     n = trials
     
     # 计算真实号码排名统计
@@ -3062,6 +3217,16 @@ def backtest(numbers, trials=BACKTEST_TRIALS, window_weights=None):
         "actual_rank_top300_rate": round(actual_rank_top300_rate, 4),
         # 数字命中比例
         "ge2_digit_rate": round(hit_ge2 / n, 4) if n > 0 else 0.0,
+        # 组六四码/五码（仅组六开奖期统计）
+        "zu6_draws": zu6_draws,
+        "zu6_four_hit": zu6_four_hit,
+        "zu6_four_rate": round(zu6_four_hit / zu6_draws, 4) if zu6_draws else 0.0,
+        "zu6_pool_hit": zu6_pool_hit,
+        "zu6_pool_rate": round(zu6_pool_hit / zu6_draws, 4) if zu6_draws else 0.0,
+        "zu6_ge2_hit": zu6_ge2_hit,
+        "zu6_ge2_rate": round(zu6_ge2_hit / zu6_draws, 4) if zu6_draws else 0.0,
+        "zu6_random_four_rate": round(random_zu6_four_hit / zu6_draws, 4) if zu6_draws else 0.0,
+        "zu6_random_pool_rate": round(random_zu6_pool_hit / zu6_draws, 4) if zu6_draws else 0.0,
         # 随机基准（仅用于页面展示，准入使用固定理论基准 3%）
         "random_rate": random_baseline,
         "random_hit": random_result["random_hit"],
@@ -3475,20 +3640,21 @@ def run_prediction(data=None, force_refresh=False, enable_backtest=False, enable
     pat = {k: meta[k] for k in ("consec_rate", "oe_freq", "bs_freq", "oe_total", "bs_total")}
 
     score, freq_all = ensemble_digit_scores(numbers, window_weights, dynamic=meta.get("dynamic"))
-    # 实盘版本：关闭胆码随机选择
-    danma, tuoma, kill, rank = pick_dan_tuo_kill(score, enable_danma_random=False)
+    danma, tuoma, kill, rank = pick_dan_tuo_kill(
+        _blend_dan_score(score, meta), enable_danma_random=False
+    )
     form_prob = analyze_form_probability(numbers, window_weights=window_weights)
-    # 组六四码：对近期已选数字降权，使其逐期轮换（选码无 edge，轮换不损失覆盖命中率）。
-    # 排除当前期自身，保证同一期内多次调用稳定。
-    current_period_zu6 = periods[-1] if periods else None
-    recent_zu6 = [
-        e for e in load_recent_zu6_four()
-        if not (isinstance(e, dict) and e.get("period") == current_period_zu6)
-    ]
-    zu6_score = recent_zu6_digit_penalty(score, recent_zu6)
-    zu6_four = pick_zu6_four(zu6_score, kill)
+    zu6_score = zu6_digit_scores(numbers, window_weights, dynamic=meta.get("dynamic"))
+    if ZU6_RECENT_PENALTY > 0:
+        current_period_zu6 = periods[-1] if periods else None
+        recent_zu6 = [
+            e for e in load_recent_zu6_four()
+            if not (isinstance(e, dict) and e.get("period") == current_period_zu6)
+        ]
+        zu6_score = recent_zu6_digit_penalty(zu6_score, recent_zu6)
+    zu6_four = pick_zu6_four(zu6_score, numbers=numbers)
     _, z6_straight = zu6_notes_from_digits(zu6_four)
-    save_recent_zu6_four(current_period_zu6, zu6_four)
+    save_recent_zu6_four(periods[-1] if periods else None, zu6_four)
     
     # 加载最近推荐历史（用于排除重复推荐）
     recent_recommendations = load_recent_3d_recommendations()
@@ -3538,6 +3704,7 @@ def run_prediction(data=None, force_refresh=False, enable_backtest=False, enable
     zhixuan_top3_detail = build_detail_list(
         zhixuan_top3, score, danma, kill, meta
     )
+    rule_top3_detail = zhixuan_top3_detail.copy()
     zhixuan_with_detail = build_detail_list(
         zhixuan_top, score, danma, kill, meta
     )
@@ -3599,10 +3766,14 @@ def run_prediction(data=None, force_refresh=False, enable_backtest=False, enable
         ml_top30_rate = ml_perf.get("top30_rate", 0.0)
         ml_lift = ml_top30_rate - baseline_rate
         
-        if ml_lift > 0:
+        if ml_lift > 0 and ml_top30_rate > rule_top30_rate:
             total_lift = max(rule_lift, 0) + ml_lift
-            rule_weight = max(rule_lift, 0) / total_lift
+            rule_weight = max(max(rule_lift, 0) / total_lift, 0.55)
             ml_weight = ml_lift / total_lift
+        else:
+            ml_eligible = False
+            ml_weight = 0.0
+            rule_weight = 1.0
     
     # 融合规则模型和ML模型
     # 当ML不准入、权重为0或推荐列表为空时，直接使用规则模型，避免无意义的重排
@@ -3662,9 +3833,9 @@ def run_prediction(data=None, force_refresh=False, enable_backtest=False, enable
         fused=[f["num"] for f in fused],
     )
     
-    # 使用融合结果作为最终推荐
+    # 使用融合结果作为最终 Top30；Top3 始终保留纯规则模型排序（ML 融合易拉低 Top3）
     zhixuan_with_detail = fused
-    zhixuan_top3_detail = fused[:ZHIXUAN_TOP3]
+    zhixuan_top3_detail = rule_top3_detail
     
     # 保存本次推荐历史（按期号去重）
     current_recommendations = [f["num"] for f in fused]
@@ -3807,8 +3978,12 @@ def run_prediction(data=None, force_refresh=False, enable_backtest=False, enable
             "digits_str": "".join(map(str, zu6_four)),
             "combos": z6_straight,
         },
-        "zu6_four_variants": build_zu6_four_variants(zu6_score, kill),
-        "zu6_coverage": build_zu6_coverage_tiers(zu6_score, kill),
+        "zu6_digit_scores": [
+            {"digit": d, "score": round(zu6_score[d], 2)}
+            for d in sorted(range(10), key=lambda x: -zu6_score[x])
+        ],
+        "zu6_four_variants": build_zu6_four_variants(zu6_score, kill=None, numbers=numbers),
+        "zu6_coverage": build_zu6_coverage_tiers(zu6_score, kill=None, numbers=numbers),
         "zhixuan_top3": zhixuan_top3_detail,
         "zhixuan": zhixuan_with_detail,
         "stability": {
