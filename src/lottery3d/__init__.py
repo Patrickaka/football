@@ -133,6 +133,7 @@ FEATURE_FLAGS = {
     "consecutive": True,   # 连号奖励（开启：待消融回测验证有效性）
     "lag1_repeat": True,   # 上期同位重复、全重复、同集合惩罚（开启：待消融回测验证有效性）
     "ratio": True,         # 奇偶比、大小比奖励（开启：待消融回测验证有效性）
+    "slope": True,         # 斜连走势（同位/跨期，辅助加分）
 }
 COLD_RATIO = 0.20  # 冷号比例 20%
 HOT_WINDOW = 20    # 冷热判断窗口
@@ -151,6 +152,12 @@ MISS_OVER_BONUS = 1.0  # 超期额外加分（实盘保守版本：降权）
 PAIR_FREQ_WINDOWS = [50, 100, 200]  # 统计窗口
 PAIR_HIGH_FREQ_THRESHOLD = 0.15  # 高频对子阈值（出现频率 > 15%）
 PAIR_BONUS = 2.5  # 高频对子加分
+
+# 斜连走势：同位连续 ±1、跨期百→十→个对角（样本少，仅轻量加分）
+SLOPE_MIN_CHAIN = 3
+SLOPE_MAX_CHAIN = 6
+W_SLOPE_MATCH = 1.2
+POS_NAMES_3D = ("百", "十", "个")
 
 # 组三组六切换模型：根据连续出现调整权重
 # 实盘版本：关闭组三组六强制切换（典型赌徒谬误，连续出现不代表下期一定要切换）
@@ -192,7 +199,7 @@ W_ZU6_BLEND = 1.5
 WINDOW_WEIGHTS_KV_KEY = "lottery3d_window_weights"
 
 # 预测版本号
-PREDICTOR_VERSION = "3d-v4.4-zhixuan-pos"
+PREDICTOR_VERSION = "3d-v4.5-slope"
 ML_MODEL_VERSION = "ml-v6"
 MIN_DATA_PERIODS_FOR_ML_FUSION = 300
 ML_CACHE_MAX_AGE_SECONDS = 36 * 3600
@@ -396,6 +403,225 @@ def has_consecutive_digits(a, b, c):
             if abs(digits[i] - digits[j]) == 1:
                 return True
     return False
+
+
+def has_consecutive_digits(a, b, c):
+    """是否存在相邻连号（差值为 1，不含 9-0）"""
+    digits = (a, b, c)
+    for i in range(3):
+        for j in range(i + 1, 3):
+            if abs(digits[i] - digits[j]) == 1:
+                return True
+    return False
+
+
+def _slope_step(prev_digit, cur_digit):
+    """斜连步长：仅认可 ±1（不含 9↔0 绕回）。"""
+    diff = cur_digit - prev_digit
+    return diff if diff in (-1, 1) else None
+
+
+def _detect_position_slope_chain(digits_at_pos, min_len=SLOPE_MIN_CHAIN, max_len=SLOPE_MAX_CHAIN):
+    """同一位上最近若干期是否形成等差斜连，返回最长有效链。"""
+    if len(digits_at_pos) < min_len:
+        return None
+    best = None
+    upper = min(max_len, len(digits_at_pos))
+    for length in range(upper, min_len - 1, -1):
+        seq = digits_at_pos[-length:]
+        step = None
+        valid = True
+        for i in range(1, len(seq)):
+            s = _slope_step(seq[i - 1], seq[i])
+            if s is None:
+                valid = False
+                break
+            if step is None:
+                step = s
+            elif s != step:
+                valid = False
+                break
+        if not valid or step is None:
+            continue
+        nxt = seq[-1] + step
+        if 0 <= nxt <= 9:
+            best = {
+                "chain": seq,
+                "step": step,
+                "predict_digit": nxt,
+                "length": length,
+            }
+            break
+    return best
+
+
+def _cross_period_slope_signals(numbers):
+    """跨期斜连：近三期在百→十→个（及轮换）上形成对角走势。"""
+    if len(numbers) < 3:
+        return []
+    signals = []
+    draws = numbers[-3:]
+    # 三种位次轮换的对角：起始位 offset ∈ {0,1,2}
+    for offset in range(3):
+        vals = []
+        for k in range(3):
+            pos = (offset + k) % 3
+            vals.append(draws[k][pos])
+        step = _slope_step(vals[0], vals[1])
+        if step is None or _slope_step(vals[1], vals[2]) != step:
+            continue
+        predict_pos = offset
+        predict_digit = vals[-1] + step
+        if not (0 <= predict_digit <= 9):
+            continue
+        route = "→".join(
+            POS_NAMES_3D[(offset + k) % 3] for k in range(3)
+        )
+        signals.append({
+            "type": "cross_period_slope",
+            "position": predict_pos,
+            "position_name": POS_NAMES_3D[predict_pos],
+            "chain": vals,
+            "route": route,
+            "step": step,
+            "predict_digit": predict_digit,
+            "length": 3,
+            "label": (
+                f"跨期斜连 {route} {'+' if step > 0 else ''}{step} "
+                f"({'→'.join(map(str, vals))}) → 下期{POS_NAMES_3D[predict_pos]}位关注 {predict_digit}"
+            ),
+            "strength": 1.0,
+        })
+    return signals
+
+
+def analyze_slope_patterns(numbers, min_len=SLOPE_MIN_CHAIN):
+    """识别斜连走势并给出下期分位关注码（辅助参考，非主预测）。"""
+    signals = []
+    position_hints = {i: [] for i in range(3)}
+
+    for pos in range(3):
+        hist = [n[pos] for n in numbers]
+        det = _detect_position_slope_chain(hist, min_len=min_len)
+        if not det:
+            continue
+        chain_s = "→".join(map(str, det["chain"]))
+        step = det["step"]
+        pred = det["predict_digit"]
+        strength = 1.0 + (det["length"] - min_len) * 0.25
+        sig = {
+            "type": "position_slope",
+            "position": pos,
+            "position_name": POS_NAMES_3D[pos],
+            "chain": det["chain"],
+            "step": step,
+            "predict_digit": pred,
+            "length": det["length"],
+            "label": (
+                f"同位斜连 {POS_NAMES_3D[pos]}位 {'+' if step > 0 else ''}{step} "
+                f"({chain_s}) → 关注 {pred}"
+            ),
+            "strength": round(strength, 2),
+        }
+        signals.append(sig)
+        position_hints[pos].append({
+            "digit": pred,
+            "strength": strength,
+            "type": "position_slope",
+        })
+
+    for sig in _cross_period_slope_signals(numbers):
+        signals.append(sig)
+        pos = sig["position"]
+        position_hints[pos].append({
+            "digit": sig["predict_digit"],
+            "strength": sig["strength"],
+            "type": "cross_period_slope",
+        })
+
+    # 上期三位本身呈斜连（百→十→个等差），下期同向延伸作弱提示
+    if len(numbers) >= 1:
+        last = numbers[-1]
+        s01 = _slope_step(last[0], last[1])
+        s12 = _slope_step(last[1], last[2])
+        if s01 is not None and s01 == s12:
+            for pos in range(3):
+                nxt = last[pos] + s01
+                if 0 <= nxt <= 9:
+                    position_hints[pos].append({
+                        "digit": nxt,
+                        "strength": 0.6,
+                        "type": "in_draw_slope",
+                    })
+            signals.append({
+                "type": "in_draw_slope",
+                "chain": list(last),
+                "step": s01,
+                "label": (
+                    f"上期位内斜连 {'+' if s01 > 0 else ''}{s01} "
+                    f"({last[0]}→{last[1]}→{last[2]})，下期各位可顺势延伸"
+                ),
+                "position_hints": [
+                    {"position_name": POS_NAMES_3D[i], "digit": last[i] + s01}
+                    for i in range(3)
+                    if 0 <= last[i] + s01 <= 9
+                ],
+            })
+
+    return {
+        "active": len(signals) > 0,
+        "signal_count": len(signals),
+        "signals": signals,
+        "position_hints": {
+            POS_NAMES_3D[i]: position_hints[i] for i in range(3)
+        },
+        "note": "斜连为走势辅助信号；历史回测命中率接近随机，请与和值/共现等一并参考。",
+    }
+
+
+def slope_triplet_bonus(a, b, c, meta):
+    """直选组合与斜连关注码吻合时的加分。"""
+    slope = meta.get("slope") or {}
+    hints = slope.get("position_hints") or {}
+    bonus = 0.0
+    digits = (a, b, c)
+    for pos, name in enumerate(POS_NAMES_3D):
+        for hint in hints.get(name, []):
+            if hint.get("digit") == digits[pos]:
+                bonus += W_SLOPE_MATCH * float(hint.get("strength", 1.0))
+    return bonus
+
+
+def backtest_slope_patterns(numbers, trials=100):
+    """斜连信号独立回测（分位预测是否命中）。"""
+    pos_hit = pos_total = 0
+    cross_hit = cross_total = 0
+    start = max(SLOPE_MIN_CHAIN + 1, len(numbers) - trials)
+
+    for i in range(start, len(numbers)):
+        train = numbers[:i]
+        actual = numbers[i]
+        slope = analyze_slope_patterns(train)
+        for sig in slope.get("signals", []):
+            if sig["type"] == "position_slope":
+                pos_total += 1
+                if actual[sig["position"]] == sig["predict_digit"]:
+                    pos_hit += 1
+            elif sig["type"] == "cross_period_slope":
+                cross_total += 1
+                if actual[sig["position"]] == sig["predict_digit"]:
+                    cross_hit += 1
+
+    return {
+        "trials": trials,
+        "position_slope_hit": pos_hit,
+        "position_slope_total": pos_total,
+        "position_slope_rate": round(pos_hit / pos_total, 4) if pos_total else 0.0,
+        "cross_slope_hit": cross_hit,
+        "cross_slope_total": cross_total,
+        "cross_slope_rate": round(cross_hit / cross_total, 4) if cross_total else 0.0,
+        "baseline_single_pos": 0.10,
+    }
 
 
 def entropy_model(numbers, min_appear_window=30):
@@ -2603,6 +2829,9 @@ def triplet_weight(a, b, c, score, danma, kill, meta, features=None):
             w += W_RATIO_MATCH * oe_freq.get(oe, 0) / meta.get("oe_total", 1)
         if bs_freq:
             w += W_RATIO_MATCH * bs_freq.get(bs, 0) / meta.get("bs_total", 1)
+
+    if flags.get("slope", True):
+        w += slope_triplet_bonus(a, b, c, meta)
     
     # 数字配对奖励：使用 meta 预计算的高频对子
     high_pairs = meta.get("high_pairs") or set()
@@ -2654,6 +2883,7 @@ def triplet_weight_detail(a, b, c, score, danma, kill, meta):
         "last_repeat": 0.0,
         "ratio_match": 0.0,
         "pair": 0.0,
+        "slope": 0.0,
         "form_switch": 0.0,
         "sum_interval": 0.0,
         "total": 0.0,
@@ -2717,6 +2947,9 @@ def triplet_weight_detail(a, b, c, score, danma, kill, meta):
     if flags.get("pair", True) and high_pairs:
         detail["pair"] += pair_bonus((a, b, c), high_pairs)
 
+    if flags.get("slope", True):
+        detail["slope"] += slope_triplet_bonus(a, b, c, meta)
+
     numbers = meta.get("numbers", [])
     if flags.get("form_switch", True) and len(numbers) >= 5:
         form_bonus = form_switch_bonus(numbers)
@@ -2751,6 +2984,7 @@ def build_detail_list(items, score, danma, kill, meta):
                 "last_repeat": round(detail["last_repeat"], 1),
                 "ratio_match": round(detail["ratio_match"], 1),
                 "pair": round(detail["pair"], 1),
+                "slope": round(detail["slope"], 1),
                 "form_switch": round(detail["form_switch"], 1),
                 "sum_interval": round(detail["sum_interval"], 1),
             }
@@ -2966,6 +3200,7 @@ def build_ranking_meta(numbers, window_weights, sums=None, spans=None, tail_top=
         )
         for pos in range(3)
     ]
+    meta["slope"] = analyze_slope_patterns(numbers)
     
     # 和值趋势模型：仅在开启调整时才融合，否则保留多窗口中心
     base_sum_center = meta["sum_center"]
@@ -3960,6 +4195,7 @@ def run_prediction(data=None, force_refresh=False, enable_backtest=False, enable
             "last_big_small": ratio_label(big_small_key(last_num), "bs"),
             "last_has_consecutive": has_consecutive_digits(*last_num),
         },
+        "slope": meta.get("slope") or analyze_slope_patterns(numbers),
         "transition": _transition_for_api(meta["lag1"], meta["dynamic"], pos_names),
         "form": {
             "last_label": FORM_LABELS[form_prob["last_form"]],
@@ -4063,6 +4299,7 @@ def run_prediction(data=None, force_refresh=False, enable_backtest=False, enable
         
         # 添加和值/跨度区间回测
         result["backtest"]["sum_span_interval"] = backtest_sum_span_interval(numbers, trials=min(100, len(numbers) - 50))
+        result["backtest"]["slope_patterns"] = backtest_slope_patterns(numbers, trials=min(200, len(numbers) - 50))
     
     # 保存到缓存
     _prediction_cache = result

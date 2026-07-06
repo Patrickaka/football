@@ -2012,6 +2012,30 @@ function renderLottery3d(r) {
     </div>`;
   }
 
+  if (r.slope) {
+    const sl = r.slope;
+    const sigs = Array.isArray(sl.signals) ? sl.signals : [];
+    html += `<div class="section-title">【斜连走势识别】（辅助参考）</div>`;
+    html += `<div class="card">`;
+    if (!sl.active || !sigs.length) {
+      html += `<div class="note">本期未识别到明确斜连（同位连续±1 或 跨期百→十→个对角）。</div>`;
+    } else {
+      sigs.forEach(s => {
+        html += `<div class="row"><span class="k">${esc(s.type === 'position_slope' ? '同位' : s.type === 'cross_period_slope' ? '跨期' : '位内')}</span><span class="v">${esc(s.label || '')}</span></div>`;
+      });
+      const hints = sl.position_hints || {};
+      const hintRows = ['百', '十', '个'].map(name => {
+        const arr = hints[name] || [];
+        if (!arr.length) return '';
+        const txt = arr.map(h => `${h.digit}(${(h.strength || 1).toFixed(1)})`).join(' · ');
+        return `<div class="row"><span class="k">${name}位关注</span><span class="v" style="font-weight:600;color:var(--accent2)">${esc(txt)}</span></div>`;
+      }).join('');
+      if (hintRows) html += hintRows;
+    }
+    html += `<div class="note" style="margin-top:8px">${esc(sl.note || '斜连为走势辅助，命中率接近分位随机，请结合和值/热号使用。')}</div>`;
+    html += `</div>`;
+  }
+
   if (r.transition) {
     const tr = r.transition;
     const dyn = tr.dynamic || {};
@@ -2199,6 +2223,17 @@ function renderLottery3d(r) {
         <div class="row"><span class="k">和值 ±4 命中</span><span class="v">${pct(ssi.sum_hit_4_rate)}</span></div>
         <div class="row"><span class="k">跨度 ±1 命中</span><span class="v">${pct(ssi.span_hit_1_rate)}</span></div>
         <div class="row"><span class="k">跨度 ±2 命中</span><span class="v">${pct(ssi.span_hit_2_rate)}</span></div>
+      </div>`;
+    }
+
+    if (bt.slope_patterns) {
+      const sp = bt.slope_patterns;
+      html += `<div class="section-title">📉 斜连走势回测</div>`;
+      html += `<div class="card">
+        <div class="row"><span class="k">同位斜连命中</span><span class="v">${sp.position_slope_total ? pct(sp.position_slope_rate) + ' (' + sp.position_slope_hit + '/' + sp.position_slope_total + ')' : '—'}</span></div>
+        <div class="row"><span class="k">跨期斜连命中</span><span class="v">${sp.cross_slope_total ? pct(sp.cross_slope_rate) + ' (' + sp.cross_slope_hit + '/' + sp.cross_slope_total + ')' : '—'}</span></div>
+        <div class="row"><span class="k">分位随机基准</span><span class="v">${pct(sp.baseline_single_pos || 0.1)}</span></div>
+        <div class="note" style="margin-top:8px">斜连信号出现次数较少；命中率接近随机时仅作走势参考，不宜单独投注。</div>
       </div>`;
     }
   }
