@@ -2728,6 +2728,130 @@ class KL8Analyzer:
             ),
         )
 
+    def _score_exclude_recalculation_pool(
+        self,
+        selected: List[Tuple[int, float]],
+        candidates: List[Tuple[int, float]],
+        target_size: int,
+        repeat_cap: int,
+    ) -> Dict:
+        """Quality score for temporary exclude recalculation candidates."""
+        numbers = [num for num, _ in selected]
+        if len(numbers) < target_size:
+            return {'quality_score': -1.0, 'reason': 'insufficient_numbers'}
+
+        score_lookup = {num: float(score) for num, score in candidates}
+        selected_score = sum(score_lookup.get(num, 0.0) for num in numbers)
+        top_score = sum(float(score) for _, score in candidates[:target_size]) or 1.0
+        score_ratio = max(0.0, min(1.2, selected_score / top_score))
+
+        zone_counts = Counter((num - 1) // 10 + 1 for num in numbers)
+        road_counts = Counter(num % 3 for num in numbers)
+        dominant_zone = max(zone_counts.values()) / max(1, target_size)
+        dominant_road = max(road_counts.values()) / max(1, target_size)
+        zone_balance = 1.0 - max(0.0, dominant_zone - 0.42)
+        road_balance = 1.0 - max(0.0, dominant_road - 0.55)
+
+        last_numbers = self.statistics.get('last_numbers', set())
+        repeat_count = sum(1 for num in numbers if num in last_numbers)
+        repeat_fit = 1.0 - min(1.0, abs(repeat_count - repeat_cap) / max(1, target_size))
+
+        quality_score = (
+            score_ratio * 70.0
+            + max(0.0, zone_balance) * 12.0
+            + max(0.0, road_balance) * 8.0
+            + repeat_fit * 10.0
+        )
+        return {
+            'quality_score': round(quality_score, 4),
+            'score_ratio': round(score_ratio, 4),
+            'zone_count': len(zone_counts),
+            'road_count': len(road_counts),
+            'repeat_count': repeat_count,
+            'repeat_cap': repeat_cap,
+        }
+
+    def _best_exclude_recalculation_pool(
+        self,
+        candidates: List[Tuple[int, float]],
+        target_size: int,
+        repeat_cap: int,
+    ) -> Tuple[List[Tuple[int, float]], Dict]:
+        """Try several deterministic recalculation shapes and keep the best one."""
+        last_numbers = self.statistics.get('last_numbers', set())
+        score_lookup = {num: score for num, score in candidates}
+        variants: List[Tuple[str, List[Tuple[int, float]]]] = []
+        seen = set()
+
+        def add(label: str, pool: List[Tuple[int, float]]):
+            nums = tuple(num for num, _ in pool[:target_size])
+            if len(nums) < target_size or nums in seen:
+                return
+            seen.add(nums)
+            variants.append((label, pool[:target_size]))
+
+        add('concentrated', candidates[:target_size])
+        add('balanced', _diversify_candidate_pool(
+            candidates,
+            target_size,
+            last_numbers,
+            max_last_numbers=repeat_cap,
+        ))
+        add('low_repeat', _diversify_candidate_pool(
+            candidates,
+            target_size,
+            last_numbers,
+            max_last_numbers=max(0, repeat_cap - 1),
+        ))
+        add('repeat_follow', _diversify_candidate_pool(
+            candidates,
+            target_size,
+            last_numbers,
+            max_last_numbers=min(target_size, repeat_cap + 1),
+        ))
+
+        zone_spread_nums = []
+        zone_counts = Counter()
+        max_zone = max(1, math.ceil(target_size / 4))
+        for num, _ in candidates[:max(target_size * 4, 20)]:
+            zone = (num - 1) // 10 + 1
+            if zone_counts[zone] >= max_zone:
+                continue
+            zone_spread_nums.append(num)
+            zone_counts[zone] += 1
+            if len(zone_spread_nums) >= target_size:
+                break
+        for num, _ in candidates:
+            if len(zone_spread_nums) >= target_size:
+                break
+            if num not in zone_spread_nums:
+                zone_spread_nums.append(num)
+        add('zone_spread', [(num, score_lookup.get(num, 0.0)) for num in zone_spread_nums])
+
+        scored = []
+        for label, pool in variants:
+            quality = self._score_exclude_recalculation_pool(
+                pool,
+                candidates,
+                target_size,
+                repeat_cap,
+            )
+            scored.append((quality.get('quality_score', -1.0), label, pool, quality))
+
+        scored.sort(key=lambda item: (-item[0], item[1]))
+        _, label, best_pool, quality = scored[0]
+        quality['selection_mode'] = label
+        quality['variant_count'] = len(scored)
+        quality['variants'] = [
+            {
+                'mode': item_label,
+                'numbers': [num for num, _ in item_pool],
+                'quality_score': item_quality.get('quality_score', -1.0),
+            }
+            for _, item_label, item_pool, item_quality in scored[:4]
+        ]
+        return best_pool, quality
+
     def recalculate_play_excluding(self, play_type: str, exclude_numbers: List[int]) -> Dict:
         """临时剔除指定号码后重算单个玩法，不写入正式快照/缓存。"""
         if not self.history_data or self.using_simulated_data:
@@ -2772,17 +2896,17 @@ class KL8Analyzer:
                 strategy.get('pool_max_last_numbers') if strategy.get('pool_max_last_numbers') is not None else adaptive_cap,
                 adaptive_cap,
             )
-            final_pool = _diversify_candidate_pool(
+            final_pool, quality = self._best_exclude_recalculation_pool(
                 candidates,
                 pick_n,
-                self.statistics.get('last_numbers', set()),
-                max_last_numbers=repeat_cap,
+                repeat_cap,
             )
             return {
                 'play_type': play_type,
                 'numbers': [num for num, _ in final_pool],
                 'excluded_numbers': excluded,
                 'candidates': candidates[:12],
+                'quality': quality,
                 'strategy_id': strategy.get('strategy_id', ''),
                 'prediction_mode': strategy.get('prediction_mode', ''),
                 'is_validated': strategy.get('is_validated', False),
@@ -2820,11 +2944,10 @@ class KL8Analyzer:
                 strategy.get('pool_max_last_numbers') if strategy.get('pool_max_last_numbers') is not None else adaptive_cap,
                 adaptive_cap,
             )
-            final_pool = _diversify_candidate_pool(
+            final_pool, quality = self._best_exclude_recalculation_pool(
                 candidates,
                 pool_size,
-                self.statistics.get('last_numbers', set()),
-                max_last_numbers=repeat_cap,
+                repeat_cap,
             )
             core_numbers = [num for num, _ in final_pool]
             combo_list = [sorted(c) for c in combinations(core_numbers, base_pick)] if len(core_numbers) == pool_size else []
@@ -2834,6 +2957,7 @@ class KL8Analyzer:
                 'core_numbers': core_numbers,
                 'excluded_numbers': excluded,
                 'candidates': candidates[:12],
+                'quality': quality,
                 'combinations': combo_list,
                 'total_combinations': len(combo_list),
                 'combo_pick': base_pick,
