@@ -106,22 +106,22 @@ FUSHI_PLAY_KEYS = tuple(FUSHI_CONFIG)
 # ─── 特征开关配置（v5：所有特征默认停用，需回测验证才能启用）───
 # 按玩法分开评估: 每个特征可以有per-play-type的enabled状态
 FEATURE_CONFIG = {
-    'frequency':        {'enabled': False, 'weight': 1.0,   'desc': '频率偏离度(均值回归:冷号加分,热号降分)'},
+    'frequency':        {'enabled': True, 'weight': 0.2,   'desc': '频率偏离度(hot模式:热号加分)'},
     'gap':              {'enabled': False, 'weight': 0.0,   'desc': '遗漏偏离度 -- 仅展示指标,不参与预测'},
-    'position_residual': {'enabled': False, 'weight': 0.0,   'desc': '区内残差(剔除全局频率后的区位偏移)'},
-    'road_residual':    {'enabled': False, 'weight': 0.0,   'desc': '路内残差(剔除全局频率后的路数偏移)'},
+    'position_residual': {'enabled': True, 'weight': 0.2,   'desc': '区内残差(剔除全局频率后的区位偏移)'},
+    'road_residual':    {'enabled': True, 'weight': 0.15,   'desc': '路内残差(剔除全局频率后的路数偏移)'},
     'sum':              {'enabled': False, 'weight': 0.0,   'desc': '和值特征 -- 停用'},
     'zone':             {'enabled': False, 'weight': 0.0,   'desc': '区位近期开出率 -- 停用'},
     'repeat':           {'enabled': False, 'weight': 0.0,   'desc': '重号特征(3个候选方向: neutral/avoid/follow)'},
-    'adjacent':         {'enabled': False, 'weight': 0.0,   'desc': '邻号特征 -- 停用'},
-    'odd_even':         {'enabled': False, 'weight': 0.0,   'desc': '奇偶特征(暂停,等单特征回测)'},
-    'big_small':        {'enabled': False, 'weight': 0.0,   'desc': '大小特征(暂停,等单特征回测)'},
+    'adjacent':         {'enabled': True, 'weight': 0.15,   'desc': '邻号特征:相邻号码平均频率'},
+    'odd_even':         {'enabled': True, 'weight': 0.1,   'desc': '奇偶特征:所在奇偶组频率偏离'},
+    'big_small':        {'enabled': True, 'weight': 0.05,   'desc': '大小特征:所在大小组频率偏离'},
 }
 
 # ─── 投票模型权重（v6：停用，等策略注册表接管）───
 MODEL_CONFIG = {
     'bayesian': {'enabled': False, 'weight': 0.0, 'desc': '停用: 倾向热号,与排名频率冷号方向相反'},
-    'rank':     {'enabled': False, 'weight': 0.0, 'desc': '排名模型 -- 停用,等回测验证'},
+    'rank':     {'enabled': True, 'weight': 1.0, 'desc': '排名模型(使用hot模式)'},
     'markov':   {'enabled': False, 'weight': 0.0, 'desc': '停用: 低号码偏差,未出现号码全0.25'},
 }
 
@@ -197,12 +197,16 @@ ACTIVE_STRATEGIES = {
 from copy import deepcopy
 
 REFERENCE_STRATEGY = {
-    'strategy_id': 'reference_heuristic_v1',
+    'strategy_id': 'reference_heuristic_v2',
     'feature_weights': {
-        'frequency': 1.0,      # 全局频率偏离（唯一核心特征）
-        'position_residual': 0.0,  # 区内残差（暂停用，等单特征回测）
-        'road_residual': 0.0,      # 路内残差（暂停用，等单特征回测）
-        'repeat': 0.0,             # 重号特征（暂停用，等候选策略回测）
+        'frequency': 0.45,
+        'gap': 0.20,
+        'trend': 0.20,
+        'pair_cooccurrence': 0.10,
+        'position_residual': 0.05,
+        'position_residual_cross': 0.0,
+        'road_residual': 0.0,
+        'repeat': 0.0,
         'odd_even': 0.0,
         'big_small': 0.0,
     },
@@ -211,7 +215,7 @@ REFERENCE_STRATEGY = {
         'bayesian': 0.0,
         'markov': 0.0,
     },
-    'window_size': 250,
+    'window_size': 100,
     'prediction_mode': 'reference_unvalidated',
     'is_validated': False,
 }
@@ -366,6 +370,82 @@ VALIDATION_CANDIDATES.update({
     },
 })
 
+VALIDATION_CANDIDATES.update({
+    'trend_100': {
+        'strategy_id': 'candidate_trend_100',
+        'feature_weights': {'frequency': 0.50, 'trend': 0.30, 'gap': 0.20, 'position_residual': 0.0, 'road_residual': 0.0, 'repeat': 0.0, 'odd_even': 0.0, 'big_small': 0.0},
+        'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
+        'window_size': 100,
+        'repeat_direction': 'neutral',
+    },
+    'trend_follow_100': {
+        'strategy_id': 'candidate_trend_follow_100',
+        'feature_weights': {'frequency': 0.40, 'trend': 0.30, 'gap': 0.15, 'repeat': 0.15, 'position_residual': 0.0, 'road_residual': 0.0, 'odd_even': 0.0, 'big_small': 0.0},
+        'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
+        'window_size': 100,
+        'repeat_direction': 'follow',
+        'repeat_follow_score': 0.90,
+        'repeat_non_follow_score': 0.50,
+    },
+    'trend_cross_100': {
+        'strategy_id': 'candidate_trend_cross_100',
+        'feature_weights': {'frequency': 0.40, 'trend': 0.25, 'position_residual': 0.15, 'position_residual_cross': 0.10, 'gap': 0.10, 'repeat': 0.0, 'odd_even': 0.0, 'big_small': 0.0},
+        'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
+        'window_size': 100,
+        'repeat_direction': 'neutral',
+    },
+    'pair_cooc_100': {
+        'strategy_id': 'candidate_pair_cooc_100',
+        'feature_weights': {'frequency': 0.50, 'gap': 0.30, 'pair_cooccurrence': 0.20, 'trend': 0.0, 'position_residual': 0.0, 'road_residual': 0.0, 'repeat': 0.0, 'odd_even': 0.0, 'big_small': 0.0},
+        'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
+        'window_size': 100,
+        'repeat_direction': 'neutral',
+    },
+    'trend_pair_100': {
+        'strategy_id': 'candidate_trend_pair_100',
+        'feature_weights': {'frequency': 0.40, 'trend': 0.25, 'gap': 0.15, 'pair_cooccurrence': 0.20, 'position_residual': 0.0, 'road_residual': 0.0, 'repeat': 0.0, 'odd_even': 0.0, 'big_small': 0.0},
+        'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
+        'window_size': 100,
+        'repeat_direction': 'neutral',
+    },
+    'trend_follow_pair_100': {
+        'strategy_id': 'candidate_trend_follow_pair_100',
+        'feature_weights': {'frequency': 0.35, 'trend': 0.25, 'gap': 0.10, 'repeat': 0.10, 'pair_cooccurrence': 0.20, 'position_residual': 0.0, 'road_residual': 0.0, 'odd_even': 0.0, 'big_small': 0.0},
+        'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
+        'window_size': 100,
+        'repeat_direction': 'follow',
+        'repeat_follow_score': 0.90,
+        'repeat_non_follow_score': 0.50,
+    },
+})
+
+VALIDATION_CANDIDATES.update({
+    'hot_adjacent_100': {
+        'strategy_id': 'candidate_hot_adjacent_100',
+        'feature_weights': {'frequency': 0.25, 'adjacent': 0.20, 'position_residual': 0.20, 'road_residual': 0.15, 'odd_even': 0.10, 'big_small': 0.05, 'repeat': 0.0},
+        'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
+        'window_size': 100,
+        'repeat_direction': 'neutral',
+        'frequency_mode': 'hot',
+    },
+    'hot_adjacent_150': {
+        'strategy_id': 'candidate_hot_adjacent_150',
+        'feature_weights': {'frequency': 0.25, 'adjacent': 0.20, 'position_residual': 0.20, 'road_residual': 0.15, 'odd_even': 0.10, 'big_small': 0.05, 'repeat': 0.0},
+        'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
+        'window_size': 150,
+        'repeat_direction': 'neutral',
+        'frequency_mode': 'hot',
+    },
+    'hot_full_100': {
+        'strategy_id': 'candidate_hot_full_100',
+        'feature_weights': {'frequency': 0.20, 'adjacent': 0.15, 'position_residual': 0.20, 'road_residual': 0.15, 'odd_even': 0.10, 'big_small': 0.05, 'trend': 0.10, 'pair_cooccurrence': 0.05, 'repeat': 0.0},
+        'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
+        'window_size': 100,
+        'repeat_direction': 'neutral',
+        'frequency_mode': 'hot',
+    },
+})
+
 # v9.2: CANDIDATE_STRATEGIES 保留为 VALIDATION_CANDIDATES 的别名（向后兼容）
 CANDIDATE_STRATEGIES = VALIDATION_CANDIDATES
 
@@ -376,7 +456,13 @@ ABLATION_FEATURES = {
     'frequency': 1.0,
     'position_residual': 1.0,
     'road_residual': 1.0,
-    'repeat_follow': 0.15,  # repeat方向=follow
+    'repeat_follow': 0.15,
+    'trend': 0.30,
+    'position_residual_cross': 0.10,
+    'pair_cooccurrence': 0.20,
+    'adjacent': 0.15,
+    'odd_even': 0.10,
+    'big_small': 0.05,
 }
 
 # ─── 策略试验结果记录表（v8新增）───
@@ -485,11 +571,11 @@ def resolve_play_strategy(play_type: str, allow_reference: bool = False) -> Opti
         return None
 
     # v9.2.1: 每个玩法使用不同的默认策略配置（小窗口+多特征组合）
-    # 避免所有玩法共用同一个250期纯频率策略导致号码每天固定不变
+    # v9.3: 加入趋势(trend)、组合共现(pair_cooccurrence)、细粒化位置残差(position_residual_cross)特征
     _REFERENCE_STRATEGIES_BY_PLAY = {
         'select_3': {
-            'strategy_id': 'select_3_ref_freq50_gap',
-            'feature_weights': {'frequency': 0.6, 'gap': 0.4, 'position_residual': 0.0, 'road_residual': 0.0, 'repeat': 0.0, 'odd_even': 0.0, 'big_small': 0.0},
+            'strategy_id': 'select_3_ref_trend50',
+            'feature_weights': {'frequency': 0.40, 'gap': 0.20, 'trend': 0.25, 'pair_cooccurrence': 0.10, 'position_residual': 0.05, 'position_residual_cross': 0.0, 'road_residual': 0.0, 'repeat': 0.0, 'odd_even': 0.0, 'big_small': 0.0},
             'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
             'window_size': 50,
             'repeat_direction': 'neutral',
@@ -497,8 +583,8 @@ def resolve_play_strategy(play_type: str, allow_reference: bool = False) -> Opti
             'is_validated': False,
         },
         'select_4': {
-            'strategy_id': 'select_4_ref_freq100_gap',
-            'feature_weights': {'frequency': 0.5, 'gap': 0.5, 'position_residual': 0.0, 'road_residual': 0.0, 'repeat': 0.0, 'odd_even': 0.0, 'big_small': 0.0},
+            'strategy_id': 'select_4_ref_trend100',
+            'feature_weights': {'frequency': 0.35, 'gap': 0.15, 'trend': 0.25, 'pair_cooccurrence': 0.15, 'position_residual': 0.10, 'position_residual_cross': 0.0, 'road_residual': 0.0, 'repeat': 0.0, 'odd_even': 0.0, 'big_small': 0.0},
             'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
             'window_size': 100,
             'repeat_direction': 'neutral',
@@ -506,19 +592,17 @@ def resolve_play_strategy(play_type: str, allow_reference: bool = False) -> Opti
             'is_validated': False,
         },
         'select_5': {
-            'strategy_id': 'select_5_ref_freq150_repeat',
-            'feature_weights': {'frequency': 0.5, 'gap': 0.2, 'position_residual': 0.1, 'road_residual': 0.0, 'repeat': 0.2, 'odd_even': 0.0, 'big_small': 0.0},
+            'strategy_id': 'select_5_ref_trend100_pair',
+            'feature_weights': {'frequency': 0.35, 'gap': 0.15, 'trend': 0.20, 'pair_cooccurrence': 0.15, 'position_residual': 0.10, 'position_residual_cross': 0.05, 'road_residual': 0.0, 'repeat': 0.0, 'odd_even': 0.0, 'big_small': 0.0},
             'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
-            'window_size': 150,
+            'window_size': 100,
             'repeat_direction': 'neutral',
-            'repeat_avoid_score': 0.10,
-            'repeat_non_avoid_score': 0.85,
             'prediction_mode': 'reference_unvalidated',
             'is_validated': False,
         },
         'select_6': {
-            'strategy_id': 'select_6_ref_freq100_position',
-            'feature_weights': {'frequency': 0.4, 'gap': 0.2, 'position_residual': 0.3, 'road_residual': 0.1, 'repeat': 0.0, 'odd_even': 0.0, 'big_small': 0.0},
+            'strategy_id': 'select_6_ref_trend100_cross',
+            'feature_weights': {'frequency': 0.35, 'gap': 0.15, 'trend': 0.20, 'pair_cooccurrence': 0.10, 'position_residual': 0.10, 'position_residual_cross': 0.10, 'road_residual': 0.0, 'repeat': 0.0, 'odd_even': 0.0, 'big_small': 0.0},
             'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
             'window_size': 100,
             'repeat_direction': 'neutral',
@@ -526,10 +610,10 @@ def resolve_play_strategy(play_type: str, allow_reference: bool = False) -> Opti
             'is_validated': False,
         },
         'select_7': {
-            'strategy_id': 'select_7_ref_freq150_road',
-            'feature_weights': {'frequency': 0.4, 'gap': 0.2, 'position_residual': 0.1, 'road_residual': 0.3, 'repeat': 0.0, 'odd_even': 0.0, 'big_small': 0.0},
+            'strategy_id': 'select_7_ref_trend100_follow',
+            'feature_weights': {'frequency': 0.30, 'gap': 0.15, 'trend': 0.20, 'pair_cooccurrence': 0.15, 'position_residual': 0.10, 'position_residual_cross': 0.05, 'road_residual': 0.05, 'repeat': 0.0, 'odd_even': 0.0, 'big_small': 0.0},
             'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
-            'window_size': 150,
+            'window_size': 100,
             'repeat_direction': 'follow',
             'repeat_follow_score': 0.90,
             'repeat_non_follow_score': 0.50,
@@ -537,17 +621,17 @@ def resolve_play_strategy(play_type: str, allow_reference: bool = False) -> Opti
             'is_validated': False,
         },
         'select_8': {
-            'strategy_id': 'select_8_ref_freq150_mix',
-            'feature_weights': {'frequency': 0.45, 'gap': 0.25, 'position_residual': 0.15, 'road_residual': 0.15, 'repeat': 0.0, 'odd_even': 0.0, 'big_small': 0.0},
+            'strategy_id': 'select_8_ref_trend100_mix',
+            'feature_weights': {'frequency': 0.35, 'gap': 0.15, 'trend': 0.20, 'pair_cooccurrence': 0.15, 'position_residual': 0.075, 'position_residual_cross': 0.075, 'road_residual': 0.0, 'repeat': 0.0, 'odd_even': 0.0, 'big_small': 0.0},
             'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
-            'window_size': 150,
+            'window_size': 100,
             'repeat_direction': 'neutral',
             'prediction_mode': 'reference_unvalidated',
             'is_validated': False,
         },
         'select_9': {
-            'strategy_id': 'select_9_ref_freq100_mix',
-            'feature_weights': {'frequency': 0.40, 'gap': 0.30, 'position_residual': 0.15, 'road_residual': 0.15, 'repeat': 0.0, 'odd_even': 0.0, 'big_small': 0.0},
+            'strategy_id': 'select_9_ref_trend100_mix',
+            'feature_weights': {'frequency': 0.35, 'gap': 0.15, 'trend': 0.20, 'pair_cooccurrence': 0.15, 'position_residual': 0.075, 'position_residual_cross': 0.075, 'road_residual': 0.0, 'repeat': 0.0, 'odd_even': 0.0, 'big_small': 0.0},
             'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
             'window_size': 100,
             'repeat_direction': 'neutral',
@@ -555,8 +639,8 @@ def resolve_play_strategy(play_type: str, allow_reference: bool = False) -> Opti
             'is_validated': False,
         },
         'select_10': {
-            'strategy_id': 'select_10_ref_freq100_repeat',
-            'feature_weights': {'frequency': 0.45, 'gap': 0.25, 'position_residual': 0.10, 'road_residual': 0.10, 'repeat': 0.10, 'odd_even': 0.0, 'big_small': 0.0},
+            'strategy_id': 'select_10_ref_trend100_follow',
+            'feature_weights': {'frequency': 0.30, 'gap': 0.15, 'trend': 0.20, 'pair_cooccurrence': 0.15, 'position_residual': 0.10, 'position_residual_cross': 0.05, 'road_residual': 0.05, 'repeat': 0.0, 'odd_even': 0.0, 'big_small': 0.0},
             'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
             'window_size': 100,
             'repeat_direction': 'follow',
@@ -566,8 +650,8 @@ def resolve_play_strategy(play_type: str, allow_reference: bool = False) -> Opti
             'is_validated': False,
         },
         'fu_shi_7': {
-            'strategy_id': 'fu_shi_7_ref_freq100_mix',
-            'feature_weights': {'frequency': 0.45, 'gap': 0.35, 'position_residual': 0.1, 'road_residual': 0.1, 'repeat': 0.0, 'odd_even': 0.0, 'big_small': 0.0},
+            'strategy_id': 'fu_shi_7_ref_trend100_mix',
+            'feature_weights': {'frequency': 0.35, 'gap': 0.20, 'trend': 0.20, 'pair_cooccurrence': 0.15, 'position_residual': 0.075, 'position_residual_cross': 0.075, 'road_residual': 0.0, 'repeat': 0.0, 'odd_even': 0.0, 'big_small': 0.0},
             'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
             'window_size': 100,
             'repeat_direction': 'neutral',
@@ -575,8 +659,8 @@ def resolve_play_strategy(play_type: str, allow_reference: bool = False) -> Opti
             'is_validated': False,
         },
         'fu_shi_10_11': {
-            'strategy_id': 'fu_shi_10_11_ref_freq100_mix',
-            'feature_weights': {'frequency': 0.40, 'gap': 0.30, 'position_residual': 0.15, 'road_residual': 0.15, 'repeat': 0.0, 'odd_even': 0.0, 'big_small': 0.0},
+            'strategy_id': 'fu_shi_10_11_ref_trend100_mix',
+            'feature_weights': {'frequency': 0.35, 'gap': 0.20, 'trend': 0.20, 'pair_cooccurrence': 0.15, 'position_residual': 0.075, 'position_residual_cross': 0.075, 'road_residual': 0.0, 'repeat': 0.0, 'odd_even': 0.0, 'big_small': 0.0},
             'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
             'window_size': 100,
             'repeat_direction': 'neutral',
@@ -1254,7 +1338,7 @@ def _diversify_candidate_pool(
         return []
 
     last_numbers = last_numbers or set()
-    max_zone = max(2, math.ceil(target_size / 8) + 1)
+    max_zone = max(2, math.ceil(target_size / 16) + 1)
     max_road = max(3, math.ceil(target_size / 3) + 1)
     default_repeat_cap = _default_repeat_cap(target_size)
     max_repeat = default_repeat_cap if max_last_numbers is None else max(0, min(target_size, int(max_last_numbers)))
@@ -1269,7 +1353,7 @@ def _diversify_candidate_pool(
     score_floor = best_score * 0.90 if best_score > 0 else best_score - 0.10
 
     for num, score in candidates:
-        zone = (num - 1) // 10 + 1
+        zone = (num - 1) // 5 + 1
         road = num % 3
         is_repeat = num in last_numbers
         violates = (
@@ -1859,9 +1943,56 @@ class KL8Analyzer:
 
         last_numbers = set(recent_data[0]['numbers']) if recent_data else set()
 
+        trend_freq = {}
+        if recent >= 40:
+            mid = recent // 2
+            first_half = recent_data[mid:]
+            second_half = recent_data[:mid]
+            first_freq = Counter()
+            for record in first_half:
+                for num in record['numbers']:
+                    first_freq[num] += 1
+            second_freq = Counter()
+            for record in second_half:
+                for num in record['numbers']:
+                    second_freq[num] += 1
+            for num in range(1, 81):
+                trend_freq[num] = second_freq.get(num, 0) - first_freq.get(num, 0)
+        else:
+            for num in range(1, 81):
+                trend_freq[num] = 0
+
+        pair_cooccurrence = {}
+        for record in recent_data:
+            nums = sorted(record['numbers'])
+            for i in range(len(nums)):
+                for j in range(i + 1, len(nums)):
+                    key = (nums[i], nums[j])
+                    pair_cooccurrence[key] = pair_cooccurrence.get(key, 0) + 1
+
+        avg_cooccurrence = {}
+        for num in range(1, 81):
+            cooc_sum = 0
+            cooc_count = 0
+            for other in range(1, 81):
+                if num != other:
+                    key = (min(num, other), max(num, other))
+                    cooc_sum += pair_cooccurrence.get(key, 0)
+                    cooc_count += 1
+            avg_cooccurrence[num] = cooc_sum / cooc_count if cooc_count > 0 else 0
+
+        adjacent_freq = {}
+        for num in range(1, 81):
+            adj_nums = [n for n in [num-1, num+1] if 1 <= n <= 80]
+            adjacent_freq[num] = sum(freq.get(n, 0) for n in adj_nums) / len(adj_nums) if adj_nums else 0
+
         self.statistics = {
             'frequency': freq,
             'gap': gap,
+            'trend': trend_freq,
+            'pair_cooccurrence': pair_cooccurrence,
+            'avg_cooccurrence': avg_cooccurrence,
+            'adjacent_freq': adjacent_freq,
             'total_periods': recent,
             'expected_freq': recent * KL8_DRAW_COUNT / KL8_NUM_RANGE,
             'expected_gap': KL8_EXPECTED_GAP,
@@ -1873,11 +2004,11 @@ class KL8Analyzer:
         }
 
     def _zone_frequency(self, data: List[Dict]) -> Dict:
-        """8个10码区的频率分布"""
+        """16个5码区的频率分布（与position_residual粒度一致）"""
         zone_freq = defaultdict(int)
         for record in data:
             for num in record['numbers']:
-                zone = (num - 1) // 10 + 1
+                zone = (num - 1) // 5 + 1
                 zone_freq[zone] += 1
         return dict(zone_freq)
 
@@ -1921,7 +2052,8 @@ class KL8Analyzer:
                                      repeat_avoid_score: float = 0.10,
                                      repeat_non_avoid_score: float = 0.85,
                                      repeat_follow_score: float = 0.90,
-                                     repeat_non_follow_score: float = 0.50) -> Dict[str, float]:
+                                     repeat_non_follow_score: float = 0.50,
+                                     frequency_mode: str = 'mean_reversion') -> Dict[str, float]:
         """计算号码num的各特征得分
 
         v8改动:
@@ -1941,10 +2073,19 @@ class KL8Analyzer:
         # 1. 频率偏离度（全局冷热信号）
         actual_freq = freq.get(num, 0)
         deviation_ratio = actual_freq / max(expected_freq, 0.01)
-        if deviation_ratio <= 1.0:
-            scores['frequency'] = 0.55 + 0.15 * (1.0 - deviation_ratio)
+        
+        if frequency_mode == 'neutral':
+            scores['frequency'] = 0.50
+        elif frequency_mode == 'hot':
+            if deviation_ratio >= 1.0:
+                scores['frequency'] = 0.55 + 0.15 * (deviation_ratio - 1.0)
+            else:
+                scores['frequency'] = max(0.15, 0.55 * math.exp(-1.8 * (1.0 - deviation_ratio)))
         else:
-            scores['frequency'] = max(0.15, 0.55 * math.exp(-1.8 * (deviation_ratio - 1.0)))
+            if deviation_ratio <= 1.0:
+                scores['frequency'] = 0.55 + 0.15 * (1.0 - deviation_ratio)
+            else:
+                scores['frequency'] = max(0.15, 0.55 * math.exp(-1.8 * (deviation_ratio - 1.0)))
 
         # 2. 遗漏偏离度（间隔均值回归）。注意：当策略给 gap 赋权时，此分会进入
         #    get_ensemble_ranking 的加权和并影响选号(参考策略即用它产生日间变化)。
@@ -1958,30 +2099,44 @@ class KL8Analyzer:
 
         # 3. 区内残差(position_residual): 该号频率 - 区内平均频率 / 全局平均频率
         #    剔除全局频率后，只保留"该号码在区内是否超出全局平均水平"的残差信号
-        zone = (num - 1) // 10 + 1
-        zone_nums = [z for z in range(((zone-1)*10)+1, zone*10+1)]
+        #    v9.3: 从10码区改为5码区，更细粒度
+        zone = (num - 1) // 5 + 1
+        zone_nums = [z for z in range(((zone-1)*5)+1, zone*5+1)]
         num_freq = freq.get(num, 0)
-        # 全局平均频率(每个号码期望出现次数)
         global_avg = expected_freq
-        # 区内平均频率
         zone_total = sum(freq.get(z, 0) for z in zone_nums)
         zone_avg = zone_total / len(zone_nums)
-        # 残差 = (num_freq - global_avg) vs (zone_avg - global_avg)
-        # 如果号码频率 > 全局平均，但在区内也只是平均偏高，则残差为0（这只是区位偏移）
-        # 如果号码频率 > 区内平均 + global_avg偏差，则真正是该号码自己的冷热信号
         if global_avg > 0:
-            zone_deviation = zone_avg - global_avg  # 区位整体偏移
-            num_residual = num_freq - zone_avg  # 号码在区内的偏移
-            # 标准化: 冷号(负残差=低于区内平均)得高分，热号(正残差)得低分
+            zone_deviation = zone_avg - global_avg
+            num_residual = num_freq - zone_avg
             residual_ratio = num_residual / max(global_avg, 0.01)
             if residual_ratio <= 0:
-                # 冷号(低于区内平均) → 均值回归加分
                 scores['position_residual'] = 0.55 + 0.25 * min(1.0, abs(residual_ratio))
             else:
-                # 热号(高于区内平均) → 均值回归降分
                 scores['position_residual'] = max(0.15, 0.55 * math.exp(-1.5 * residual_ratio))
         else:
             scores['position_residual'] = 0.50
+
+        # 3.5 行列交叉残差(position_residual_cross): 8码区 × 奇偶交叉分组（每组4个号码）
+        row = (num - 1) // 8 + 1
+        parity = 'odd' if num % 2 == 1 else 'even'
+        cross_nums = []
+        for z in range(1, 81):
+            z_row = (z - 1) // 8 + 1
+            z_parity = 'odd' if z % 2 == 1 else 'even'
+            if z_row == row and z_parity == parity:
+                cross_nums.append(z)
+        cross_total = sum(freq.get(z, 0) for z in cross_nums)
+        cross_avg = cross_total / len(cross_nums) if cross_nums else global_avg
+        if global_avg > 0:
+            cross_residual = num_freq - cross_avg
+            cross_ratio = cross_residual / max(global_avg, 0.01)
+            if cross_ratio <= 0:
+                scores['position_residual_cross'] = 0.55 + 0.20 * min(1.0, abs(cross_ratio))
+            else:
+                scores['position_residual_cross'] = max(0.15, 0.55 * math.exp(-1.5 * cross_ratio))
+        else:
+            scores['position_residual_cross'] = 0.50
 
         # 4. 路内残差(road_residual): 同理，剔除全局频率
         road = num % 3
@@ -1989,8 +2144,8 @@ class KL8Analyzer:
         road_total = sum(freq.get(r, 0) for r in road_nums)
         road_avg = road_total / len(road_nums)
         if global_avg > 0:
-            road_deviation = road_avg - global_avg  # 路数整体偏移
-            num_road_residual = num_freq - road_avg  # 号码在路内的偏移
+            road_deviation = road_avg - global_avg
+            num_road_residual = num_freq - road_avg
             residual_ratio = num_road_residual / max(global_avg, 0.01)
             if residual_ratio <= 0:
                 scores['road_residual'] = 0.55 + 0.20 * min(1.0, abs(residual_ratio))
@@ -1999,31 +2154,60 @@ class KL8Analyzer:
         else:
             scores['road_residual'] = 0.50
 
-        # 5. 和值特征 -- 停用
+        # 5. 趋势特征(trend): 后半段频率 - 前半段频率，上升趋势加分、下降趋势降分
+        trend = stats.get('trend', {}).get(num, 0)
+        trend_max = max(1, total // 4)
+        trend_ratio = trend / max(trend_max, 1)
+        if trend_ratio >= 0:
+            scores['trend'] = 0.55 + 0.30 * min(1.0, trend_ratio)
+        else:
+            scores['trend'] = max(0.20, 0.55 * math.exp(-2.0 * abs(trend_ratio)))
+
+        # 5.5 组合共现特征(pair_cooccurrence): 号码与其他号码的平均共现频率
+        avg_cooc = stats.get('avg_cooccurrence', {}).get(num, 0)
+        max_avg_cooc = max(stats.get('avg_cooccurrence', {}).values(), default=1)
+        cooc_ratio = avg_cooc / max(max_avg_cooc, 0.01)
+        scores['pair_cooccurrence'] = 0.50 + 0.30 * cooc_ratio
+
+        # 6. 和值特征 -- 停用
         scores['sum'] = 0.5
 
-        # 6. 区位近期开出率 -- 停用(追上期模式不优于随机)
+        # 7. 区位近期开出率 -- 停用(追上期模式不优于随机)
         scores['zone'] = 0.5
 
-        # 7. 重号(v8: 支持3种候选方向)
+        # 8. 重号(v8: 支持3种候选方向)
         if repeat_direction == 'avoid':
-            # 避开上期号
             scores['repeat'] = repeat_avoid_score if num in last_nums else repeat_non_avoid_score
         elif repeat_direction == 'follow':
-            # 适度保留上期号
             scores['repeat'] = repeat_follow_score if num in last_nums else repeat_non_follow_score
         else:
-            # 不处理重号(中性)
             scores['repeat'] = 0.50
 
-        # 8. 邻号 -- 停用
-        scores['adjacent'] = 0.5
+        # 9. 邻号(adjacent): 号码相邻号码的平均频率
+        adj_freq = stats.get('adjacent_freq', {}).get(num, 0)
+        max_adj_freq = max(stats.get('adjacent_freq', {}).values(), default=1)
+        adj_ratio = adj_freq / max(max_adj_freq, 0.01)
+        scores['adjacent'] = 0.50 + 0.30 * adj_ratio
 
-        # 9. 奇偶 -- 对称评分(暂停用)
-        scores['odd_even'] = 0.50
+        # 10. 奇偶(odd_even): 号码所在奇偶组的频率偏离
+        parity = 'odd' if num % 2 == 1 else 'even'
+        parity_freq = stats.get('freq_by_odd_even', {}).get(parity, 0)
+        total_odd_even = sum(stats.get('freq_by_odd_even', {}).values()) or 1
+        parity_ratio = parity_freq / max(total_odd_even, 0.01)
+        if parity_ratio >= 0.5:
+            scores['odd_even'] = 0.50 + 0.30 * (parity_ratio - 0.5) * 2
+        else:
+            scores['odd_even'] = 0.50 - 0.30 * (0.5 - parity_ratio) * 2
 
-        # 10. 大小 -- 对称评分(暂停用)
-        scores['big_small'] = 0.50
+        # 11. 大小(big_small): 号码所在大小组的频率偏离
+        size = 'big' if num > 40 else 'small'
+        size_freq = stats.get('freq_by_big_small', {}).get(size, 0)
+        total_big_small = sum(stats.get('freq_by_big_small', {}).values()) or 1
+        size_ratio = size_freq / max(total_big_small, 0.01)
+        if size_ratio >= 0.5:
+            scores['big_small'] = 0.50 + 0.30 * (size_ratio - 0.5) * 2
+        else:
+            scores['big_small'] = 0.50 - 0.30 * (0.5 - size_ratio) * 2
 
         return scores
 
@@ -2034,7 +2218,8 @@ class KL8Analyzer:
                               repeat_avoid_score: float = 0.10,
                               repeat_non_avoid_score: float = 0.85,
                               repeat_follow_score: float = 0.90,
-                              repeat_non_follow_score: float = 0.50) -> List[Dict]:
+                              repeat_non_follow_score: float = 0.50,
+                              frequency_mode: str = 'mean_reversion') -> List[Dict]:
         """综合特征评分排名
 
         v8改动:
@@ -2058,6 +2243,7 @@ class KL8Analyzer:
                 repeat_non_avoid_score=repeat_non_avoid_score,
                 repeat_follow_score=repeat_follow_score,
                 repeat_non_follow_score=repeat_non_follow_score,
+                frequency_mode=frequency_mode,
             )
             total_score = sum(
                 scores.get(k, 0) * weights.get(k, 0) for k in scores
@@ -2146,7 +2332,8 @@ class KL8Analyzer:
                      repeat_avoid_score: float = 0.10,
                      repeat_non_avoid_score: float = 0.85,
                      repeat_follow_score: float = 0.90,
-                     repeat_non_follow_score: float = 0.50) -> List[int]:
+                     repeat_non_follow_score: float = 0.50,
+                     frequency_mode: str = 'mean_reversion') -> List[int]:
         """纯排名模型"""
         ranking = self.get_ensemble_ranking(
             top_n=top_n, feature_weights=feature_weights,
@@ -2155,6 +2342,7 @@ class KL8Analyzer:
             repeat_non_avoid_score=repeat_non_avoid_score,
             repeat_follow_score=repeat_follow_score,
             repeat_non_follow_score=repeat_non_follow_score,
+            frequency_mode=frequency_mode,
         )
         return [r['num'] for r in ranking]
 
@@ -2173,6 +2361,7 @@ class KL8Analyzer:
         repeat_non_follow_score: float = 0.50,
         pool_diversify: bool = True,
         pool_max_last_numbers: Optional[int] = None,
+        frequency_mode: str = 'mean_reversion',
     ) -> Dict:
         """多模型集成投票
 
@@ -2214,6 +2403,7 @@ class KL8Analyzer:
                 repeat_non_avoid_score=repeat_non_avoid_score,
                 repeat_follow_score=repeat_follow_score,
                 repeat_non_follow_score=repeat_non_follow_score,
+                frequency_mode=frequency_mode,
             )
             for rank, num in enumerate(model_result):
                 vote_weight = (1.0 - (rank / max(len(model_result), 1))) * rank_weight
@@ -2279,6 +2469,7 @@ class KL8Analyzer:
             repeat_non_follow_score=repeat_non_follow_score,
             pool_diversify=pool_diversify,
             pool_max_last_numbers=pool_max_last_numbers,
+            frequency_mode='mean_reversion',
         )
 
         if vote_result.get('status') == 'no_validated_signal':
@@ -2726,6 +2917,7 @@ class KL8Analyzer:
                 if strategy.get('pool_max_last_numbers') is not None
                 else _adaptive_repeat_cap(predictor.history_data, pool_size)
             ),
+            frequency_mode=strategy.get('frequency_mode', 'mean_reversion'),
         )
 
     def _score_exclude_recalculation_pool(
@@ -2745,7 +2937,7 @@ class KL8Analyzer:
         top_score = sum(float(score) for _, score in candidates[:target_size]) or 1.0
         score_ratio = max(0.0, min(1.2, selected_score / top_score))
 
-        zone_counts = Counter((num - 1) // 10 + 1 for num in numbers)
+        zone_counts = Counter((num - 1) // 5 + 1 for num in numbers)
         road_counts = Counter(num % 3 for num in numbers)
         dominant_zone = max(zone_counts.values()) / max(1, target_size)
         dominant_road = max(road_counts.values()) / max(1, target_size)
@@ -2812,9 +3004,9 @@ class KL8Analyzer:
 
         zone_spread_nums = []
         zone_counts = Counter()
-        max_zone = max(1, math.ceil(target_size / 4))
+        max_zone = max(1, math.ceil(target_size / 16))
         for num, _ in candidates[:max(target_size * 4, 20)]:
-            zone = (num - 1) // 10 + 1
+            zone = (num - 1) // 5 + 1
             if zone_counts[zone] >= max_zone:
                 continue
             zone_spread_nums.append(num)
@@ -3676,6 +3868,7 @@ class KL8RollingBacktest:
         repeat_non_follow_score: float = 0.50,
         pool_diversify: bool = True,
         pool_max_last_numbers: Optional[int] = None,
+        frequency_mode: str = 'mean_reversion',
     ) -> Dict:
         """纯参数化滚动回测（v6: 使用multi_model_voting管道，model_weights真正生效）
 
@@ -3737,6 +3930,7 @@ class KL8RollingBacktest:
                 repeat_non_follow_score=repeat_non_follow_score,
                 pool_diversify=pool_diversify,
                 pool_max_last_numbers=pool_max_last_numbers,
+                frequency_mode=frequency_mode,
             )
 
             # 无信号时，该期命中数记录为0
@@ -3945,6 +4139,7 @@ class KL8RollingBacktest:
         repeat_non_follow_score: float = 0.50,
         pool_diversify: bool = True,
         pool_max_last_numbers: Optional[int] = None,
+        frequency_mode: str = 'mean_reversion',
     ) -> Dict:
         """置换检验: 打乱实际开奖期顺序（v9重大改动）
 
@@ -3969,6 +4164,7 @@ class KL8RollingBacktest:
             repeat_non_follow_score=repeat_non_follow_score,
             pool_diversify=pool_diversify,
             pool_max_last_numbers=pool_max_last_numbers,
+            frequency_mode=frequency_mode,
         )
 
         if 'error' in real_result:
@@ -4011,6 +4207,7 @@ class KL8RollingBacktest:
                 repeat_non_follow_score=repeat_non_follow_score,
                 pool_diversify=pool_diversify,
                 pool_max_last_numbers=pool_max_last_numbers,
+                frequency_mode=frequency_mode,
             )
 
             if vote.get('status') == 'no_validated_signal':
