@@ -142,6 +142,7 @@ class KL8PredictionGuardTests(unittest.TestCase):
 
         self.assertNotIn('error', result)
         self.assertEqual(len(result['numbers']), 5)
+        self.assertEqual(result['numbers'], sorted(result['numbers']))
         self.assertFalse(set(result['numbers']) & {1, 2, 3, 4, 5})
         self.assertEqual(result['excluded_numbers'], [1, 2, 3, 4, 5])
 
@@ -153,9 +154,10 @@ class KL8PredictionGuardTests(unittest.TestCase):
 
         original_build = KL8Analyzer.build_pool_by_strategy
         try:
+            unsorted_candidates = [20, 19, 18, 17, 16, 15, 14, 13, 12, 11] + list(range(21, 51))
             KL8Analyzer.build_pool_by_strategy = lambda self, strategy, pool_size=20: {
                 'selected': list(range(1, min(pool_size, 50) + 1)),
-                'candidates': [(n, float(100 - n)) for n in range(1, 51)],
+                'candidates': [(n, float(100 - i)) for i, n in enumerate(unsorted_candidates)],
                 'votes': {},
             }
             result = analyzer.recalculate_play_excluding('select_10', list(range(1, 11)))
@@ -164,6 +166,7 @@ class KL8PredictionGuardTests(unittest.TestCase):
 
         self.assertNotIn('error', result)
         self.assertEqual(len(result['numbers']), 10)
+        self.assertEqual(result['numbers'], sorted(result['numbers']))
         self.assertFalse(set(result['numbers']) & set(range(1, 11)))
         self.assertEqual(result['excluded_numbers'], list(range(1, 11)))
 
@@ -253,9 +256,14 @@ class KL8PredictionGuardTests(unittest.TestCase):
             self.assertIn(key, result)
             self.assertEqual(result[key]['pick'], pick)
             self.assertEqual(len(result[key]['numbers']), pick)
+            self.assertEqual(result[key]['numbers'], sorted(result[key]['numbers']))
 
         self.assertIn('fu_shi_10_11', result)
         self.assertEqual(len(result['fu_shi_10_11']['top11_numbers']), 11)
+        self.assertEqual(
+            result['fu_shi_10_11']['top11_numbers'],
+            sorted(result['fu_shi_10_11']['top11_numbers']),
+        )
         self.assertEqual(result['fu_shi_10_11']['combo_pick'], 10)
         self.assertEqual(result['fu_shi_10_11']['pool_size'], 11)
         self.assertEqual(result['fu_shi_10_11']['total_combinations'], 11)

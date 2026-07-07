@@ -3300,9 +3300,10 @@ class KL8Analyzer:
                 pick_n,
                 repeat_cap,
             )
+            output_numbers = sorted(num for num, _ in final_pool)
             return {
                 'play_type': play_type,
-                'numbers': [num for num, _ in final_pool],
+                'numbers': output_numbers,
                 'excluded_numbers': excluded,
                 'candidates': candidates[:12],
                 'quality': quality,
@@ -3348,7 +3349,7 @@ class KL8Analyzer:
                 pool_size,
                 repeat_cap,
             )
-            core_numbers = [num for num, _ in final_pool]
+            core_numbers = sorted(num for num, _ in final_pool)
             combo_list = [sorted(c) for c in combinations(core_numbers, base_pick)] if len(core_numbers) == pool_size else []
             return {
                 'play_type': play_type,
@@ -3381,23 +3382,23 @@ class KL8Analyzer:
             return {}
 
         last_numbers = self.statistics.get('last_numbers', set())
-        concentrated = [num for num, _ in candidates[:target_size]]
-        balanced = [
+        concentrated = sorted(num for num, _ in candidates[:target_size])
+        balanced = sorted(
             num for num, _ in _diversify_candidate_pool(
                 candidates,
                 target_size,
                 last_numbers,
                 max_last_numbers=repeat_cap,
             )
-        ]
-        low_repeat = [
+        )
+        low_repeat = sorted(
             num for num, _ in _diversify_candidate_pool(
                 candidates,
                 target_size,
                 last_numbers,
                 max_last_numbers=max(0, repeat_cap - 1),
             )
-        ]
+        )
 
         return {
             'balanced': balanced,
@@ -3511,7 +3512,7 @@ class KL8Analyzer:
                 max_last_numbers=final_repeat_cap,
                 selection_mode=strategy.get('final_selection_mode', 'balanced'),
             )
-            numbers = [num for num, _ in final_pool]
+            numbers = sorted(num for num, _ in final_pool)
             variants = self._candidate_variants(pool_candidates, select_type, final_repeat_cap)
 
             results[s_key] = {
@@ -3591,7 +3592,7 @@ class KL8Analyzer:
                 max_last_numbers=fushi_repeat_cap,
                 selection_mode=strategy.get('final_selection_mode', 'balanced'),
             )
-            core_numbers = [num for num, _ in final_pool]
+            core_numbers = sorted(num for num, _ in final_pool)
             variants = self._candidate_variants(fu_candidates, pool_size, fushi_repeat_cap)
 
             all_candidate_pools[fushi_key] = {
