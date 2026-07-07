@@ -3640,6 +3640,7 @@ async function fetchLotteryData() {
 let kl8Loaded = false;
 let kl8LastData = null;
 let kl8ExcludeState = null;
+let kl8SettlementWindowSize = 30;
 
 async function loadKL8() {
   if (kl8Loaded) return;
@@ -3778,6 +3779,7 @@ function renderKL8(r) {
 
   // ── 本期变化对比信息（仅在有已验证策略时显示）───
   html += renderKL8SettlementPerformance(r.statistics?.recent_settlement_performance);
+  html += renderKL8StrategyHealth(r.statistics?.strategy_health);
 
   const changeInfo = r.change_info || {};
   if (changeInfo.has_previous && signalStatus === 'validated') {
@@ -3985,11 +3987,21 @@ function renderKL8SettlementPerformance(perf) {
   if (!perf || !Array.isArray(perf.windows) || perf.available_count <= 0) return '';
 
   const focusPlays = ['select_5', 'select_6', 'select_10', 'fu_shi_7', 'fu_shi_10_11'];
-  const window = perf.windows.find(item => item.settled_count > 0) || perf.windows[0];
+  const availableWindows = perf.windows.filter(item => item && item.settled_count > 0);
+  const preferredWindow = availableWindows.find(item => Number(item.window_size) === Number(kl8SettlementWindowSize));
+  const window = preferredWindow || availableWindows[0] || perf.windows[0];
   if (!window || !window.play_stats) return '';
 
-  let html = `<div class="card" style="margin-bottom:16px;border-left:3px solid #8957e5">`;
-  html += `<div class="section-title" style="font-size:14px;margin-bottom:8px">最近结算表现 vs 随机基线</div>`;
+  let html = `<div id="kl8-settlement-performance" class="card" style="margin-bottom:16px;border-left:3px solid #8957e5">`;
+  html += `<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:8px">`;
+  html += `<div class="section-title" style="font-size:14px;margin:0">最近结算表现 vs 随机基线</div>`;
+  html += `<div style="display:flex;gap:6px;flex-wrap:wrap">`;
+  for (const item of perf.windows) {
+    if (!item || !item.settled_count) continue;
+    const active = Number(item.window_size) === Number(window.window_size);
+    html += `<button class="kl8-refresh-btn" style="padding:4px 9px;font-size:12px;background:${active ? '#8957e5' : '#30363d'}" onclick="setKL8SettlementWindow(${Number(item.window_size)})">近${esc(item.window_size)}期</button>`;
+  }
+  html += `</div></div>`;
   html += `<div class="note" style="font-size:12px;margin-bottom:10px">统计最近 ${esc(window.settled_count)} / ${esc(window.window_size)} 期已结算预测；随机基线=公平摇奖理论期望命中数。</div>`;
   html += `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px">`;
 
@@ -4011,6 +4023,61 @@ function renderKL8SettlementPerformance(perf) {
   html += `</div>`;
   if (perf.note) {
     html += `<div class="note" style="font-size:11px;margin-top:10px;color:var(--muted)">${esc(perf.note)}</div>`;
+  }
+  html += `</div>`;
+  return html;
+}
+
+function setKL8SettlementWindow(windowSize) {
+  kl8SettlementWindowSize = Number(windowSize) || 30;
+  const target = document.getElementById('kl8-settlement-performance');
+  const perf = kl8LastData?.statistics?.recent_settlement_performance;
+  if (target && perf) {
+    target.outerHTML = renderKL8SettlementPerformance(perf);
+  }
+}
+
+function renderKL8StrategyHealth(health) {
+  const byPlay = health?.health_by_play || {};
+  const focusPlays = ['select_5', 'select_6', 'select_10', 'fu_shi_7', 'fu_shi_10_11'];
+  const items = focusPlays.map(key => byPlay[key]).filter(Boolean);
+  if (!items.length) return '';
+
+  const statusColor = {
+    healthy: '#2ea043',
+    watch: '#d29922',
+    cool_down: '#f85149',
+    pending: '#8b949e',
+    unverified: '#8b949e',
+  };
+
+  let html = `<div class="card" style="margin-bottom:16px;border-left:3px solid #2ea043">`;
+  html += `<div class="section-title" style="font-size:14px;margin-bottom:8px">策略健康度</div>`;
+  html += `<div class="note" style="font-size:12px;margin-bottom:10px">结合当前策略验证信息、最近 ${esc(health.settled_count || 0)} 期实测表现和随机基线差值，仅作观察提示。</div>`;
+  html += `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:8px">`;
+
+  for (const item of items) {
+    const color = statusColor[item.status] || 'var(--muted)';
+    const reasons = Array.isArray(item.reasons) ? item.reasons.slice(0, 2) : [];
+    html += `<div class="kl8-select-card" style="padding:10px;margin:0;border-color:${color}">`;
+    html += `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px">`;
+    html += `<span style="font-weight:700;font-size:13px">${esc(item.label || item.play_type)}</span>`;
+    html += `<span style="font-size:12px;font-weight:700;color:${color}">${esc(item.status_label || item.status)}</span>`;
+    html += `</div>`;
+    html += `<div style="font-size:12px;color:var(--muted)">评分 <b style="color:var(--text)">${esc(item.score ?? '-')}</b> · 结算 ${esc(item.settled_count || 0)} 期</div>`;
+    if (item.hit_delta_vs_random !== undefined) {
+      const delta = Number(item.hit_delta_vs_random || 0);
+      html += `<div style="font-size:12px;color:var(--muted);margin-top:4px">命中差值 ${delta >= 0 ? '+' : ''}${esc(delta.toFixed(2))} · ROI ${esc((Number(item.profit_roi || 0) * 100).toFixed(1))}%</div>`;
+    }
+    if (reasons.length) {
+      html += `<div style="font-size:11px;color:var(--muted);margin-top:6px;line-height:1.45">${reasons.map(esc).join('；')}</div>`;
+    }
+    html += `</div>`;
+  }
+
+  html += `</div>`;
+  if (health.note) {
+    html += `<div class="note" style="font-size:11px;margin-top:10px;color:var(--muted)">${esc(health.note)}</div>`;
   }
   html += `</div>`;
   return html;

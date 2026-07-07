@@ -733,6 +733,56 @@ class KL8PredictionGuardTests(unittest.TestCase):
         self.assertEqual(fushi7['avg_hits'], 3.0)
         self.assertEqual(fushi7['random_expected_hits'], 1.75)
 
+    def test_strategy_health_combines_validation_and_recent_settlements(self):
+        original_strategies = kl8_module.ACTIVE_STRATEGIES
+        try:
+            kl8_module.ACTIVE_STRATEGIES = {
+                key: {'strategy_id': '', 'feature_weights': {}, 'model_weights': {}, 'window_size': 0}
+                for key in list(kl8_module.SELECT_PLAY_KEYS) + list(kl8_module.FUSHI_PLAY_KEYS)
+            }
+            kl8_module.ACTIVE_STRATEGIES['select_5'] = {
+                'strategy_id': 'select_5_good',
+                'is_validated': True,
+                'validation_report': {'validation_lift': 0.2, 'final_test_lift': 0.1},
+            }
+            kl8_module.ACTIVE_STRATEGIES['select_6'] = {
+                'strategy_id': 'select_6_weak',
+                'is_validated': True,
+                'validation_report': {'validation_lift': -0.1, 'final_test_lift': -0.05},
+            }
+
+            performance = {
+                'available_count': 30,
+                'windows': [
+                    {
+                        'window_size': 30,
+                        'settled_count': 30,
+                        'play_stats': {
+                            'select_5': {
+                                'settled_count': 30,
+                                'hit_delta_vs_random': 0.35,
+                                'profit_roi': 0.1,
+                            },
+                            'select_6': {
+                                'settled_count': 30,
+                                'hit_delta_vs_random': -0.35,
+                                'profit_roi': -0.9,
+                            },
+                        },
+                    }
+                ],
+            }
+
+            result = kl8_module._build_strategy_health(performance)
+        finally:
+            kl8_module.ACTIVE_STRATEGIES = original_strategies
+
+        health = result['health_by_play']
+        self.assertEqual(health['select_5']['status'], 'healthy')
+        self.assertEqual(health['select_6']['status'], 'cool_down')
+        self.assertEqual(health['select_10']['status'], 'unverified')
+        self.assertEqual(result['window_size'], 30)
+
 
 if __name__ == '__main__':
     unittest.main()

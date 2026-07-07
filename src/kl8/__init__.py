@@ -3662,6 +3662,7 @@ class KL8Analyzer:
         backfill_target = KL8_BACKFILL_MIN_PERIODS
 
         stats = self.statistics
+        recent_performance = _build_recent_settlement_performance()
         results['statistics'] = {
             'total_periods': stats.get('total_periods', 0),
             'min_prediction_periods': KL8_MIN_PREDICTION_PERIODS,
@@ -3693,7 +3694,8 @@ class KL8Analyzer:
                 'progress_pct': round(min(100, current_periods / backfill_target * 100), 1),
                 'is_complete': current_periods >= backfill_target,
             },
-            'recent_settlement_performance': _build_recent_settlement_performance(),
+            'recent_settlement_performance': recent_performance,
+            'strategy_health': _build_strategy_health(recent_performance),
             'note': (
                 '当前启用策略已通过回测验证。'
                 if overall_status == 'validated'
@@ -3875,6 +3877,138 @@ def _build_recent_settlement_performance(windows: Tuple[int, ...] = (30, 100)) -
         'available_count': len(settlements),
         'windows': summaries,
         'note': '实际命中与随机理论期望对照；快乐8为公平摇奖，短期高低可能只是随机波动。',
+    }
+
+
+def _build_strategy_health(performance: Optional[Dict] = None) -> Dict:
+    performance = performance or _build_recent_settlement_performance()
+    windows = performance.get('windows', []) if isinstance(performance, dict) else []
+    available_windows = [w for w in windows if w.get('settled_count', 0) > 0]
+    window = (
+        next((w for w in available_windows if int(w.get('window_size', 0)) == 30), None)
+        or (available_windows[0] if available_windows else {})
+    )
+    play_stats = window.get('play_stats', {}) if isinstance(window, dict) else {}
+    health_by_play = {}
+
+    def make_label(play_type: str) -> str:
+        if play_type.startswith('select_'):
+            return f'选{play_type.split("_")[-1]}'
+        return FUSHI_CONFIG.get(play_type, {}).get('desc', play_type)
+
+    for play_type in list(SELECT_PLAY_KEYS) + list(FUSHI_PLAY_KEYS):
+        strategy = ACTIVE_STRATEGIES.get(play_type, {}) or {}
+        strategy_id = strategy.get('strategy_id', '')
+        is_validated = bool(strategy_id and strategy.get('is_validated', False))
+        report = strategy.get('validation_report', {}) if isinstance(strategy.get('validation_report', {}), dict) else {}
+        stat = play_stats.get(play_type, {})
+        settled_count = int(stat.get('settled_count', 0) or 0)
+
+        validation_lift = report.get('validation_lift')
+        final_test_lift = report.get('final_test_lift')
+        hit_delta = float(stat.get('hit_delta_vs_random', 0) or 0)
+        roi = float(stat.get('profit_roi', 0) or 0)
+
+        score = 50
+        reasons = []
+
+        if not strategy_id:
+            health_by_play[play_type] = {
+                'play_type': play_type,
+                'label': make_label(play_type),
+                'status': 'unverified',
+                'status_label': '未验证',
+                'score': 0,
+                'settled_count': settled_count,
+                'strategy_id': '',
+                'reasons': ['当前玩法没有激活的已验证策略'],
+            }
+            continue
+
+        if is_validated:
+            score += 20
+            reasons.append('策略已通过验证')
+        else:
+            score -= 10
+            reasons.append('策略未标记为已验证')
+
+        if isinstance(validation_lift, (int, float)):
+            score += 10 if validation_lift > 0 else -8
+            reasons.append(f'验证Lift={round(validation_lift, 4)}')
+        if isinstance(final_test_lift, (int, float)):
+            score += 5 if final_test_lift > 0 else -5
+            reasons.append(f'封存Lift={round(final_test_lift, 4)}')
+
+        if settled_count < 5:
+            health_by_play[play_type] = {
+                'play_type': play_type,
+                'label': make_label(play_type),
+                'status': 'pending',
+                'status_label': '待结算',
+                'score': max(0, min(100, score)),
+                'settled_count': settled_count,
+                'strategy_id': strategy_id,
+                'validation_lift': validation_lift,
+                'final_test_lift': final_test_lift,
+                'hit_delta_vs_random': hit_delta,
+                'profit_roi': roi,
+                'reasons': reasons + ['结算样本少于5期，暂不判断实测表现'],
+            }
+            continue
+
+        if settled_count >= 30:
+            score += 5
+        elif settled_count < 10:
+            score -= 5
+
+        if hit_delta >= 0.2:
+            score += 15
+            reasons.append(f'近期命中高于随机 {round(hit_delta, 2)}')
+        elif hit_delta >= 0:
+            score += 8
+            reasons.append(f'近期命中略高于随机 {round(hit_delta, 2)}')
+        elif hit_delta >= -0.2:
+            score -= 5
+            reasons.append(f'近期命中略低于随机 {round(hit_delta, 2)}')
+        else:
+            score -= 15
+            reasons.append(f'近期命中低于随机 {round(hit_delta, 2)}')
+
+        if roi > 0:
+            score += 10
+            reasons.append(f'近期ROI为正 {round(roi * 100, 1)}%')
+        elif roi < -0.75:
+            score -= 10
+            reasons.append(f'近期ROI偏低 {round(roi * 100, 1)}%')
+
+        score = max(0, min(100, round(score)))
+        if score >= 75:
+            status, status_label = 'healthy', '健康'
+        elif score >= 55:
+            status, status_label = 'watch', '观察'
+        else:
+            status, status_label = 'cool_down', '降温'
+
+        health_by_play[play_type] = {
+            'play_type': play_type,
+            'label': make_label(play_type),
+            'status': status,
+            'status_label': status_label,
+            'score': score,
+            'settled_count': settled_count,
+            'strategy_id': strategy_id,
+            'validation_lift': validation_lift,
+            'final_test_lift': final_test_lift,
+            'hit_delta_vs_random': round(hit_delta, 4),
+            'profit_roi': round(roi, 4),
+            'reasons': reasons[:4],
+        }
+
+    return {
+        'window_size': window.get('window_size', 0) if isinstance(window, dict) else 0,
+        'settled_count': window.get('settled_count', 0) if isinstance(window, dict) else 0,
+        'health_by_play': health_by_play,
+        'note': '策略健康度只用于观察，不会自动启用、降级或替换策略。',
     }
 
 
