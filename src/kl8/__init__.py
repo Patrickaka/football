@@ -446,6 +446,67 @@ VALIDATION_CANDIDATES.update({
     },
 })
 
+VALIDATION_CANDIDATES.update({
+    'select5_balanced_75': {
+        'strategy_id': 'candidate_select5_balanced_75',
+        'feature_weights': {'frequency': 0.45, 'gap': 0.25, 'trend': 0.15, 'position_residual': 0.10, 'pair_cooccurrence': 0.05, 'repeat': 0.0, 'road_residual': 0.0, 'odd_even': 0.0, 'big_small': 0.0},
+        'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
+        'window_size': 75,
+        'repeat_direction': 'neutral',
+        'pool_max_last_numbers': 2,
+        'final_selection_mode': 'best_variant',
+    },
+    'select5_low_repeat_100': {
+        'strategy_id': 'candidate_select5_low_repeat_100',
+        'feature_weights': {'frequency': 0.50, 'gap': 0.20, 'position_residual': 0.15, 'trend': 0.10, 'pair_cooccurrence': 0.05, 'repeat': 0.0, 'road_residual': 0.0, 'odd_even': 0.0, 'big_small': 0.0},
+        'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
+        'window_size': 100,
+        'repeat_direction': 'neutral',
+        'pool_max_last_numbers': 1,
+        'final_selection_mode': 'low_repeat',
+    },
+    'select5_hot_zone_150': {
+        'strategy_id': 'candidate_select5_hot_zone_150',
+        'feature_weights': {'frequency': 0.35, 'adjacent': 0.20, 'position_residual': 0.20, 'road_residual': 0.10, 'trend': 0.10, 'pair_cooccurrence': 0.05, 'repeat': 0.0, 'odd_even': 0.0, 'big_small': 0.0},
+        'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
+        'window_size': 150,
+        'repeat_direction': 'neutral',
+        'frequency_mode': 'hot',
+        'pool_max_last_numbers': 2,
+        'final_selection_mode': 'zone_spread',
+    },
+    'select6_balanced_100': {
+        'strategy_id': 'candidate_select6_balanced_100',
+        'feature_weights': {'frequency': 0.40, 'gap': 0.20, 'trend': 0.15, 'pair_cooccurrence': 0.15, 'position_residual': 0.10, 'repeat': 0.0, 'road_residual': 0.0, 'odd_even': 0.0, 'big_small': 0.0},
+        'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
+        'window_size': 100,
+        'repeat_direction': 'neutral',
+        'pool_max_last_numbers': 3,
+        'final_selection_mode': 'best_variant',
+    },
+    'select6_repeat_follow_75': {
+        'strategy_id': 'candidate_select6_repeat_follow_75',
+        'feature_weights': {'frequency': 0.45, 'gap': 0.15, 'trend': 0.15, 'pair_cooccurrence': 0.10, 'repeat': 0.15, 'position_residual': 0.0, 'road_residual': 0.0, 'odd_even': 0.0, 'big_small': 0.0},
+        'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
+        'window_size': 75,
+        'repeat_direction': 'follow',
+        'repeat_follow_score': 0.90,
+        'repeat_non_follow_score': 0.50,
+        'pool_max_last_numbers': 4,
+        'final_selection_mode': 'repeat_follow',
+    },
+    'select6_hot_balanced_150': {
+        'strategy_id': 'candidate_select6_hot_balanced_150',
+        'feature_weights': {'frequency': 0.30, 'adjacent': 0.20, 'position_residual': 0.15, 'road_residual': 0.10, 'trend': 0.15, 'pair_cooccurrence': 0.10, 'repeat': 0.0, 'odd_even': 0.0, 'big_small': 0.0},
+        'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
+        'window_size': 150,
+        'repeat_direction': 'neutral',
+        'frequency_mode': 'hot',
+        'pool_max_last_numbers': 3,
+        'final_selection_mode': 'balanced',
+    },
+})
+
 # v9.2: CANDIDATE_STRATEGIES 保留为 VALIDATION_CANDIDATES 的别名（向后兼容）
 CANDIDATE_STRATEGIES = VALIDATION_CANDIDATES
 
@@ -727,6 +788,8 @@ def validate_and_activate_strategy(
     repeat_non_follow_score: float = 0.50,
     pool_diversify: bool = True,
     pool_max_last_numbers: Optional[int] = None,
+    frequency_mode: str = 'mean_reversion',
+    final_selection_mode: str = 'balanced',
     auto_activate: bool = False,
     n_permutations: int = BACKTEST_PERMUTATION_COUNT,
 ) -> Dict:
@@ -823,6 +886,8 @@ def validate_and_activate_strategy(
         repeat_non_follow_score=repeat_non_follow_score,
         pool_diversify=pool_diversify,
         pool_max_last_numbers=pool_max_last_numbers,
+        frequency_mode=frequency_mode,
+        final_selection_mode=final_selection_mode,
     )
 
     if 'error' in val_result:
@@ -852,6 +917,8 @@ def validate_and_activate_strategy(
         repeat_non_follow_score=repeat_non_follow_score,
         pool_diversify=pool_diversify,
         pool_max_last_numbers=pool_max_last_numbers,
+        frequency_mode=frequency_mode,
+        final_selection_mode=final_selection_mode,
     )
 
     if 'error' in perm_result:
@@ -921,6 +988,8 @@ def validate_and_activate_strategy(
             repeat_non_follow_score=repeat_non_follow_score,
             pool_diversify=pool_diversify,
             pool_max_last_numbers=pool_max_last_numbers,
+            frequency_mode=frequency_mode,
+            final_selection_mode=final_selection_mode,
         )
 
         if 'error' in sub_result:
@@ -948,6 +1017,8 @@ def validate_and_activate_strategy(
         repeat_non_follow_score=repeat_non_follow_score,
         pool_diversify=pool_diversify,
         pool_max_last_numbers=pool_max_last_numbers,
+        frequency_mode=frequency_mode,
+        final_selection_mode=final_selection_mode,
     )
 
     final_test_lift = None
@@ -1013,6 +1084,8 @@ def validate_and_activate_strategy(
         'repeat_non_follow_score': repeat_non_follow_score,
         'pool_diversify': pool_diversify,
         'pool_max_last_numbers': pool_max_last_numbers,
+        'frequency_mode': frequency_mode,
+        'final_selection_mode': final_selection_mode,
         'conditions': {
             'condition_1_lift_positive': {
                 'passed': condition_1_lift_positive,
@@ -1086,6 +1159,8 @@ def validate_and_activate_strategy(
             'repeat_non_follow_score': repeat_non_follow_score,
             'pool_diversify': pool_diversify,
             'pool_max_last_numbers': pool_max_last_numbers,
+            'frequency_mode': frequency_mode,
+            'final_selection_mode': final_selection_mode,
         }
         activate_verified_strategy(play_type, strategy_dict, report)
         activated = True
@@ -1388,6 +1463,125 @@ def _diversify_candidate_pool(
     return selected[:target_size]
 
 
+def _zone_spread_candidate_pool(
+    candidates: List[Tuple[int, float]],
+    target_size: int,
+) -> List[Tuple[int, float]]:
+    if target_size <= 0 or not candidates:
+        return []
+
+    selected_nums = []
+    zone_counts = Counter()
+    max_zone = max(1, math.ceil(target_size / 16))
+    score_lookup = {num: score for num, score in candidates}
+
+    for num, _ in candidates[:max(target_size * 4, 20)]:
+        zone = (num - 1) // 5 + 1
+        if zone_counts[zone] >= max_zone:
+            continue
+        selected_nums.append(num)
+        zone_counts[zone] += 1
+        if len(selected_nums) >= target_size:
+            break
+
+    for num, _ in candidates:
+        if len(selected_nums) >= target_size:
+            break
+        if num not in selected_nums:
+            selected_nums.append(num)
+
+    return [(num, score_lookup.get(num, 0.0)) for num in selected_nums[:target_size]]
+
+
+def _score_candidate_selection(
+    pool: List[Tuple[int, float]],
+    candidates: List[Tuple[int, float]],
+    target_size: int,
+    last_numbers: Optional[set],
+    repeat_cap: int,
+) -> float:
+    if not pool or target_size <= 0:
+        return -1.0
+
+    top_score = float(candidates[0][1]) if candidates else 1.0
+    if top_score == 0:
+        top_score = 1.0
+    avg_score = sum(float(score) for _, score in pool) / max(len(pool), 1)
+    score_ratio = avg_score / max(abs(top_score), 1e-9)
+
+    nums = [num for num, _ in pool]
+    zone_count = len({(num - 1) // 5 for num in nums})
+    road_count = len({num % 3 for num in nums})
+    repeat_count = sum(1 for num in nums if num in (last_numbers or set()))
+    repeat_penalty = max(0, repeat_count - repeat_cap) / max(target_size, 1)
+
+    zone_score = zone_count / min(target_size, 16)
+    road_score = road_count / min(target_size, 3)
+    return score_ratio * 0.72 + zone_score * 0.14 + road_score * 0.10 - repeat_penalty * 0.20
+
+
+def _select_final_candidate_pool(
+    candidates: List[Tuple[int, float]],
+    target_size: int,
+    last_numbers: Optional[set] = None,
+    max_last_numbers: Optional[int] = None,
+    selection_mode: str = 'balanced',
+) -> Tuple[List[Tuple[int, float]], str]:
+    if target_size <= 0 or not candidates:
+        return [], selection_mode
+
+    last_numbers = last_numbers or set()
+    repeat_cap = (
+        _default_repeat_cap(target_size)
+        if max_last_numbers is None
+        else max(0, min(target_size, int(max_last_numbers)))
+    )
+
+    modes = {
+        'top_ranked': candidates[:target_size],
+        'concentrated': candidates[:target_size],
+        'balanced': _diversify_candidate_pool(
+            candidates,
+            target_size,
+            last_numbers,
+            max_last_numbers=repeat_cap,
+        ),
+        'diversified': _diversify_candidate_pool(
+            candidates,
+            target_size,
+            last_numbers,
+            max_last_numbers=repeat_cap,
+        ),
+        'low_repeat': _diversify_candidate_pool(
+            candidates,
+            target_size,
+            last_numbers,
+            max_last_numbers=max(0, repeat_cap - 1),
+        ),
+        'repeat_follow': _diversify_candidate_pool(
+            candidates,
+            target_size,
+            last_numbers,
+            max_last_numbers=min(target_size, repeat_cap + 1),
+        ),
+        'zone_spread': _zone_spread_candidate_pool(candidates, target_size),
+    }
+
+    if selection_mode in modes and selection_mode != 'best_variant':
+        return modes[selection_mode], selection_mode
+
+    scored = []
+    for mode, pool in modes.items():
+        scored.append((
+            _score_candidate_selection(pool, candidates, target_size, last_numbers, repeat_cap),
+            mode,
+            pool,
+        ))
+    scored.sort(key=lambda item: (-item[0], item[1]))
+    _, mode, pool = scored[0]
+    return pool, mode
+
+
 def normalize_record(record, keep_meta: bool = False) -> Optional[Dict]:
     """校验并标准化单条记录
 
@@ -1551,6 +1745,8 @@ def _strategy_fingerprint(strategy: Dict) -> str:
         'repeat_non_follow_score': strategy.get('repeat_non_follow_score', 0.50),
         'pool_diversify_enabled': strategy.get('pool_diversify', True),
         'pool_max_last_numbers': strategy.get('pool_max_last_numbers'),
+        'frequency_mode': strategy.get('frequency_mode', 'mean_reversion'),
+        'final_selection_mode': strategy.get('final_selection_mode', 'balanced'),
         'code_version': KL8_PREDICTOR_VERSION,
     }
     return hashlib.sha256(
@@ -2362,6 +2558,7 @@ class KL8Analyzer:
         pool_diversify: bool = True,
         pool_max_last_numbers: Optional[int] = None,
         frequency_mode: str = 'mean_reversion',
+        final_selection_mode: str = 'balanced',
     ) -> Dict:
         """多模型集成投票
 
@@ -2431,14 +2628,23 @@ class KL8Analyzer:
             )
         else:
             candidate_pool = candidates[:max(top_n, 7)]
-        selected = [num for num, _ in candidate_pool[:pick_n]]
+        final_pool, selected_mode = _select_final_candidate_pool(
+            candidate_pool,
+            pick_n,
+            self.statistics.get('last_numbers', set()),
+            max_last_numbers=pool_max_last_numbers,
+            selection_mode=final_selection_mode,
+        )
+        selected = [num for num, _ in final_pool]
 
         return {
             'selected': selected,
             'candidates': candidate_pool,
+            'selected_pool': final_pool,
             'votes': dict(votes),
             'diversified': pool_diversify,
             'pool_max_last_numbers': pool_max_last_numbers,
+            'final_selection_mode': selected_mode,
             'raw_candidate_count': len(candidates),
             'version': KL8_PREDICTOR_VERSION,
         }
@@ -2918,6 +3124,7 @@ class KL8Analyzer:
                 else _adaptive_repeat_cap(predictor.history_data, pool_size)
             ),
             frequency_mode=strategy.get('frequency_mode', 'mean_reversion'),
+            final_selection_mode=strategy.get('final_selection_mode', 'balanced'),
         )
 
     def _score_exclude_recalculation_pool(
@@ -3273,6 +3480,8 @@ class KL8Analyzer:
                 'repeat_non_follow_score': strategy.get('repeat_non_follow_score', 0.50),
                 'pool_diversify': strategy.get('pool_diversify', True),
                 'pool_max_last_numbers': strategy.get('pool_max_last_numbers'),
+                'frequency_mode': strategy.get('frequency_mode', 'mean_reversion'),
+                'final_selection_mode': strategy.get('final_selection_mode', 'balanced'),
                 'prediction_mode': strategy['prediction_mode'],
                 'is_validated': strategy['is_validated'],
             }
@@ -3295,11 +3504,12 @@ class KL8Analyzer:
                     _adaptive_repeat_cap(self.history_data, select_type),
                 )
             )
-            final_pool = _diversify_candidate_pool(
+            final_pool, selected_mode = _select_final_candidate_pool(
                 pool_candidates,
                 select_type,
                 self.statistics.get('last_numbers', set()),
                 max_last_numbers=final_repeat_cap,
+                selection_mode=strategy.get('final_selection_mode', 'balanced'),
             )
             numbers = [num for num, _ in final_pool]
             variants = self._candidate_variants(pool_candidates, select_type, final_repeat_cap)
@@ -3313,6 +3523,7 @@ class KL8Analyzer:
                 'strategy_id': strategy['strategy_id'],
                 'prediction_mode': strategy['prediction_mode'],
                 'is_validated': strategy['is_validated'],
+                'final_selection_mode': selected_mode,
                 'warning': (
                     '' if strategy['is_validated']
                     else '参考预测：当前策略尚未通过严格回测验证，仅供数据观察。'
@@ -3360,18 +3571,27 @@ class KL8Analyzer:
                 'repeat_non_follow_score': strategy.get('repeat_non_follow_score', 0.50),
                 'pool_diversify': strategy.get('pool_diversify', True),
                 'pool_max_last_numbers': strategy.get('pool_max_last_numbers'),
+                'frequency_mode': strategy.get('frequency_mode', 'mean_reversion'),
+                'final_selection_mode': strategy.get('final_selection_mode', 'balanced'),
                 'prediction_mode': strategy['prediction_mode'],
                 'is_validated': strategy['is_validated'],
             }
 
             fu_pool_result = self.build_pool_by_strategy(strategy, pool_size=max(20, pool_size))
             fu_candidates = fu_pool_result.get('candidates', [])[:20]
-            core_numbers = fu_pool_result.get('selected', [])[:pool_size]
             fushi_repeat_cap = (
                 strategy.get('pool_max_last_numbers')
                 if strategy.get('pool_max_last_numbers') is not None
                 else _adaptive_repeat_cap(self.history_data, pool_size)
             )
+            final_pool, selected_mode = _select_final_candidate_pool(
+                fu_candidates,
+                pool_size,
+                self.statistics.get('last_numbers', set()),
+                max_last_numbers=fushi_repeat_cap,
+                selection_mode=strategy.get('final_selection_mode', 'balanced'),
+            )
+            core_numbers = [num for num, _ in final_pool]
             variants = self._candidate_variants(fu_candidates, pool_size, fushi_repeat_cap)
 
             all_candidate_pools[fushi_key] = {
@@ -3397,6 +3617,7 @@ class KL8Analyzer:
                 'strategy_id': strategy['strategy_id'],
                 'prediction_mode': strategy['prediction_mode'],
                 'is_validated': strategy['is_validated'],
+                'final_selection_mode': selected_mode,
                 'warning': '' if strategy['is_validated']
                     else '参考预测：当前策略尚未通过严格回测验证，仅供数据观察。',
             }
@@ -3869,6 +4090,7 @@ class KL8RollingBacktest:
         pool_diversify: bool = True,
         pool_max_last_numbers: Optional[int] = None,
         frequency_mode: str = 'mean_reversion',
+        final_selection_mode: str = 'balanced',
     ) -> Dict:
         """纯参数化滚动回测（v6: 使用multi_model_voting管道，model_weights真正生效）
 
@@ -3931,6 +4153,7 @@ class KL8RollingBacktest:
                 pool_diversify=pool_diversify,
                 pool_max_last_numbers=pool_max_last_numbers,
                 frequency_mode=frequency_mode,
+                final_selection_mode=final_selection_mode,
             )
 
             # 无信号时，该期命中数记录为0
@@ -3954,12 +4177,13 @@ class KL8RollingBacktest:
                     adaptive_cap,
                 )
                 top_nums = [
-                    num for num, _ in _diversify_candidate_pool(
+                    num for num, _ in _select_final_candidate_pool(
                         candidate_items,
                         select_type,
                         temp_analyzer.statistics.get('last_numbers', set()),
                         max_last_numbers=final_repeat_cap,
-                    )
+                        selection_mode=final_selection_mode,
+                    )[0]
                 ]
                 hits = len(set(top_nums) & actual_numbers)
                 all_hits[select_type].append(hits)
@@ -3974,12 +4198,13 @@ class KL8RollingBacktest:
                     adaptive_cap,
                 )
                 core_numbers = [
-                    num for num, _ in _diversify_candidate_pool(
+                    num for num, _ in _select_final_candidate_pool(
                         candidate_items,
                         pool_size,
                         temp_analyzer.statistics.get('last_numbers', set()),
                         max_last_numbers=repeat_cap,
-                    )
+                        selection_mode=final_selection_mode,
+                    )[0]
                 ]
                 pool_hits = len(set(core_numbers) & actual_numbers)
                 all_fushi_pool_hits[fushi_key].append(pool_hits)
@@ -4140,6 +4365,7 @@ class KL8RollingBacktest:
         pool_diversify: bool = True,
         pool_max_last_numbers: Optional[int] = None,
         frequency_mode: str = 'mean_reversion',
+        final_selection_mode: str = 'balanced',
     ) -> Dict:
         """置换检验: 打乱实际开奖期顺序（v9重大改动）
 
@@ -4165,6 +4391,7 @@ class KL8RollingBacktest:
             pool_diversify=pool_diversify,
             pool_max_last_numbers=pool_max_last_numbers,
             frequency_mode=frequency_mode,
+            final_selection_mode=final_selection_mode,
         )
 
         if 'error' in real_result:
@@ -4208,6 +4435,7 @@ class KL8RollingBacktest:
                 pool_diversify=pool_diversify,
                 pool_max_last_numbers=pool_max_last_numbers,
                 frequency_mode=frequency_mode,
+                final_selection_mode=final_selection_mode,
             )
 
             if vote.get('status') == 'no_validated_signal':
@@ -4221,12 +4449,13 @@ class KL8RollingBacktest:
                 adaptive_cap,
             )
             pred_nums = [
-                num for num, _ in _diversify_candidate_pool(
+                num for num, _ in _select_final_candidate_pool(
                     vote.get('candidates', []),
                     pick_n,
                     temp_analyzer.statistics.get('last_numbers', set()),
                     max_last_numbers=final_repeat_cap,
-                )
+                    selection_mode=final_selection_mode,
+                )[0]
             ]
             predictions.append(set(pred_nums))
             actual_draws.append(set(history_asc[t]['numbers']))
@@ -4534,12 +4763,16 @@ class KL8RollingBacktest:
         repeat_directions: Optional[List[str]] = None,
         repeat_caps: Optional[List[Optional[int]]] = None,
         pool_diversify_options: Optional[List[bool]] = None,
+        final_selection_modes: Optional[List[str]] = None,
+        frequency_modes: Optional[List[str]] = None,
         max_candidates: int = 24,
     ) -> Dict[str, Dict]:
-        window_sizes = window_sizes or [50, 100, 150]
+        window_sizes = window_sizes or [75, 100, 150]
         repeat_directions = repeat_directions or ['neutral', 'follow']
-        repeat_caps = repeat_caps or [None, 2, 5]
+        repeat_caps = repeat_caps or [None, 2, 3, 4]
         pool_diversify_options = pool_diversify_options or [True]
+        final_selection_modes = final_selection_modes or ['balanced', 'best_variant', 'low_repeat', 'zone_spread']
+        frequency_modes = frequency_modes or ['mean_reversion', 'hot']
 
         profiles = {
             'freq': {'frequency': 1.0, 'gap': 0.0, 'position_residual': 0.0, 'road_residual': 0.0, 'repeat': 0.0, 'odd_even': 0.0, 'big_small': 0.0},
@@ -4554,24 +4787,30 @@ class KL8RollingBacktest:
             for repeat_direction in repeat_directions:
                 for repeat_cap in repeat_caps:
                     for pool_diversify in pool_diversify_options:
-                        for profile_name, feature_weights in profiles.items():
-                            if len(candidates) >= max_candidates:
-                                return candidates
-                            suffix = 'none' if repeat_cap is None else str(repeat_cap)
-                            name = f'{profile_name}_w{window_size}_{repeat_direction}_cap{suffix}_div{int(pool_diversify)}'
-                            candidates[name] = {
-                                'strategy_id': f'grid_{name}',
-                                'feature_weights': dict(feature_weights),
-                                'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
-                                'window_size': window_size,
-                                'repeat_direction': repeat_direction,
-                                'repeat_avoid_score': 0.10,
-                                'repeat_non_avoid_score': 0.85,
-                                'repeat_follow_score': 0.90,
-                                'repeat_non_follow_score': 0.50,
-                                'pool_diversify': pool_diversify,
-                                'pool_max_last_numbers': repeat_cap,
-                            }
+                        for final_selection_mode in final_selection_modes:
+                            for frequency_mode in frequency_modes:
+                                for profile_name, feature_weights in profiles.items():
+                                    if len(candidates) >= max_candidates:
+                                        return candidates
+                                    suffix = 'none' if repeat_cap is None else str(repeat_cap)
+                                    mode_suffix = final_selection_mode.replace('_', '')
+                                    freq_suffix = 'hot' if frequency_mode == 'hot' else 'mr'
+                                    name = f'{profile_name}_w{window_size}_{repeat_direction}_cap{suffix}_div{int(pool_diversify)}_{mode_suffix}_{freq_suffix}'
+                                    candidates[name] = {
+                                        'strategy_id': f'grid_{name}',
+                                        'feature_weights': dict(feature_weights),
+                                        'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
+                                        'window_size': window_size,
+                                        'repeat_direction': repeat_direction,
+                                        'repeat_avoid_score': 0.10,
+                                        'repeat_non_avoid_score': 0.85,
+                                        'repeat_follow_score': 0.90,
+                                        'repeat_non_follow_score': 0.50,
+                                        'pool_diversify': pool_diversify,
+                                        'pool_max_last_numbers': repeat_cap,
+                                        'frequency_mode': frequency_mode,
+                                        'final_selection_mode': final_selection_mode,
+                                    }
         return candidates
 
     def run_parameter_search(
@@ -4618,6 +4857,8 @@ class KL8RollingBacktest:
                 'repeat_non_follow_score': strategy.get('repeat_non_follow_score', 0.50),
                 'pool_diversify': strategy.get('pool_diversify', True),
                 'pool_max_last_numbers': strategy.get('pool_max_last_numbers'),
+                'frequency_mode': strategy.get('frequency_mode', 'mean_reversion'),
+                'final_selection_mode': strategy.get('final_selection_mode', 'balanced'),
             }
             candidate_runtime[name] = (fw, mw, kwargs)
             val_result = self._rolling_backtest_parametric(
@@ -5007,6 +5248,8 @@ class KL8RollingBacktest:
             repeat_non_follow_score = strategy.get('repeat_non_follow_score', 0.50)
             pool_diversify = strategy.get('pool_diversify', True)
             pool_max_last_numbers = strategy.get('pool_max_last_numbers')
+            frequency_mode = strategy.get('frequency_mode', 'mean_reversion')
+            final_selection_mode = strategy.get('final_selection_mode', 'balanced')
 
             train_result = self._rolling_backtest_parametric(
                 fw, mw,
@@ -5021,6 +5264,8 @@ class KL8RollingBacktest:
                 repeat_non_follow_score=repeat_non_follow_score,
                 pool_diversify=pool_diversify,
                 pool_max_last_numbers=pool_max_last_numbers,
+                frequency_mode=frequency_mode,
+                final_selection_mode=final_selection_mode,
             )
 
             if 'error' in train_result:
@@ -5058,6 +5303,8 @@ class KL8RollingBacktest:
             repeat_non_follow_score = strategy.get('repeat_non_follow_score', 0.50)
             pool_diversify = strategy.get('pool_diversify', True)
             pool_max_last_numbers = strategy.get('pool_max_last_numbers')
+            frequency_mode = strategy.get('frequency_mode', 'mean_reversion')
+            final_selection_mode = strategy.get('final_selection_mode', 'balanced')
 
             # 验证段回测
             val_result = self._rolling_backtest_parametric(
@@ -5073,6 +5320,8 @@ class KL8RollingBacktest:
                 repeat_non_follow_score=repeat_non_follow_score,
                 pool_diversify=pool_diversify,
                 pool_max_last_numbers=pool_max_last_numbers,
+                frequency_mode=frequency_mode,
+                final_selection_mode=final_selection_mode,
             )
 
             if 'error' in val_result:
@@ -5098,6 +5347,8 @@ class KL8RollingBacktest:
                 repeat_non_follow_score=repeat_non_follow_score,
                 pool_diversify=pool_diversify,
                 pool_max_last_numbers=pool_max_last_numbers,
+                frequency_mode=frequency_mode,
+                final_selection_mode=final_selection_mode,
             )
 
             raw_p = perm_result.get('p_value', 1.0) if 'error' not in perm_result else 1.0
@@ -5123,6 +5374,8 @@ class KL8RollingBacktest:
                     repeat_non_follow_score=repeat_non_follow_score,
                     pool_diversify=pool_diversify,
                     pool_max_last_numbers=pool_max_last_numbers,
+                    frequency_mode=frequency_mode,
+                    final_selection_mode=final_selection_mode,
                 )
 
                 sub_lift = _play_lift(sub_result, play_type) if 'error' not in sub_result else 0
@@ -5180,6 +5433,8 @@ class KL8RollingBacktest:
                 'repeat_direction': strategy.get('repeat_direction', 'neutral'),
                 'pool_diversify': strategy.get('pool_diversify', True),
                 'pool_max_last_numbers': strategy.get('pool_max_last_numbers'),
+                'frequency_mode': strategy.get('frequency_mode', 'mean_reversion'),
+                'final_selection_mode': strategy.get('final_selection_mode', 'balanced'),
                 'raw_p_value': raw_p,
                 'validation_lift': round(val_lift, 4),
                 'n_permutations': n_permutations,
@@ -5248,6 +5503,8 @@ class KL8RollingBacktest:
         repeat_non_follow_score = strategy.get('repeat_non_follow_score', 0.50)
         pool_diversify = strategy.get('pool_diversify', True)
         pool_max_last_numbers = strategy.get('pool_max_last_numbers')
+        frequency_mode = strategy.get('frequency_mode', 'mean_reversion')
+        final_selection_mode = strategy.get('final_selection_mode', 'balanced')
 
         final_test_result = self._rolling_backtest_parametric(
             fw, mw,
@@ -5262,6 +5519,8 @@ class KL8RollingBacktest:
             repeat_non_follow_score=repeat_non_follow_score,
             pool_diversify=pool_diversify,
             pool_max_last_numbers=pool_max_last_numbers,
+            frequency_mode=frequency_mode,
+            final_selection_mode=final_selection_mode,
         )
 
         if 'error' in final_test_result:
@@ -5318,6 +5577,8 @@ class KL8RollingBacktest:
             'roi_not_worse': best_candidate['roi_not_worse'],
             'final_test_lift': round(final_test_lift, 4),
             'final_test_prize_tier_passed': ft_prize_tier_passed,
+            'frequency_mode': frequency_mode,
+            'final_selection_mode': final_selection_mode,
             'data_cutoff_issue': self.analyzer.history_data[0]['issue'] if self.analyzer.history_data else '',
             'data_periods': n,
             'version': KL8_PREDICTOR_VERSION,
@@ -5391,6 +5652,8 @@ class KL8RollingBacktest:
             repeat_non_follow_score = strategy.get('repeat_non_follow_score', 0.50)
             pool_diversify = strategy.get('pool_diversify', True)
             pool_max_last_numbers = strategy.get('pool_max_last_numbers')
+            frequency_mode = strategy.get('frequency_mode', 'mean_reversion')
+            final_selection_mode = strategy.get('final_selection_mode', 'balanced')
 
             train_result = self._rolling_backtest_parametric(
                 fw, mw,
@@ -5405,6 +5668,8 @@ class KL8RollingBacktest:
                 repeat_non_follow_score=repeat_non_follow_score,
                 pool_diversify=pool_diversify,
                 pool_max_last_numbers=pool_max_last_numbers,
+                frequency_mode=frequency_mode,
+                final_selection_mode=final_selection_mode,
             )
 
             if 'error' in train_result:
@@ -5450,6 +5715,8 @@ class KL8RollingBacktest:
             repeat_non_follow_score = strategy.get('repeat_non_follow_score', 0.50)
             pool_diversify = strategy.get('pool_diversify', True)
             pool_max_last_numbers = strategy.get('pool_max_last_numbers')
+            frequency_mode = strategy.get('frequency_mode', 'mean_reversion')
+            final_selection_mode = strategy.get('final_selection_mode', 'balanced')
 
             val_result = self._rolling_backtest_parametric(
                 fw, mw,
@@ -5464,6 +5731,8 @@ class KL8RollingBacktest:
                 repeat_non_follow_score=repeat_non_follow_score,
                 pool_diversify=pool_diversify,
                 pool_max_last_numbers=pool_max_last_numbers,
+                frequency_mode=frequency_mode,
+                final_selection_mode=final_selection_mode,
             )
 
             if 'error' in val_result:
@@ -5488,6 +5757,8 @@ class KL8RollingBacktest:
                 repeat_non_follow_score=repeat_non_follow_score,
                 pool_diversify=pool_diversify,
                 pool_max_last_numbers=pool_max_last_numbers,
+                frequency_mode=frequency_mode,
+                final_selection_mode=final_selection_mode,
             )
 
             raw_p = perm_result.get('p_value', 1.0) if 'error' not in perm_result else 1.0
@@ -5513,6 +5784,8 @@ class KL8RollingBacktest:
                     repeat_non_follow_score=repeat_non_follow_score,
                     pool_diversify=pool_diversify,
                     pool_max_last_numbers=pool_max_last_numbers,
+                    frequency_mode=frequency_mode,
+                    final_selection_mode=final_selection_mode,
                 )
                 sub_lift = sub_result.get('select_5', {}).get('lift', 0) if 'error' not in sub_result else 0
                 sub_lifts.append(sub_lift)
@@ -5529,6 +5802,8 @@ class KL8RollingBacktest:
                 'repeat_direction': strategy.get('repeat_direction', 'neutral'),
                 'pool_diversify': strategy.get('pool_diversify', True),
                 'pool_max_last_numbers': strategy.get('pool_max_last_numbers'),
+                'frequency_mode': strategy.get('frequency_mode', 'mean_reversion'),
+                'final_selection_mode': strategy.get('final_selection_mode', 'balanced'),
                 'raw_p_value': raw_p,
                 'validation_lift': round(s5_lift, 4),
                 'n_permutations': n_permutations,
@@ -5567,6 +5842,8 @@ class KL8RollingBacktest:
             repeat_non_follow_score = strategy.get('repeat_non_follow_score', 0.50)
             pool_diversify = strategy.get('pool_diversify', True)
             pool_max_last_numbers = strategy.get('pool_max_last_numbers')
+            frequency_mode = strategy.get('frequency_mode', 'mean_reversion')
+            final_selection_mode = strategy.get('final_selection_mode', 'balanced')
 
             final_test_result = self._rolling_backtest_parametric(
                 fw, mw,
@@ -5581,6 +5858,8 @@ class KL8RollingBacktest:
                 repeat_non_follow_score=repeat_non_follow_score,
                 pool_diversify=pool_diversify,
                 pool_max_last_numbers=pool_max_last_numbers,
+                frequency_mode=frequency_mode,
+                final_selection_mode=final_selection_mode,
             )
 
             if 'error' not in final_test_result:
