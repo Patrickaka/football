@@ -682,6 +682,57 @@ class KL8PredictionGuardTests(unittest.TestCase):
         self.assertEqual(fushi['total_prize'], 55000000)
         self.assertEqual(fushi['hit_distribution'], {10: 11})
 
+    def test_recent_settlement_performance_compares_random_baseline(self):
+        original_settlement_dir = kl8_module.KL8_SETTLEMENT_DIR
+
+        with tempfile.TemporaryDirectory() as tmp:
+            settlement_dir = Path(tmp) / 'settlements'
+            settlement_dir.mkdir()
+            rows = [
+                {
+                    'snapshot_id': 'perf-1',
+                    'settled_at': '2026-01-02T00:00:00',
+                    'prize_settlement': {
+                        'select_5': {'placed': True, 'hits': 3, 'bet': 2, 'prize': 10},
+                    },
+                    'fushi_settlement': {
+                        'fu_shi_7': {'placed': True, 'pool_hits': 2, 'total_bet': 42, 'total_prize': 20},
+                    },
+                },
+                {
+                    'snapshot_id': 'perf-2',
+                    'settled_at': '2026-01-01T00:00:00',
+                    'prize_settlement': {
+                        'select_5': {'placed': True, 'hits': 1, 'bet': 2, 'prize': 0},
+                    },
+                    'fushi_settlement': {
+                        'fu_shi_7': {'placed': True, 'pool_hits': 4, 'total_bet': 42, 'total_prize': 100},
+                    },
+                },
+            ]
+            for row in rows:
+                path = settlement_dir / f"settlement_{row['snapshot_id']}.json"
+                path.write_text(json.dumps(row), encoding='utf-8')
+
+            try:
+                kl8_module.KL8_SETTLEMENT_DIR = str(settlement_dir)
+                result = kl8_module._build_recent_settlement_performance(windows=(2,))
+            finally:
+                kl8_module.KL8_SETTLEMENT_DIR = original_settlement_dir
+
+        self.assertEqual(result['available_count'], 2)
+        window = result['windows'][0]
+        self.assertEqual(window['settled_count'], 2)
+        select5 = window['play_stats']['select_5']
+        self.assertEqual(select5['settled_count'], 2)
+        self.assertEqual(select5['avg_hits'], 2.0)
+        self.assertEqual(select5['random_expected_hits'], 1.25)
+        self.assertEqual(select5['hit_delta_vs_random'], 0.75)
+        self.assertEqual(select5['profit_roi'], 1.5)
+        fushi7 = window['play_stats']['fu_shi_7']
+        self.assertEqual(fushi7['avg_hits'], 3.0)
+        self.assertEqual(fushi7['random_expected_hits'], 1.75)
+
 
 if __name__ == '__main__':
     unittest.main()

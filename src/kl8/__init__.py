@@ -3693,6 +3693,7 @@ class KL8Analyzer:
                 'progress_pct': round(min(100, current_periods / backfill_target * 100), 1),
                 'is_complete': current_periods >= backfill_target,
             },
+            'recent_settlement_performance': _build_recent_settlement_performance(),
             'note': (
                 '当前启用策略已通过回测验证。'
                 if overall_status == 'validated'
@@ -3780,6 +3781,101 @@ def _load_last_snapshot() -> Optional[Dict]:
     # 按predicted_at时间排序（而不是文件名UUID）
     candidates.sort(key=lambda x: x[1].get('predicted_at', ''), reverse=True)
     return candidates[0][1]
+
+
+def _load_recent_settlements(limit: int = 100) -> List[Dict]:
+    settlements_dir = Path(KL8_SETTLEMENT_DIR)
+    if not settlements_dir.exists():
+        return []
+
+    items = []
+    for path in settlements_dir.glob('settlement_*.json'):
+        try:
+            data = json.loads(path.read_text(encoding='utf-8'))
+            sort_key = data.get('settled_at') or data.get('actual_issue') or ''
+            items.append((sort_key, path.stat().st_mtime, data))
+        except Exception:
+            continue
+
+    items.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    return [data for _, _, data in items[:limit]]
+
+
+def _summarize_settlement_window(settlements: List[Dict], window_size: int) -> Dict:
+    window = settlements[:window_size]
+    play_stats = {}
+
+    for select_type in SELECT_TYPES:
+        play_type = f'select_{select_type}'
+        rows = [
+            s.get('prize_settlement', {}).get(play_type, {})
+            for s in window
+        ]
+        rows = [row for row in rows if row.get('placed')]
+        count = len(rows)
+        total_hits = sum(int(row.get('hits', 0)) for row in rows)
+        expected_hits = hypergeom_expected(select_type)
+        avg_hits = total_hits / count if count else 0.0
+        total_bet = sum(float(row.get('bet', 0)) for row in rows)
+        total_prize = sum(float(row.get('prize', 0)) for row in rows)
+
+        play_stats[play_type] = {
+            'play_type': play_type,
+            'label': f'选{select_type}',
+            'settled_count': count,
+            'avg_hits': round(avg_hits, 4),
+            'random_expected_hits': round(expected_hits, 4),
+            'hit_delta_vs_random': round(avg_hits - expected_hits, 4),
+            'total_bet': round(total_bet, 2),
+            'total_prize': round(total_prize, 2),
+            'profit_roi': round((total_prize - total_bet) / total_bet, 4) if total_bet else 0.0,
+        }
+
+    for fushi_key, fushi_cfg in FUSHI_CONFIG.items():
+        pool_size = fushi_cfg['pool_size']
+        rows = [
+            s.get('fushi_settlement', {}).get(fushi_key, {})
+            for s in window
+        ]
+        rows = [row for row in rows if row.get('placed')]
+        count = len(rows)
+        total_hits = sum(int(row.get('pool_hits', 0)) for row in rows)
+        expected_hits = hypergeom_expected(pool_size)
+        avg_hits = total_hits / count if count else 0.0
+        total_bet = sum(float(row.get('total_bet', 0)) for row in rows)
+        total_prize = sum(float(row.get('total_prize', 0)) for row in rows)
+
+        play_stats[fushi_key] = {
+            'play_type': fushi_key,
+            'label': fushi_cfg['desc'],
+            'settled_count': count,
+            'avg_hits': round(avg_hits, 4),
+            'random_expected_hits': round(expected_hits, 4),
+            'hit_delta_vs_random': round(avg_hits - expected_hits, 4),
+            'total_bet': round(total_bet, 2),
+            'total_prize': round(total_prize, 2),
+            'profit_roi': round((total_prize - total_bet) / total_bet, 4) if total_bet else 0.0,
+        }
+
+    return {
+        'window_size': window_size,
+        'settled_count': len(window),
+        'play_stats': play_stats,
+    }
+
+
+def _build_recent_settlement_performance(windows: Tuple[int, ...] = (30, 100)) -> Dict:
+    max_window = max(windows) if windows else 100
+    settlements = _load_recent_settlements(max_window)
+    summaries = [
+        _summarize_settlement_window(settlements, window)
+        for window in windows
+    ]
+    return {
+        'available_count': len(settlements),
+        'windows': summaries,
+        'note': '实际命中与随机理论期望对照；快乐8为公平摇奖，短期高低可能只是随机波动。',
+    }
 
 
 def _compute_prediction_changes(

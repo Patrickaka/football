@@ -3777,6 +3777,8 @@ function renderKL8(r) {
   }
 
   // ── 本期变化对比信息（仅在有已验证策略时显示）───
+  html += renderKL8SettlementPerformance(r.statistics?.recent_settlement_performance);
+
   const changeInfo = r.change_info || {};
   if (changeInfo.has_previous && signalStatus === 'validated') {
     html += `<div class="card" style="margin-bottom:12px;padding:10px 14px;border-left:3px solid #4493f8">`;
@@ -3977,6 +3979,41 @@ function getKL8ExcludeOptions() {
     { key: 'select_10', label: '选10', numbers: r.select_10?.numbers || [], resultField: 'numbers' },
     { key: 'fu_shi_7', label: '选5复式7码', numbers: r.fu_shi_7?.top7_numbers || r.fu_shi_7?.core_numbers || [], resultField: 'top7_numbers' },
   ].filter(item => item.numbers && item.numbers.length > 0);
+}
+
+function renderKL8SettlementPerformance(perf) {
+  if (!perf || !Array.isArray(perf.windows) || perf.available_count <= 0) return '';
+
+  const focusPlays = ['select_5', 'select_6', 'select_10', 'fu_shi_7', 'fu_shi_10_11'];
+  const window = perf.windows.find(item => item.settled_count > 0) || perf.windows[0];
+  if (!window || !window.play_stats) return '';
+
+  let html = `<div class="card" style="margin-bottom:16px;border-left:3px solid #8957e5">`;
+  html += `<div class="section-title" style="font-size:14px;margin-bottom:8px">最近结算表现 vs 随机基线</div>`;
+  html += `<div class="note" style="font-size:12px;margin-bottom:10px">统计最近 ${esc(window.settled_count)} / ${esc(window.window_size)} 期已结算预测；随机基线=公平摇奖理论期望命中数。</div>`;
+  html += `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px">`;
+
+  for (const key of focusPlays) {
+    const item = window.play_stats[key];
+    if (!item || !item.settled_count) continue;
+    const delta = Number(item.hit_delta_vs_random || 0);
+    const deltaColor = delta > 0 ? '#2ea043' : delta < 0 ? '#f85149' : 'var(--muted)';
+    const roi = Number(item.profit_roi || 0);
+    const roiColor = roi > 0 ? '#2ea043' : roi < 0 ? '#f85149' : 'var(--muted)';
+    html += `<div class="kl8-select-card" style="padding:10px;margin:0">`;
+    html += `<div style="font-weight:700;font-size:13px;margin-bottom:6px">${esc(item.label || key)}</div>`;
+    html += `<div style="font-size:12px;color:var(--muted)">平均命中 <b style="color:var(--text)">${esc(Number(item.avg_hits || 0).toFixed(2))}</b> / 随机 ${esc(Number(item.random_expected_hits || 0).toFixed(2))}</div>`;
+    html += `<div style="font-size:12px;color:${deltaColor};margin-top:4px">差值 ${delta >= 0 ? '+' : ''}${esc(delta.toFixed(2))}</div>`;
+    html += `<div style="font-size:12px;color:${roiColor};margin-top:4px">ROI ${esc((roi * 100).toFixed(1))}%</div>`;
+    html += `</div>`;
+  }
+
+  html += `</div>`;
+  if (perf.note) {
+    html += `<div class="note" style="font-size:11px;margin-top:10px;color:var(--muted)">${esc(perf.note)}</div>`;
+  }
+  html += `</div>`;
+  return html;
 }
 
 function renderKL8Balls(numbers, size = 36) {
