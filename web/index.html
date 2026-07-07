@@ -3974,6 +3974,7 @@ function getKL8ExcludeOptions() {
   return [
     { key: 'select_5', label: '选5', numbers: r.select_5?.numbers || [], resultField: 'numbers' },
     { key: 'select_6', label: '选6', numbers: r.select_6?.numbers || [], resultField: 'numbers' },
+    { key: 'select_10', label: '选10', numbers: r.select_10?.numbers || [], resultField: 'numbers' },
     { key: 'fu_shi_7', label: '选5复式7码', numbers: r.fu_shi_7?.top7_numbers || r.fu_shi_7?.core_numbers || [], resultField: 'top7_numbers' },
   ].filter(item => item.numbers && item.numbers.length > 0);
 }
