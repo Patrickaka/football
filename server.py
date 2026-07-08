@@ -31,7 +31,7 @@ from src.lottery3d import run_prediction
 from src.lottery3d.ml import fetch_data, predict_current
 from src.lottery import get_lottery_analyzer, run_prediction as lottery_run_prediction
 from src.lottery.ml import predict_with_ml, clear_ml_cache
-from src.beidan import generate_beidan_recommendations, find_value_bets
+from src.beidan import generate_beidan_recommendations, find_value_bets, summarize_beidan_history
 from src.kl8 import (
     get_kl8_analyzer, run_prediction as kl8_run_prediction,
     clear_cache as kl8_clear_cache, list_prediction_snapshots as kl8_list_snapshots,
@@ -309,6 +309,9 @@ class Handler(BaseHTTPRequestHandler):
         elif path == '/api/beidan/value':
             params = parse_qs(route.query)
             self._serve_json(self._beidan_value_payload(params))
+        elif path == '/api/beidan/history':
+            params = parse_qs(route.query)
+            self._serve_json(self._beidan_history_payload(params))
         elif path == '/api/lottery':
             self._serve_json(self._lottery_payload())
         elif path == '/api/lottery-refresh':
@@ -793,7 +796,7 @@ class Handler(BaseHTTPRequestHandler):
         """获取北单推荐预测"""
         try:
             date = params.get('date', [None])[0]
-            source = params.get('source', ['dc'])[0]
+            source = params.get('source', ['okooo'])[0]
             bet_types = params.get('types', ['spf,zjq'])[0].split(',')
             
             self._log.info(f'北单推荐请求: date={date}, source={source}, types={bet_types}')
@@ -812,10 +815,14 @@ class Handler(BaseHTTPRequestHandler):
         """获取北单比赛列表"""
         try:
             date = params.get('date', [None])[0]
-            source = params.get('source', ['dc'])[0]
+            source = params.get('source', ['okooo'])[0]
             
-            from src.beidan import fetch_beidan_schedule
-            matches = fetch_beidan_schedule(date=date, source=source)
+            if source == 'okooo':
+                from src.beidan import fetch_okooo_schedule
+                matches = fetch_okooo_schedule(date=date)
+            else:
+                from src.beidan import fetch_beidan_schedule
+                matches = fetch_beidan_schedule(date=date, source=source)
             
             return {'matches': matches}
         except Exception as e:
@@ -826,7 +833,7 @@ class Handler(BaseHTTPRequestHandler):
         """获取北单价值投注推荐"""
         try:
             date = params.get('date', [None])[0]
-            source = params.get('source', ['dc'])[0]
+            source = params.get('source', ['okooo'])[0]
             threshold = float(params.get('threshold', [0.05])[0])
             
             result = find_value_bets(date=date, threshold=threshold, source=source)
@@ -838,6 +845,15 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:
             self._log.error('北单价值投注失败', exc_info=True)
             return {'error': f'价值投注分析失败: {str(e)}'}
+
+    def _beidan_history_payload(self, params):
+        """获取北单预测记录摘要"""
+        try:
+            limit = int(params.get('limit', ['200'])[0])
+            return {'result': summarize_beidan_history(limit=limit)}
+        except Exception as e:
+            self._log.error('北单预测记录获取失败', exc_info=True)
+            return {'error': f'北单预测记录获取失败: {str(e)}'}
 
     def _calibrate_payload(self, params):
         """手动触发联赛重新校准"""

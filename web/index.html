@@ -1155,8 +1155,9 @@ async function loadMatches() {
   }
 }
 
-let beidanSource = 'dc';
+let beidanSource = 'okooo';
 let beidanDate = '';
+let beidanQualityFilter = 'all';
 
 async function loadBeidan() {
   appBeidan.innerHTML = '<div class="status">加载中…</div>';
@@ -1190,6 +1191,33 @@ function renderBeidanQuality(q) {
   </div>`;
 }
 
+function renderBeidanHistorySummary(summary) {
+  if (!summary) return '';
+  const levels = summary.quality_levels || {};
+  return `<div style="margin:8px 0 12px;padding:8px;background:var(--bg2);border-radius:8px;font-size:12px;color:var(--muted)">
+    预测记录：共 ${summary.total_records || 0} 条 · 待复盘 ${summary.pending_records || 0} 条 · 已复盘 ${summary.settled_records || 0} 条
+    <span style="margin-left:8px">强 ${levels.strong || 0} / 可参 ${levels.medium || 0} / 分歧 ${levels.split || 0} / 低 ${levels.low || 0}</span>
+  </div>`;
+}
+
+function beidanMatchPassesFilter(m) {
+  if (beidanQualityFilter === 'all') return true;
+  const levels = [m.spf?.quality?.level, m.zjq?.quality?.level].filter(Boolean);
+  if (!levels.length) return beidanQualityFilter !== 'quality';
+  if (beidanQualityFilter === 'quality') {
+    return levels.some(level => level === 'strong' || level === 'medium');
+  }
+  if (beidanQualityFilter === 'hide_low') {
+    return levels.some(level => level !== 'low' && level !== 'unknown');
+  }
+  return true;
+}
+
+function setBeidanQualityFilter(filter) {
+  beidanQualityFilter = filter;
+  loadBeidan();
+}
+
 function renderBeidan(result) {
   let html = '';
   
@@ -1202,18 +1230,32 @@ function renderBeidan(result) {
       <span style="font-size:14px;color:var(--muted);margin-left:12px">日期：${esc(result.date)}</span>
       <button onclick="loadBeidan()" style="margin-left:auto">🔄 刷新</button>
     </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:8px">
+      <span style="font-size:14px;color:var(--muted)">筛选：</span>
+      <button onclick="setBeidanQualityFilter('all')" class="${beidanQualityFilter === 'all' ? 'on' : ''}">全部</button>
+      <button onclick="setBeidanQualityFilter('quality')" class="${beidanQualityFilter === 'quality' ? 'on' : ''}">强推荐+可参考</button>
+      <button onclick="setBeidanQualityFilter('hide_low')" class="${beidanQualityFilter === 'hide_low' ? 'on' : ''}">隐藏低置信</button>
+    </div>
   </div>`;
-  
-  html += `<div class="status" style="padding:4px 0 12px;font-size:13px">共 ${result.total_matches} 场比赛</div>`;
   
   if (!result.recommendations || !result.recommendations.length) {
     html += '<div class="status">暂无比赛数据</div>';
     appBeidan.innerHTML = html;
     return;
   }
+
+  const visibleRecommendations = result.recommendations.filter(beidanMatchPassesFilter);
+  html += `<div class="status" style="padding:4px 0 12px;font-size:13px">共 ${result.total_matches} 场比赛，当前显示 ${visibleRecommendations.length} 场</div>`;
+  html += renderBeidanHistorySummary(result.history_summary);
+
+  if (!visibleRecommendations.length) {
+    html += '<div class="status">当前筛选下暂无推荐</div>';
+    appBeidan.innerHTML = html;
+    return;
+  }
   
   const groups = {};
-  result.recommendations.forEach(m => {
+  visibleRecommendations.forEach(m => {
     const league = m.league || '其它';
     (groups[league] ||= []).push(m);
   });
@@ -1284,6 +1326,22 @@ function renderBeidan(result) {
               </div>`;
             });
             html += '</div>';
+          }
+          if (m.zjq.goal_groups && m.zjq.goal_groups.primary) {
+            const primary = m.zjq.goal_groups.primary;
+            html += `<div style="margin-top:6px;font-size:12px;color:var(--accent2)">
+              分组建议：<b>${esc(primary.advice || primary.label || '')}</b>
+              <span style="color:var(--muted)"> ${(primary.probability * 100).toFixed(1)}%</span>
+            </div>`;
+            if (m.zjq.goal_groups.groups && m.zjq.goal_groups.groups.length) {
+              html += '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px">';
+              m.zjq.goal_groups.groups.forEach(g => {
+                html += `<span style="padding:3px 6px;background:var(--bg);border-radius:4px;font-size:12px">
+                  ${esc(g.label)} ${(g.probability * 100).toFixed(0)}%
+                </span>`;
+              });
+              html += '</div>';
+            }
           }
           if (m.zjq.over25_prob !== undefined) {
             html += `<div style="margin-top:6px;font-size:12px">

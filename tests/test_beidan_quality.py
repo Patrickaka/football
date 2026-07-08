@@ -5,7 +5,10 @@ from src.beidan import (
     analyze_spf,
     analyze_zjq,
     assess_recommendation_quality,
+    assess_score_consistency,
+    build_zjq_group_recommendation,
     enhance_scores_with_cs,
+    save_beidan_prediction_snapshot,
 )
 
 
@@ -16,6 +19,23 @@ class BeidanQualityTests(unittest.TestCase):
         self.assertEqual(quality['level'], 'split')
         self.assertTrue(quality['avoid_single'])
         self.assertEqual([x['option'] for x in quality['top2']], ['胜', '平'])
+
+    def test_score_conflict_downgrades_quality(self):
+        scores = [
+            {'score': '0-1', 'probability': 0.16, 'home_goals': 0, 'away_goals': 1},
+            {'score': '1-1', 'probability': 0.12, 'home_goals': 1, 'away_goals': 1},
+            {'score': '0-2', 'probability': 0.08, 'home_goals': 0, 'away_goals': 2},
+        ]
+        consistency = assess_score_consistency(scores, '胜')
+        quality = assess_recommendation_quality(
+            {'胜': 0.48, '平': 0.28, '负': 0.24},
+            '胜',
+            {'score_consistency': consistency}
+        )
+
+        self.assertTrue(consistency['conflict'])
+        self.assertEqual(quality['level'], 'split')
+        self.assertTrue(quality['avoid_single'])
 
     def test_analyze_spf_uses_adjusted_probabilities_for_quality(self):
         match = {
@@ -41,6 +61,7 @@ class BeidanQualityTests(unittest.TestCase):
         self.assertIn('quality', result)
         self.assertIn(result['quality']['level'], {'medium', 'split', 'low', 'strong'})
         self.assertIn('raw_probabilities', result)
+        self.assertIn('score_consistency', result)
 
     def test_enhance_scores_with_cs_keeps_dict_shape(self):
         score_prediction = {
@@ -78,7 +99,47 @@ class BeidanQualityTests(unittest.TestCase):
         self.assertTrue(result['market_adjusted'])
         self.assertIn('odds', result)
         self.assertIn('quality', result)
+        self.assertIn('goal_groups', result)
+        self.assertIn(result['goal_groups']['primary']['key'], {'small', 'middle', 'big'})
         self.assertAlmostEqual(sum(result['probabilities'].values()), 1.0, places=6)
+
+    def test_zjq_group_recommendation_prefers_best_band(self):
+        groups = build_zjq_group_recommendation({
+            '0': 0.02, '1': 0.08, '2': 0.16,
+            '3': 0.24, '4': 0.22, '5': 0.14, '6': 0.08, '7+': 0.06,
+        })
+
+        self.assertEqual(groups['primary']['key'], 'big')
+        self.assertEqual(groups['primary']['options'], ['3', '4', '5', '6', '7+'])
+
+    def test_save_prediction_snapshot_upserts_by_match_key(self):
+        saved_payloads = []
+        result = {
+            'source': 'okooo',
+            'recommendations': [{
+                'date': '2026-07-08',
+                'num': '001',
+                'time': '20:00',
+                'league': 'L',
+                'home': 'A',
+                'away': 'B',
+                'spf': {'prediction': '胜', 'confidence': 0.48, 'quality': {'level': 'strong'}},
+                'zjq': {
+                    'prediction': '3',
+                    'confidence': 0.24,
+                    'quality': {'level': 'medium'},
+                    'goal_groups': {'primary': {'key': 'big'}},
+                },
+            }]
+        }
+
+        with patch('src.beidan._load_beidan_history', return_value=[]), \
+                patch('src.beidan._save_beidan_history', side_effect=lambda rows: saved_payloads.append(rows)):
+            summary = save_beidan_prediction_snapshot(result)
+
+        self.assertEqual(summary['saved'], 1)
+        self.assertEqual(saved_payloads[0][0]['key'], '2026-07-08|001|A|B')
+        self.assertEqual(saved_payloads[0][0]['zjq']['goal_groups']['primary']['key'], 'big')
 
 
 if __name__ == '__main__':

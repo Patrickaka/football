@@ -10,10 +10,13 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Tuple
 from ..common.logger import setup_logger
 from ..common.paths import data_path
+from ..common import kv_store
 
 log = setup_logger('beidan')
 
-BEIDAN_VERSION = '2026-07-08-v4'
+BEIDAN_VERSION = '2026-07-08-v5'
+BEIDAN_HISTORY_KEY = 'beidan_prediction_history'
+BEIDAN_HISTORY_LIMIT = 500
 
 BASE_URL = 'https://odds.500.com'
 SCHEDULE_URL = f'{BASE_URL}/index_jczq.shtml'
@@ -1234,11 +1237,15 @@ def assess_recommendation_quality(probabilities, prediction=None, context=None):
     lead = top_prob - second_prob
     top2 = [{'option': key, 'probability': prob} for key, prob in ranked[:2]]
 
-    asian_direction = (context or {}).get('asian_direction')
+    context = context or {}
+    asian_direction = context.get('asian_direction')
+    score_consistency = context.get('score_consistency') or {}
     conflict = False
     if asian_direction in ('home_backing', 'away_laying') and top_key == '负':
         conflict = True
     elif asian_direction in ('away_backing', 'home_laying') and top_key == '胜':
+        conflict = True
+    if score_consistency.get('conflict'):
         conflict = True
 
     if top_prob >= 0.46 and lead >= 0.08 and not conflict:
@@ -1262,6 +1269,178 @@ def assess_recommendation_quality(probabilities, prediction=None, context=None):
         'advice': advice,
         'avoid_single': level in ('low', 'split', 'unknown'),
         'conflict': conflict,
+        'score_consistency': score_consistency,
+    }
+
+def _score_result_label(score):
+    if isinstance(score, dict):
+        home_goals = score.get('home_goals')
+        away_goals = score.get('away_goals')
+        if home_goals is None or away_goals is None:
+            score_text = str(score.get('score', ''))
+        else:
+            try:
+                home_goals = int(home_goals)
+                away_goals = int(away_goals)
+                return '胜' if home_goals > away_goals else ('负' if home_goals < away_goals else '平')
+            except (TypeError, ValueError):
+                score_text = str(score.get('score', ''))
+    else:
+        score_text = str(score[0]) if score else ''
+
+    if '-' not in score_text:
+        return None
+    left, right = score_text.split('-', 1)
+    try:
+        home_goals = int(left)
+        away_goals = int(right)
+    except ValueError:
+        return None
+    return '胜' if home_goals > away_goals else ('负' if home_goals < away_goals else '平')
+
+def assess_score_consistency(scores, prediction):
+    if not scores or not prediction:
+        return {'available': False, 'conflict': False}
+
+    weights = {'胜': 0.0, '平': 0.0, '负': 0.0}
+    top_result = None
+    total_weight = 0.0
+    for idx, score in enumerate(scores[:3]):
+        result = _score_result_label(score)
+        if not result:
+            continue
+        if top_result is None:
+            top_result = result
+        if isinstance(score, dict):
+            prob = score.get('probability')
+        else:
+            prob = score[1] if len(score) > 1 else None
+        weight = float(prob) if prob is not None else max(0.1, 1.0 - idx * 0.25)
+        weights[result] += weight
+        total_weight += weight
+
+    if total_weight <= 0:
+        return {'available': False, 'conflict': False}
+
+    agreement = weights.get(prediction, 0.0) / total_weight
+    conflict = top_result != prediction and agreement < 0.45
+    return {
+        'available': True,
+        'conflict': conflict,
+        'top_score_result': top_result,
+        'agreement': round(agreement, 6),
+        'result_weights': {k: round(v / total_weight, 6) for k, v in weights.items()},
+    }
+
+def build_zjq_group_recommendation(zjq_probs):
+    if not zjq_probs:
+        return {'groups': [], 'primary': None}
+
+    definitions = [
+        ('small', '小球组', ['0', '1', '2']),
+        ('middle', '中位组', ['2', '3']),
+        ('big', '大球组', ['3', '4', '5', '6', '7+']),
+    ]
+    groups = []
+    for key, label, options in definitions:
+        prob = sum(float(zjq_probs.get(opt, 0) or 0) for opt in options)
+        groups.append({
+            'key': key,
+            'label': label,
+            'options': options,
+            'probability': round(prob, 6),
+            'advice': f"{label} {'/'.join(options)}",
+        })
+
+    groups.sort(key=lambda item: -item['probability'])
+    primary = groups[0] if groups else None
+    return {
+        'groups': groups,
+        'primary': primary,
+    }
+
+def _beidan_record_key(match):
+    return '|'.join(str(match.get(k, '')) for k in ('date', 'num', 'home', 'away'))
+
+def _load_beidan_history():
+    data = kv_store.load(BEIDAN_HISTORY_KEY, [])
+    return data if isinstance(data, list) else []
+
+def _save_beidan_history(records):
+    records = sorted(records, key=lambda r: r.get('created_at', ''), reverse=True)
+    kv_store.save(BEIDAN_HISTORY_KEY, records[:BEIDAN_HISTORY_LIMIT])
+
+def _compact_beidan_record(match, source):
+    spf = match.get('spf') or {}
+    zjq = match.get('zjq') or {}
+    return {
+        'key': _beidan_record_key(match),
+        'source': source,
+        'date': match.get('date'),
+        'num': match.get('num'),
+        'time': match.get('time'),
+        'league': match.get('league'),
+        'home': match.get('home'),
+        'away': match.get('away'),
+        'created_at': datetime.now().isoformat(timespec='seconds'),
+        'updated_at': datetime.now().isoformat(timespec='seconds'),
+        'settled': False,
+        'spf': {
+            'prediction': spf.get('prediction'),
+            'confidence': spf.get('confidence'),
+            'quality': spf.get('quality'),
+            'probabilities': spf.get('probabilities'),
+            'score_consistency': spf.get('score_consistency'),
+        },
+        'zjq': {
+            'prediction': zjq.get('prediction'),
+            'confidence': zjq.get('confidence'),
+            'quality': zjq.get('quality'),
+            'goal_groups': zjq.get('goal_groups'),
+            'probabilities': zjq.get('probabilities'),
+        },
+    }
+
+def save_beidan_prediction_snapshot(result):
+    if not isinstance(result, dict) or 'error' in result:
+        return {'saved': 0, 'total': 0}
+
+    records = _load_beidan_history()
+    by_key = {r.get('key'): r for r in records if r.get('key')}
+    saved = 0
+    for match in result.get('recommendations') or []:
+        key = _beidan_record_key(match)
+        if not key.strip('|'):
+            continue
+        compact = _compact_beidan_record(match, result.get('source'))
+        if key in by_key and by_key[key].get('settled'):
+            compact['settled'] = True
+            compact['actual'] = by_key[key].get('actual')
+            compact['settlement'] = by_key[key].get('settlement')
+            compact['created_at'] = by_key[key].get('created_at') or compact['created_at']
+        by_key[key] = {**by_key.get(key, {}), **compact}
+        saved += 1
+
+    _save_beidan_history(list(by_key.values()))
+    return {'saved': saved, 'total': len(by_key)}
+
+def summarize_beidan_history(limit=200):
+    records = _load_beidan_history()
+    recent = sorted(records, key=lambda r: r.get('created_at', ''), reverse=True)[:limit]
+    levels = {}
+    for record in recent:
+        for bet_type in ('spf', 'zjq'):
+            level = ((record.get(bet_type) or {}).get('quality') or {}).get('level') or 'unknown'
+            levels[level] = levels.get(level, 0) + 1
+
+    settled = [r for r in recent if r.get('settled')]
+    return {
+        'total_records': len(records),
+        'recent_records': len(recent),
+        'settled_records': len(settled),
+        'pending_records': len(recent) - len(settled),
+        'quality_levels': levels,
+        'latest': recent[:30],
     }
 
 def fetch_ouzhi_odds(match_id):
@@ -1370,6 +1549,11 @@ def analyze_spf(match, asian_data=None, cs_data=None):
             quality_context = {}
             if result.get('asian_trend'):
                 quality_context['asian_direction'] = result['asian_trend'].get('direction')
+            result['score_consistency'] = assess_score_consistency(
+                result['scores'],
+                result['prediction']
+            )
+            quality_context['score_consistency'] = result['score_consistency']
             result['quality'] = assess_recommendation_quality(
                 model_probs,
                 result['prediction'],
@@ -1553,6 +1737,7 @@ def analyze_zjq(match, zjq_odds=None, asian_data=None, goals_data=None):
         result['prediction'],
         {}
     )
+    result['goal_groups'] = build_zjq_group_recommendation(zjq_probs)
     
     over25_prob = sum(zjq_probs.get(str(i), 0) for i in [3, 4, 5, 6]) + zjq_probs.get('7+', 0)
     result['over25_prob'] = over25_prob
@@ -1603,7 +1788,7 @@ def analyze_bqc(match, bqc_odds):
     
     return result
 
-def generate_beidan_recommendations(date=None, bet_types=None, source='dc'):
+def generate_beidan_recommendations(date=None, bet_types=None, source='okooo', save_history=True):
     if bet_types is None:
         bet_types = ['spf', 'rqspf']
     
@@ -1675,15 +1860,20 @@ def generate_beidan_recommendations(date=None, bet_types=None, source='dc'):
         
         recommendations.append(rec)
     
-    return {
+    result = {
         'date': date,
         'total_matches': len(matches),
         'pending_matches': len(recommendations),
         'recommendations': recommendations,
         'source': source,
+        'history_summary': summarize_beidan_history(limit=200),
     }
+    if save_history:
+        result['history_save'] = save_beidan_prediction_snapshot(result)
+        result['history_summary'] = summarize_beidan_history(limit=200)
+    return result
 
-def find_value_bets(date=None, threshold=0.05, source='dc'):
+def find_value_bets(date=None, threshold=0.05, source='okooo'):
     result = generate_beidan_recommendations(date, bet_types=['spf', 'rqspf', 'zjq'], source=source)
     
     if 'error' in result:
