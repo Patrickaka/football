@@ -38,10 +38,20 @@ HEADERS = {
 OKOOO_HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
                   '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-    'Accept-Language': 'zh-CN,zh;q=0.9',
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+    'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+    'Accept-Encoding': 'gzip, deflate, br',
+    'Connection': 'keep-alive',
+    'Cache-Control': 'max-age=0',
+    'Sec-Ch-Ua': '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+    'Sec-Ch-Ua-Mobile': '?0',
+    'Sec-Ch-Ua-Platform': '"Windows"',
+    'Sec-Fetch-Dest': 'document',
+    'Sec-Fetch-Mode': 'navigate',
+    'Sec-Fetch-Site': 'none',
+    'Sec-Fetch-User': '?1',
+    'Upgrade-Insecure-Requests': '1',
     'Referer': OKOOO_DANCHANG_URL,
-    'X-Requested-With': 'XMLHttpRequest',
 }
 
 BET_TYPES = {
@@ -233,27 +243,41 @@ def fetch_json(url, referer=None):
         log.error(f"JSON decode error: {e}")
     return None
 
-def fetch_okooo(url, encoding='utf-8', referer=None):
+def fetch_okooo(url, encoding='utf-8', referer=None, max_retries=2):
     headers = {**OKOOO_HEADERS, 'Referer': referer} if referer else OKOOO_HEADERS
-    req = urllib.request.Request(url, headers=headers)
-    try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            raw = resp.read()
-    except urllib.error.HTTPError as e:
-        log.warning(f"HTTP Error {e.code} for {url}")
-        return None
-    except urllib.error.URLError as e:
-        log.warning(f"URL Error {e} for {url}")
-        return None
-
-    for enc in [encoding, 'gbk', 'gb2312', 'utf-8']:
+    
+    for attempt in range(max_retries):
+        req = urllib.request.Request(url, headers=headers)
         try:
-            result = raw.decode(enc)
-            result = result.encode('utf-8', errors='replace').decode('utf-8')
-            return result
-        except (UnicodeDecodeError, LookupError):
-            continue
-    return raw.decode('utf-8', errors='replace')
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                content_encoding = resp.headers.get('Content-Encoding', '')
+                raw = resp.read()
+                
+                if 'gzip' in content_encoding.lower():
+                    import gzip
+                    raw = gzip.decompress(raw)
+                
+                for enc in [encoding, 'gbk', 'gb2312', 'utf-8']:
+                    try:
+                        result = raw.decode(enc)
+                        result = result.encode('utf-8', errors='replace').decode('utf-8')
+                        return result
+                    except (UnicodeDecodeError, LookupError):
+                        continue
+                return raw.decode('utf-8', errors='replace')
+        except urllib.error.HTTPError as e:
+            log.warning(f"HTTP Error {e.code} for {url}")
+            if e.code >= 500 and attempt < max_retries - 1:
+                time.sleep(2)
+            else:
+                break
+        except urllib.error.URLError as e:
+            log.warning(f"URL Error {e} for {url} (attempt {attempt + 1}/{max_retries})")
+            if attempt < max_retries - 1:
+                time.sleep(2)
+    
+    log.error(f"Failed to fetch {url} after {max_retries} attempts")
+    return None
 
 def fetch_okooo_schedule(date=None):
     if date is None:
@@ -265,6 +289,7 @@ def fetch_okooo_schedule(date=None):
     try:
         html = fetch_okooo(url, referer=OKOOO_DANCHANG_URL)
         if not html:
+            log.warning(f"okooo页面返回为空")
             return []
         
         matches = []
@@ -273,7 +298,8 @@ def fetch_okooo_schedule(date=None):
         tables = table_pattern.findall(html)
         
         if len(tables) < 2:
-            log.warning("okooo页面未找到比赛表格")
+            log.warning(f"okooo页面未找到比赛表格，找到 {len(tables)} 个table标签")
+            log.debug(f"页面前500字符: {html[:500]}")
             return []
         
         main_table = tables[1]
