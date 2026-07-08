@@ -895,6 +895,8 @@ let allMatches = [];
 let listFilter = '';
 let groupMode = 'league';
 let activeTab = 'football';
+let predictionsPage = 1;
+const PREDICTIONS_PAGE_SIZE = 20;
 let lottery3dLoaded = false;
 
 const TAB_META = {
@@ -3983,6 +3985,34 @@ function getKL8ExcludeOptions() {
   ].filter(item => item.numbers && item.numbers.length > 0);
 }
 
+function renderPredictionsPager(total, page, totalPages, start, end) {
+  const prevDisabled = page <= 1;
+  const nextDisabled = page >= totalPages;
+  const pageButtons = [];
+  const from = Math.max(1, page - 2);
+  const to = Math.min(totalPages, page + 2);
+  for (let p = from; p <= to; p++) {
+    const active = p === page;
+    pageButtons.push(`<button type="button" onclick="setPredictionsPage(${p})" style="padding:6px 10px;border:1px solid ${active ? 'var(--accent2)' : 'var(--line)'};background:${active ? 'var(--accent2)' : 'var(--card2)'};color:${active ? '#fff' : 'var(--text)'};border-radius:6px;cursor:pointer">${p}</button>`);
+  }
+
+  return `<div class="card" style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin:10px 0;padding:10px 12px">
+    <div style="font-size:12px;color:var(--muted)">显示 ${esc(start)}-${esc(end)} / ${esc(total)} 条 · 第 ${esc(page)} / ${esc(totalPages)} 页</div>
+    <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+      <button type="button" onclick="setPredictionsPage(${page - 1})" ${prevDisabled ? 'disabled' : ''} style="padding:6px 10px;border:1px solid var(--line);background:var(--card2);color:var(--text);border-radius:6px;cursor:${prevDisabled ? 'not-allowed' : 'pointer'};opacity:${prevDisabled ? '.5' : '1'}">上一页</button>
+      ${pageButtons.join('')}
+      <button type="button" onclick="setPredictionsPage(${page + 1})" ${nextDisabled ? 'disabled' : ''} style="padding:6px 10px;border:1px solid var(--line);background:var(--card2);color:var(--text);border-radius:6px;cursor:${nextDisabled ? 'not-allowed' : 'pointer'};opacity:${nextDisabled ? '.5' : '1'}">下一页</button>
+    </div>
+  </div>`;
+}
+
+function setPredictionsPage(page) {
+  predictionsPage = Math.max(1, Number(page) || 1);
+  loadPredictions().then(() => {
+    document.getElementById('app-predictions')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
+}
+
 function renderKL8SettlementPerformance(perf) {
   if (!perf || !Array.isArray(perf.windows) || perf.available_count <= 0) return '';
 
@@ -4634,12 +4664,21 @@ async function loadPredictions() {
     // ── 预测记录列表 ──
     html += `<div class="section-title">📋 预测记录（共 ${records.length} 条）</div>`;
     
+    const totalPages = Math.max(1, Math.ceil(records.length / PREDICTIONS_PAGE_SIZE));
+    predictionsPage = Math.max(1, Math.min(predictionsPage, totalPages));
+    const pageStart = (predictionsPage - 1) * PREDICTIONS_PAGE_SIZE;
+    const pageRecords = records.slice(pageStart, pageStart + PREDICTIONS_PAGE_SIZE);
+    const pageEnd = pageStart + pageRecords.length;
+    if (records.length > PREDICTIONS_PAGE_SIZE) {
+      html += renderPredictionsPager(records.length, predictionsPage, totalPages, pageStart + 1, pageEnd);
+    }
+
     if (records.length === 0) {
       html += `<div class="card">
         <div class="status" style="padding:20px">暂无预测记录。点击足球预测标签页查看比赛并进行预测。</div>
       </div>`;
     } else {
-      records.forEach((record, idx) => {
+      pageRecords.forEach((record, idx) => {
         const statusMap = {
           'pending': { label: '等待自动同步', color: 'var(--muted)' },
           'ready': { label: '准备同步', color: 'var(--warn)' },
@@ -4693,6 +4732,9 @@ async function loadPredictions() {
         
         html += `</div>`;
       });
+      if (records.length > PREDICTIONS_PAGE_SIZE) {
+        html += renderPredictionsPager(records.length, predictionsPage, totalPages, pageStart + 1, pageEnd);
+      }
     }
     
     app.innerHTML = html;
