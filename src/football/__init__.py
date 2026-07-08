@@ -2251,27 +2251,9 @@ def _heuristic_draw_calibration(p_home, p_draw, p_away, asian_handicap,
     
     # 应用调整
     p_draw_new = p_draw * adjustment * draw_tendency / 0.25
-    
-    # 重新归一化
+
+    # 重新归一化并按让球分档夹取平局边界
     return _redistribute_draw_probability(p_home, p_draw_new, p_away, asian_handicap)
-    total = p_home + p_draw_new + p_away
-    if total > 0:
-        p_home_new = p_home / total
-        p_draw_new = p_draw_new / total
-        p_away_new = p_away / total
-    else:
-        p_home_new, p_draw_new, p_away_new = p_home, p_draw, p_away
-    
-    # 限制平局概率范围
-    p_draw_new = max(0.05, min(0.45, p_draw_new))
-    
-    # 再次归一化
-    total = p_home_new + p_draw_new + p_away_new
-    if total > 0:
-        p_home_new = p_home_new / total * (1 - p_draw_new)
-        p_away_new = p_away_new / total * (1 - p_draw_new)
-    
-    return p_home_new, p_draw_new, p_away_new
 
 
 # ===================== 贝叶斯框架 =====================
@@ -3170,22 +3152,27 @@ def _estimate_dc_rho(lam_home, lam_away, p_draw_target):
     return -0.11
 
 
-def build_score_matrix(lam_home, lam_away, max_goals=MAX_GOALS, rho=0.0, distribution='poisson'):
+def build_score_matrix(lam_home, lam_away, max_goals=MAX_GOALS, rho=0.0, distribution='poisson',
+                       league_profile=None):
     """
     比分矩阵构建；支持泊松分布和负二项分布。
     rho≠0 时施加 Dixon-Coles 低比分修正并归一化。
-    
+
     参数：
         lam_home, lam_away: 主客队期望进球数
         max_goals: 最大考虑进球数
         rho: Dixon-Coles 相关系数
         distribution: 'poisson' 或 'negative_binomial'
+        league_profile: 联赛画像（预留：接入按联赛数据校准的过离散系数）
     """
     cells = {}
-    
+
     if distribution == 'negative_binomial':
-        # 估计负二项分布参数
-        overdispersion = 1.22  # 原1.45，降低过离散系数减少0球堆积
+        # 过离散系数保持 1.22：离线回测(1000场,5大联赛)显示，在足球典型 λ 下
+        # 把它提高到按联赛表(1.25~1.42)只会增厚 0-0/低比分（0-0 概率 0.087→0.099），
+        # 4+ 高比分尾部几乎不变(0.290→0.291)，大小球命中反而略降。故不上调。
+        # league_profile 形参预留给未来「用真实赛果标定的过离散」，而非硬编码猜测值。
+        overdispersion = 1.22
         var_home = lam_home * overdispersion
         var_away = lam_away * overdispersion
         r_h, p_h = _nb_params_from_mean_var(lam_home, var_home)
@@ -4365,24 +4352,37 @@ def calculate_half_full_time_probs(candidates, team_strength=None, asian=None, t
     total_goals_exp = home_goals_exp + away_goals_exp
     
     # 计算半场比例（可根据联赛、盘口等调整）
+    # 优先使用该分桶的真实实测半场比例（≥20 样本），否则回退到硬编码基准 0.42。
     half_time_ratio = 0.42
-    
-    # 低进球盘口：上半场更谨慎
-    if close_line <= 2.0:
-        half_time_ratio -= 0.03
-    elif close_line <= 2.25:
-        half_time_ratio -= 0.015
-    
-    # 高进球盘口：上半场进球概率提高
-    elif close_line >= 3.0:
-        half_time_ratio += 0.025
-    elif close_line >= 2.75:
-        half_time_ratio += 0.015
-    
-    # 深盘强弱明显时，强队上半场领先概率提高
-    if abs(handicap) >= 1.0:
-        half_time_ratio += 0.015
-    
+    half_time_ratio_source = 'default'
+    try:
+        from .half_time_stats import HalfTimeStatsDB
+        _ht_stats = HalfTimeStatsDB().get_stats(league, close_line, handicap,
+                                                match_type='league', min_samples=20)
+        if _ht_stats and _ht_stats.get('half_time_ratio_avg'):
+            _real_ratio = float(_ht_stats['half_time_ratio_avg'])
+            if 0.30 <= _real_ratio <= 0.55:
+                half_time_ratio = _real_ratio
+                half_time_ratio_source = 'real_stats'
+    except Exception as e:
+        log.debug(f"读取真实半场比例失败，回退默认: {e}")
+
+    if half_time_ratio_source == 'default':
+        # 低进球盘口：上半场更谨慎
+        if close_line <= 2.0:
+            half_time_ratio -= 0.03
+        elif close_line <= 2.25:
+            half_time_ratio -= 0.015
+        # 高进球盘口：上半场进球概率提高
+        elif close_line >= 3.0:
+            half_time_ratio += 0.025
+        elif close_line >= 2.75:
+            half_time_ratio += 0.015
+
+        # 深盘强弱明显时，强队上半场领先概率提高
+        if abs(handicap) >= 1.0:
+            half_time_ratio += 0.015
+
     half_time_ratio *= elo_factor
     half_time_ratio = max(0.36, min(0.49, half_time_ratio))
     
@@ -4903,8 +4903,9 @@ def predict_scores(asian, euro, total, team_strength=None, league_profile=None,
         
         # 选择分布类型
         distribution = 'negative_binomial' if model_type == 'negative_binomial' else 'poisson'
-        matrix = build_score_matrix(lam_home, lam_away, rho=rho, distribution=distribution)
-        
+        matrix = build_score_matrix(lam_home, lam_away, rho=rho, distribution=distribution,
+                                    league_profile=league_profile)
+
         margins = _matrix_margins(matrix)
         err = sum(
             (margins[k] - t) ** 2
@@ -4931,7 +4932,8 @@ def predict_scores(asian, euro, total, team_strength=None, league_profile=None,
         lam_away = max(0.08, lam_away)
         
         distribution = 'negative_binomial' if model_type == 'negative_binomial' else 'poisson'
-        matrix = build_score_matrix(lam_home, lam_away, distribution=distribution)
+        matrix = build_score_matrix(lam_home, lam_away, distribution=distribution,
+                                    league_profile=league_profile)
         matrix = calibrate_to_euro(matrix, p_home, p_draw, p_away)
         target_total = line
         rho = 0.0

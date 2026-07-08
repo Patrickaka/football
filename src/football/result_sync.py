@@ -909,6 +909,7 @@ class PredictionHistory:
                         self._update_score_frequency_db(record)
                         self._update_elo_ratings(record)
                         self._update_half_time_stats(record)  # 新增：更新半场统计
+                        self._update_goal_count_stats(record)  # 新增：更新总进球校准闭环
 
                         # 最后写入盘口变化库
                         self._update_market_change_db(record)
@@ -1324,6 +1325,61 @@ class PredictionHistory:
                     log.debug(f"解析半场比分失败: {e}")
         except Exception as e:
             log.debug(f"更新半场统计数据库失败: {e}")
+
+    def _update_goal_count_stats(self, record: Dict):
+        """更新总进球数校准数据库（赛后回填闭环）。
+
+        此前 GoalCountCalibrator 的写入函数在生产代码从未被调用，导致校准表恒空、
+        校准恒等返回。这里由预测比分分布边缘化出「预测进球数分布」与「期望总进球」，
+        与真实总进球一起回填，逐步积累后校准器才能真正生效。
+        """
+        try:
+            from .goal_count_calibrator import record_goal_count_result
+
+            predicted_scores = record.get('predicted_scores') or {}
+            actual_score = record.get('actual_score', '')
+            total_line = record.get('total_line')
+            if not predicted_scores or not actual_score or total_line is None:
+                return
+
+            goal_dist = {}
+            expected_total = 0.0
+            prob_sum = 0.0
+            for score, prob in predicted_scores.items():
+                try:
+                    h, a = map(int, str(score).split('-'))
+                    p = float(prob)
+                except (ValueError, TypeError):
+                    continue
+                if p <= 0:
+                    continue
+                g = h + a
+                goal_dist[g] = goal_dist.get(g, 0.0) + p
+                expected_total += g * p
+                prob_sum += p
+            if prob_sum <= 0:
+                return
+            goal_dist = {g: p / prob_sum for g, p in goal_dist.items()}
+            expected_total /= prob_sum
+
+            try:
+                full_h, full_a = map(int, actual_score.split('-'))
+            except (ValueError, TypeError):
+                return
+            actual_total = full_h + full_a
+
+            record_goal_count_result(
+                league=record.get('league', ''),
+                total_line=total_line,
+                predicted_goal_dist=goal_dist,
+                actual_total_goals=actual_total,
+                expected_total_goals=expected_total,
+                asian=record.get('asian') or 0.0,
+                sample_weight=_calibration_sample_weight(record),
+            )
+            log.debug("已更新总进球校准数据库")
+        except Exception as e:
+            log.debug(f"更新总进球校准数据库失败: {e}")
 
     def _first_not_none(self, *values):
         for v in values:

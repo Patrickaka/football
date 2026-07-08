@@ -21,6 +21,8 @@ _UPSERT = (
 )
 
 _FALLBACK_FILE = None
+_FALLBACK_CACHE = None
+_FALLBACK_CACHE_SIG = None
 
 
 def _fallback_path():
@@ -31,26 +33,41 @@ def _fallback_path():
 
 
 def _fallback_load_all():
-    """加载整个 fallback 文件"""
+    """加载整个 fallback 文件。
+
+    带进程内缓存（按文件 mtime+size 失效）：MySQL 不可用时，load() 会被
+    大量调用（每次预测多次），若每次都重新解析整份 JSON（可达数百 KB）会
+    造成严重 I/O 开销。缓存后同一份文件只解析一次，写入时失效。
+    """
+    global _FALLBACK_CACHE, _FALLBACK_CACHE_SIG
     path = _fallback_path()
     if not os.path.exists(path):
         return {}
     try:
+        st = os.stat(path)
+        sig = (st.st_mtime_ns, st.st_size)
+        if _FALLBACK_CACHE is not None and _FALLBACK_CACHE_SIG == sig:
+            return _FALLBACK_CACHE
         with open(path, 'r', encoding='utf-8') as f:
-            return json.load(f)
+            data = json.load(f)
+        _FALLBACK_CACHE = data
+        _FALLBACK_CACHE_SIG = sig
+        return data
     except Exception:
         return {}
 
 
 def _fallback_save(key, value, cache_date=None):
     """写入单条到 fallback 文件"""
-    data = _fallback_load_all()
+    global _FALLBACK_CACHE_SIG
+    data = dict(_fallback_load_all())
     data[key] = {'json_value': json.dumps(value, ensure_ascii=False), 'cache_date': cache_date}
     path = _fallback_path()
     tmp = path + '.tmp'
     with open(tmp, 'w', encoding='utf-8') as f:
         json.dump(data, f, ensure_ascii=False)
     os.replace(tmp, path)
+    _FALLBACK_CACHE_SIG = None  # 失效缓存，下次 load 重新读取
 
 
 def _fallback_load(key, default=None, check_today=False):

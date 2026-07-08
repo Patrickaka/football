@@ -365,7 +365,8 @@ class MarketScoreDB:
             data = kv_store.load('market_score_db') or {}
             self.db = data.get('probabilities', {})
             self.sample_counts = data.get('sample_counts', {})
-            print(f"已加载数据库，{len(self.db)} 个盘口组合")
+            if self.db:
+                print(f"已加载数据库，{len(self.db)} 个盘口组合")
         except Exception as e:
             print(f"加载数据库失败: {e}")
             self.db = {}
@@ -735,7 +736,8 @@ class MarketChangeDB:
         """从 MySQL 加载数据库"""
         try:
             self.db = kv_store.load('market_change_db') or {}
-            print(f"已加载盘口变化数据库，{len(self.db)} 个变化组合")
+            if self.db:
+                print(f"已加载盘口变化数据库，{len(self.db)} 个变化组合")
         except Exception as e:
             print(f"加载盘口变化数据库失败: {e}")
             self.db = {}
