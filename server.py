@@ -804,7 +804,7 @@ class Handler(BaseHTTPRequestHandler):
             result = generate_beidan_recommendations(date=date, bet_types=bet_types, source=source)
             
             if 'error' in result:
-                return {'error': result['error']}
+                return result
             
             return {'result': result}
         except Exception as e:

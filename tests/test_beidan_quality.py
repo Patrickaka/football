@@ -10,6 +10,7 @@ from src.beidan import (
     assess_score_consistency,
     build_zjq_group_recommendation,
     enhance_scores_with_cs,
+    generate_beidan_recommendations,
     parse_beidan_handicap,
     rqspf_probs_from_score_probs,
     save_beidan_prediction_snapshot,
@@ -221,6 +222,60 @@ class BeidanQualityTests(unittest.TestCase):
         self.assertEqual(summary['saved'], 1)
         self.assertEqual(saved_payloads[0][0]['key'], '2026-07-08|001|A|B')
         self.assertEqual(saved_payloads[0][0]['zjq']['goal_groups']['primary']['key'], 'big')
+
+    def test_generate_recommendations_falls_back_to_okooo_source(self):
+        fallback_match = {
+            'id': 'm1',
+            'num': '001',
+            'date': '2026-07-08',
+            'time': '20:00',
+            'league': 'L',
+            'home': 'A',
+            'away': 'B',
+            'handicap': '(-1)',
+        }
+
+        with patch('src.beidan.fetch_beidan_schedule', return_value=[]), \
+                patch('src.beidan.fetch_okooo_schedule', return_value=[fallback_match]):
+            result = generate_beidan_recommendations(
+                date='2026-07-08',
+                bet_types=[],
+                source='dc',
+                save_history=False
+            )
+
+        self.assertNotIn('error', result)
+        self.assertEqual(result['source'], 'okooo')
+        self.assertTrue(result['match_fetch']['source_fallback'])
+        self.assertEqual(result['total_matches'], 1)
+
+    def test_generate_recommendations_tries_next_dates_for_default_date(self):
+        fallback_match = {
+            'id': 'm1',
+            'num': '001',
+            'date': '2026-07-09',
+            'time': '20:00',
+            'league': 'L',
+            'home': 'A',
+            'away': 'B',
+            'handicap': '(-1)',
+        }
+
+        def fake_schedule(date):
+            return [fallback_match] if date == '2026-07-09' else []
+
+        with patch('src.beidan.time.strftime', return_value='2026-07-08'), \
+                patch('src.beidan.fetch_okooo_schedule', side_effect=fake_schedule):
+            result = generate_beidan_recommendations(
+                date=None,
+                bet_types=[],
+                source='okooo',
+                save_history=False
+            )
+
+        self.assertNotIn('error', result)
+        self.assertEqual(result['date'], '2026-07-09')
+        self.assertTrue(result['match_fetch']['date_fallback'])
 
 
 if __name__ == '__main__':

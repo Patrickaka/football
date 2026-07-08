@@ -1165,7 +1165,10 @@ async function loadBeidan() {
     const q = new URLSearchParams({ source: beidanSource, date: beidanDate || '' });
     const data = await fetchJson('/api/beidan?' + q);
     if (data.error) {
-      appBeidan.innerHTML = `<div class="status error">✗ ${esc(data.error)}</div>`;
+      const attempts = (data.attempts || []).map(a =>
+        `${esc(a.source)} ${esc(a.date)}：${Number(a.match_count || 0)}场`
+      ).join('；');
+      appBeidan.innerHTML = `<div class="status error">✗ ${esc(data.error)}${attempts ? `<div style="margin-top:6px;font-size:12px;color:var(--muted)">已尝试：${attempts}</div>` : ''}</div>`;
       return;
     }
     renderBeidan(data.result);
@@ -1237,6 +1240,12 @@ function renderBeidan(result) {
       <button onclick="setBeidanQualityFilter('hide_low')" class="${beidanQualityFilter === 'hide_low' ? 'on' : ''}">隐藏低置信</button>
     </div>
   </div>`;
+
+  if (result.match_fetch && (result.match_fetch.source_fallback || result.match_fetch.date_fallback)) {
+    html += `<div class="status" style="padding:8px 0 12px;font-size:13px;color:var(--warn)">
+      当前条件无未开赛场次，已自动切换到 ${esc(result.match_fetch.source)} / ${esc(result.match_fetch.date)}
+    </div>`;
+  }
   
   if (!result.recommendations || !result.recommendations.length) {
     html += '<div class="status">暂无比赛数据</div>';

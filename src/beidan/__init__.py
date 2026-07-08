@@ -2043,19 +2043,79 @@ def analyze_bqc(match, bqc_odds):
     
     return result
 
+def _candidate_beidan_dates(date, allow_fallback=True, days=2):
+    dates = [date]
+    if not allow_fallback:
+        return dates
+    try:
+        base = datetime.strptime(date, '%Y-%m-%d')
+    except (TypeError, ValueError):
+        return dates
+    for offset in range(1, days + 1):
+        candidate = base + timedelta(days=offset)
+        dates.append(f'{candidate.year:04d}-{candidate.month:02d}-{candidate.day:02d}')
+    return dates
+
+def _fetch_beidan_matches_with_fallback(date, source, allow_date_fallback=True):
+    sources = [source]
+    if source != 'okooo':
+        sources.append('okooo')
+
+    attempts = []
+    for candidate_source in sources:
+        for candidate_date in _candidate_beidan_dates(date, allow_date_fallback):
+            if candidate_source == 'okooo':
+                matches = fetch_okooo_schedule(candidate_date)
+            else:
+                matches = fetch_beidan_schedule(candidate_date, source=candidate_source)
+
+            attempts.append({
+                'source': candidate_source,
+                'date': candidate_date,
+                'match_count': len(matches),
+            })
+            if matches:
+                return matches, {
+                    'requested_source': source,
+                    'requested_date': date,
+                    'source': candidate_source,
+                    'date': candidate_date,
+                    'source_fallback': candidate_source != source,
+                    'date_fallback': candidate_date != date,
+                    'attempts': attempts,
+                }
+
+    return [], {
+        'requested_source': source,
+        'requested_date': date,
+        'source': source,
+        'date': date,
+        'source_fallback': False,
+        'date_fallback': False,
+        'attempts': attempts,
+    }
+
 def generate_beidan_recommendations(date=None, bet_types=None, source='okooo', save_history=True):
     if bet_types is None:
         bet_types = ['spf', 'rqspf']
     
+    allow_date_fallback = not date
     date = date or time.strftime('%Y-%m-%d')
-    
-    if source == 'okooo':
-        matches = fetch_okooo_schedule(date)
-    else:
-        matches = fetch_beidan_schedule(date, source=source)
+    matches, match_meta = _fetch_beidan_matches_with_fallback(
+        date,
+        source,
+        allow_date_fallback=allow_date_fallback
+    )
     
     if not matches:
-        return {'error': '未获取到比赛数据', 'date': date}
+        return {
+            'error': '未获取到比赛数据',
+            'date': date,
+            'source': source,
+            'attempts': match_meta.get('attempts', []),
+        }
+    date = match_meta.get('date', date)
+    source = match_meta.get('source', source)
     
     bifen_odds = {}
     zjq_odds = {}
@@ -2085,18 +2145,21 @@ def generate_beidan_recommendations(date=None, bet_types=None, source='okooo', s
         goals_data = None
         cs_data = None
         
-        if source == 'okooo':
-            asian_data = fetch_okooo_asian_history(match['id'])
-            if asian_data and asian_data.get('history'):
-                rec['asian'] = asian_data
-            
-            goals_data = fetch_okooo_goals_history(match['id'])
-            if goals_data and goals_data.get('history'):
-                rec['goals'] = goals_data
-            
-            cs_data = fetch_okooo_cs_history(match['id'])
-            if cs_data and cs_data.get('history'):
-                rec['cs'] = cs_data
+        if source == 'okooo' and bet_types:
+            if 'spf' in bet_types or 'zjq' in bet_types:
+                asian_data = fetch_okooo_asian_history(match['id'])
+                if asian_data and asian_data.get('history'):
+                    rec['asian'] = asian_data
+
+            if 'zjq' in bet_types:
+                goals_data = fetch_okooo_goals_history(match['id'])
+                if goals_data and goals_data.get('history'):
+                    rec['goals'] = goals_data
+
+            if 'spf' in bet_types:
+                cs_data = fetch_okooo_cs_history(match['id'])
+                if cs_data and cs_data.get('history'):
+                    rec['cs'] = cs_data
         
         if 'spf' in bet_types:
             rec['spf'] = analyze_spf(match, asian_data, cs_data)
@@ -2121,6 +2184,7 @@ def generate_beidan_recommendations(date=None, bet_types=None, source='okooo', s
         'pending_matches': len(recommendations),
         'recommendations': recommendations,
         'source': source,
+        'match_fetch': match_meta,
         'history_summary': summarize_beidan_history(limit=200),
     }
     if save_history:
