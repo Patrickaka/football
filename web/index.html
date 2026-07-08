@@ -4094,10 +4094,11 @@ function renderKL8VariantRows(variants) {
   const labels = {
     balanced: '均衡',
     concentrated: '集中',
-    low_repeat: '少重号',
+    repeat_follow: '跟重号',
+    zone_spread: '区间分散',
   };
   let html = `<div style="margin-top:8px;display:grid;gap:5px">`;
-  for (const key of ['balanced', 'concentrated', 'low_repeat']) {
+  for (const key of ['balanced', 'concentrated', 'repeat_follow', 'zone_spread']) {
     const nums = variants[key] || [];
     if (!nums.length) continue;
     html += `<div style="font-size:11px;color:var(--muted);display:flex;align-items:center;gap:6px;flex-wrap:wrap">`;

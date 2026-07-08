@@ -258,6 +258,25 @@ class KL8PredictionGuardTests(unittest.TestCase):
             self.assertEqual(len(result[key]['numbers']), pick)
             self.assertEqual(result[key]['numbers'], sorted(result[key]['numbers']))
 
+        for key in ['select_5', 'select_6']:
+            self.assertEqual(
+                result['resolved_strategies'][key]['final_selection_mode'],
+                'best_variant',
+            )
+            self.assertIn('repeat_follow', result[key]['variants'])
+            self.assertIn('zone_spread', result[key]['variants'])
+
+        self.assertEqual(result['resolved_strategies']['select_5']['pool_max_last_numbers'], 3)
+        self.assertEqual(result['resolved_strategies']['select_6']['pool_max_last_numbers'], 4)
+
+        self.assertEqual(
+            result['resolved_strategies']['fu_shi_7']['final_selection_mode'],
+            'best_variant',
+        )
+        self.assertIn('repeat_follow', result['fu_shi_7']['variants'])
+        self.assertIn('zone_spread', result['fu_shi_7']['variants'])
+        self.assertEqual(result['resolved_strategies']['fu_shi_7']['pool_max_last_numbers'], 4)
+
         self.assertIn('fu_shi_10_11', result)
         self.assertEqual(len(result['fu_shi_10_11']['top11_numbers']), 11)
         self.assertEqual(

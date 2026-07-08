@@ -658,6 +658,8 @@ def resolve_play_strategy(play_type: str, allow_reference: bool = False) -> Opti
             'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
             'window_size': 100,
             'repeat_direction': 'neutral',
+            'pool_max_last_numbers': 3,
+            'final_selection_mode': 'best_variant',
             'prediction_mode': 'reference_unvalidated',
             'is_validated': False,
         },
@@ -667,6 +669,8 @@ def resolve_play_strategy(play_type: str, allow_reference: bool = False) -> Opti
             'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
             'window_size': 100,
             'repeat_direction': 'neutral',
+            'pool_max_last_numbers': 4,
+            'final_selection_mode': 'best_variant',
             'prediction_mode': 'reference_unvalidated',
             'is_validated': False,
         },
@@ -716,6 +720,8 @@ def resolve_play_strategy(play_type: str, allow_reference: bool = False) -> Opti
             'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
             'window_size': 100,
             'repeat_direction': 'neutral',
+            'pool_max_last_numbers': 4,
+            'final_selection_mode': 'best_variant',
             'prediction_mode': 'reference_unvalidated',
             'is_validated': False,
         },
@@ -1572,6 +1578,8 @@ def _select_final_candidate_pool(
 
     scored = []
     for mode, pool in modes.items():
+        if selection_mode == 'best_variant' and mode == 'low_repeat':
+            continue
         scored.append((
             _score_candidate_selection(pool, candidates, target_size, last_numbers, repeat_cap),
             mode,
@@ -3399,11 +3407,22 @@ class KL8Analyzer:
                 max_last_numbers=max(0, repeat_cap - 1),
             )
         )
+        repeat_follow = sorted(
+            num for num, _ in _diversify_candidate_pool(
+                candidates,
+                target_size,
+                last_numbers,
+                max_last_numbers=min(target_size, repeat_cap + 1),
+            )
+        )
+        zone_spread = sorted(num for num, _ in _zone_spread_candidate_pool(candidates, target_size))
 
         return {
             'balanced': balanced,
             'concentrated': concentrated,
             'low_repeat': low_repeat,
+            'repeat_follow': repeat_follow,
+            'zone_spread': zone_spread,
         }
 
     # ─── 综合预测（v9.1: 各玩法独立候选池 + 本期变化对比）───
