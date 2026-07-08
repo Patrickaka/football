@@ -711,6 +711,8 @@ def resolve_play_strategy(play_type: str, allow_reference: bool = False) -> Opti
             'repeat_direction': 'follow',
             'repeat_follow_score': 0.90,
             'repeat_non_follow_score': 0.50,
+            'pool_max_last_numbers': 5,
+            'final_selection_mode': 'best_variant',
             'prediction_mode': 'reference_unvalidated',
             'is_validated': False,
         },
@@ -3204,12 +3206,6 @@ class KL8Analyzer:
             last_numbers,
             max_last_numbers=repeat_cap,
         ))
-        add('low_repeat', _diversify_candidate_pool(
-            candidates,
-            target_size,
-            last_numbers,
-            max_last_numbers=max(0, repeat_cap - 1),
-        ))
         add('repeat_follow', _diversify_candidate_pool(
             candidates,
             target_size,
@@ -3299,9 +3295,10 @@ class KL8Analyzer:
                     'required_count': pick_n,
                 }
             adaptive_cap = _adaptive_repeat_cap(self.history_data, pick_n)
-            repeat_cap = min(
-                strategy.get('pool_max_last_numbers') if strategy.get('pool_max_last_numbers') is not None else adaptive_cap,
-                adaptive_cap,
+            repeat_cap = (
+                max(0, min(pick_n, int(strategy.get('pool_max_last_numbers'))))
+                if strategy.get('pool_max_last_numbers') is not None
+                else adaptive_cap
             )
             final_pool, quality = self._best_exclude_recalculation_pool(
                 candidates,
@@ -3348,9 +3345,10 @@ class KL8Analyzer:
                     'required_count': pool_size,
                 }
             adaptive_cap = _adaptive_repeat_cap(self.history_data, pool_size)
-            repeat_cap = min(
-                strategy.get('pool_max_last_numbers') if strategy.get('pool_max_last_numbers') is not None else adaptive_cap,
-                adaptive_cap,
+            repeat_cap = (
+                max(0, min(pool_size, int(strategy.get('pool_max_last_numbers'))))
+                if strategy.get('pool_max_last_numbers') is not None
+                else adaptive_cap
             )
             final_pool, quality = self._best_exclude_recalculation_pool(
                 candidates,

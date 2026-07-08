@@ -169,6 +169,7 @@ class KL8PredictionGuardTests(unittest.TestCase):
         self.assertEqual(result['numbers'], sorted(result['numbers']))
         self.assertFalse(set(result['numbers']) & set(range(1, 11)))
         self.assertEqual(result['excluded_numbers'], list(range(1, 11)))
+        self.assertNotEqual(result['quality']['selection_mode'], 'low_repeat')
 
     def test_multi_model_voting_uses_broader_diversified_pool(self):
         analyzer = KL8Analyzer.__new__(KL8Analyzer)
@@ -268,6 +269,13 @@ class KL8PredictionGuardTests(unittest.TestCase):
 
         self.assertEqual(result['resolved_strategies']['select_5']['pool_max_last_numbers'], 3)
         self.assertEqual(result['resolved_strategies']['select_6']['pool_max_last_numbers'], 4)
+        self.assertEqual(
+            result['resolved_strategies']['select_10']['final_selection_mode'],
+            'best_variant',
+        )
+        self.assertEqual(result['resolved_strategies']['select_10']['pool_max_last_numbers'], 5)
+        self.assertIn('repeat_follow', result['select_10']['variants'])
+        self.assertIn('zone_spread', result['select_10']['variants'])
 
         self.assertEqual(
             result['resolved_strategies']['fu_shi_7']['final_selection_mode'],
