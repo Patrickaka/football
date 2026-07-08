@@ -1082,6 +1082,7 @@ const searchWrap = document.getElementById('search-wrap');
 const pageTitle = document.getElementById('page-title');
 const pageDesc = document.getElementById('page-desc');
 let allMatches = [];
+let allPredictions = [];
 let listFilter = '';
 let groupMode = 'league';
 let activeTab = 'football';
@@ -1345,6 +1346,12 @@ async function loadMatches() {
 }
 
 let footballQualityFilter = 'all';
+let footballSort = 'time';
+
+function setFootballSort(sort) {
+  footballSort = sort;
+  loadAllPredictions();
+}
 
 async function loadAllPredictions() {
   loading('正在分析比赛数据…');
@@ -1391,12 +1398,24 @@ function footballMatchPassesFilter(item) {
 }
 
 function renderFootballPredictions(results) {
-  searchWrap.style.display = 'none';
-  
+  allPredictions = results;
   let html = '';
+
+  searchWrap.innerHTML = '';
+  searchWrap.style.display = '';
   
   html += `<div class="beidan-toolbar">
     <div class="toolbar-row">
+      <div class="toolbar-group" style="flex:1;min-width:200px">
+        <span class="toolbar-label">搜索</span>
+        <div style="flex:1">
+          <input type="search" id="search" class="search" placeholder="🔍 搜索球队或联赛…" 
+            value="${esc(listFilter || '')}" 
+            style="width:100%;padding:8px 12px;border-radius:8px;border:1px solid rgba(44,58,78,0.5);background:rgba(0,0,0,0.2);color:var(--text);font-size:13px"
+          />
+        </div>
+      </div>
+      <div class="toolbar-divider"></div>
       <div class="toolbar-group">
         <span class="toolbar-label">筛选</span>
         <div class="toolbar-buttons">
@@ -1409,133 +1428,175 @@ function renderFootballPredictions(results) {
       <button onclick="switchTab('predictions')" class="tb-refresh">📋 预测记录</button>
       <button onclick="loadMatches()" class="tb-refresh">🔄 刷新</button>
     </div>
+    <div class="toolbar-row">
+      <div class="toolbar-group">
+        <span class="toolbar-label">排序</span>
+        <div class="toolbar-buttons">
+          <button onclick="setFootballSort('time')" class="tb-btn ${footballSort === 'time' ? 'tb-active' : ''}">按时间</button>
+          <button onclick="setFootballSort('league')" class="tb-btn ${footballSort === 'league' ? 'tb-active' : ''}">按联赛</button>
+        </div>
+      </div>
+    </div>
   </div>`;
   
   if (!results.length) {
     html += '<div class="status">暂无预测数据</div>';
     app.innerHTML = html;
+    attachFootballSearchListeners();
     return;
   }
   
-  const visibleResults = results.filter(footballMatchPassesFilter);
+  const kw = (listFilter || '').trim().toLowerCase();
+  const keywordMatch = item => {
+    if (!kw) return true;
+    const m = item.match || {};
+    return (`${m.home || ''}${m.away || ''}${m.league || ''}${m.num || ''}`).toLowerCase().includes(kw);
+  };
+  const visibleResults = results.filter(footballMatchPassesFilter).filter(keywordMatch);
   html += `<div class="status" style="padding:4px 0 12px;font-size:13px">共 ${results.length} 场比赛，当前显示 ${visibleResults.length} 场</div>`;
-  
+
   if (!visibleResults.length) {
-    html += '<div class="status">当前筛选下暂无推荐</div>';
+    html += `<div class="status">${kw ? '没有匹配的比赛' : '当前筛选下暂无推荐'}</div>`;
     app.innerHTML = html;
+    attachFootballSearchListeners();
     return;
   }
-  
-  const groups = {};
-  visibleResults.forEach(item => {
-    const league = item.match.league || '其它';
-    (groups[league] ||= []).push(item);
-  });
-  
-  for (const [league, items] of Object.entries(groups)) {
-    html += `<div class="league-group"><div class="league-title">${esc(league)}</div>`;
-    items.forEach(item => {
-      const m = item.match;
-      const r = item.result;
-      const top = r.model && r.model.top_scores ? r.model.top_scores : [];
-      const cf = r.confidence;
-      
-      html += `<div class="match" style="padding:12px">
-        <div style="display:flex;justify-content:space-between;align-items:flex-start">
-          <div style="flex:1">
-            <div style="font-weight:bold;font-size:15px;margin-bottom:4px">
-              ${esc(m.home)} <span style="color:var(--muted)">vs</span> ${esc(m.away)}
-            </div>
-            <div style="font-size:13px;color:var(--muted)">
-              ${esc(m.num || '')} · ${esc(m.time || '')}
-            </div>
-            ${cf && cf.label ? `<div style="font-size:12px;color:${cf.level === 'low' ? 'var(--muted)' : cf.level === 'high' ? 'var(--accent2)' : 'var(--warn)'};margin-top:2px">
-              🎯 ${esc(cf.label)} (${(cf.score * 100).toFixed(0)}%)
-            </div>` : ''}
+
+  function renderMatchItem(item) {
+    const m = item.match;
+    const r = item.result;
+    const top = r.model && r.model.top_scores ? r.model.top_scores : [];
+    const cf = r.confidence;
+    
+    let itemHtml = `<div class="match" style="padding:12px">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start">
+        <div style="flex:1">
+          <div style="font-weight:bold;font-size:15px;margin-bottom:4px">
+            ${esc(m.home)} <span style="color:var(--muted)">vs</span> ${esc(m.away)}
           </div>
-        </div>`;
-        
-        if (top.length) {
-          html += '<div style="margin-top:8px;padding:8px;background:var(--bg2);border-radius:8px">';
-          html += '<div style="font-size:12px;color:var(--muted);margin-bottom:6px">⚽ 比分预测（Top3）</div>';
-          html += '<div style="display:flex;gap:8px">';
-          top.slice(0, 3).forEach((s, idx) => {
-            const isTop1 = idx === 0;
-            const score = s.score || (s.home != null && s.away != null ? `${s.home}-${s.away}` : '-');
-            const prob = s.prob || s.probability || 0;
-            html += `<div style="flex:1;text-align:center;padding:6px;border-radius:6px${isTop1 ? ';background:#3b82f620;color:#3b82f6;font-weight:bold' : ';background:var(--bg)'}">
-              <div style="font-size:14px">${esc(score)}</div>
-              <div style="font-size:11px;color:var(--muted)">${(prob * 100).toFixed(1)}%</div>
-            </div>`;
-          });
-          html += '</div>';
-          html += '</div>';
-        }
-        
-        const spfPrediction = getSPFPrediction(top);
-        if (spfPrediction) {
-          html += '<div style="margin-top:8px;padding:8px;background:var(--bg2);border-radius:8px">';
-          html += '<div style="font-size:12px;color:var(--muted);margin-bottom:6px">🎯 胜平负</div>';
-          html += '<div style="display:flex;gap:12px">';
-          ['胜', '平', '负'].forEach(key => {
-            const prob = spfPrediction.probs[key] || 0;
-            const isPred = spfPrediction.pred === key;
-            const colors = { '胜': '#ef4444', '平': '#f59e0b', '负': '#22c55e' };
-            html += `<div style="flex:1;text-align:center;padding:6px;border-radius:6px${isPred ? `;background:${colors[key]}20;color:${colors[key]};font-weight:bold` : ''}">
-              <div>${key}</div>
-              <div style="font-size:11px;color:var(--muted)">${(prob * 100).toFixed(0)}%</div>
-            </div>`;
-          });
-          html += '</div>';
-          html += '</div>';
-        }
-        
-        const htfProbs = r.model && r.model.half_full_time && r.model.half_full_time.probs ? r.model.half_full_time.probs : [];
-        if (htfProbs.length) {
-          const htfTop3 = htfProbs.sort((a, b) => b.raw_prob - a.raw_prob).slice(0, 3);
-          const htfMap = {
-            'HH': '胜胜', 'DH': '平胜', 'AH': '负胜',
-            'HD': '胜平', 'DD': '平平', 'AD': '负平',
-            'HA': '胜负', 'DA': '平负', 'AA': '负负',
-            '半胜全胜': '胜胜', '半平全胜': '平胜', '半负全胜': '负胜',
-            '半胜全平': '胜平', '半平全平': '平平', '半负全平': '负平',
-            '半胜全负': '胜负', '半平全负': '平负', '半负全负': '负负'
-          };
-          html += '<div style="margin-top:8px;padding:8px;background:var(--bg2);border-radius:8px">';
-          html += '<div style="font-size:12px;color:var(--muted);margin-bottom:6px">🔄 半全场（Top3）</div>';
-          html += '<div style="display:flex;gap:8px">';
-          htfTop3.forEach((item, idx) => {
-            const isTop1 = idx === 0;
-            const label = htfMap[item.code] || htfMap[item.name] || item.name || item.code;
-            html += `<div style="flex:1;text-align:center;padding:6px;border-radius:6px${isTop1 ? ';background:#8b5cf620;color:#8b5cf6;font-weight:bold' : ';background:var(--bg)'}">
-              <div style="font-size:13px">${esc(label)}</div>
-              <div style="font-size:11px;color:var(--muted)">${(item.raw_prob * 100).toFixed(1)}%</div>
-            </div>`;
-          });
-          html += '</div>';
-          html += '</div>';
-        }
-        
-        const goalDist = r.model && r.model.goal_count && r.model.goal_count.distribution ? r.model.goal_count.distribution : [];
-        if (goalDist.length) {
-          const goalsTop3 = goalDist.sort((a, b) => b.probability - a.probability).slice(0, 3);
-          html += '<div style="margin-top:8px;padding:8px;background:var(--bg2);border-radius:8px">';
-          html += '<div style="font-size:12px;color:var(--muted);margin-bottom:6px">⚽ 进球数（Top3）</div>';
-          html += '<div style="display:flex;gap:8px">';
-          goalsTop3.forEach((item, idx) => {
-            const isTop1 = idx === 0;
-            html += `<div style="flex:1;text-align:center;padding:6px;border-radius:6px${isTop1 ? ';background:#06b6d420;color:#06b6d4;font-weight:bold' : ';background:var(--bg)'}">
-              <div style="font-size:13px">${esc(item.label || item.goals + '球')}</div>
-              <div style="font-size:11px;color:var(--muted)">${(item.probability * 100).toFixed(1)}%</div>
-            </div>`;
-          });
-          html += '</div>';
-          html += '</div>';
-        }
-        
-        html += '</div>';
+          <div style="font-size:13px;color:var(--muted)">
+            ${esc(m.num || '')} · ${esc(m.time || '')}
+          </div>
+          ${cf && cf.label ? `<div style="font-size:12px;color:${cf.level === 'low' ? 'var(--muted)' : cf.level === 'high' ? 'var(--accent2)' : 'var(--warn)'};margin-top:2px">
+            🎯 ${esc(cf.label)} (${(cf.score * 100).toFixed(0)}%)
+          </div>` : ''}
+        </div>
+      </div>`;
+      
+      if (top.length) {
+        itemHtml += '<div style="margin-top:8px;padding:8px;background:var(--bg2);border-radius:8px">';
+        itemHtml += '<div style="font-size:12px;color:var(--muted);margin-bottom:6px">⚽ 比分预测（Top3）</div>';
+        itemHtml += '<div style="display:flex;gap:8px">';
+        top.slice(0, 3).forEach((s, idx) => {
+          const isTop1 = idx === 0;
+          const score = s.score || (s.home != null && s.away != null ? `${s.home}-${s.away}` : '-');
+          const prob = s.prob || s.probability || 0;
+          itemHtml += `<div style="flex:1;text-align:center;padding:6px;border-radius:6px${isTop1 ? ';background:#3b82f620;color:#3b82f6;font-weight:bold' : ';background:var(--bg)'}">
+            <div style="font-size:14px">${esc(score)}</div>
+            <div style="font-size:11px;color:var(--muted)">${(prob * 100).toFixed(1)}%</div>
+          </div>`;
+        });
+        itemHtml += '</div>';
+        itemHtml += '</div>';
+      }
+      
+      const spfPrediction = getSPFPrediction(top);
+      if (spfPrediction) {
+        itemHtml += '<div style="margin-top:8px;padding:8px;background:var(--bg2);border-radius:8px">';
+        itemHtml += '<div style="font-size:12px;color:var(--muted);margin-bottom:6px">🎯 胜平负</div>';
+        itemHtml += '<div style="display:flex;gap:12px">';
+        ['胜', '平', '负'].forEach(key => {
+          const prob = spfPrediction.probs[key] || 0;
+          const isPred = spfPrediction.pred === key;
+          const colors = { '胜': '#ef4444', '平': '#f59e0b', '负': '#22c55e' };
+          itemHtml += `<div style="flex:1;text-align:center;padding:6px;border-radius:6px${isPred ? `;background:${colors[key]}20;color:${colors[key]};font-weight:bold` : ''}">
+            <div>${key}</div>
+            <div style="font-size:11px;color:var(--muted)">${(prob * 100).toFixed(0)}%</div>
+          </div>`;
+        });
+        itemHtml += '</div>';
+        itemHtml += '</div>';
+      }
+      
+      const htfProbs = r.model && r.model.half_full_time && r.model.half_full_time.probs ? r.model.half_full_time.probs : [];
+      if (htfProbs.length) {
+        const htfTop3 = [...htfProbs].sort((a, b) => b.raw_prob - a.raw_prob).slice(0, 3);
+        const htfMap = {
+          'HH': '胜胜', 'DH': '平胜', 'AH': '负胜',
+          'HD': '胜平', 'DD': '平平', 'AD': '负平',
+          'HA': '胜负', 'DA': '平负', 'AA': '负负',
+          '半胜全胜': '胜胜', '半平全胜': '平胜', '半负全胜': '负胜',
+          '半胜全平': '胜平', '半平全平': '平平', '半负全平': '负平',
+          '半胜全负': '胜负', '半平全负': '平负', '半负全负': '负负'
+        };
+        itemHtml += '<div style="margin-top:8px;padding:8px;background:var(--bg2);border-radius:8px">';
+        itemHtml += '<div style="font-size:12px;color:var(--muted);margin-bottom:6px">🔄 半全场（Top3）</div>';
+        itemHtml += '<div style="display:flex;gap:8px">';
+        htfTop3.forEach((htfItem, idx) => {
+          const isTop1 = idx === 0;
+          const label = htfMap[htfItem.code] || htfMap[htfItem.name] || htfItem.name || htfItem.code;
+          itemHtml += `<div style="flex:1;text-align:center;padding:6px;border-radius:6px${isTop1 ? ';background:#8b5cf620;color:#8b5cf6;font-weight:bold' : ';background:var(--bg)'}">
+            <div style="font-size:13px">${esc(label)}</div>
+            <div style="font-size:11px;color:var(--muted)">${(htfItem.raw_prob * 100).toFixed(1)}%</div>
+          </div>`;
+        });
+        itemHtml += '</div>';
+        itemHtml += '</div>';
+      }
+      
+      const goalDist = r.model && r.model.goal_count && r.model.goal_count.distribution ? r.model.goal_count.distribution : [];
+      if (goalDist.length) {
+        const goalsTop3 = [...goalDist].sort((a, b) => b.probability - a.probability).slice(0, 3);
+        itemHtml += '<div style="margin-top:8px;padding:8px;background:var(--bg2);border-radius:8px">';
+        itemHtml += '<div style="font-size:12px;color:var(--muted);margin-bottom:6px">⚽ 进球数（Top3）</div>';
+        itemHtml += '<div style="display:flex;gap:8px">';
+        goalsTop3.forEach((goalItem, idx) => {
+          const isTop1 = idx === 0;
+          itemHtml += `<div style="flex:1;text-align:center;padding:6px;border-radius:6px${isTop1 ? ';background:#06b6d420;color:#06b6d4;font-weight:bold' : ';background:var(--bg)'}">
+            <div style="font-size:13px">${esc(goalItem.label || goalItem.goals + '球')}</div>
+            <div style="font-size:11px;color:var(--muted)">${(goalItem.probability * 100).toFixed(1)}%</div>
+          </div>`;
+        });
+        itemHtml += '</div>';
+        itemHtml += '</div>';
+      }
+      
+      itemHtml += '</div>';
+      return itemHtml;
+    }
+    
+    if (footballSort === 'time') {
+      const sortedItems = [...visibleResults].sort((a, b) => {
+        const timeA = a.match.time || '';
+        const timeB = b.match.time || '';
+        return timeA.localeCompare(timeB, 'zh-CN');
+      });
+      html += `<div class="league-group"><div class="league-title">⏱️ 按时间排序</div>`;
+      sortedItems.forEach(item => {
+        html += renderMatchItem(item);
       });
       html += '</div>';
+    } else {
+      const groups = {};
+      visibleResults.forEach(item => {
+        const league = item.match.league || '其它';
+        (groups[league] ||= []).push(item);
+      });
+      
+      const sortedLeagues = Object.keys(groups).sort((a, b) => {
+        const timeA = groups[a][0]?.match.time || '';
+        const timeB = groups[b][0]?.match.time || '';
+        return timeA.localeCompare(timeB, 'zh-CN');
+      });
+      
+      sortedLeagues.forEach(league => {
+        const items = groups[league];
+        html += `<div class="league-group"><div class="league-title">${esc(league)}</div>`;
+        items.forEach(item => {
+          html += renderMatchItem(item);
+        });
+        html += '</div>';
+      });
     }
     
     html += `<div style="margin-top:20px;padding-top:16px;border-top:1px solid var(--line)">
@@ -1545,6 +1606,45 @@ function renderFootballPredictions(results) {
     </div>`;
     
     app.innerHTML = html;
+
+    attachFootballSearchListeners();
+}
+
+let searchDebounceTimer = null;
+
+function attachFootballSearchListeners() {
+  const searchInput = document.getElementById('search');
+  if (!searchInput) return;
+  // app.innerHTML 每次重建都会生成全新的 input 节点，无需 removeEventListener
+  searchInput.setAttribute('autocomplete', 'off');
+  searchInput.addEventListener('compositionstart', () => {
+    searchInput.dataset.composing = '1';
+  });
+  searchInput.addEventListener('compositionend', () => {
+    delete searchInput.dataset.composing;
+    handleFootballSearch({ target: searchInput });
+  });
+  searchInput.addEventListener('input', handleFootballSearch);
+}
+
+function handleFootballSearch(e) {
+  const el = e.target;
+  // 输入法拼音未上屏时不触发筛选，避免"没输完就刷新"
+  if (el.dataset && el.dataset.composing) return;
+  listFilter = el.value;
+  if (searchDebounceTimer) clearTimeout(searchDebounceTimer);
+  searchDebounceTimer = setTimeout(applyFootballSearch, 200);
+}
+
+function applyFootballSearch() {
+  // 仅在已加载的预测结果上做本地筛选，不再重新请求后端
+  renderFootballPredictions(allPredictions);
+  const searchInput = document.getElementById('search');
+  if (searchInput) {
+    searchInput.focus();
+    const pos = searchInput.value.length;
+    try { searchInput.setSelectionRange(pos, pos); } catch (_) {}
+  }
 }
 
 function getSPFPrediction(topScores) {
