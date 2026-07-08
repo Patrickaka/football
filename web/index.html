@@ -1102,7 +1102,7 @@ function apiPrefix() {
 
 async function fetchJson(path) {
   const url = apiPrefix() + path;
-  const r = await fetch(url);
+  const r = await fetch(url, { cache: 'no-store' });
   const text = await r.text();
   if (!r.ok) {
     const htmlTitle = text.match(/<h1[^>]*>(.*?)<\/h1>/i) || text.match(/<title[^>]*>(.*?)<\/title>/i);
@@ -1162,7 +1162,7 @@ let beidanQualityFilter = 'all';
 async function loadBeidan() {
   appBeidan.innerHTML = '<div class="status">加载中…</div>';
   try {
-    const q = new URLSearchParams({ source: beidanSource, date: beidanDate || '' });
+    const q = new URLSearchParams({ source: beidanSource, date: beidanDate || '', _: Date.now().toString() });
     const data = await fetchJson('/api/beidan?' + q);
     if (data.error) {
       const attempts = (data.attempts || []).map(a =>
