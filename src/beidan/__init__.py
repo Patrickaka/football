@@ -75,7 +75,7 @@ def _is_okooo_waf_blocked():
     global _okooo_waf_blocked, _okooo_waf_blocked_time
     if not _okooo_waf_blocked:
         return False
-    if time.time() - _okooo_waf_blocked_time > 300:
+    if time.time() - _okooo_waf_blocked_time > 60:
         _okooo_waf_blocked = False
         return False
     return True
@@ -349,16 +349,20 @@ def fetch_okooo_schedule(date=None):
     try:
         html = fetch_okooo(url, referer=OKOOO_DANCHANG_URL)
         if not html:
-            log.warning(f"okooo页面返回为空，尝试500.com备用数据源")
-            fallback_matches = fetch_beidan_schedule(date)
+            log.warning(f"okooo页面返回为空(WAF拦截或网络错误)，尝试500.com备用数据源")
+            fallback_matches = fetch_beidan_schedule(date, source='dc')
+            if not fallback_matches:
+                fallback_matches = fetch_beidan_schedule(date, source='jczq')
             for m in fallback_matches:
                 m['source'] = '500.com'
             return fallback_matches
         
+        log.debug(f"okooo页面HTML长度: {len(html)}")
         matches = []
         
         table_pattern = re.compile(r'<table[^>]*>(.*?)</table>', re.DOTALL)
         tables = table_pattern.findall(html)
+        log.debug(f"okooo页面找到 {len(tables)} 个table标签")
         
         if len(tables) < 2:
             log.warning(f"okooo页面未找到比赛表格，找到 {len(tables)} 个table标签，尝试500.com备用数据源")
@@ -2195,6 +2199,35 @@ def _fetch_beidan_matches_with_fallback(date, source, allow_date_fallback=True):
                     'attempts': attempts,
                 }
 
+    log.warning(f"所有数据源均返回0场比赛，尝试重置okooo session并重试")
+    _okooo_session = requests.Session()
+    _okooo_session.headers.update(OKOOO_HEADERS)
+    _okooo_session.verify = False
+    global _okooo_waf_blocked
+    _okooo_waf_blocked = False
+    
+    for candidate_date in _candidate_beidan_dates(date, allow_date_fallback):
+        matches = fetch_okooo_schedule(candidate_date)
+        attempts.append({
+            'source': 'okooo_retry',
+            'date': candidate_date,
+            'match_count': len(matches),
+            'retry': True,
+        })
+        if matches:
+            log.info(f"okooo重试成功，获取到{len(matches)}场比赛")
+            return matches, {
+                'requested_source': source,
+                'requested_date': date,
+                'source': 'okooo',
+                'date': candidate_date,
+                'source_fallback': True,
+                'date_fallback': candidate_date != date,
+                'attempts': attempts,
+                'retry_success': True,
+            }
+
+    log.error(f"所有数据源均失败，返回空结果。尝试记录: {attempts}")
     return [], {
         'requested_source': source,
         'requested_date': date,
