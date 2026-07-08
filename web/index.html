@@ -23,16 +23,29 @@
   header h1 { font-size: 24px; font-weight: 600; }
   header p { color: var(--muted); font-size: 13px; margin-top: 4px; }
 
-  .tabs { display: flex; margin-bottom: 20px; border: 2px solid rgba(44, 58, 78, 0.8); border-radius: 10px; overflow: hidden; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2); }
+  .tabs { display: flex; margin-bottom: 20px; border-radius: 12px; overflow: hidden; background: var(--card); border: 1px solid rgba(44, 58, 78, 0.5); box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.03); }
   .tab {
-    flex: 1; padding: 12px 8px; text-align: center; cursor: pointer;
-    background: var(--card); color: var(--muted); font-size: 15px; font-weight: 500;
-    border: none; transition: .15s;
-    border-right: 1px solid rgba(44, 58, 78, 0.5);
+    flex: 1; padding: 14px 8px; text-align: center; cursor: pointer;
+    background: transparent; color: var(--muted); font-size: 15px; font-weight: 600;
+    border: none; transition: all .2s ease;
+    border-right: 1px solid rgba(44, 58, 78, 0.4);
+    position: relative;
+    overflow: hidden;
   }
   .tab:last-child { border-right: none; }
-  .tab:hover { color: var(--text); background: var(--card2); }
-  .tab.active { background: var(--card2); color: var(--accent2); box-shadow: inset 0 -3px 0 var(--accent); }
+  .tab::before {
+    content: ''; position: absolute; bottom: 0; left: 0; width: 100%; height: 3px;
+    background: var(--accent); transform: scaleX(0); transition: transform .25s ease;
+  }
+  .tab:hover {
+    color: var(--text);
+    background: rgba(44, 61, 82, 0.4);
+  }
+  .tab.active {
+    color: var(--accent2);
+    background: rgba(46, 160, 67, 0.08);
+  }
+  .tab.active::before { transform: scaleX(1); }
   .tab-panel { display: none; }
   .tab-panel.active { display: block; }
 
@@ -95,20 +108,196 @@
   }
   .search:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(46, 160, 67, 0.1); }
 
-  .group-bar { display: flex; gap: 8px; margin: 0 4px 14px; }
+  .group-bar { display: flex; gap: 8px; margin: 0 4px 14px; align-items: center; }
   .group-bar button {
-    background: var(--card); 
-    border: 2px solid rgba(44, 58, 78, 0.6); 
+    background: linear-gradient(145deg, rgba(30, 42, 57, 0.8), rgba(26, 34, 48, 0.9));
+    border: 1px solid rgba(44, 58, 78, 0.5);
+    border-radius: 10px;
+    color: var(--muted); font-size: 13px; font-weight: 500; padding: 8px 16px;
+    cursor: pointer; transition: all .2s ease;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+    position: relative;
+    overflow: hidden;
+  }
+  .group-bar button::before {
+    content: ''; position: absolute; top: 0; left: -100%; width: 100%; height: 100%;
+    background: linear-gradient(90deg, transparent, rgba(255,255,255,0.08), transparent);
+    transition: left .3s ease;
+  }
+  .group-bar button:hover {
+    color: var(--text);
+    border-color: rgba(46, 160, 67, 0.5);
+    background: linear-gradient(145deg, rgba(44, 61, 82, 0.8), rgba(30, 42, 57, 0.9));
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+    transform: translateY(-1px);
+  }
+  .group-bar button:hover::before { left: 100%; }
+  .group-bar button:active {
+    transform: translateY(0);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2), inset 0 1px 0 rgba(0, 0, 0, 0.1);
+  }
+  .group-bar button.on {
+    background: linear-gradient(145deg, rgba(46, 160, 67, 0.15), rgba(30, 120, 50, 0.1));
+    border-color: var(--accent);
+    color: var(--accent2);
+    box-shadow: 0 0 0 2px rgba(46, 160, 67, 0.2), 0 4px 12px rgba(46, 160, 67, 0.15);
+  }
+  .group-bar button.on::before { left: 100%; }
+  .refresh-btn {
+    margin-left: auto;
+    background: linear-gradient(145deg, rgba(68, 147, 248, 0.15), rgba(44, 100, 180, 0.1));
+    border: 1px solid rgba(68, 147, 248, 0.4);
+    border-radius: 10px;
+    color: #4493f8; font-size: 13px; font-weight: 500; padding: 8px 16px;
+    cursor: pointer; transition: all .2s ease;
+    box-shadow: 0 2px 6px rgba(68, 147, 248, 0.15), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+    position: relative;
+    overflow: hidden;
+  }
+  .refresh-btn::before {
+    content: ''; position: absolute; top: 0; left: -100%; width: 100%; height: 100%;
+    background: linear-gradient(90deg, transparent, rgba(68, 147, 248, 0.2), transparent);
+    transition: left .3s ease;
+  }
+  .refresh-btn:hover {
+    background: linear-gradient(145deg, rgba(68, 147, 248, 0.25), rgba(44, 100, 180, 0.15));
+    border-color: rgba(68, 147, 248, 0.6);
+    box-shadow: 0 4px 12px rgba(68, 147, 248, 0.25);
+    transform: translateY(-1px);
+  }
+  .refresh-btn:hover::before { left: 100%; }
+  .refresh-btn:active {
+    transform: translateY(0);
+    box-shadow: 0 1px 3px rgba(68, 147, 248, 0.2);
+  }
+
+  .beidan-toolbar {
+    background: linear-gradient(145deg, rgba(26, 34, 48, 0.9), rgba(20, 28, 40, 0.95));
+    border: 1px solid rgba(44, 58, 78, 0.5);
+    border-radius: 14px;
+    padding: 14px 16px;
+    margin-bottom: 16px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.03);
+  }
+  .toolbar-row {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+  .toolbar-row + .toolbar-row {
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid rgba(44, 58, 78, 0.4);
+  }
+  .toolbar-group {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .toolbar-label {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    padding: 4px 0;
+  }
+  .toolbar-buttons {
+    display: flex;
+    gap: 6px;
+    background: rgba(0, 0, 0, 0.2);
+    padding: 4px;
+    border-radius: 10px;
+    border: 1px solid rgba(44, 58, 78, 0.3);
+  }
+  .tb-btn {
+    background: transparent;
+    border: none;
+    color: var(--muted);
+    font-size: 13px;
+    font-weight: 500;
+    padding: 7px 14px;
     border-radius: 8px;
-    color: var(--muted); font-size: 13px; padding: 6px 14px; cursor: pointer; transition: .15s;
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    cursor: pointer;
+    transition: all .2s ease;
+    position: relative;
+    overflow: hidden;
   }
-  .group-bar button.on { 
-    color: var(--text); 
-    border-color: var(--accent); 
-    background: var(--card2); 
-    box-shadow: 0 0 0 2px rgba(46, 160, 67, 0.2);
+  .tb-btn::before {
+    content: '';
+    position: absolute;
+    top: 0; left: -100%;
+    width: 100%; height: 100%;
+    background: linear-gradient(90deg, transparent, rgba(255,255,255,0.08), transparent);
+    transition: left .3s ease;
   }
+  .tb-btn:hover {
+    color: var(--text);
+    background: rgba(44, 61, 82, 0.5);
+  }
+  .tb-btn:hover::before { left: 100%; }
+  .tb-btn.tb-active {
+    background: linear-gradient(145deg, rgba(46, 160, 67, 0.2), rgba(30, 120, 50, 0.15));
+    color: var(--accent2);
+    font-weight: 600;
+    box-shadow: 0 2px 6px rgba(46, 160, 67, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  }
+  .toolbar-divider {
+    width: 1px;
+    height: 24px;
+    background: rgba(44, 58, 78, 0.5);
+  }
+  .toolbar-date {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .date-value {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text);
+    background: rgba(44, 61, 82, 0.4);
+    padding: 6px 12px;
+    border-radius: 8px;
+    border: 1px solid rgba(44, 58, 78, 0.4);
+    font-variant-numeric: tabular-nums;
+  }
+  .tb-refresh {
+    margin-left: auto;
+    background: linear-gradient(145deg, rgba(68, 147, 248, 0.15), rgba(44, 100, 180, 0.1));
+    border: 1px solid rgba(68, 147, 248, 0.4);
+    border-radius: 10px;
+    color: #4493f8;
+    font-size: 13px;
+    font-weight: 500;
+    padding: 8px 16px;
+    cursor: pointer;
+    transition: all .2s ease;
+    box-shadow: 0 2px 6px rgba(68, 147, 248, 0.15);
+    position: relative;
+    overflow: hidden;
+  }
+  .tb-refresh::before {
+    content: '';
+    position: absolute;
+    top: 0; left: -100%;
+    width: 100%; height: 100%;
+    background: linear-gradient(90deg, transparent, rgba(68, 147, 248, 0.2), transparent);
+    transition: left .3s ease;
+  }
+  .tb-refresh:hover {
+    background: linear-gradient(145deg, rgba(68, 147, 248, 0.25), rgba(44, 100, 180, 0.15));
+    border-color: rgba(68, 147, 248, 0.6);
+    box-shadow: 0 4px 12px rgba(68, 147, 248, 0.25);
+    transform: translateY(-1px);
+  }
+  .tb-refresh:hover::before { left: 100%; }
+  .tb-refresh:active {
+    transform: translateY(0);
+    box-shadow: 0 1px 3px rgba(68, 147, 248, 0.2);
+  }
+
   .league-group { margin-bottom: 18px; }
   .league-title { font-size: 13px; color: var(--accent2); font-weight: 600;
     margin: 0 4px 8px; letter-spacing: .5px; }
@@ -1224,20 +1413,32 @@ function setBeidanQualityFilter(filter) {
 function renderBeidan(result) {
   let html = '';
   
-  html += `<div style="margin-bottom:16px">
-    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-      <span style="font-size:14px;color:var(--muted)">数据源：</span>
-      <button onclick="switchBeidanSource('dc')" class="${beidanSource === 'dc' ? 'on' : ''}">竞彩单场</button>
-      <button onclick="switchBeidanSource('jczq')" class="${beidanSource === 'jczq' ? 'on' : ''}">竞彩足球</button>
-      <button onclick="switchBeidanSource('okooo')" class="${beidanSource === 'okooo' ? 'on' : ''}">okooo</button>
-      <span style="font-size:14px;color:var(--muted);margin-left:12px">日期：${esc(result.date)}</span>
-      <button onclick="loadBeidan()" style="margin-left:auto">🔄 刷新</button>
+  html += `<div class="beidan-toolbar">
+    <div class="toolbar-row">
+      <div class="toolbar-group">
+        <span class="toolbar-label">数据源</span>
+        <div class="toolbar-buttons">
+          <button onclick="switchBeidanSource('dc')" class="tb-btn ${beidanSource === 'dc' ? 'tb-active' : ''}">竞彩单场</button>
+          <button onclick="switchBeidanSource('jczq')" class="tb-btn ${beidanSource === 'jczq' ? 'tb-active' : ''}">竞彩足球</button>
+          <button onclick="switchBeidanSource('okooo')" class="tb-btn ${beidanSource === 'okooo' ? 'tb-active' : ''}">okooo</button>
+        </div>
+      </div>
+      <div class="toolbar-divider"></div>
+      <div class="toolbar-date">
+        <span class="toolbar-label">日期</span>
+        <span class="date-value">${esc(result.date)}</span>
+      </div>
+      <button onclick="loadBeidan()" class="tb-refresh">🔄 刷新</button>
     </div>
-    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:8px">
-      <span style="font-size:14px;color:var(--muted)">筛选：</span>
-      <button onclick="setBeidanQualityFilter('all')" class="${beidanQualityFilter === 'all' ? 'on' : ''}">全部</button>
-      <button onclick="setBeidanQualityFilter('quality')" class="${beidanQualityFilter === 'quality' ? 'on' : ''}">强推荐+可参考</button>
-      <button onclick="setBeidanQualityFilter('hide_low')" class="${beidanQualityFilter === 'hide_low' ? 'on' : ''}">隐藏低置信</button>
+    <div class="toolbar-row">
+      <div class="toolbar-group">
+        <span class="toolbar-label">筛选</span>
+        <div class="toolbar-buttons">
+          <button onclick="setBeidanQualityFilter('all')" class="tb-btn ${beidanQualityFilter === 'all' ? 'tb-active' : ''}">全部</button>
+          <button onclick="setBeidanQualityFilter('quality')" class="tb-btn ${beidanQualityFilter === 'quality' ? 'tb-active' : ''}">强推荐+可参考</button>
+          <button onclick="setBeidanQualityFilter('hide_low')" class="tb-btn ${beidanQualityFilter === 'hide_low' ? 'tb-active' : ''}">隐藏低置信</button>
+        </div>
+      </div>
     </div>
   </div>`;
 
