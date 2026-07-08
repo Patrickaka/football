@@ -8,6 +8,8 @@ import urllib.error
 import random
 from datetime import datetime, timedelta
 from typing import Dict, List, Tuple
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from functools import lru_cache
 from ..common.logger import setup_logger
 from ..common.paths import data_path
 from ..common import kv_store
@@ -1653,27 +1655,42 @@ def summarize_beidan_history(limit=200):
         'latest': recent[:30],
     }
 
+_ouzhi_cache = {}
+
 def fetch_ouzhi_odds(match_id):
+    match_id = str(match_id)
+    if match_id in _ouzhi_cache:
+        return _ouzhi_cache[match_id]
+    
     url = f'{BASE_URL}/fenxi1/json/ouzhi.php?fid={match_id}&cid=0&type=europe&r=1'
     referer = f'{BASE_URL}/fenxi/ouzhi-{match_id}.shtml'
     
     try:
         series = fetch_json(url, referer=referer)
         if not isinstance(series, list) or len(series) == 0:
+            _ouzhi_cache[match_id] = None
             return None
         
         close = series[0]
         if not isinstance(close, (list, tuple)) or len(close) < 3:
+            _ouzhi_cache[match_id] = None
             return None
         
-        return {
+        result = {
             'home': float(close[0]),
             'draw': float(close[1]),
             'away': float(close[2]),
         }
+        _ouzhi_cache[match_id] = result
+        return result
     except Exception as e:
         log.warning(f"获取欧赔数据失败 match_id={match_id}: {e}")
+        _ouzhi_cache[match_id] = None
         return None
+
+def _clear_ouzhi_cache():
+    global _ouzhi_cache
+    _ouzhi_cache = {}
 
 def analyze_spf(match, asian_data=None, cs_data=None):
     result = {
@@ -2154,6 +2171,49 @@ def generate_beidan_recommendations(date=None, bet_types=None, source='okooo', s
     if 'bqc' in bet_types and source != 'okooo':
         bqc_odds = fetch_beidan_bqc(date)
     
+    _clear_ouzhi_cache()
+    
+    match_ids = [str(m['id']) for m in matches]
+    
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        ouzhi_futures = {executor.submit(fetch_ouzhi_odds, mid): mid for mid in match_ids}
+        for future in as_completed(ouzhi_futures):
+            pass
+    
+    match_odds_cache = {mid: fetch_ouzhi_odds(mid) for mid in match_ids}
+    
+    if source == 'okooo' and bet_types:
+        with ThreadPoolExecutor(max_workers=8) as executor:
+            futures = {}
+            for match in matches:
+                if 'spf' in bet_types or 'zjq' in bet_types:
+                    futures[executor.submit(fetch_okooo_asian_history, match['id'])] = ('asian', match['id'])
+                if 'zjq' in bet_types:
+                    futures[executor.submit(fetch_okooo_goals_history, match['id'])] = ('goals', match['id'])
+                if 'spf' in bet_types:
+                    futures[executor.submit(fetch_okooo_cs_history, match['id'])] = ('cs', match['id'])
+            
+            asian_cache = {}
+            goals_cache = {}
+            cs_cache = {}
+            
+            for future in as_completed(futures):
+                data_type, match_id = futures[future]
+                try:
+                    data = future.result()
+                    if data_type == 'asian':
+                        asian_cache[match_id] = data
+                    elif data_type == 'goals':
+                        goals_cache[match_id] = data
+                    elif data_type == 'cs':
+                        cs_cache[match_id] = data
+                except Exception as e:
+                    log.warning(f"并行获取数据失败 {data_type} {match_id}: {e}")
+    else:
+        asian_cache = {}
+        goals_cache = {}
+        cs_cache = {}
+    
     recommendations = []
     
     for match in matches:
@@ -2167,25 +2227,16 @@ def generate_beidan_recommendations(date=None, bet_types=None, source='okooo', s
             'handicap': match['handicap'],
         }
         
-        asian_data = None
-        goals_data = None
-        cs_data = None
+        asian_data = asian_cache.get(match['id'])
+        goals_data = goals_cache.get(match['id'])
+        cs_data = cs_cache.get(match['id'])
         
-        if source == 'okooo' and bet_types:
-            if 'spf' in bet_types or 'zjq' in bet_types:
-                asian_data = fetch_okooo_asian_history(match['id'])
-                if asian_data and asian_data.get('history'):
-                    rec['asian'] = asian_data
-
-            if 'zjq' in bet_types:
-                goals_data = fetch_okooo_goals_history(match['id'])
-                if goals_data and goals_data.get('history'):
-                    rec['goals'] = goals_data
-
-            if 'spf' in bet_types:
-                cs_data = fetch_okooo_cs_history(match['id'])
-                if cs_data and cs_data.get('history'):
-                    rec['cs'] = cs_data
+        if asian_data and asian_data.get('history'):
+            rec['asian'] = asian_data
+        if goals_data and goals_data.get('history'):
+            rec['goals'] = goals_data
+        if cs_data and cs_data.get('history'):
+            rec['cs'] = cs_data
         
         if 'spf' in bet_types:
             rec['spf'] = analyze_spf(match, asian_data, cs_data)
