@@ -150,6 +150,58 @@ def predict_scores_by_poisson(home_prob, draw_prob, away_prob, league='', handic
         '1x2_prob': {'H': p_home, 'D': p_draw, 'A': p_away},
     }
 
+def parse_beidan_handicap(handicap):
+    if handicap is None:
+        return None
+    if isinstance(handicap, (int, float)):
+        return float(handicap)
+
+    text = str(handicap).strip()
+    if not text:
+        return None
+    text = text.replace('（', '(').replace('）', ')')
+    match = re.search(r'[-+]?\d+(?:\.\d+)?', text)
+    if not match:
+        return None
+    try:
+        return float(match.group(0))
+    except ValueError:
+        return None
+
+def rqspf_probs_from_score_probs(score_probs, handicap):
+    handicap_value = parse_beidan_handicap(handicap)
+    if handicap_value is None:
+        return {}, {'available': False, 'reason': 'missing_handicap'}
+
+    probs = {'让胜': 0.0, '让平': 0.0, '让负': 0.0}
+    top_scores = []
+    for (home_goals, away_goals), prob in score_probs.items():
+        adjusted_margin = home_goals + handicap_value - away_goals
+        if adjusted_margin > 0:
+            label = '让胜'
+        elif adjusted_margin < 0:
+            label = '让负'
+        else:
+            label = '让平'
+        probs[label] += prob
+        top_scores.append({
+            'score': f"{home_goals}-{away_goals}",
+            'handicap_score': f"{home_goals + handicap_value:g}-{away_goals}",
+            'result': label,
+            'probability': prob,
+        })
+
+    total = sum(probs.values())
+    if total > 0:
+        probs = {key: value / total for key, value in probs.items()}
+
+    top_scores.sort(key=lambda item: -item['probability'])
+    return probs, {
+        'available': True,
+        'handicap': handicap_value,
+        'top_scores': top_scores[:5],
+    }
+
 def fetch(url, encoding='utf-8', referer=None):
     headers = {**HEADERS, 'Referer': referer} if referer else HEADERS
     req = urllib.request.Request(url, headers=headers)
@@ -1718,17 +1770,74 @@ def analyze_rqspf(match):
         'type': 'rqspf',
     }
     
+    handicap_value = parse_beidan_handicap(match.get('handicap'))
+    if handicap_value is None:
+        result['error'] = '让球值不可用，无法计算让球胜平负'
+        return result
+
     odds_data = fetch_ouzhi_odds(match['id'])
-    
-    if odds_data:
-        result['error'] = '让球胜平负需要亚盘数据，请查看胜平负结果'
-        result['spf_odds'] = {
-            '胜': odds_data['home'],
-            '平': odds_data['draw'],
-            '负': odds_data['away'],
+
+    if not odds_data:
+        if match.get('spf_sp') and match.get('spf_s') and match.get('spf_f'):
+            odds_data = {
+                'home': match['spf_sp'],
+                'draw': match['spf_s'],
+                'away': match['spf_f'],
+            }
+            result['odds_source'] = 'okooo_main'
+        else:
+            result['error'] = '欧赔数据不可用，无法计算让球胜平负'
+            return result
+
+    odds = {
+        '胜': odds_data['home'],
+        '平': odds_data['draw'],
+        '负': odds_data['away'],
+    }
+    probs = calculate_implied_probability(odds)
+    if not probs:
+        result['error'] = '欧赔概率不可用，无法计算让球胜平负'
+        return result
+
+    score_prediction = predict_scores_by_poisson(
+        probs.get('胜', 0.33),
+        probs.get('平', 0.33),
+        probs.get('负', 0.34),
+        league=match.get('league', ''),
+        handicap=handicap_value
+    )
+    rq_probs, rq_meta = rqspf_probs_from_score_probs(
+        score_prediction['score_probs'],
+        handicap_value
+    )
+    if not rq_probs:
+        result['error'] = '让球胜平负概率计算失败'
+        result['rqspf_meta'] = rq_meta
+        return result
+
+    result['spf_odds'] = odds
+    result['odds'] = {}
+    result['raw_spf_probabilities'] = probs
+    result['probabilities'] = rq_probs
+    result['prediction'] = max(rq_probs, key=rq_probs.get)
+    result['confidence'] = rq_probs[result['prediction']]
+    result['lambda_home'] = score_prediction['lambda_home']
+    result['lambda_away'] = score_prediction['lambda_away']
+    result['rqspf_meta'] = rq_meta
+    result['quality'] = assess_recommendation_quality(
+        rq_probs,
+        result['prediction'],
+        {}
+    )
+    result['scores'] = [
+        {
+            'score': item['score'],
+            'handicap_score': item['handicap_score'],
+            'result': item['result'],
+            'probability': item['probability'],
         }
-    else:
-        result['error'] = '欧赔数据不可用'
+        for item in rq_meta.get('top_scores', [])
+    ]
     
     return result
 

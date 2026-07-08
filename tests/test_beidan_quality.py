@@ -3,12 +3,15 @@ from unittest.mock import patch
 
 from src.beidan import (
     apply_beidan_history_calibration,
+    analyze_rqspf,
     analyze_spf,
     analyze_zjq,
     assess_recommendation_quality,
     assess_score_consistency,
     build_zjq_group_recommendation,
     enhance_scores_with_cs,
+    parse_beidan_handicap,
+    rqspf_probs_from_score_probs,
     save_beidan_prediction_snapshot,
 )
 
@@ -64,6 +67,45 @@ class BeidanQualityTests(unittest.TestCase):
         self.assertIn('raw_probabilities', result)
         self.assertIn('score_consistency', result)
         self.assertIn('history_calibration', result)
+
+    def test_parse_beidan_handicap_accepts_parenthesized_values(self):
+        self.assertEqual(parse_beidan_handicap('(-1)'), -1.0)
+        self.assertEqual(parse_beidan_handicap('(+2)'), 2.0)
+        self.assertIsNone(parse_beidan_handicap(''))
+
+    def test_rqspf_probs_from_score_probs_applies_home_handicap(self):
+        probs, meta = rqspf_probs_from_score_probs({
+            (1, 0): 0.4,
+            (2, 0): 0.3,
+            (0, 1): 0.3,
+        }, -1)
+
+        self.assertTrue(meta['available'])
+        self.assertAlmostEqual(probs['让平'], 0.4)
+        self.assertAlmostEqual(probs['让胜'], 0.3)
+        self.assertAlmostEqual(probs['让负'], 0.3)
+        self.assertAlmostEqual(sum(probs.values()), 1.0)
+
+    def test_analyze_rqspf_returns_real_probabilities(self):
+        match = {
+            'id': 'm1',
+            'num': '001',
+            'home': 'A',
+            'away': 'B',
+            'league': '',
+            'time': '20:00',
+            'handicap': '(-1)',
+        }
+
+        with patch('src.beidan.fetch_ouzhi_odds', return_value={'home': 1.8, 'draw': 3.4, 'away': 4.2}):
+            result = analyze_rqspf(match)
+
+        self.assertNotIn('error', result)
+        self.assertEqual(set(result['probabilities']), {'让胜', '让平', '让负'})
+        self.assertIn(result['prediction'], {'让胜', '让平', '让负'})
+        self.assertIn('quality', result)
+        self.assertGreater(len(result['scores']), 0)
+        self.assertAlmostEqual(sum(result['probabilities'].values()), 1.0, places=6)
 
     def test_history_calibration_lifts_underestimated_settled_outcome(self):
         records = []
