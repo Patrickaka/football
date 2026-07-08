@@ -1338,10 +1338,308 @@ async function loadMatches() {
     if (data.error) return showError(data.error);
     allMatches = data.matches || [];
     if (!allMatches.length) return showError('未找到任何比赛数据，请稍后重试。');
-    showListView('');
+    await loadAllPredictions();
   } catch (e) {
     showError('网络请求失败：' + e.message);
   }
+}
+
+let footballQualityFilter = 'all';
+
+async function loadAllPredictions() {
+  loading('正在分析比赛数据…');
+  try {
+    const results = [];
+    for (let i = 0; i < allMatches.length; i++) {
+      const m = allMatches[i];
+      loading(`正在分析 ${m.home} vs ${m.away} (${i + 1}/${allMatches.length})…`);
+      const q = new URLSearchParams({
+        match_id: m.match_id, home: m.home, away: m.away,
+        league: m.league || '', time: m.time || '', num: m.num || ''
+      });
+      try {
+        const data = await fetchJson('/api/predict?' + q);
+        if (!data.error && data.result) {
+          results.push({ match: m, result: data.result });
+        }
+      } catch (e) {
+        console.warn(`预测 ${m.home} vs ${m.away} 失败:`, e);
+      }
+    }
+    renderFootballPredictions(results);
+  } catch (e) {
+    showError('预测分析失败：' + e.message);
+  }
+}
+
+function setFootballQualityFilter(filter) {
+  footballQualityFilter = filter;
+  loadMatches();
+}
+
+function footballMatchPassesFilter(item) {
+  if (footballQualityFilter === 'all') return true;
+  const cf = item.result?.confidence;
+  if (!cf) return footballQualityFilter !== 'quality';
+  if (footballQualityFilter === 'quality') {
+    return cf.level === 'high' || cf.level === 'medium';
+  }
+  if (footballQualityFilter === 'hide_low') {
+    return cf.level !== 'low';
+  }
+  return true;
+}
+
+function renderFootballPredictions(results) {
+  searchWrap.style.display = 'none';
+  
+  let html = '';
+  
+  html += `<div class="beidan-toolbar">
+    <div class="toolbar-row">
+      <div class="toolbar-group">
+        <span class="toolbar-label">筛选</span>
+        <div class="toolbar-buttons">
+          <button onclick="setFootballQualityFilter('all')" class="tb-btn ${footballQualityFilter === 'all' ? 'tb-active' : ''}">全部</button>
+          <button onclick="setFootballQualityFilter('quality')" class="tb-btn ${footballQualityFilter === 'quality' ? 'tb-active' : ''}">高置信+中置信</button>
+          <button onclick="setFootballQualityFilter('hide_low')" class="tb-btn ${footballQualityFilter === 'hide_low' ? 'tb-active' : ''}">隐藏低置信</button>
+        </div>
+      </div>
+      <div class="toolbar-divider"></div>
+      <button onclick="switchTab('predictions')" class="tb-refresh">📋 预测记录</button>
+      <button onclick="loadMatches()" class="tb-refresh">🔄 刷新</button>
+    </div>
+  </div>`;
+  
+  if (!results.length) {
+    html += '<div class="status">暂无预测数据</div>';
+    app.innerHTML = html;
+    return;
+  }
+  
+  const visibleResults = results.filter(footballMatchPassesFilter);
+  html += `<div class="status" style="padding:4px 0 12px;font-size:13px">共 ${results.length} 场比赛，当前显示 ${visibleResults.length} 场</div>`;
+  
+  if (!visibleResults.length) {
+    html += '<div class="status">当前筛选下暂无推荐</div>';
+    app.innerHTML = html;
+    return;
+  }
+  
+  const groups = {};
+  visibleResults.forEach(item => {
+    const league = item.match.league || '其它';
+    (groups[league] ||= []).push(item);
+  });
+  
+  for (const [league, items] of Object.entries(groups)) {
+    html += `<div class="league-group"><div class="league-title">${esc(league)}</div>`;
+    items.forEach(item => {
+      const m = item.match;
+      const r = item.result;
+      const top = r.model && r.model.top_scores ? r.model.top_scores : [];
+      const cf = r.confidence;
+      
+      html += `<div class="match" style="padding:12px">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start">
+          <div style="flex:1">
+            <div style="font-weight:bold;font-size:15px;margin-bottom:4px">
+              ${esc(m.home)} <span style="color:var(--muted)">vs</span> ${esc(m.away)}
+            </div>
+            <div style="font-size:13px;color:var(--muted)">
+              ${esc(m.num || '')} · ${esc(m.time || '')}
+            </div>
+            ${cf && cf.label ? `<div style="font-size:12px;color:${cf.level === 'low' ? 'var(--muted)' : cf.level === 'high' ? 'var(--accent2)' : 'var(--warn)'};margin-top:2px">
+              🎯 ${esc(cf.label)} (${(cf.score * 100).toFixed(0)}%)
+            </div>` : ''}
+          </div>
+        </div>`;
+        
+        if (top.length) {
+          html += '<div style="margin-top:8px;padding:8px;background:var(--bg2);border-radius:8px">';
+          html += '<div style="font-size:12px;color:var(--muted);margin-bottom:6px">⚽ 比分预测（Top3）</div>';
+          html += '<div style="display:flex;gap:8px">';
+          top.slice(0, 3).forEach((s, idx) => {
+            const isTop1 = idx === 0;
+            const score = s.score || (s.home != null && s.away != null ? `${s.home}-${s.away}` : '-');
+            const prob = s.prob || s.probability || 0;
+            html += `<div style="flex:1;text-align:center;padding:6px;border-radius:6px${isTop1 ? ';background:#3b82f620;color:#3b82f6;font-weight:bold' : ';background:var(--bg)'}">
+              <div style="font-size:14px">${esc(score)}</div>
+              <div style="font-size:11px;color:var(--muted)">${(prob * 100).toFixed(1)}%</div>
+            </div>`;
+          });
+          html += '</div>';
+          html += '</div>';
+        }
+        
+        const spfPrediction = getSPFPrediction(top);
+        if (spfPrediction) {
+          html += '<div style="margin-top:8px;padding:8px;background:var(--bg2);border-radius:8px">';
+          html += '<div style="font-size:12px;color:var(--muted);margin-bottom:6px">🎯 胜平负</div>';
+          html += '<div style="display:flex;gap:12px">';
+          ['胜', '平', '负'].forEach(key => {
+            const prob = spfPrediction.probs[key] || 0;
+            const isPred = spfPrediction.pred === key;
+            const colors = { '胜': '#ef4444', '平': '#f59e0b', '负': '#22c55e' };
+            html += `<div style="flex:1;text-align:center;padding:6px;border-radius:6px${isPred ? `;background:${colors[key]}20;color:${colors[key]};font-weight:bold` : ''}">
+              <div>${key}</div>
+              <div style="font-size:11px;color:var(--muted)">${(prob * 100).toFixed(0)}%</div>
+            </div>`;
+          });
+          html += '</div>';
+          html += '</div>';
+        }
+        
+        const htfProbs = r.model && r.model.half_full_time && r.model.half_full_time.probs ? r.model.half_full_time.probs : [];
+        if (htfProbs.length) {
+          const htfTop3 = htfProbs.sort((a, b) => b.raw_prob - a.raw_prob).slice(0, 3);
+          const htfMap = {
+            'HH': '胜胜', 'DH': '平胜', 'AH': '负胜',
+            'HD': '胜平', 'DD': '平平', 'AD': '负平',
+            'HA': '胜负', 'DA': '平负', 'AA': '负负',
+            '半胜全胜': '胜胜', '半平全胜': '平胜', '半负全胜': '负胜',
+            '半胜全平': '胜平', '半平全平': '平平', '半负全平': '负平',
+            '半胜全负': '胜负', '半平全负': '平负', '半负全负': '负负'
+          };
+          html += '<div style="margin-top:8px;padding:8px;background:var(--bg2);border-radius:8px">';
+          html += '<div style="font-size:12px;color:var(--muted);margin-bottom:6px">🔄 半全场（Top3）</div>';
+          html += '<div style="display:flex;gap:8px">';
+          htfTop3.forEach((item, idx) => {
+            const isTop1 = idx === 0;
+            const label = htfMap[item.code] || htfMap[item.name] || item.name || item.code;
+            html += `<div style="flex:1;text-align:center;padding:6px;border-radius:6px${isTop1 ? ';background:#8b5cf620;color:#8b5cf6;font-weight:bold' : ';background:var(--bg)'}">
+              <div style="font-size:13px">${esc(label)}</div>
+              <div style="font-size:11px;color:var(--muted)">${(item.raw_prob * 100).toFixed(1)}%</div>
+            </div>`;
+          });
+          html += '</div>';
+          html += '</div>';
+        }
+        
+        const goalDist = r.model && r.model.goal_count && r.model.goal_count.distribution ? r.model.goal_count.distribution : [];
+        if (goalDist.length) {
+          const goalsTop3 = goalDist.sort((a, b) => b.probability - a.probability).slice(0, 3);
+          html += '<div style="margin-top:8px;padding:8px;background:var(--bg2);border-radius:8px">';
+          html += '<div style="font-size:12px;color:var(--muted);margin-bottom:6px">⚽ 进球数（Top3）</div>';
+          html += '<div style="display:flex;gap:8px">';
+          goalsTop3.forEach((item, idx) => {
+            const isTop1 = idx === 0;
+            html += `<div style="flex:1;text-align:center;padding:6px;border-radius:6px${isTop1 ? ';background:#06b6d420;color:#06b6d4;font-weight:bold' : ';background:var(--bg)'}">
+              <div style="font-size:13px">${esc(item.label || item.goals + '球')}</div>
+              <div style="font-size:11px;color:var(--muted)">${(item.probability * 100).toFixed(1)}%</div>
+            </div>`;
+          });
+          html += '</div>';
+          html += '</div>';
+        }
+        
+        html += '</div>';
+      });
+      html += '</div>';
+    }
+    
+    html += `<div style="margin-top:20px;padding-top:16px;border-top:1px solid var(--line)">
+      <div style="font-size:12px;color:var(--muted);text-align:center">
+        提示：缓存按自然天自动失效，每天会自动重新抓取最新数据
+      </div>
+    </div>`;
+    
+    app.innerHTML = html;
+}
+
+function getSPFPrediction(topScores) {
+  if (!topScores || !topScores.length) return null;
+  const probs = { '胜': 0, '平': 0, '负': 0 };
+  topScores.forEach(s => {
+    if (!s) return;
+    let h, a, prob;
+    if (s.home != null && s.away != null) {
+      h = s.home;
+      a = s.away;
+      prob = s.prob || s.probability || 0;
+    } else if (s.score) {
+      const parts = s.score.split('-');
+      if (parts.length !== 2) return;
+      h = Number(parts[0]);
+      a = Number(parts[1]);
+      prob = s.prob || s.probability || 0;
+      if (isNaN(h) || isNaN(a)) return;
+    } else {
+      return;
+    }
+    if (h > a) probs['胜'] += prob;
+    else if (h < a) probs['负'] += prob;
+    else probs['平'] += prob;
+  });
+  const total = probs['胜'] + probs['平'] + probs['负'];
+  if (total <= 0) return null;
+  let pred = '平';
+  let maxProb = probs['平'];
+  if (probs['胜'] > maxProb) { pred = '胜'; maxProb = probs['胜']; }
+  if (probs['负'] > maxProb) { pred = '负'; maxProb = probs['负']; }
+  return { pred, probs };
+}
+
+function getHTFPrediction(topScores) {
+  if (!topScores || !topScores.length) return null;
+  const htfMap = {};
+  topScores.forEach(s => {
+    if (!s) return;
+    let h, a, prob;
+    if (s.home != null && s.away != null) {
+      h = s.home;
+      a = s.away;
+      prob = s.prob || s.probability || 0;
+    } else if (s.score) {
+      const parts = s.score.split('-');
+      if (parts.length !== 2) return;
+      h = Number(parts[0]);
+      a = Number(parts[1]);
+      prob = s.prob || s.probability || 0;
+      if (isNaN(h) || isNaN(a)) return;
+    } else {
+      return;
+    }
+    const ht = h > 0 || a > 0 ? '有球' : '无球';
+    const ft = h > a ? '主胜' : h < a ? '客胜' : '平局';
+    const label = ht + '+' + ft;
+    htfMap[label] = (htfMap[label] || 0) + prob;
+  });
+  const top3 = Object.entries(htfMap)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 3)
+    .map(([label, prob]) => ({ label, prob }));
+  return top3.length ? { top3 } : null;
+}
+
+function getGoalsPrediction(topScores) {
+  if (!topScores || !topScores.length) return null;
+  const goalsMap = {};
+  topScores.forEach(s => {
+    if (!s) return;
+    let h, a, prob;
+    if (s.home != null && s.away != null) {
+      h = s.home;
+      a = s.away;
+      prob = s.prob || s.probability || 0;
+    } else if (s.score) {
+      const parts = s.score.split('-');
+      if (parts.length !== 2) return;
+      h = Number(parts[0]);
+      a = Number(parts[1]);
+      prob = s.prob || s.probability || 0;
+      if (isNaN(h) || isNaN(a)) return;
+    } else {
+      return;
+    }
+    const total = h + a;
+    goalsMap[total] = (goalsMap[total] || 0) + prob;
+  });
+  const top3 = Object.entries(goalsMap)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 3)
+    .map(([count, prob]) => ({ count: Number(count), prob }));
+  return top3.length ? { top3 } : null;
 }
 
 let beidanSource = 'okooo';
@@ -1787,7 +2085,7 @@ async function predict(m) {
 const backBtn = () => `<div class="back" id="back">‹ 返回比赛列表</div>`;
 function bindBack() {
   const b = document.getElementById('back');
-  if (b) b.onclick = () => showListView(listFilter);
+  if (b) b.onclick = () => loadMatches();
 }
 
 async function clearCacheAndRefresh() {
@@ -2283,8 +2581,7 @@ function switchTab(tab) {
   document.getElementById('disclaimer').innerHTML = meta.disclaimer;
   location.hash = tab === 'lottery3d' ? '3d' : tab === 'beidan' ? 'beidan' : tab === 'lottery' ? 'lottery' : tab === 'kl8' ? 'kl8' : tab === 'predictions' ? 'predictions' : 'football';
   if (tab === 'football') {
-    if (!allMatches.length) loadMatches();
-    else showListView();
+    loadMatches();
   } else if (tab === 'beidan') {
     loadBeidan();
   } else if (tab === 'lottery3d') {

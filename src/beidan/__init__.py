@@ -475,7 +475,7 @@ def fetch_okooo_asian_history(match_id):
         f'{OKOOO_MATCH_URL}{match_id}/odds/',
         f'{OKOOO_MATCH_URL}{match_id}/history/',
     ]
-    log.info(f"抓取okooo亚盘赔率变化: match_id={match_id}")
+    log.debug(f"抓取okooo亚盘赔率变化: match_id={match_id}")
     
     for url in urls:
         try:
@@ -560,14 +560,14 @@ def fetch_okooo_asian_history(match_id):
             log.warning(f"抓取okooo亚盘赔率变化失败({url}): {e}")
             continue
     
-    log.info(f"未获取到亚盘赔率变化数据")
+    log.debug(f"未获取到亚盘赔率变化数据")
     return {'history': []}
 
 def fetch_okooo_goals_history(match_id):
     urls = [
         f'{OKOOO_MATCH_URL}{match_id}/goals/',
     ]
-    log.info(f"抓取okooo总进球赔率变化: match_id={match_id}")
+    log.debug(f"抓取okooo总进球赔率变化: match_id={match_id}")
     
     for url in urls:
         try:
@@ -650,14 +650,14 @@ def fetch_okooo_goals_history(match_id):
             log.warning(f"抓取okooo总进球赔率变化失败({url}): {e}")
             continue
     
-    log.info(f"未获取到总进球赔率变化数据")
+    log.debug(f"未获取到总进球赔率变化数据")
     return {'history': []}
 
 def fetch_okooo_cs_history(match_id):
     urls = [
         f'{OKOOO_MATCH_URL}{match_id}/cs/',
     ]
-    log.info(f"抓取okooo比分赔率变化: match_id={match_id}")
+    log.debug(f"抓取okooo比分赔率变化: match_id={match_id}")
     
     for url in urls:
         try:
@@ -738,7 +738,7 @@ def fetch_okooo_cs_history(match_id):
             log.warning(f"抓取okooo比分赔率变化失败({url}): {e}")
             continue
     
-    log.info(f"未获取到比分赔率变化数据")
+    log.debug(f"未获取到比分赔率变化数据")
     return {'history': []}
 
 def adjust_probs_by_asian(home_win_prob, draw_prob, away_win_prob, asian_history):
