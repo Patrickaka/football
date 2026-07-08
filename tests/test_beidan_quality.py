@@ -2,6 +2,7 @@ import unittest
 from unittest.mock import patch
 
 from src.beidan import (
+    apply_beidan_history_calibration,
     analyze_spf,
     analyze_zjq,
     assess_recommendation_quality,
@@ -62,6 +63,44 @@ class BeidanQualityTests(unittest.TestCase):
         self.assertIn(result['quality']['level'], {'medium', 'split', 'low', 'strong'})
         self.assertIn('raw_probabilities', result)
         self.assertIn('score_consistency', result)
+        self.assertIn('history_calibration', result)
+
+    def test_history_calibration_lifts_underestimated_settled_outcome(self):
+        records = []
+        for idx in range(10):
+            records.append({
+                'settled': True,
+                'league': 'L',
+                'actual': {'score': '1-0'},
+                'spf': {'probabilities': {'胜': 0.30, '平': 0.35, '负': 0.35}},
+            })
+
+        with patch('src.beidan._load_beidan_history', return_value=records):
+            adjusted, meta = apply_beidan_history_calibration(
+                {'胜': 0.34, '平': 0.33, '负': 0.33},
+                'spf',
+                league='L'
+            )
+
+        self.assertTrue(meta['applied'])
+        self.assertGreater(adjusted['胜'], 0.34)
+        self.assertAlmostEqual(sum(adjusted.values()), 1.0, places=6)
+
+    def test_history_calibration_waits_for_enough_samples(self):
+        records = [{
+            'settled': True,
+            'actual': {'score': '0-1'},
+            'spf': {'probabilities': {'胜': 0.40, '平': 0.30, '负': 0.30}},
+        }]
+
+        with patch('src.beidan._load_beidan_history', return_value=records):
+            adjusted, meta = apply_beidan_history_calibration(
+                {'胜': 0.34, '平': 0.33, '负': 0.33},
+                'spf'
+            )
+
+        self.assertFalse(meta['applied'])
+        self.assertEqual(adjusted['胜'], 0.34)
 
     def test_enhance_scores_with_cs_keeps_dict_shape(self):
         score_prediction = {

@@ -1198,6 +1198,138 @@ def calculate_implied_probability(odds_dict):
     
     return {k: (1 / v) / prob_sum for k, v in odds_dict.items() if v and v > 0}
 
+def _actual_spf_from_record(record):
+    actual = record.get('actual') if isinstance(record.get('actual'), dict) else {}
+    settlement = record.get('settlement') if isinstance(record.get('settlement'), dict) else {}
+
+    direct = (
+        record.get('actual_spf')
+        or actual.get('spf')
+        or settlement.get('spf')
+        or settlement.get('actual_spf')
+    )
+    if direct in ('胜', '平', '负'):
+        return direct
+
+    score = (
+        record.get('actual_score')
+        or actual.get('score')
+        or actual.get('actual_score')
+        or settlement.get('score')
+        or settlement.get('actual_score')
+    )
+    if not score or '-' not in str(score):
+        return None
+    try:
+        home_goals, away_goals = map(int, str(score).split('-', 1))
+    except ValueError:
+        return None
+    if home_goals > away_goals:
+        return '胜'
+    if home_goals < away_goals:
+        return '负'
+    return '平'
+
+def _actual_zjq_from_record(record):
+    actual = record.get('actual') if isinstance(record.get('actual'), dict) else {}
+    settlement = record.get('settlement') if isinstance(record.get('settlement'), dict) else {}
+
+    direct = (
+        record.get('actual_zjq')
+        or actual.get('zjq')
+        or settlement.get('zjq')
+        or settlement.get('actual_zjq')
+    )
+    if direct is not None:
+        direct = str(direct)
+        if direct in {'0', '1', '2', '3', '4', '5', '6', '7+'}:
+            return direct
+
+    score = (
+        record.get('actual_score')
+        or actual.get('score')
+        or actual.get('actual_score')
+        or settlement.get('score')
+        or settlement.get('actual_score')
+    )
+    if not score or '-' not in str(score):
+        return None
+    try:
+        home_goals, away_goals = map(int, str(score).split('-', 1))
+    except ValueError:
+        return None
+    total_goals = home_goals + away_goals
+    return '7+' if total_goals >= 7 else str(total_goals)
+
+def apply_beidan_history_calibration(probabilities, bet_type, league=None, min_samples=8, limit=200):
+    """Use settled Beidan snapshots as a conservative reliability correction."""
+    if not probabilities:
+        return probabilities, {'applied': False, 'reason': 'empty_probabilities'}
+
+    records = _load_beidan_history()
+    if not records:
+        return probabilities, {'applied': False, 'reason': 'no_history'}
+
+    expected = {str(k): 0.0 for k in probabilities}
+    actuals = {str(k): 0.0 for k in probabilities}
+    samples = 0
+
+    for record in records[:limit]:
+        if not record.get('settled'):
+            continue
+        section = record.get(bet_type) if isinstance(record.get(bet_type), dict) else {}
+        past_probs = section.get('probabilities') if isinstance(section.get('probabilities'), dict) else {}
+        if not past_probs:
+            continue
+
+        if bet_type == 'spf':
+            actual = _actual_spf_from_record(record)
+        elif bet_type == 'zjq':
+            actual = _actual_zjq_from_record(record)
+        else:
+            actual = None
+        if actual not in expected:
+            continue
+
+        league_weight = 1.25 if league and record.get('league') == league else 1.0
+        for option in expected:
+            expected[option] += float(past_probs.get(option, 0.0) or 0.0) * league_weight
+        actuals[actual] += league_weight
+        samples += league_weight
+
+    if samples < min_samples:
+        return probabilities, {
+            'applied': False,
+            'reason': 'insufficient_settled_samples',
+            'sample_count': round(samples, 3),
+            'min_samples': min_samples,
+        }
+
+    factors = {}
+    prior = 6.0
+    option_count = max(len(expected), 1)
+    prior_each = prior / option_count
+    for option in expected:
+        ratio = (actuals[option] + prior_each) / max(expected[option] + prior_each, 1e-9)
+        factors[option] = max(0.86, min(1.16, ratio))
+
+    adjusted = {
+        option: float(probabilities.get(option, 0.0) or 0.0) * factors.get(option, 1.0)
+        for option in probabilities
+    }
+    total = sum(adjusted.values())
+    if total <= 0:
+        return probabilities, {'applied': False, 'reason': 'zero_adjusted_total'}
+
+    adjusted = {option: value / total for option, value in adjusted.items()}
+    return adjusted, {
+        'applied': True,
+        'sample_count': round(samples, 3),
+        'factors': {k: round(v, 6) for k, v in factors.items()},
+        'actuals': {k: round(v, 3) for k, v in actuals.items()},
+        'expected': {k: round(v, 3) for k, v in expected.items()},
+    }
+
 def assess_recommendation_quality(probabilities, prediction=None, context=None):
     """Classify narrow calls so the UI can avoid treating them as strong picks."""
     if not probabilities:
@@ -1522,6 +1654,13 @@ def analyze_spf(match, asian_data=None, cs_data=None):
             if prob_total > 0:
                 model_probs = {k: v / prob_total for k, v in model_probs.items()}
 
+            model_probs, calibration_meta = apply_beidan_history_calibration(
+                model_probs,
+                'spf',
+                league=match.get('league')
+            )
+            result['history_calibration'] = calibration_meta
+
             result['probabilities'] = model_probs
             result['raw_probabilities'] = probs
             result['prediction'] = max(model_probs, key=model_probs.get)
@@ -1723,6 +1862,13 @@ def analyze_zjq(match, zjq_odds=None, asian_data=None, goals_data=None):
     total_zjq = sum(zjq_probs.values())
     if total_zjq > 0:
         zjq_probs = {k: v / total_zjq for k, v in zjq_probs.items()}
+
+    zjq_probs, calibration_meta = apply_beidan_history_calibration(
+        zjq_probs,
+        'zjq',
+        league=match.get('league')
+    )
+    result['history_calibration'] = calibration_meta
     
     result['probabilities'] = zjq_probs
     result['mu_home'] = mu1
