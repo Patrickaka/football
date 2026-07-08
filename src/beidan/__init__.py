@@ -6,6 +6,7 @@ import json
 import urllib.request
 import urllib.error
 import random
+import requests
 from datetime import datetime, timedelta
 from typing import Dict, List, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -39,22 +40,61 @@ HEADERS = {
 
 OKOOO_HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
-                  '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                  '(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
     'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
     'Accept-Encoding': 'gzip, deflate, br',
     'Connection': 'keep-alive',
     'Cache-Control': 'max-age=0',
-    'Sec-Ch-Ua': '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+    'Sec-Ch-Ua': '"Not/A)Brand";v="8", "Chromium";v="126", "Google Chrome";v="126"',
     'Sec-Ch-Ua-Mobile': '?0',
     'Sec-Ch-Ua-Platform': '"Windows"',
+    'Sec-Ch-Ua-Platform-Version': '"10.0.0"',
     'Sec-Fetch-Dest': 'document',
     'Sec-Fetch-Mode': 'navigate',
     'Sec-Fetch-Site': 'none',
     'Sec-Fetch-User': '?1',
     'Upgrade-Insecure-Requests': '1',
     'Referer': OKOOO_DANCHANG_URL,
+    'Host': 'www.okooo.com',
 }
+
+_okooo_session = requests.Session()
+_okooo_session.headers.update(OKOOO_HEADERS)
+_okooo_session.verify = False
+
+_okooo_waf_blocked = False
+_okooo_waf_blocked_time = 0
+
+def _mark_okooo_waf_blocked():
+    global _okooo_waf_blocked, _okooo_waf_blocked_time
+    _okooo_waf_blocked = True
+    _okooo_waf_blocked_time = time.time()
+
+def _is_okooo_waf_blocked():
+    global _okooo_waf_blocked, _okooo_waf_blocked_time
+    if not _okooo_waf_blocked:
+        return False
+    if time.time() - _okooo_waf_blocked_time > 300:
+        _okooo_waf_blocked = False
+        return False
+    return True
+
+def _init_okooo_session():
+    global _okooo_session
+    if _is_okooo_waf_blocked():
+        log.info("okooo WAF已拦截，跳过session初始化")
+        return
+    try:
+        log.info("初始化okooo session...")
+        _okooo_session.get('https://www.okooo.com/', timeout=10)
+        time.sleep(0.5)
+        _okooo_session.get(OKOOO_DANCHANG_URL, timeout=10)
+        log.info("okooo session初始化完成")
+    except Exception as e:
+        log.warning(f"初始化okooo session失败: {e}")
+
+_init_okooo_session()
 
 BET_TYPES = {
     'spf': {'name': '胜平负', 'description': '预测比赛胜负平结果'},
@@ -246,35 +286,53 @@ def fetch_json(url, referer=None):
     return None
 
 def fetch_okooo(url, encoding='utf-8', referer=None, max_retries=2):
-    headers = {**OKOOO_HEADERS, 'Referer': referer} if referer else OKOOO_HEADERS
+    global _okooo_session
+    
+    if _is_okooo_waf_blocked():
+        log.debug(f"okooo WAF已拦截，跳过请求: {url}")
+        return None
     
     for attempt in range(max_retries):
-        req = urllib.request.Request(url, headers=headers)
         try:
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                content_encoding = resp.headers.get('Content-Encoding', '')
-                raw = resp.read()
-                
-                if 'gzip' in content_encoding.lower():
-                    import gzip
-                    raw = gzip.decompress(raw)
-                
-                for enc in [encoding, 'gbk', 'gb2312', 'utf-8']:
-                    try:
-                        result = raw.decode(enc)
-                        result = result.encode('utf-8', errors='replace').decode('utf-8')
-                        return result
-                    except (UnicodeDecodeError, LookupError):
-                        continue
-                return raw.decode('utf-8', errors='replace')
-        except urllib.error.HTTPError as e:
-            log.warning(f"HTTP Error {e.code} for {url}")
-            if e.code >= 500 and attempt < max_retries - 1:
-                time.sleep(2)
-            else:
-                break
-        except urllib.error.URLError as e:
-            log.warning(f"URL Error {e} for {url} (attempt {attempt + 1}/{max_retries})")
+            headers = {}
+            if referer:
+                headers['Referer'] = referer
+            
+            resp = _okooo_session.get(url, headers=headers, timeout=30)
+            
+            if resp.status_code == 403 or resp.status_code == 503:
+                log.warning(f"WAF拦截 {resp.status_code} for {url}, marking as blocked")
+                _mark_okooo_waf_blocked()
+                _okooo_session = requests.Session()
+                _okooo_session.headers.update(OKOOO_HEADERS)
+                _okooo_session.verify = False
+                return None
+            
+            if resp.status_code != 200:
+                log.warning(f"HTTP Error {resp.status_code} for {url}")
+                if resp.status_code >= 500 and attempt < max_retries - 1:
+                    time.sleep(2)
+                    continue
+                return None
+            
+            try:
+                resp.encoding = 'gb2312'
+                result = resp.text
+            except:
+                result = resp.content.decode('gb2312', errors='replace')
+            
+            if 'aliyun_waf' in result and '<title></title>' in result:
+                log.warning(f"WAF拦截 detected for {url}, marking as blocked")
+                _mark_okooo_waf_blocked()
+                _okooo_session = requests.Session()
+                _okooo_session.headers.update(OKOOO_HEADERS)
+                _okooo_session.verify = False
+                return None
+            
+            return result
+            
+        except requests.RequestException as e:
+            log.warning(f"Request Error {e} for {url} (attempt {attempt + 1}/{max_retries})")
             if attempt < max_retries - 1:
                 time.sleep(2)
     
@@ -291,8 +349,11 @@ def fetch_okooo_schedule(date=None):
     try:
         html = fetch_okooo(url, referer=OKOOO_DANCHANG_URL)
         if not html:
-            log.warning(f"okooo页面返回为空")
-            return []
+            log.warning(f"okooo页面返回为空，尝试500.com备用数据源")
+            fallback_matches = fetch_beidan_schedule(date)
+            for m in fallback_matches:
+                m['source'] = '500.com'
+            return fallback_matches
         
         matches = []
         
@@ -300,9 +361,8 @@ def fetch_okooo_schedule(date=None):
         tables = table_pattern.findall(html)
         
         if len(tables) < 2:
-            log.warning(f"okooo页面未找到比赛表格，找到 {len(tables)} 个table标签")
-            log.debug(f"页面前500字符: {html[:500]}")
-            return []
+            log.warning(f"okooo页面未找到比赛表格，找到 {len(tables)} 个table标签，尝试500.com备用数据源")
+            return fetch_beidan_schedule(date)
         
         main_table = tables[1]
         tr_pattern = re.compile(r'<tr[^>]*>(.*?)</tr>', re.DOTALL)
@@ -390,12 +450,19 @@ def fetch_okooo_schedule(date=None):
         
         matches = [m for m in matches if m['status'] != 'finished']
         
+        if not matches:
+            log.warning(f"okooo未找到未完结比赛，尝试500.com备用数据源")
+            return fetch_beidan_schedule(date)
+        
         log.info(f"okooo获取到 {len(matches)} 场未完结北单比赛")
         return matches
     
     except Exception as e:
-        log.error(f"抓取okooo北单赛程失败: {e}")
-        return []
+        log.error(f"抓取okooo北单赛程失败: {e}，尝试500.com备用数据源")
+        fallback_matches = fetch_beidan_schedule(date)
+        for m in fallback_matches:
+            m['source'] = '500.com'
+        return fallback_matches
 
 def fetch_okooo_asian_history(match_id):
     urls = [
@@ -2182,7 +2249,8 @@ def generate_beidan_recommendations(date=None, bet_types=None, source='okooo', s
     
     match_odds_cache = {mid: fetch_ouzhi_odds(mid) for mid in match_ids}
     
-    if source == 'okooo' and bet_types:
+    actual_source = matches[0].get('source', source) if matches else source
+    if actual_source == 'okooo' and bet_types:
         with ThreadPoolExecutor(max_workers=8) as executor:
             futures = {}
             for match in matches:
