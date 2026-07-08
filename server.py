@@ -29,9 +29,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
 from src.football import fetch_match_list, analyze_match
 from src.lottery3d import run_prediction
 from src.lottery3d.ml import fetch_data, predict_current
-from src.pailie5 import get_pailie5_analyzer, run_prediction as pailie5_run_prediction
 from src.lottery import get_lottery_analyzer, run_prediction as lottery_run_prediction
 from src.lottery.ml import predict_with_ml, clear_ml_cache
+from src.beidan import generate_beidan_recommendations, find_value_bets
 from src.kl8 import (
     get_kl8_analyzer, run_prediction as kl8_run_prediction,
     clear_cache as kl8_clear_cache, list_prediction_snapshots as kl8_list_snapshots,
@@ -122,10 +122,10 @@ _CACHE = {
         'timestamp': 0,
         'expire_seconds': 86400  # 24小时缓存（当天有效）
     },
-    'pailie5': {
+    'beidan': {
         'data': None,
         'timestamp': 0,
-        'expire_seconds': 86400  # 24小时缓存（当天有效）
+        'expire_seconds': 3600  # 1小时缓存
     },
     'kl8': {
         'data': None,
@@ -300,40 +300,20 @@ class Handler(BaseHTTPRequestHandler):
             self._serve_json(self._lottery_3d_payload())
         elif path == '/api/3d-ml':
             self._serve_json(self._lottery_3d_ml_payload())
-        elif path == '/api/pailie5':
-            self._serve_json(self._pailie5_payload())
-        elif path == '/api/pailie5/recommend':
+        elif path == '/api/beidan':
             params = parse_qs(route.query)
-            self._serve_json(self._pailie5_recommend_payload(params))
-        elif path == '/api/pailie5/backtest':
+            self._serve_json(self._beidan_payload(params))
+        elif path == '/api/beidan/matches':
             params = parse_qs(route.query)
-            self._serve_json(self._pailie5_backtest_payload(params))
-        elif path == '/api/pailie5/fetch':
-            self._serve_json(self._pailie5_fetch_payload())
-        elif path == '/api/pailie5/optimize':
-            self._serve_json(self._pailie5_optimize_payload())
-        elif path == '/api/pailie5/markov':
-            self._serve_json(self._pailie5_markov_payload())
-        elif path == '/api/pailie5/filter':
+            self._serve_json(self._beidan_matches_payload(params))
+        elif path == '/api/beidan/value':
             params = parse_qs(route.query)
-            self._serve_json(self._pailie5_filter_payload(params))
-        elif path == '/api/pailie5/rank':
-            params = parse_qs(route.query)
-            self._serve_json(self._pailie5_rank_payload(params))
-        elif path == '/api/pailie5/ensemble':
-            params = parse_qs(route.query)
-            self._serve_json(self._pailie5_ensemble_payload(params))
-        elif path == '/api/pailie5/cycles':
-            self._serve_json(self._pailie5_cycles_payload())
-        elif path == '/api/pailie5/contribution':
-            self._serve_json(self._pailie5_contribution_payload())
+            self._serve_json(self._beidan_value_payload(params))
         elif path == '/api/lottery':
             self._serve_json(self._lottery_payload())
         elif path == '/api/lottery-refresh':
             params = parse_qs(route.query)
             self._serve_json(self._lottery_refresh_payload(params))
-        elif path == '/api/pailie5-refresh':
-            self._serve_json(self._pailie5_refresh_payload())
         elif path == '/api/3d-refresh':
             params = parse_qs(route.query)
             self._serve_json(self._lottery_3d_refresh_payload(params))
@@ -809,305 +789,55 @@ class Handler(BaseHTTPRequestHandler):
             self._log.error('ML 3D 预测失败', exc_info=True)
             return {'error': 'ML 3D 预测失败'}
 
-    def _pailie5_payload(self):
-        """获取排列五统计分析（含双层缓存）"""
+    def _beidan_payload(self, params):
+        """获取北单推荐预测"""
         try:
-            now = time.time()
-            cache = _CACHE['pailie5']
-
-            # 检查 server 级缓存（TTL + 跨天双重校验）
-            if cache['data'] is not None and _is_cache_valid(cache, now):
-                self._log.info('排列五分析使用 server 级缓存')
-                return {'result': cache['data']}
-
-            # server 缓存失效，调用模块级预测函数（含模块级内存缓存）
-            self._log.info('排列五分析重新计算')
-            result = pailie5_run_prediction()
-
-            # 处理模块返回的错误
+            date = params.get('date', [None])[0]
+            source = params.get('source', ['dc'])[0]
+            bet_types = params.get('types', ['spf,zjq'])[0].split(',')
+            
+            self._log.info(f'北单推荐请求: date={date}, source={source}, types={bet_types}')
+            
+            result = generate_beidan_recommendations(date=date, bet_types=bet_types, source=source)
+            
             if 'error' in result:
                 return {'error': result['error']}
-
-            # 更新 server 级缓存
-            cache['data'] = result
-            cache['timestamp'] = now
-
+            
             return {'result': result}
-        except Exception:
-            self._log.error('排列五分析失败', exc_info=True)
-            return {'error': '排列五分析失败'}
-
-    def _pailie5_refresh_payload(self):
-        """强制刷新排列五数据缓存"""
-        try:
-            self._log.info('排列五强制刷新请求到达')
-            
-            # 清除模块级缓存
-            from src.pailie5 import clear_cache
-            clear_cache()
-            
-            # 清除服务器级缓存
-            _CACHE['pailie5']['data'] = None
-            _CACHE['pailie5']['timestamp'] = 0
-            
-            # 立即重新抓取并计算
-            self._log.info('排列五强制刷新：重新抓取数据...')
-            start = time.time()
-            result = pailie5_run_prediction()
-            elapsed = time.time() - start
-            
-            # 更新缓存
-            _CACHE['pailie5']['data'] = result
-            _CACHE['pailie5']['timestamp'] = time.time()
-            
-            self._log.info('排列五强制刷新完成，耗时 %.2f秒', elapsed)
-            
-            return {
-                'success': True,
-                'message': '缓存已刷新',
-                'elapsed': round(elapsed, 2),
-                'data_count': result.get('statistics', {}).get('total_issues', 0) if isinstance(result, dict) else 0,
-                'data_quality': result.get('data_quality') if isinstance(result, dict) else None,
-                'version': result.get('version') if isinstance(result, dict) else None
-            }
         except Exception as e:
-            self._log.error('排列五强制刷新失败: %s', str(e), exc_info=True)
-            return {'success': False, 'error': str(e)}
+            self._log.error('北单推荐失败', exc_info=True)
+            return {'error': f'北单推荐失败: {str(e)}'}
 
-    def _pailie5_recommend_payload(self, params):
-        """获取排列五推荐号码"""
+    def _beidan_matches_payload(self, params):
+        """获取北单比赛列表"""
         try:
-            analyzer = get_pailie5_analyzer()
-            method = params.get('method', ['balanced'])[0]
+            date = params.get('date', [None])[0]
+            source = params.get('source', ['dc'])[0]
             
-            recommendations = []
-            for _ in range(5):
-                nums = analyzer.generate_recommendation(method)
-                recommendations.append(nums)
+            from src.beidan import fetch_beidan_schedule
+            matches = fetch_beidan_schedule(date=date, source=source)
             
-            return {
-                'result': {
-                    'method': method,
-                    'recommendations': recommendations,
-                    'hot_numbers': analyzer.get_hot_numbers(5),
-                    'cold_numbers': analyzer.get_cold_numbers(5),
-                }
-            }
-        except Exception:
-            self._log.error('排列五推荐失败', exc_info=True)
-            return {'error': '排列五推荐失败'}
+            return {'matches': matches}
+        except Exception as e:
+            self._log.error('北单比赛列表获取失败', exc_info=True)
+            return {'error': f'获取比赛列表失败: {str(e)}'}
 
-    def _pailie5_fetch_payload(self):
-        """动态抓取排列五最新开奖号码（强制刷新并重新分析）"""
+    def _beidan_value_payload(self, params):
+        """获取北单价值投注推荐"""
         try:
-            self._log.info('排列五抓取并重新分析请求到达')
+            date = params.get('date', [None])[0]
+            source = params.get('source', ['dc'])[0]
+            threshold = float(params.get('threshold', [0.05])[0])
             
-            # 清除服务器级缓存
-            _CACHE['pailie5']['data'] = None
-            _CACHE['pailie5']['timestamp'] = 0
+            result = find_value_bets(date=date, threshold=threshold, source=source)
             
-            # 清除模块级缓存
-            from src.pailie5 import clear_cache
-            clear_cache()
-            
-            # 强制抓取最新数据
-            analyzer = get_pailie5_analyzer()
-            fetch_result = analyzer.fetch_latest_results(force_refresh=True)
-            
-            # 重新分析
-            self._log.info('排列五抓取完成，开始重新分析...')
-            analysis_result = pailie5_run_prediction(force_refresh=True)
-            
-            # 更新缓存
-            _CACHE['pailie5']['data'] = analysis_result
-            _CACHE['pailie5']['timestamp'] = time.time()
-            
-            # 合并结果
-            result = {
-                'success': fetch_result.get('success', False),
-                'source': fetch_result.get('source'),
-                'message': fetch_result.get('message'),
-                'latest_issue': fetch_result.get('latest_issue'),
-                'fetched_count': fetch_result.get('count', 0),
-                'analysis': analysis_result
-            }
+            if 'error' in result:
+                return {'error': result['error']}
             
             return {'result': result}
-        except Exception:
-            self._log.error('排列五抓取失败', exc_info=True)
-            return {'error': '排列五抓取失败'}
-
-    def _pailie5_backtest_payload(self, params):
-        """排列五历史回测（滚动回测）"""
-        try:
-            analyzer = get_pailie5_analyzer()
-            periods = int(params.get('periods', [30])[0])
-            
-            result = analyzer.rolling_backtest(trials=periods)
-            
-            return {'result': result}
-        except Exception:
-            self._log.error('排列五回测失败', exc_info=True)
-            return {'error': '排列五回测失败'}
-
-    def _pailie5_optimize_payload(self):
-        """排列五窗口权重优化（回测驱动）"""
-        try:
-            analyzer = get_pailie5_analyzer()
-            weights = analyzer.optimize_window_weights(trials=80)
-            
-            return {'result': weights}
-        except Exception:
-            self._log.error('排列五权重优化失败', exc_info=True)
-            return {'error': '排列五权重优化失败'}
-
-    def _pailie5_markov_payload(self):
-        """排列五位置级马尔可夫预测"""
-        try:
-            from src.pailie5 import build_markov_pos, markov_prob_smoothed
-            analyzer = get_pailie5_analyzer()
-            numbers_list = [r['numbers'] for r in reversed(analyzer.history)]
-            recent = analyzer.get_recent_results(2)
-            last = numbers_list[-1] if numbers_list else [0]*5
-            
-            # 每个位置的Top3预测
-            position_preds = []
-            for pos in range(5):
-                trans = build_markov_pos(numbers_list, pos)
-                prev_d = last[pos]
-                row = trans.get(prev_d, {})
-                probs = markov_prob_smoothed(row, range(10))
-                top3 = sorted(probs.items(), key=lambda x: -x[1])[:3]
-                position_preds.append({'position': pos, 'last': prev_d, 'top3': top3})
-            
-            return {
-                'result': {
-                    'recent_results': [r['numbers'] for r in recent],
-                    'position_predictions': position_preds,
-                }
-            }
-        except Exception:
-            self._log.error('排列五马尔可夫预测失败', exc_info=True)
-            return {'error': '排列五马尔可夫预测失败'}
-
-    def _pailie5_filter_payload(self, params):
-        """排列五多条件缩水筛选"""
-        try:
-            from src.pailie5 import generate_pool, load_window_weights
-            analyzer = get_pailie5_analyzer()
-            numbers_list = [r['numbers'] for r in reversed(analyzer.history)]
-            ww = load_window_weights()
-            
-            # 生成候选推荐池（Top100）
-            pool = generate_pool(numbers_list, ww, top_n=100, apply_dedup=False)
-            candidates = [list(map(int, num)) for _, num in pool]
-            
-            # 解析条件参数
-            conditions = {}
-            if 'sum_min' in params and 'sum_max' in params:
-                conditions['sum_range'] = (int(params['sum_min'][0]), int(params['sum_max'][0]))
-            if 'span_min' in params and 'span_max' in params:
-                conditions['span_range'] = (int(params['span_min'][0]), int(params['span_max'][0]))
-            if 'odd_min' in params and 'odd_max' in params:
-                conditions['odd_count'] = (int(params['odd_min'][0]), int(params['odd_max'][0]))
-            if 'big_min' in params and 'big_max' in params:
-                conditions['big_count'] = (int(params['big_min'][0]), int(params['big_max'][0]))
-            
-            # 应用筛选
-            filtered = []
-            for nums in candidates:
-                ok = True
-                if 'sum_range' in conditions:
-                    s = sum(nums)
-                    if s < conditions['sum_range'][0] or s > conditions['sum_range'][1]:
-                        ok = False
-                if ok and 'span_range' in conditions:
-                    sp = max(nums) - min(nums)
-                    if sp < conditions['span_range'][0] or sp > conditions['span_range'][1]:
-                        ok = False
-                if ok and 'odd_count' in conditions:
-                    oc = sum(1 for n in nums if n % 2 == 1)
-                    if oc < conditions['odd_count'][0] or oc > conditions['odd_count'][1]:
-                        ok = False
-                if ok and 'big_count' in conditions:
-                    bc = sum(1 for n in nums if n >= 5)
-                    if bc < conditions['big_count'][0] or bc > conditions['big_count'][1]:
-                        ok = False
-                if ok:
-                    filtered.append(nums)
-            
-            return {
-                'result': {
-                    'conditions': conditions,
-                    'total_candidates': len(candidates),
-                    'filtered_count': len(filtered),
-                    'filtered': filtered[:20]
-                }
-            }
-        except Exception:
-            self._log.error('排列五多条件缩水失败', exc_info=True)
-            return {'error': '排列五多条件缩水失败'}
-
-    def _pailie5_rank_payload(self, params):
-        """排列五排名模型 - Top-N排序"""
-        try:
-            analyzer = get_pailie5_analyzer()
-            top_n = int(params.get('top_n', [5])[0])
-            
-            # 获取排名结果
-            ranked = analyzer.rank_model(top_n=top_n)
-            
-            return {
-                'result': {
-                    'top_n': top_n,
-                    'ranked_numbers': [{'number': n, 'score': s} for n, s in ranked]
-                }
-            }
-        except Exception:
-            self._log.error('排列五排名模型失败', exc_info=True)
-            return {'error': '排列五排名模型失败'}
-
-    def _pailie5_ensemble_payload(self, params):
-        """排列五多模型集成预测"""
-        try:
-            analyzer = get_pailie5_analyzer()
-            result = analyzer.ensemble_predict()
-            
-            return {'result': result}
-        except Exception:
-            self._log.error('排列五集成预测失败', exc_info=True)
-            return {'error': '排列五集成预测失败'}
-
-    def _pailie5_cycles_payload(self):
-        """排列五周期与状态识别"""
-        try:
-            analyzer = get_pailie5_analyzer()
-            
-            cycles = analyzer.identify_cycles()
-            
-            return {'result': cycles}
-        except Exception:
-            self._log.error('排列五周期识别失败', exc_info=True)
-            return {'error': '排列五周期识别失败'}
-
-    def _pailie5_contribution_payload(self):
-        """排列五数字评分贡献度分析"""
-        try:
-            from src.pailie5 import ensemble_digit_scores_multi_window, load_window_weights
-            analyzer = get_pailie5_analyzer()
-            numbers_list = [r['numbers'] for r in reversed(analyzer.history)]
-            ww = load_window_weights()
-            score = ensemble_digit_scores_multi_window(numbers_list, ww)
-            
-            # 构建贡献度数据（归一化到0-1）
-            min_s = min(score)
-            max_s = max(score) - min_s + 1e-9
-            contributions = {str(d): round((score[d] - min_s) / max_s, 4) for d in range(10)}
-            
-            return {'result': {'normalized_scores': contributions, 'raw_scores': {str(d): round(score[d], 3) for d in range(10)}}}
-        except Exception:
-            self._log.error('排列五特征贡献度分析失败', exc_info=True)
-            return {'error': '排列五特征贡献度分析失败'}
+        except Exception as e:
+            self._log.error('北单价值投注失败', exc_info=True)
+            return {'error': f'价值投注分析失败: {str(e)}'}
 
     def _calibrate_payload(self, params):
         """手动触发联赛重新校准"""

@@ -832,8 +832,8 @@
   </header>
   <div class="tabs" role="tablist">
     <button type="button" class="tab active" data-tab="football" role="tab">⚽ 足球预测</button>
+    <button type="button" class="tab" data-tab="beidan" role="tab">🏈 北单</button>
     <button type="button" class="tab" data-tab="lottery3d" role="tab">🎲 福彩3D</button>
-    <button type="button" class="tab" data-tab="pailie5" role="tab">🔢 排列五</button>
     <button type="button" class="tab" data-tab="lottery" role="tab">🎯 大乐透</button>
     <button type="button" class="tab" data-tab="kl8" role="tab">🎱 快乐8</button>
   </div>
@@ -844,8 +844,8 @@
   <div id="panel-lottery3d" class="tab-panel">
     <div id="app-3d"></div>
   </div>
-  <div id="panel-pailie5" class="tab-panel">
-    <div id="app-pailie5"></div>
+  <div id="panel-beidan" class="tab-panel">
+    <div id="app-beidan"></div>
   </div>
   <div id="panel-lottery" class="tab-panel">
     <div id="app-lottery"></div>
@@ -867,13 +867,13 @@
     <span class="nav-icon">⚽</span>
     <span>足球</span>
   </div>
+  <div class="bottom-nav-item" data-tab="beidan">
+    <span class="nav-icon">🏈</span>
+    <span>北单</span>
+  </div>
   <div class="bottom-nav-item" data-tab="lottery3d">
     <span class="nav-icon">🎲</span>
     <span>3D</span>
-  </div>
-  <div class="bottom-nav-item" data-tab="pailie5">
-    <span class="nav-icon">🔢</span>
-    <span>排列五</span>
   </div>
   <div class="bottom-nav-item" data-tab="lottery">
     <span class="nav-icon">🎯</span>
@@ -888,6 +888,7 @@
 <script>
 const app = document.getElementById('app');
 const app3d = document.getElementById('app-3d');
+const appBeidan = document.getElementById('app-beidan');
 const searchWrap = document.getElementById('search-wrap');
 const pageTitle = document.getElementById('page-title');
 const pageDesc = document.getElementById('page-desc');
@@ -898,6 +899,7 @@ let activeTab = 'football';
 let predictionsPage = 1;
 const PREDICTIONS_PAGE_SIZE = 20;
 let lottery3dLoaded = false;
+let beidanMatches = [];
 
 const TAB_META = {
   football: {
@@ -905,15 +907,15 @@ const TAB_META = {
     desc: '数据来源：odds.500.com（Bet365/Pinnacle 独赔） · 泊松概率模型',
     disclaimer: '⚠ 以上分析仅为概率统计参考，体育赛事结果受多种不确定因素影响，不构成任何投注建议。请理性对待！',
   },
+  beidan: {
+    title: '🏈 北单分析',
+    desc: '数据来源：odds.500.com · 胜平负预测 + 总进球分析',
+    disclaimer: '⚠ 以上分析仅为概率统计参考，体育赛事结果受多种不确定因素影响，不构成任何投注建议。请理性对待！',
+  },
   lottery3d: {
     title: '🎲 福彩3D预测',
     desc: '数据来源：8300.cn 近200期 · 形态概率 + 组六四码 + 直选Top3/Top15',
     disclaimer: '⚠ 3D 开奖具有随机性，以上分析仅为历史统计参考，回测用于观察候选池收缩效果，不构成任何投注建议。',
-  },
-  pailie5: {
-    title: '🔢 排列五分析',
-    desc: '数据来源：官方开奖数据 · 频率统计 + 遗漏分析 + 贝叶斯综合评分',
-    disclaimer: '⚠ 排列五开奖具有随机性，以上分析仅为历史统计参考，不构成任何投注建议。请理性对待！',
   },
   lottery: {
     title: '🎯 大乐透分析',
@@ -1151,6 +1153,201 @@ async function loadMatches() {
   } catch (e) {
     showError('网络请求失败：' + e.message);
   }
+}
+
+let beidanSource = 'dc';
+let beidanDate = '';
+
+async function loadBeidan() {
+  appBeidan.innerHTML = '<div class="status">加载中…</div>';
+  try {
+    const q = new URLSearchParams({ source: beidanSource, date: beidanDate || '' });
+    const data = await fetchJson('/api/beidan?' + q);
+    if (data.error) {
+      appBeidan.innerHTML = `<div class="status error">✗ ${esc(data.error)}</div>`;
+      return;
+    }
+    renderBeidan(data.result);
+  } catch (e) {
+    appBeidan.innerHTML = `<div class="status error">网络请求失败：${esc(e.message)}</div>`;
+  }
+}
+
+function renderBeidan(result) {
+  let html = '';
+  
+  html += `<div style="margin-bottom:16px">
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      <span style="font-size:14px;color:var(--muted)">数据源：</span>
+      <button onclick="switchBeidanSource('dc')" class="${beidanSource === 'dc' ? 'on' : ''}">竞彩单场</button>
+      <button onclick="switchBeidanSource('jczq')" class="${beidanSource === 'jczq' ? 'on' : ''}">竞彩足球</button>
+      <button onclick="switchBeidanSource('okooo')" class="${beidanSource === 'okooo' ? 'on' : ''}">okooo</button>
+      <span style="font-size:14px;color:var(--muted);margin-left:12px">日期：${esc(result.date)}</span>
+      <button onclick="loadBeidan()" style="margin-left:auto">🔄 刷新</button>
+    </div>
+  </div>`;
+  
+  html += `<div class="status" style="padding:4px 0 12px;font-size:13px">共 ${result.total_matches} 场比赛</div>`;
+  
+  if (!result.recommendations || !result.recommendations.length) {
+    html += '<div class="status">暂无比赛数据</div>';
+    appBeidan.innerHTML = html;
+    return;
+  }
+  
+  const groups = {};
+  result.recommendations.forEach(m => {
+    const league = m.league || '其它';
+    (groups[league] ||= []).push(m);
+  });
+  
+  for (const [league, matches] of Object.entries(groups)) {
+    html += `<div class="league-group"><div class="league-title">${esc(league)}</div>`;
+    matches.forEach(m => {
+      html += `<div class="match" style="padding:12px">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start">
+          <div style="flex:1">
+            <div style="font-weight:bold;font-size:15px;margin-bottom:4px">
+              ${esc(m.home)} <span style="color:var(--muted)">vs</span> ${esc(m.away)}
+            </div>
+            <div style="font-size:13px;color:var(--muted)">
+              ${esc(m.num || '')} · ${esc(m.time || '')}
+            </div>
+          </div>
+        </div>`;
+        
+        if (m.spf && !m.spf.error) {
+          html += '<div style="margin-top:8px;padding:8px;background:var(--bg2);border-radius:8px">';
+          html += '<div style="font-size:12px;color:var(--muted);margin-bottom:6px">🎯 胜平负</div>';
+          if (m.spf.odds) {
+            html += '<div style="display:flex;gap:12px">';
+            const items = [
+              { key: '胜', color: '#ef4444', pred: m.spf.prediction === '胜' },
+              { key: '平', color: '#f59e0b', pred: m.spf.prediction === '平' },
+              { key: '负', color: '#22c55e', pred: m.spf.prediction === '负' },
+            ];
+            items.forEach(item => {
+              const prob = m.spf.probabilities?.[item.key] || 0;
+              const odd = m.spf.odds?.[item.key] || '-';
+              html += `<div style="flex:1;text-align:center;padding:6px;border-radius:6px${item.pred ? `;background:${item.color}20;color:${item.color};font-weight:bold` : ''}">
+                <div>${item.key}</div>
+                <div style="font-size:11px;color:var(--muted)">${((prob || 0) * 100).toFixed(0)}%</div>
+                <div style="font-size:12px">${odd}</div>
+              </div>`;
+            });
+            html += '</div>';
+          }
+          if (m.spf.scores && m.spf.scores.length) {
+            html += '<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border)">';
+            html += '<div style="font-size:12px;color:var(--muted);margin-bottom:6px">⚽ 比分预测（Top3）</div>';
+            html += '<div style="display:flex;gap:8px">';
+            m.spf.scores.forEach((s, idx) => {
+              const isTop1 = idx === 0;
+              html += `<div style="flex:1;text-align:center;padding:6px;border-radius:6px${isTop1 ? ';background:#3b82f620;color:#3b82f6;font-weight:bold' : ';background:var(--bg)'}">
+                <div style="font-size:14px">${esc(s.score)}</div>
+                <div style="font-size:11px;color:var(--muted)">${(s.probability * 100).toFixed(1)}%</div>
+              </div>`;
+            });
+            html += '</div>';
+            html += '</div>';
+          }
+          html += '</div>';
+        }
+        
+        if (m.zjq && !m.zjq.error) {
+          html += '<div style="margin-top:8px;padding:8px;background:var(--bg2);border-radius:8px">';
+          html += '<div style="font-size:12px;color:var(--muted);margin-bottom:6px">⚽ 总进球</div>';
+          if (m.zjq.top3) {
+            html += '<div style="display:flex;gap:8px">';
+            m.zjq.top3.slice(0, 3).forEach(([count, prob]) => {
+              html += `<div style="padding:4px 8px;background:var(--bg);border-radius:4px;font-size:13px">
+                ${count}球 <span style="color:var(--muted)">${(prob * 100).toFixed(0)}%</span>
+              </div>`;
+            });
+            html += '</div>';
+          }
+          if (m.zjq.over25_prob !== undefined) {
+            html += `<div style="margin-top:6px;font-size:12px">
+              大球(>2.5): <b>${(m.zjq.over25_prob * 100).toFixed(1)}%</b> · 
+              小球(<2.5): <b>${(m.zjq.under25_prob * 100).toFixed(1)}%</b>
+            </div>`;
+          }
+          html += '</div>';
+        }
+        
+        if (m.asian && m.asian.history && m.asian.history.length > 0) {
+          html += '<div style="margin-top:8px;padding:8px;background:var(--bg2);border-radius:8px">';
+          html += '<div style="font-size:12px;color:var(--muted);margin-bottom:6px">📈 亚盘水位变化</div>';
+          html += '<div style="max-height:150px;overflow-y:auto;font-size:11px">';
+          const recent = m.asian.history.slice(-5).reverse();
+          recent.forEach((entry, idx) => {
+            const isLatest = idx === 0;
+            html += `<div style="display:flex;justify-content:space-between;padding:2px 0${isLatest ? ';font-weight:bold;color:#3b82f6' : ''}">
+              <span>${esc(entry.time)}</span>
+              <span>${esc(entry.handicap)}</span>
+              <span>${entry.home_odds || '-'}</span>
+              <span>${entry.away_odds || '-'}</span>
+            </div>`;
+          });
+          if (m.asian.history.length > 5) {
+            html += `<div style="color:var(--muted);text-align:center;margin-top:4px">...共 ${m.asian.history.length} 条记录</div>`;
+          }
+          html += '</div>';
+          html += '</div>';
+        }
+        
+        if (m.goals && m.goals.history && m.goals.history.length > 0) {
+          html += '<div style="margin-top:8px;padding:8px;background:var(--bg2);border-radius:8px">';
+          html += '<div style="font-size:12px;color:var(--muted);margin-bottom:6px">⚽ 总进球赔率变化</div>';
+          html += '<div style="max-height:150px;overflow-y:auto;font-size:11px">';
+          const recent = m.goals.history.slice(-5).reverse();
+          recent.forEach((entry, idx) => {
+            const isLatest = idx === 0;
+            html += `<div style="display:flex;justify-content:space-between;padding:2px 0${isLatest ? ';font-weight:bold;color:#3b82f6' : ''}">
+              <span>${esc(entry.time)}</span>
+              <span>${esc(entry.line)}</span>
+              <span>大: ${entry.over_odds || '-'}</span>
+              <span>小: ${entry.under_odds || '-'}</span>
+            </div>`;
+          });
+          if (m.goals.history.length > 5) {
+            html += `<div style="color:var(--muted);text-align:center;margin-top:4px">...共 ${m.goals.history.length} 条记录</div>`;
+          }
+          html += '</div>';
+          html += '</div>';
+        }
+        
+        if (m.cs && m.cs.history && m.cs.history.length > 0) {
+          html += '<div style="margin-top:8px;padding:8px;background:var(--bg2);border-radius:8px">';
+          html += '<div style="font-size:12px;color:var(--muted);margin-bottom:6px">🏆 比分赔率变化</div>';
+          html += '<div style="max-height:150px;overflow-y:auto;font-size:11px">';
+          const recent = m.cs.history.slice(-5).reverse();
+          recent.forEach((entry, idx) => {
+            const isLatest = idx === 0;
+            html += `<div style="display:flex;justify-content:space-between;padding:2px 0${isLatest ? ';font-weight:bold;color:#3b82f6' : ''}">
+              <span>${esc(entry.time)}</span>
+              <span>${esc(entry.score)}</span>
+              <span>${entry.odds || '-'}</span>
+            </div>`;
+          });
+          if (m.cs.history.length > 5) {
+            html += `<div style="color:var(--muted);text-align:center;margin-top:4px">...共 ${m.cs.history.length} 条记录</div>`;
+          }
+          html += '</div>';
+          html += '</div>';
+        }
+        
+        html += '</div>';
+      });
+    html += '</div>';
+  }
+  
+  appBeidan.innerHTML = html;
+}
+
+function switchBeidanSource(source) {
+  beidanSource = source;
+  loadBeidan();
 }
 
 function ensureSearchBox() {
@@ -1797,14 +1994,14 @@ function switchTab(tab) {
   pageTitle.textContent = meta.title;
   pageDesc.textContent = meta.desc;
   document.getElementById('disclaimer').innerHTML = meta.disclaimer;
-  location.hash = tab === 'lottery3d' ? '3d' : tab === 'pailie5' ? 'pailie5' : tab === 'lottery' ? 'lottery' : tab === 'kl8' ? 'kl8' : tab === 'predictions' ? 'predictions' : 'football';
+  location.hash = tab === 'lottery3d' ? '3d' : tab === 'beidan' ? 'beidan' : tab === 'lottery' ? 'lottery' : tab === 'kl8' ? 'kl8' : tab === 'predictions' ? 'predictions' : 'football';
   if (tab === 'football') {
     if (!allMatches.length) loadMatches();
     else showListView();
+  } else if (tab === 'beidan') {
+    loadBeidan();
   } else if (tab === 'lottery3d') {
     loadLottery3d(true);
-  } else if (tab === 'pailie5') {
-    loadPailie5();
   } else if (tab === 'lottery') {
     loadLottery();
   } else if (tab === 'kl8') {
@@ -4436,7 +4633,7 @@ async function fetchKL8Data() {
 
 function initPage() {
   const hash = location.hash.replace('#', '');
-  switchTab(hash === '3d' ? 'lottery3d' : hash === 'pailie5' ? 'pailie5' : hash === 'lottery' ? 'lottery' : hash === 'kl8' ? 'kl8' : hash === 'predictions' ? 'predictions' : 'football');
+  switchTab(hash === '3d' ? 'lottery3d' : hash === 'beidan' ? 'beidan' : hash === 'lottery' ? 'lottery' : hash === 'kl8' ? 'kl8' : hash === 'predictions' ? 'predictions' : 'football');
 }
 
 function fmtPctValue(value) {
