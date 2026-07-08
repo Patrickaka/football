@@ -1173,6 +1173,23 @@ async function loadBeidan() {
   }
 }
 
+function renderBeidanQuality(q) {
+  if (!q) return '';
+  const colors = {
+    strong: 'var(--accent2)',
+    medium: 'var(--warn)',
+    split: 'var(--warn)',
+    low: 'var(--muted)',
+    unknown: 'var(--muted)',
+  };
+  const color = colors[q.level] || 'var(--muted)';
+  const lead = q.lead != null ? ` · 领先 ${(q.lead * 100).toFixed(1)}%` : '';
+  const conflict = q.conflict ? ' · 盘口分歧' : '';
+  return `<div style="margin:4px 0 8px;font-size:12px;color:${color}">
+    ${esc(q.label || '')}${q.advice ? ' · ' + esc(q.advice) : ''}${lead}${conflict}
+  </div>`;
+}
+
 function renderBeidan(result) {
   let html = '';
   
@@ -1219,6 +1236,7 @@ function renderBeidan(result) {
         if (m.spf && !m.spf.error) {
           html += '<div style="margin-top:8px;padding:8px;background:var(--bg2);border-radius:8px">';
           html += '<div style="font-size:12px;color:var(--muted);margin-bottom:6px">🎯 胜平负</div>';
+          html += renderBeidanQuality(m.spf.quality);
           if (m.spf.odds) {
             html += '<div style="display:flex;gap:12px">';
             const items = [
@@ -1257,6 +1275,7 @@ function renderBeidan(result) {
         if (m.zjq && !m.zjq.error) {
           html += '<div style="margin-top:8px;padding:8px;background:var(--bg2);border-radius:8px">';
           html += '<div style="font-size:12px;color:var(--muted);margin-bottom:6px">⚽ 总进球</div>';
+          html += renderBeidanQuality(m.zjq.quality);
           if (m.zjq.top3) {
             html += '<div style="display:flex;gap:8px">';
             m.zjq.top3.slice(0, 3).forEach(([count, prob]) => {

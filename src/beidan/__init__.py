@@ -13,7 +13,7 @@ from ..common.paths import data_path
 
 log = setup_logger('beidan')
 
-BEIDAN_VERSION = '2026-07-08-v3'
+BEIDAN_VERSION = '2026-07-08-v4'
 
 BASE_URL = 'https://odds.500.com'
 SCHEDULE_URL = f'{BASE_URL}/index_jczq.shtml'
@@ -727,8 +727,14 @@ def enhance_scores_with_cs(score_prediction, cs_history):
     
     enhanced_scores = []
     for score_item in score_prediction['top3']:
-        score = score_item[0]
-        prob = score_item[1]
+        if isinstance(score_item, dict):
+            score = score_item.get('score')
+            prob = score_item.get('probability', 0)
+        else:
+            score = score_item[0]
+            prob = score_item[1]
+        if not score:
+            continue
         
         if score in cs_odds_map:
             cs_odds = cs_odds_map[score]
@@ -745,7 +751,16 @@ def enhance_scores_with_cs(score_prediction, cs_history):
     
     enhanced_scores.sort(key=lambda x: -x[1])
     
-    score_prediction['top3'] = [(s[0], s[1]) for s in enhanced_scores[:3]]
+    score_prediction['top3'] = [
+        {
+            'score': s[0],
+            'probability': s[1],
+            'source': s[2],
+            'home_goals': int(s[0].split('-')[0]) if '-' in s[0] and s[0].split('-')[0].isdigit() else None,
+            'away_goals': int(s[0].split('-')[1]) if '-' in s[0] and s[0].split('-')[1].isdigit() else None,
+        }
+        for s in enhanced_scores[:3]
+    ]
     
     return score_prediction
 
@@ -1180,6 +1195,75 @@ def calculate_implied_probability(odds_dict):
     
     return {k: (1 / v) / prob_sum for k, v in odds_dict.items() if v and v > 0}
 
+def assess_recommendation_quality(probabilities, prediction=None, context=None):
+    """Classify narrow calls so the UI can avoid treating them as strong picks."""
+    if not probabilities:
+        return {
+            'level': 'unknown',
+            'label': '无数据',
+            'confidence': 0,
+            'lead': 0,
+            'top2': [],
+            'advice': '跳过',
+            'avoid_single': True,
+        }
+
+    ranked = sorted(
+        ((str(k), float(v)) for k, v in probabilities.items() if v is not None),
+        key=lambda x: -x[1]
+    )
+    if not ranked:
+        return {
+            'level': 'unknown',
+            'label': '无数据',
+            'confidence': 0,
+            'lead': 0,
+            'top2': [],
+            'advice': '跳过',
+            'avoid_single': True,
+        }
+
+    top_key, top_prob = ranked[0]
+    if prediction and prediction != top_key:
+        for key, prob in ranked:
+            if key == prediction:
+                top_key, top_prob = key, prob
+                break
+
+    second_prob = ranked[1][1] if len(ranked) > 1 else 0.0
+    lead = top_prob - second_prob
+    top2 = [{'option': key, 'probability': prob} for key, prob in ranked[:2]]
+
+    asian_direction = (context or {}).get('asian_direction')
+    conflict = False
+    if asian_direction in ('home_backing', 'away_laying') and top_key == '负':
+        conflict = True
+    elif asian_direction in ('away_backing', 'home_laying') and top_key == '胜':
+        conflict = True
+
+    if top_prob >= 0.46 and lead >= 0.08 and not conflict:
+        level, label, advice = 'strong', '强推荐', f'主推 {top_key}'
+    elif top_prob >= 0.40 and lead >= 0.045 and not conflict:
+        level, label, advice = 'medium', '可参考', f'主推 {top_key}'
+    elif lead < 0.035 or conflict:
+        level, label = 'split', '分歧较大'
+        combo = '/'.join(item['option'] for item in top2)
+        advice = f'建议双选 {combo}' if len(top2) >= 2 else f'谨慎 {top_key}'
+    else:
+        level, label, advice = 'low', '低置信', f'谨慎 {top_key}'
+
+    return {
+        'level': level,
+        'label': label,
+        'prediction': top_key,
+        'confidence': round(top_prob, 6),
+        'lead': round(lead, 6),
+        'top2': top2,
+        'advice': advice,
+        'avoid_single': level in ('low', 'split', 'unknown'),
+        'conflict': conflict,
+    }
+
 def fetch_ouzhi_odds(match_id):
     url = f'{BASE_URL}/fenxi1/json/ouzhi.php?fid={match_id}&cid=0&type=europe&r=1'
     referer = f'{BASE_URL}/fenxi/ouzhi-{match_id}.shtml'
@@ -1238,9 +1322,6 @@ def analyze_spf(match, asian_data=None, cs_data=None):
         
         if probs:
             result['odds'] = odds
-            result['probabilities'] = probs
-            result['prediction'] = max(probs, key=probs.get)
-            result['confidence'] = probs[result['prediction']]
             result['margin'] = sum(probs.values()) - 1.0
             
             home_win_prob = probs.get('胜', 0.33)
@@ -1252,6 +1333,20 @@ def analyze_spf(match, asian_data=None, cs_data=None):
                     home_win_prob, draw_prob, away_win_prob, asian_data['history']
                 )
                 result['asian_adjusted'] = True
+
+            model_probs = {
+                '胜': home_win_prob,
+                '平': draw_prob,
+                '负': away_win_prob,
+            }
+            prob_total = sum(model_probs.values())
+            if prob_total > 0:
+                model_probs = {k: v / prob_total for k, v in model_probs.items()}
+
+            result['probabilities'] = model_probs
+            result['raw_probabilities'] = probs
+            result['prediction'] = max(model_probs, key=model_probs.get)
+            result['confidence'] = model_probs[result['prediction']]
             
             score_prediction = predict_scores_by_poisson(
                 home_win_prob,
@@ -1271,6 +1366,15 @@ def analyze_spf(match, asian_data=None, cs_data=None):
             
             if asian_data and asian_data.get('history'):
                 result['asian_trend'] = analyze_asian_trend(asian_data['history'])
+            
+            quality_context = {}
+            if result.get('asian_trend'):
+                quality_context['asian_direction'] = result['asian_trend'].get('direction')
+            result['quality'] = assess_recommendation_quality(
+                model_probs,
+                result['prediction'],
+                quality_context
+            )
             
             if cs_data and cs_data.get('history'):
                 result['cs_trend'] = analyze_cs_trend(cs_data['history'])
@@ -1370,7 +1474,8 @@ def analyze_zjq(match, zjq_odds=None, asian_data=None, goals_data=None):
     draw_prob_norm = draw_prob / total_prob
     away_prob_norm = away_prob / total_prob
     
-    avg_goals = 2.6
+    league_profile = LEAGUE_PROFILES.get(match.get('league'), {'avg_goals': 2.6, 'draw_rate': 0.27})
+    avg_goals = league_profile['avg_goals']
     
     if asian_data and asian_data.get('history'):
         asian_factor = calculate_asian_goal_factor(asian_data['history'])
@@ -1416,6 +1521,20 @@ def analyze_zjq(match, zjq_odds=None, asian_data=None, goals_data=None):
     if goals_data and goals_data.get('history'):
         zjq_probs = adjust_zjq_by_goals(zjq_probs, goals_data['history'])
         result['goals_adjusted'] = True
+
+    market_zjq_odds = (zjq_odds or {}).get(match['id']) if isinstance(zjq_odds, dict) else None
+    if market_zjq_odds:
+        market_probs = calculate_implied_probability(market_zjq_odds)
+        if market_probs:
+            blended = {}
+            for key in set(zjq_probs) | set(market_probs):
+                model_prob = zjq_probs.get(key, 0)
+                market_prob = market_probs.get(key, 0)
+                blended[key] = model_prob * 0.55 + market_prob * 0.45
+            zjq_probs = blended
+            result['odds'] = market_zjq_odds
+            result['market_probabilities'] = market_probs
+            result['market_adjusted'] = True
     
     total_zjq = sum(zjq_probs.values())
     if total_zjq > 0:
@@ -1429,6 +1548,11 @@ def analyze_zjq(match, zjq_odds=None, asian_data=None, goals_data=None):
     result['top3'] = sorted_counts[:3]
     result['prediction'] = sorted_counts[0][0]
     result['confidence'] = sorted_counts[0][1]
+    result['quality'] = assess_recommendation_quality(
+        zjq_probs,
+        result['prediction'],
+        {}
+    )
     
     over25_prob = sum(zjq_probs.get(str(i), 0) for i in [3, 4, 5, 6]) + zjq_probs.get('7+', 0)
     result['over25_prob'] = over25_prob
@@ -1579,10 +1703,11 @@ def find_value_bets(date=None, threshold=0.05, source='dc'):
             probs = data['probabilities']
             
             if bet_type == 'zjq':
+                odds_map = data.get('odds') or {}
                 for key, prob in probs.items():
                     if key == '7+':
                         continue
-                    odd = data['odds'].get(key)
+                    odd = odds_map.get(key)
                     if odd and odd > 0:
                         implied_prob = 1 / odd
                         edge = prob - implied_prob
