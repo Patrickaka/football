@@ -16,6 +16,8 @@ from src.kl8 import (
     _adaptive_repeat_cap,
     _hit_rate_priority_score,
     _hit_rate_priority_thresholds,
+    _shape_balanced_candidate_pool,
+    _shape_profile,
 )
 
 
@@ -197,6 +199,27 @@ class KL8PredictionGuardTests(unittest.TestCase):
         self.assertEqual(result['raw_candidate_count'], 40)
         self.assertEqual(len(result['selected']), 7)
         self.assertLessEqual(sum(1 for n in result['selected'] if n <= 20), 3)
+
+    def test_shape_balanced_candidate_pool_controls_zone_and_odd_even(self):
+        candidates = [
+            (1, 100.0), (3, 99.0), (5, 98.0), (7, 97.0), (9, 96.0),
+            (22, 95.0), (24, 94.0), (26, 93.0),
+            (41, 92.0), (43, 91.0), (62, 90.0), (64, 89.0),
+        ]
+
+        pool = _shape_balanced_candidate_pool(
+            candidates,
+            8,
+            last_numbers={1, 3, 5, 7, 9},
+            max_last_numbers=2,
+        )
+        nums = [num for num, _ in pool]
+        profile = _shape_profile(nums, {1, 3, 5, 7, 9})
+
+        self.assertEqual(len(nums), 8)
+        self.assertLessEqual(max(profile['zone20']), 3)
+        self.assertLessEqual(abs(profile['odd_even']['odd'] - profile['odd_even']['even']), 2)
+        self.assertLessEqual(profile['repeat_from_last'], 3)
 
     def test_predict_all_blocks_tiny_history(self):
         analyzer = KL8Analyzer.__new__(KL8Analyzer)

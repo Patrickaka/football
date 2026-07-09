@@ -1581,6 +1581,172 @@ def _prize_floor_candidate_pool(
     return [(num, score_lookup.get(num, score)) for num, score in selected[:target_size]]
 
 
+def _shape_targets(target_size: int) -> Dict:
+    """Return neutral KL8 draw-shape targets scaled to the pick size."""
+    zone_base, zone_rem = divmod(max(target_size, 0), 4)
+    zone_targets = [zone_base + (1 if idx < zone_rem else 0) for idx in range(4)]
+    half_low = target_size // 2
+    half_high = target_size - half_low
+    return {
+        'zone20_targets': zone_targets,
+        'odd_range': (half_low, half_high),
+        'small_range': (half_low, half_high),
+    }
+
+
+def _shape_profile(numbers: List[int], last_numbers: Optional[set] = None) -> Dict:
+    nums = sorted(int(n) for n in numbers)
+    last_numbers = last_numbers or set()
+    zone20 = [
+        sum(1 for n in nums if 1 <= n <= 20),
+        sum(1 for n in nums if 21 <= n <= 40),
+        sum(1 for n in nums if 41 <= n <= 60),
+        sum(1 for n in nums if 61 <= n <= 80),
+    ]
+    zone10 = [
+        sum(1 for n in nums if start <= n <= start + 9)
+        for start in range(1, 80, 10)
+    ]
+    odd = sum(1 for n in nums if n % 2 == 1)
+    even = len(nums) - odd
+    small = sum(1 for n in nums if n <= 40)
+    big = len(nums) - small
+    return {
+        'zone20': zone20,
+        'zone10': zone10,
+        'odd_even': {'odd': odd, 'even': even},
+        'big_small': {'small': small, 'big': big},
+        'sum': sum(nums),
+        'repeat_from_last': sum(1 for n in nums if n in last_numbers),
+    }
+
+
+def _shape_penalty(numbers: List[int], target_size: int, last_numbers: Optional[set], repeat_cap: int) -> float:
+    """Lower is better. Penalize shapes that drift from common KL8 balance."""
+    if len(numbers) != target_size:
+        return 999.0
+
+    profile = _shape_profile(numbers, last_numbers)
+    targets = _shape_targets(target_size)
+    penalty = 0.0
+
+    penalty += sum(
+        abs(actual - target)
+        for actual, target in zip(profile['zone20'], targets['zone20_targets'])
+    ) * 1.15
+
+    odd = profile['odd_even']['odd']
+    odd_low, odd_high = targets['odd_range']
+    if odd < odd_low:
+        penalty += (odd_low - odd) * 1.0
+    elif odd > odd_high:
+        penalty += (odd - odd_high) * 1.0
+
+    small = profile['big_small']['small']
+    small_low, small_high = targets['small_range']
+    if small < small_low:
+        penalty += (small_low - small) * 0.85
+    elif small > small_high:
+        penalty += (small - small_high) * 0.85
+
+    repeat_count = profile['repeat_from_last']
+    if repeat_count > repeat_cap:
+        penalty += (repeat_count - repeat_cap) * 0.95
+
+    return penalty
+
+
+def _shape_balanced_candidate_pool(
+    candidates: List[Tuple[int, float]],
+    target_size: int,
+    last_numbers: Optional[set] = None,
+    max_last_numbers: Optional[int] = None,
+) -> List[Tuple[int, float]]:
+    """Select a pool that keeps score order but favors normal KL8 shapes.
+
+    The shape constraints are intentionally soft: four 20-number zones should
+    stay near an even split, odd/even and small/big should stay near half, and
+    repeats from the previous draw should stay close to the adaptive cap.
+    """
+    if target_size <= 0 or not candidates:
+        return []
+
+    last_numbers = last_numbers or set()
+    repeat_cap = (
+        _default_repeat_cap(target_size)
+        if max_last_numbers is None
+        else max(0, min(target_size, int(max_last_numbers)))
+    )
+    score_lookup = {num: score for num, score in candidates}
+    selected: List[Tuple[int, float]] = []
+    selected_nums = set()
+    targets = _shape_targets(target_size)
+    zone_caps = [max(1, target + 1) for target in targets['zone20_targets']]
+
+    for num, score in candidates:
+        if len(selected) >= target_size:
+            break
+        trial_nums = [n for n, _ in selected] + [num]
+        profile = _shape_profile(trial_nums, last_numbers)
+        zone_idx = (num - 1) // 20
+        odd = profile['odd_even']['odd']
+        small = profile['big_small']['small']
+        repeat_count = profile['repeat_from_last']
+
+        if profile['zone20'][zone_idx] > zone_caps[zone_idx]:
+            continue
+        if odd > targets['odd_range'][1] + 1:
+            continue
+        if small > targets['small_range'][1] + 1:
+            continue
+        if repeat_count > repeat_cap + 1:
+            continue
+
+        selected.append((num, score))
+        selected_nums.add(num)
+
+    if len(selected) < target_size:
+        for num, score in candidates:
+            if num not in selected_nums:
+                selected.append((num, score))
+                selected_nums.add(num)
+            if len(selected) >= target_size:
+                break
+
+    # One deterministic improvement pass: replace weaker shape outliers when a
+    # nearby-scored candidate materially improves the final structure.
+    candidate_window = candidates[:max(target_size * 5, 30)]
+    improved = True
+    while improved:
+        improved = False
+        current_nums = [num for num, _ in selected]
+        current_penalty = _shape_penalty(current_nums, target_size, last_numbers, repeat_cap)
+        current_score = sum(score for _, score in selected)
+        selected_set = {num for num, _ in selected}
+
+        best_swap = None
+        for out_num, out_score in list(selected):
+            for in_num, in_score in candidate_window:
+                if in_num in selected_set:
+                    continue
+                trial = [(n, s) for n, s in selected if n != out_num] + [(in_num, in_score)]
+                trial_nums = [n for n, _ in trial]
+                trial_penalty = _shape_penalty(trial_nums, target_size, last_numbers, repeat_cap)
+                score_loss = max(0.0, current_score - sum(s for _, s in trial))
+                gain = current_penalty - trial_penalty - score_loss * 0.10
+                if gain > 0.35 and (best_swap is None or gain > best_swap[0]):
+                    best_swap = (gain, out_num, in_num, in_score)
+
+        if best_swap:
+            _, out_num, in_num, in_score = best_swap
+            selected = [(n, s) for n, s in selected if n != out_num]
+            selected.append((in_num, score_lookup.get(in_num, in_score)))
+            selected.sort(key=lambda item: (-item[1], item[0]))
+            improved = True
+
+    return [(num, score_lookup.get(num, score)) for num, score in selected[:target_size]]
+
+
 def _score_candidate_selection(
     pool: List[Tuple[int, float]],
     candidates: List[Tuple[int, float]],
@@ -1602,10 +1768,18 @@ def _score_candidate_selection(
     road_count = len({num % 3 for num in nums})
     repeat_count = sum(1 for num in nums if num in (last_numbers or set()))
     repeat_penalty = max(0, repeat_count - repeat_cap) / max(target_size, 1)
+    shape_penalty = _shape_penalty(nums, target_size, last_numbers, repeat_cap) / max(target_size, 1)
 
     zone_score = zone_count / min(target_size, 16)
     road_score = road_count / min(target_size, 3)
-    return score_ratio * 0.72 + zone_score * 0.14 + road_score * 0.10 - repeat_penalty * 0.20
+    shape_score = max(0.0, 1.0 - shape_penalty / 2.0)
+    return (
+        score_ratio * 0.60
+        + zone_score * 0.10
+        + road_score * 0.08
+        + shape_score * 0.18
+        - repeat_penalty * 0.16
+    )
 
 
 def _select_final_candidate_pool(
@@ -1654,6 +1828,12 @@ def _select_final_candidate_pool(
         ),
         'zone_spread': _zone_spread_candidate_pool(candidates, target_size),
         'prize_floor': _prize_floor_candidate_pool(
+            candidates,
+            target_size,
+            last_numbers,
+            max_last_numbers=repeat_cap,
+        ),
+        'shape_balanced': _shape_balanced_candidate_pool(
             candidates,
             target_size,
             last_numbers,
@@ -3250,12 +3430,15 @@ class KL8Analyzer:
         last_numbers = self.statistics.get('last_numbers', set())
         repeat_count = sum(1 for num in numbers if num in last_numbers)
         repeat_fit = 1.0 - min(1.0, abs(repeat_count - repeat_cap) / max(1, target_size))
+        shape_penalty = _shape_penalty(numbers, target_size, last_numbers, repeat_cap)
+        shape_fit = max(0.0, 1.0 - shape_penalty / max(1.0, target_size * 1.6))
 
         quality_score = (
-            score_ratio * 70.0
-            + max(0.0, zone_balance) * 12.0
-            + max(0.0, road_balance) * 8.0
-            + repeat_fit * 10.0
+            score_ratio * 60.0
+            + max(0.0, zone_balance) * 8.0
+            + max(0.0, road_balance) * 6.0
+            + repeat_fit * 8.0
+            + shape_fit * 18.0
         )
         return {
             'quality_score': round(quality_score, 4),
@@ -3264,6 +3447,8 @@ class KL8Analyzer:
             'road_count': len(road_counts),
             'repeat_count': repeat_count,
             'repeat_cap': repeat_cap,
+            'shape_fit': round(shape_fit, 4),
+            'shape_profile': _shape_profile(numbers, last_numbers),
         }
 
     def _best_exclude_recalculation_pool(
@@ -3316,6 +3501,12 @@ class KL8Analyzer:
             if num not in zone_spread_nums:
                 zone_spread_nums.append(num)
         add('zone_spread', [(num, score_lookup.get(num, 0.0)) for num in zone_spread_nums])
+        add('shape_balanced', _shape_balanced_candidate_pool(
+            candidates,
+            target_size,
+            last_numbers,
+            max_last_numbers=repeat_cap,
+        ))
 
         scored = []
         for label, pool in variants:
@@ -3508,6 +3699,14 @@ class KL8Analyzer:
                 max_last_numbers=repeat_cap,
             )
         )
+        shape_balanced = sorted(
+            num for num, _ in _shape_balanced_candidate_pool(
+                candidates,
+                target_size,
+                last_numbers,
+                max_last_numbers=repeat_cap,
+            )
+        )
 
         return {
             'balanced': balanced,
@@ -3516,6 +3715,7 @@ class KL8Analyzer:
             'repeat_follow': repeat_follow,
             'zone_spread': zone_spread,
             'prize_floor': prize_floor,
+            'shape_balanced': shape_balanced,
         }
 
     # ─── 综合预测（v9.1: 各玩法独立候选池 + 本期变化对比）───
@@ -3626,11 +3826,13 @@ class KL8Analyzer:
             )
             numbers = sorted(num for num, _ in final_pool)
             variants = self._candidate_variants(pool_candidates, select_type, final_repeat_cap)
+            shape_profile = _shape_profile(numbers, self.statistics.get('last_numbers', set()))
 
             results[s_key] = {
                 'desc': config['desc'],
                 'pick': config['pick'],
                 'numbers': numbers,
+                'shape_profile': shape_profile,
                 'variants': variants,
                 'candidates': pool_candidates[:10],
                 'prize_hit_thresholds': _prize_tier_thresholds(s_key),
@@ -3708,6 +3910,7 @@ class KL8Analyzer:
             )
             core_numbers = sorted(num for num, _ in final_pool)
             variants = self._candidate_variants(fu_candidates, pool_size, fushi_repeat_cap)
+            shape_profile = _shape_profile(core_numbers, self.statistics.get('last_numbers', set()))
 
             all_candidate_pools[fushi_key] = {
                 f'top{pool_size}': core_numbers,
@@ -3723,6 +3926,7 @@ class KL8Analyzer:
             results[fushi_key] = {
                 numbers_field: core_numbers,
                 'core_numbers': core_numbers,
+                'shape_profile': shape_profile,
                 'variants': variants,
                 'prize_hit_thresholds': _prize_tier_thresholds(fushi_key),
                 'hit_rate_priority_thresholds': _hit_rate_priority_thresholds(fushi_key),
@@ -3788,6 +3992,12 @@ class KL8Analyzer:
             'expected_freq': round(stats.get('expected_freq', 2), 2),
             'expected_gap': round(stats.get('expected_gap', 1), 1),
             'last_numbers': sorted(list(stats.get('last_numbers', set()))),
+            'shape_targets': {
+                str(pick): _shape_targets(pick)
+                for pick in list(SELECT_TYPES) + [
+                    cfg['pool_size'] for cfg in FUSHI_CONFIG.values()
+                ]
+            },
             'version': KL8_PREDICTOR_VERSION,
             'feature_config': FEATURE_CONFIG,
             'active_feature_weights': get_active_feature_weights(),
