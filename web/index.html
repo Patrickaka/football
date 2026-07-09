@@ -678,7 +678,7 @@
   /* 中屏 (≤768px): 横向滚动导航 + 紧凑布局 */
   @media (max-width: 768px) {
     body {
-      padding: 12px 8px 80px 8px;  /* 底部留空给固定导航 */
+      padding: 12px 8px calc(88px + env(safe-area-inset-bottom, 0px)) 8px;  /* 底部留空给固定导航 + 安全区域 */
       font-size: 14px;
     }
     .wrap { max-width: 100%; }
@@ -932,9 +932,10 @@
       right: 0;
       background: var(--card);
       border-top: 2px solid var(--line);
-      padding: 4px 0 env(safe-area-inset-bottom, 4px);  /* iPhone安全区 */
+      padding: 6px 0 calc(4px + env(safe-area-inset-bottom, 0px));  /* iPhone安全区 */
       z-index: 1000;
       box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.3);
+      min-height: calc(56px + env(safe-area-inset-bottom, 0px));
     }
     .bottom-nav-item {
       flex: 1;
@@ -942,35 +943,43 @@
       flex-direction: column;
       align-items: center;
       justify-content: center;
-      padding: 6px 0 4px;
+      padding: 6px 2px;
       cursor: pointer;
       color: var(--muted);
       font-size: 11px;
       font-weight: 500;
       text-decoration: none;
-      transition: color 0.15s;
+      transition: all 0.15s;
       -webkit-tap-highlight-color: transparent;
-      touch-action: manipulation;  /* 阻止双击缩放和延迟焦点 */
-      user-select: none;  /* 防止长按选中触发输入法 */
-      -webkit-user-select: none;
+      touch-action: manipulation;
       user-select: none;
+      -webkit-user-select: none;
+      line-height: 1.2;
     }
     .bottom-nav-item .nav-icon {
-      font-size: 20px;
-      margin-bottom: 2px;
+      font-size: 22px;
+      margin-bottom: 3px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      line-height: 1;
     }
     .bottom-nav-item.active {
       color: var(--accent2);
     }
+    .bottom-nav-item.active .nav-icon {
+      transform: scale(1.1);
+    }
     .bottom-nav-item:active {
       color: var(--accent);
+      opacity: 0.8;
     }
   }
 
   /* 小屏手机优化 (< 480px) */
   @media (max-width: 480px) {
     body {
-      padding: 8px 6px 80px 6px;
+      padding: 8px 6px calc(88px + env(safe-area-inset-bottom, 0px)) 6px;
     }
     
     header h1 { font-size: 16px; }
@@ -2908,7 +2917,7 @@ function renderLottery3d(r) {
   if (r.sum_tails && r.sum_tails.length) {
     html += `<div class="section-title">和值尾 TOP5（多窗口集成）</div>`;
     html += `<div class="card"><div class="digit-grid">${r.sum_tails.map(t =>
-      `<div class="digit-cell"><div class="d">尾${t.tail}</div><div class="s">${t.count}次</div></div>`
+      `<div class="digit-cell"><div class="d">尾${t.tail}</div><div class="s">${typeof t.count === 'number' ? t.count.toFixed(2) : t.count}次</div></div>`
     ).join('')}</div></div>`;
   }
 
@@ -3244,12 +3253,10 @@ function renderLottery3d(r) {
     html += `</div>`;
   }
 
-  html += `<div class="status" style="padding:12px 0;font-size:13px">
-    <span style="cursor:pointer;color:var(--accent2)" id="refresh-3d">↻ 重新抓取数据并计算</span>
-    <span style="margin:0 12px;color:var(--line)">|</span>
-    <span style="cursor:pointer;color:var(--accent2)" id="refresh-3d-backtest">刷新+回测</span>
-    <span style="margin:0 12px;color:var(--line)">|</span>
-    <span style="cursor:pointer;color:var(--accent2)" id="run-ml">🤖 运行 ML 预测</span>
+  html += `<div style="display:flex;flex-wrap:wrap;justify-content:center;gap:12px;padding:16px 0 24px;font-size:13px">
+    <button id="refresh-3d" style="background:linear-gradient(145deg,rgba(46,160,67,0.15),rgba(30,120,50,0.1));border:1px solid rgba(46,160,67,0.4);border-radius:10px;color:var(--accent2);padding:10px 16px;font-size:13px;font-weight:600;cursor:pointer;transition:all .2s;box-shadow:0 2px 6px rgba(46,160,67,0.15)">↻ 重新抓取数据</button>
+    <button id="refresh-3d-backtest" style="background:linear-gradient(145deg,rgba(68,147,248,0.15),rgba(44,100,180,0.1));border:1px solid rgba(68,147,248,0.4);border-radius:10px;color:#4493f8;padding:10px 16px;font-size:13px;font-weight:600;cursor:pointer;transition:all .2s;box-shadow:0 2px 6px rgba(68,147,248,0.15)">🔄 刷新+回测</button>
+    <button id="run-ml" style="background:linear-gradient(145deg,rgba(210,153,34,0.15),rgba(180,120,20,0.1));border:1px solid rgba(210,153,34,0.4);border-radius:10px;color:var(--warn);padding:10px 16px;font-size:13px;font-weight:600;cursor:pointer;transition:all .2s;box-shadow:0 2px 6px rgba(210,153,34,0.15)">🤖 运行 ML 预测</button>
   </div>`;
 
   app3d.innerHTML = html;

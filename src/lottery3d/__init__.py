@@ -4154,7 +4154,7 @@ def run_prediction(data=None, force_refresh=False, enable_backtest=False, enable
             "digits": [{"digit": d, "miss": miss_value(numbers, d, position=pos)} for d in top],
         })
 
-    sum_tails = [{"tail": t, "count": c} for t, c in meta_raw["sum_tail_freq"].most_common(5)]
+    sum_tails = [{"tail": t, "count": round(c, 2)} for t, c in meta_raw["sum_tail_freq"].most_common(5)]
 
     result = {
         "period": periods[-1],
