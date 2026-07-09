@@ -5007,9 +5007,10 @@ function renderKL8VariantRows(variants) {
     concentrated: '集中',
     repeat_follow: '跟重号',
     zone_spread: '区间分散',
+    prize_floor: '奖级冲击',
   };
   let html = `<div style="margin-top:8px;display:grid;gap:5px">`;
-  for (const key of ['balanced', 'concentrated', 'repeat_follow', 'zone_spread']) {
+  for (const key of ['balanced', 'concentrated', 'repeat_follow', 'zone_spread', 'prize_floor']) {
     const nums = variants[key] || [];
     if (!nums.length) continue;
     html += `<div style="font-size:11px;color:var(--muted);display:flex;align-items:center;gap:6px;flex-wrap:wrap">`;

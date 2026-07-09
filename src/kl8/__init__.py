@@ -47,7 +47,7 @@ from src.common.logger import setup_logger
 
 log = setup_logger('kl8')
 
-KL8_PREDICTOR_VERSION = "kl8-v9.2.3-hit-rate-priority"
+KL8_PREDICTOR_VERSION = "kl8-v9.2.5-all-play-prize-floor"
 
 # ─── v9.2: 只显示已验证策略模式 ───
 VERIFY_ONLY_MODE = False  # True=未验证玩法不输出号码; False=回退参考策略(始终输出号码)
@@ -635,76 +635,81 @@ def resolve_play_strategy(play_type: str, allow_reference: bool = False) -> Opti
     # v9.3: 加入趋势(trend)、组合共现(pair_cooccurrence)、细粒化位置残差(position_residual_cross)特征
     _REFERENCE_STRATEGIES_BY_PLAY = {
         'select_3': {
-            'strategy_id': 'select_3_ref_trend50',
+            'strategy_id': 'select_3_ref_trend50_prize_floor',
             'feature_weights': {'frequency': 0.40, 'gap': 0.20, 'trend': 0.25, 'pair_cooccurrence': 0.10, 'position_residual': 0.05, 'position_residual_cross': 0.0, 'road_residual': 0.0, 'repeat': 0.0, 'odd_even': 0.0, 'big_small': 0.0},
             'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
             'window_size': 50,
             'repeat_direction': 'neutral',
+            'final_selection_mode': 'prize_floor',
             'prediction_mode': 'reference_unvalidated',
             'is_validated': False,
         },
         'select_4': {
-            'strategy_id': 'select_4_ref_trend100',
+            'strategy_id': 'select_4_ref_trend100_prize_floor',
             'feature_weights': {'frequency': 0.35, 'gap': 0.15, 'trend': 0.25, 'pair_cooccurrence': 0.15, 'position_residual': 0.10, 'position_residual_cross': 0.0, 'road_residual': 0.0, 'repeat': 0.0, 'odd_even': 0.0, 'big_small': 0.0},
             'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
             'window_size': 100,
             'repeat_direction': 'neutral',
+            'final_selection_mode': 'prize_floor',
             'prediction_mode': 'reference_unvalidated',
             'is_validated': False,
         },
         'select_5': {
-            'strategy_id': 'select_5_ref_trend100_pair',
+            'strategy_id': 'select_5_ref_trend100_pair_prize_floor',
             'feature_weights': {'frequency': 0.35, 'gap': 0.15, 'trend': 0.20, 'pair_cooccurrence': 0.15, 'position_residual': 0.10, 'position_residual_cross': 0.05, 'road_residual': 0.0, 'repeat': 0.0, 'odd_even': 0.0, 'big_small': 0.0},
             'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
             'window_size': 100,
             'repeat_direction': 'neutral',
             'pool_max_last_numbers': 3,
-            'final_selection_mode': 'best_variant',
+            'final_selection_mode': 'prize_floor',
             'prediction_mode': 'reference_unvalidated',
             'is_validated': False,
         },
         'select_6': {
-            'strategy_id': 'select_6_ref_trend100_cross',
+            'strategy_id': 'select_6_ref_trend100_prize_floor',
             'feature_weights': {'frequency': 0.35, 'gap': 0.15, 'trend': 0.20, 'pair_cooccurrence': 0.10, 'position_residual': 0.10, 'position_residual_cross': 0.10, 'road_residual': 0.0, 'repeat': 0.0, 'odd_even': 0.0, 'big_small': 0.0},
             'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
             'window_size': 100,
             'repeat_direction': 'neutral',
             'pool_max_last_numbers': 4,
-            'final_selection_mode': 'best_variant',
+            'final_selection_mode': 'prize_floor',
             'prediction_mode': 'reference_unvalidated',
             'is_validated': False,
         },
         'select_7': {
-            'strategy_id': 'select_7_ref_trend100_follow',
+            'strategy_id': 'select_7_ref_trend100_follow_prize_floor',
             'feature_weights': {'frequency': 0.30, 'gap': 0.15, 'trend': 0.20, 'pair_cooccurrence': 0.15, 'position_residual': 0.10, 'position_residual_cross': 0.05, 'road_residual': 0.05, 'repeat': 0.0, 'odd_even': 0.0, 'big_small': 0.0},
             'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
             'window_size': 100,
             'repeat_direction': 'follow',
             'repeat_follow_score': 0.90,
             'repeat_non_follow_score': 0.50,
+            'final_selection_mode': 'prize_floor',
             'prediction_mode': 'reference_unvalidated',
             'is_validated': False,
         },
         'select_8': {
-            'strategy_id': 'select_8_ref_trend100_mix',
+            'strategy_id': 'select_8_ref_trend100_mix_prize_floor',
             'feature_weights': {'frequency': 0.35, 'gap': 0.15, 'trend': 0.20, 'pair_cooccurrence': 0.15, 'position_residual': 0.075, 'position_residual_cross': 0.075, 'road_residual': 0.0, 'repeat': 0.0, 'odd_even': 0.0, 'big_small': 0.0},
             'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
             'window_size': 100,
             'repeat_direction': 'neutral',
+            'final_selection_mode': 'prize_floor',
             'prediction_mode': 'reference_unvalidated',
             'is_validated': False,
         },
         'select_9': {
-            'strategy_id': 'select_9_ref_trend100_mix',
+            'strategy_id': 'select_9_ref_trend100_mix_prize_floor',
             'feature_weights': {'frequency': 0.35, 'gap': 0.15, 'trend': 0.20, 'pair_cooccurrence': 0.15, 'position_residual': 0.075, 'position_residual_cross': 0.075, 'road_residual': 0.0, 'repeat': 0.0, 'odd_even': 0.0, 'big_small': 0.0},
             'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
             'window_size': 100,
             'repeat_direction': 'neutral',
+            'final_selection_mode': 'prize_floor',
             'prediction_mode': 'reference_unvalidated',
             'is_validated': False,
         },
         'select_10': {
-            'strategy_id': 'select_10_ref_trend100_follow',
+            'strategy_id': 'select_10_ref_trend100_follow_prize_floor',
             'feature_weights': {'frequency': 0.30, 'gap': 0.15, 'trend': 0.20, 'pair_cooccurrence': 0.15, 'position_residual': 0.10, 'position_residual_cross': 0.05, 'road_residual': 0.05, 'repeat': 0.0, 'odd_even': 0.0, 'big_small': 0.0},
             'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
             'window_size': 100,
@@ -712,27 +717,28 @@ def resolve_play_strategy(play_type: str, allow_reference: bool = False) -> Opti
             'repeat_follow_score': 0.90,
             'repeat_non_follow_score': 0.50,
             'pool_max_last_numbers': 5,
-            'final_selection_mode': 'best_variant',
+            'final_selection_mode': 'prize_floor',
             'prediction_mode': 'reference_unvalidated',
             'is_validated': False,
         },
         'fu_shi_7': {
-            'strategy_id': 'fu_shi_7_ref_trend100_mix',
+            'strategy_id': 'fu_shi_7_ref_trend100_mix_prize_floor',
             'feature_weights': {'frequency': 0.35, 'gap': 0.20, 'trend': 0.20, 'pair_cooccurrence': 0.15, 'position_residual': 0.075, 'position_residual_cross': 0.075, 'road_residual': 0.0, 'repeat': 0.0, 'odd_even': 0.0, 'big_small': 0.0},
             'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
             'window_size': 100,
             'repeat_direction': 'neutral',
             'pool_max_last_numbers': 4,
-            'final_selection_mode': 'best_variant',
+            'final_selection_mode': 'prize_floor',
             'prediction_mode': 'reference_unvalidated',
             'is_validated': False,
         },
         'fu_shi_10_11': {
-            'strategy_id': 'fu_shi_10_11_ref_trend100_mix',
+            'strategy_id': 'fu_shi_10_11_ref_trend100_mix_prize_floor',
             'feature_weights': {'frequency': 0.35, 'gap': 0.20, 'trend': 0.20, 'pair_cooccurrence': 0.15, 'position_residual': 0.075, 'position_residual_cross': 0.075, 'road_residual': 0.0, 'repeat': 0.0, 'odd_even': 0.0, 'big_small': 0.0},
             'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
             'window_size': 100,
             'repeat_direction': 'neutral',
+            'final_selection_mode': 'prize_floor',
             'prediction_mode': 'reference_unvalidated',
             'is_validated': False,
         },
@@ -1505,6 +1511,76 @@ def _zone_spread_candidate_pool(
     return [(num, score_lookup.get(num, 0.0)) for num in selected_nums[:target_size]]
 
 
+def _prize_floor_candidate_pool(
+    candidates: List[Tuple[int, float]],
+    target_size: int,
+    last_numbers: Optional[set] = None,
+    max_last_numbers: Optional[int] = None,
+) -> List[Tuple[int, float]]:
+    """Build a higher-variance pool for plays whose first prize tier is 3 hits.
+
+    For select-6, taking the top six often just extends select-5 by one number.
+    This keeps a strong core, then adds two later candidates with zone/road
+    separation so the recommendation is not only a near-duplicate of select-5.
+    """
+    if target_size <= 0 or not candidates:
+        return []
+    last_numbers = last_numbers or set()
+    repeat_cap = (
+        _default_repeat_cap(target_size)
+        if max_last_numbers is None
+        else max(0, min(target_size, int(max_last_numbers)))
+    )
+    score_lookup = {num: score for num, score in candidates}
+
+    if target_size <= 4:
+        wing_count = 1
+    elif target_size <= 7:
+        wing_count = 2
+    else:
+        wing_count = max(2, math.ceil(target_size * 0.30))
+    core_size = max(1, target_size - wing_count)
+    selected = list(candidates[:core_size])
+    selected_nums = {num for num, _ in selected}
+    selected_zones = {(num - 1) // 5 for num, _ in selected}
+    selected_roads = {num % 3 for num, _ in selected}
+    repeat_count = sum(1 for num, _ in selected if num in last_numbers)
+
+    wing_start = min(len(candidates), target_size)
+    wing_candidates = candidates[wing_start:] + candidates[core_size:wing_start]
+    scored_wings = []
+    for idx, (num, score) in enumerate(wing_candidates):
+        if num in selected_nums:
+            continue
+        zone = (num - 1) // 5
+        road = num % 3
+        repeat_penalty = 0.18 if num in last_numbers and repeat_count >= repeat_cap else 0.0
+        spread_bonus = (0.08 if zone not in selected_zones else 0.0) + (0.04 if road not in selected_roads else 0.0)
+        tail_bonus = 0.03 if idx < max(target_size, 8) else 0.0
+        scored_wings.append((score + spread_bonus + tail_bonus - repeat_penalty, num, score))
+
+    scored_wings.sort(key=lambda item: (-item[0], item[1]))
+    for _, num, score in scored_wings:
+        selected.append((num, score))
+        selected_nums.add(num)
+        selected_zones.add((num - 1) // 5)
+        selected_roads.add(num % 3)
+        if num in last_numbers:
+            repeat_count += 1
+        if len(selected) >= target_size:
+            break
+
+    if len(selected) < target_size:
+        for num, score in candidates:
+            if num not in selected_nums:
+                selected.append((num, score))
+                selected_nums.add(num)
+            if len(selected) >= target_size:
+                break
+
+    return [(num, score_lookup.get(num, score)) for num, score in selected[:target_size]]
+
+
 def _score_candidate_selection(
     pool: List[Tuple[int, float]],
     candidates: List[Tuple[int, float]],
@@ -1577,6 +1653,12 @@ def _select_final_candidate_pool(
             max_last_numbers=min(target_size, repeat_cap + 1),
         ),
         'zone_spread': _zone_spread_candidate_pool(candidates, target_size),
+        'prize_floor': _prize_floor_candidate_pool(
+            candidates,
+            target_size,
+            last_numbers,
+            max_last_numbers=repeat_cap,
+        ),
     }
 
     if selection_mode in modes and selection_mode != 'best_variant':
@@ -3418,6 +3500,14 @@ class KL8Analyzer:
             )
         )
         zone_spread = sorted(num for num, _ in _zone_spread_candidate_pool(candidates, target_size))
+        prize_floor = sorted(
+            num for num, _ in _prize_floor_candidate_pool(
+                candidates,
+                target_size,
+                last_numbers,
+                max_last_numbers=repeat_cap,
+            )
+        )
 
         return {
             'balanced': balanced,
@@ -3425,6 +3515,7 @@ class KL8Analyzer:
             'low_repeat': low_repeat,
             'repeat_follow': repeat_follow,
             'zone_spread': zone_spread,
+            'prize_floor': prize_floor,
         }
 
     # ─── 综合预测（v9.1: 各玩法独立候选池 + 本期变化对比）───

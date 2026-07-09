@@ -278,13 +278,14 @@ class KL8PredictionGuardTests(unittest.TestCase):
             self.assertEqual(len(result[key]['numbers']), pick)
             self.assertEqual(result[key]['numbers'], sorted(result[key]['numbers']))
 
-        for key in ['select_5', 'select_6']:
+        for key in [f'select_{pick}' for pick in range(3, 11)]:
             self.assertEqual(
                 result['resolved_strategies'][key]['final_selection_mode'],
-                'best_variant',
+                'prize_floor',
             )
             self.assertIn('repeat_follow', result[key]['variants'])
             self.assertIn('zone_spread', result[key]['variants'])
+            self.assertIn('prize_floor', result[key]['variants'])
 
         self.assertEqual(result['resolved_strategies']['select_5']['pool_max_last_numbers'], 3)
         self.assertEqual(result['resolved_strategies']['select_6']['pool_max_last_numbers'], 4)
@@ -292,22 +293,25 @@ class KL8PredictionGuardTests(unittest.TestCase):
         self.assertEqual(result['select_6']['hit_rate_priority_thresholds'], ['>=3', '>=4'])
         self.assertEqual(
             result['resolved_strategies']['select_10']['final_selection_mode'],
-            'best_variant',
+            'prize_floor',
         )
         self.assertEqual(result['resolved_strategies']['select_10']['pool_max_last_numbers'], 5)
-        self.assertIn('repeat_follow', result['select_10']['variants'])
-        self.assertIn('zone_spread', result['select_10']['variants'])
 
         self.assertEqual(
             result['resolved_strategies']['fu_shi_7']['final_selection_mode'],
-            'best_variant',
+            'prize_floor',
         )
         self.assertIn('repeat_follow', result['fu_shi_7']['variants'])
         self.assertIn('zone_spread', result['fu_shi_7']['variants'])
+        self.assertIn('prize_floor', result['fu_shi_7']['variants'])
         self.assertEqual(result['fu_shi_7']['prize_hit_thresholds'], ['>=3'])
         self.assertEqual(result['resolved_strategies']['fu_shi_7']['pool_max_last_numbers'], 4)
 
         self.assertIn('fu_shi_10_11', result)
+        self.assertEqual(
+            result['resolved_strategies']['fu_shi_10_11']['final_selection_mode'],
+            'prize_floor',
+        )
         self.assertEqual(len(result['fu_shi_10_11']['top11_numbers']), 11)
         self.assertEqual(
             result['fu_shi_10_11']['top11_numbers'],
