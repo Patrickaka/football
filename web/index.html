@@ -644,6 +644,35 @@
   .kl8-refresh-btn:hover {
     background: #c62828;
   }
+  .kl8-shape-strip {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(118px, 1fr));
+    gap: 8px;
+    margin-top: 12px;
+  }
+  .kl8-shape-chip {
+    background: rgba(34,45,61,.65);
+    border: 1px solid rgba(44,58,78,.95);
+    border-radius: 8px;
+    padding: 7px 9px;
+    min-width: 0;
+  }
+  .kl8-shape-chip .shape-k {
+    color: var(--muted);
+    font-size: 11px;
+    line-height: 1.2;
+  }
+  .kl8-shape-chip .shape-v {
+    color: var(--text);
+    font-size: 13px;
+    font-weight: 700;
+    margin-top: 2px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .kl8-shape-chip.good .shape-v { color: var(--accent2); }
+  .kl8-shape-chip.warn .shape-v { color: var(--warn); }
 
   /* ─── 移动端导航条优化 ─── */
   /* 中屏 (≤768px): 横向滚动导航 + 紧凑布局 */
@@ -4555,6 +4584,63 @@ async function refreshKL8() {
   }
 }
 
+function buildKL8ShapeProfile(numbers, lastNumbers = []) {
+  const nums = (numbers || []).map(Number).filter(n => Number.isFinite(n));
+  const lastSet = new Set((lastNumbers || []).map(Number));
+  const zone20 = [
+    nums.filter(n => n >= 1 && n <= 20).length,
+    nums.filter(n => n >= 21 && n <= 40).length,
+    nums.filter(n => n >= 41 && n <= 60).length,
+    nums.filter(n => n >= 61 && n <= 80).length,
+  ];
+  const zone10 = [];
+  for (let start = 1; start <= 71; start += 10) {
+    zone10.push(nums.filter(n => n >= start && n <= start + 9).length);
+  }
+  const odd = nums.filter(n => n % 2 === 1).length;
+  const small = nums.filter(n => n <= 40).length;
+  return {
+    zone20,
+    zone10,
+    odd_even: { odd, even: nums.length - odd },
+    big_small: { small, big: nums.length - small },
+    sum: nums.reduce((acc, n) => acc + n, 0),
+    repeat_from_last: nums.filter(n => lastSet.has(n)).length,
+  };
+}
+
+function normalizeKL8ShapeProfile(profile, numbers = []) {
+  if (profile && Array.isArray(profile.zone20)) return profile;
+  return buildKL8ShapeProfile(numbers, kl8LastData?.statistics?.last_numbers || []);
+}
+
+function renderKL8ShapeProfile(profile, numbers = [], compact = false) {
+  const p = normalizeKL8ShapeProfile(profile, numbers);
+  const odd = p.odd_even || {};
+  const bs = p.big_small || {};
+  const total = (numbers || []).length || (p.zone20 || []).reduce((acc, n) => acc + Number(n || 0), 0);
+  const oddDiff = Math.abs(Number(odd.odd || 0) - Number(odd.even || 0));
+  const sizeDiff = Math.abs(Number(bs.small || 0) - Number(bs.big || 0));
+  const maxZone = Math.max(...(p.zone20 || [0]).map(Number));
+  const zoneOk = total <= 4 ? true : maxZone <= Math.ceil(total / 4) + 1;
+  const oddOk = oddDiff <= 2;
+  const sizeOk = sizeDiff <= 2;
+  const chips = [
+    { k: '四区间 1-20/21-40/41-60/61-80', v: (p.zone20 || []).join(':'), cls: zoneOk ? 'good' : 'warn' },
+    { k: '奇偶比', v: `${odd.odd ?? '-'}:${odd.even ?? '-'}`, cls: oddOk ? 'good' : 'warn' },
+    { k: '大小比 1-40/41-80', v: `${bs.small ?? '-'}:${bs.big ?? '-'}`, cls: sizeOk ? 'good' : 'warn' },
+    { k: '和值', v: p.sum ?? '-', cls: '' },
+    { k: '上期重号', v: p.repeat_from_last ?? '-', cls: '' },
+  ];
+  const visible = compact ? chips.slice(0, 3) : chips;
+  return `<div class="kl8-shape-strip">${visible.map(item => `
+    <div class="kl8-shape-chip ${item.cls}">
+      <div class="shape-k">${esc(item.k)}</div>
+      <div class="shape-v">${esc(item.v)}</div>
+    </div>
+  `).join('')}</div>`;
+}
+
 function renderKL8(r) {
   kl8LastData = r;
   const appKL8 = document.getElementById('app-kl8');
@@ -4773,6 +4859,7 @@ function renderKL8(r) {
         }
       }
       html += `</div>`;
+      html += renderKL8ShapeProfile(sel.shape_profile, sel.numbers);
       if (sel.variants) {
         html += renderKL8VariantRows(sel.variants);
       }
@@ -4808,6 +4895,7 @@ function renderKL8(r) {
       html += `<span class="kl8-ball highlight-ball" style="width:44px;height:44px;font-size:18px">${String(n).padStart(2,'0')}</span>`;
     }
     html += `</div>`;
+    html += renderKL8ShapeProfile(fushi.shape_profile, coreNumbers);
     if (fushi.variants) {
       html += renderKL8VariantRows(fushi.variants);
     }
@@ -5009,8 +5097,9 @@ function renderKL8VariantRows(variants) {
     zone_spread: '区间分散',
     prize_floor: '奖级冲击',
   };
+  labels.shape_balanced = '形态均衡';
   let html = `<div style="margin-top:8px;display:grid;gap:5px">`;
-  for (const key of ['balanced', 'concentrated', 'repeat_follow', 'zone_spread', 'prize_floor']) {
+  for (const key of ['balanced', 'concentrated', 'repeat_follow', 'zone_spread', 'shape_balanced', 'prize_floor']) {
     const nums = variants[key] || [];
     if (!nums.length) continue;
     html += `<div style="font-size:11px;color:var(--muted);display:flex;align-items:center;gap:6px;flex-wrap:wrap">`;
@@ -5139,6 +5228,7 @@ async function runKL8ExcludeRecalculate() {
     html += `<div style="font-size:12px;color:var(--muted);margin-bottom:8px">本次剔除: ${removeNow.map(n => String(n).padStart(2,'0')).join(', ')}</div>`;
     html += `<div style="font-size:12px;color:var(--muted);margin-bottom:8px">累计剔除: ${option.excludedNumbers.map(n => String(n).padStart(2,'0')).join(', ')}</div>`;
     html += `<div class="kl8-numbers-row">${renderKL8Balls(newNumbers, 40)}</div>`;
+    html += renderKL8ShapeProfile(quality.shape_profile, newNumbers);
     if (quality.quality_score !== undefined) {
       const modeLabels = { concentrated: '高分集中', balanced: '均衡分散', repeat_follow: '适度跟重', zone_spread: '区间扩散' };
       html += `<div style="font-size:12px;color:var(--muted);margin-top:8px">质量分: ${esc(quality.quality_score)} · 模式: ${esc(modeLabels[quality.selection_mode] || quality.selection_mode || '-')} · 重号: ${esc(quality.repeat_count ?? '-')} / ${esc(quality.repeat_cap ?? '-')} · 区间: ${esc(quality.zone_count ?? '-')} · 路数: ${esc(quality.road_count ?? '-')}</div>`;
