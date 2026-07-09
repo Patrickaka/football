@@ -1265,8 +1265,10 @@ def _hit_rate_priority_thresholds(play_type: str) -> List[str]:
     pick_n = _parse_play_pick_n(play_type) or 5
     if pick_n <= 4:
         return ['>=2']
-    if pick_n <= 6:
+    if pick_n == 5:
         return ['>=2', '>=3']
+    if pick_n <= 7:
+        return ['>=3', '>=4']
     return ['>=3', '>=4']
 
 
@@ -1276,6 +1278,8 @@ def _hit_rate_priority_score(metrics: Dict, play_type: str) -> Tuple[float, Dict
     theoretical = metrics.get('theoretical_probs') or {}
     thresholds = _hit_rate_priority_thresholds(play_type)
     weights = [0.70, 0.30] if len(thresholds) > 1 else [1.0]
+    if play_type == 'select_6':
+        weights = [0.82, 0.18]
 
     detail = {}
     score = 0.0
@@ -3538,6 +3542,8 @@ class KL8Analyzer:
                 'numbers': numbers,
                 'variants': variants,
                 'candidates': pool_candidates[:10],
+                'prize_hit_thresholds': _prize_tier_thresholds(s_key),
+                'hit_rate_priority_thresholds': _hit_rate_priority_thresholds(s_key),
                 'strategy_id': strategy['strategy_id'],
                 'prediction_mode': strategy['prediction_mode'],
                 'is_validated': strategy['is_validated'],
@@ -3627,6 +3633,8 @@ class KL8Analyzer:
                 numbers_field: core_numbers,
                 'core_numbers': core_numbers,
                 'variants': variants,
+                'prize_hit_thresholds': _prize_tier_thresholds(fushi_key),
+                'hit_rate_priority_thresholds': _hit_rate_priority_thresholds(fushi_key),
                 'total_combinations': len(combo_list),
                 'combinations': combo_list,
                 'combo_pick': base_pick,

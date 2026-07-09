@@ -14,6 +14,8 @@ from src.kl8 import (
     normalize_record,
     validate_and_activate_strategy,
     _adaptive_repeat_cap,
+    _hit_rate_priority_score,
+    _hit_rate_priority_thresholds,
 )
 
 
@@ -236,6 +238,23 @@ class KL8PredictionGuardTests(unittest.TestCase):
         )
         self.assertIn('pick count', result['error'])
 
+    def test_select6_hit_rate_priority_targets_prize_floor(self):
+        self.assertEqual(_hit_rate_priority_thresholds('select_5'), ['>=2', '>=3'])
+        self.assertEqual(_hit_rate_priority_thresholds('select_6'), ['>=3', '>=4'])
+
+        select6_score, select6_detail = _hit_rate_priority_score(
+            {
+                'probabilities': {'>=2': 0.9, '>=3': 0.22, '>=4': 0.05},
+                'theoretical_probs': {'>=2': 0.47, '>=3': 0.17, '>=4': 0.04},
+            },
+            'select_6',
+        )
+
+        self.assertGreater(select6_score, 0)
+        self.assertNotIn('>=2', select6_detail)
+        self.assertIn('>=3', select6_detail)
+        self.assertIn('>=4', select6_detail)
+
     def test_predict_all_includes_select_8_9_10_and_fushi_10_11(self):
         analyzer = KL8Analyzer.__new__(KL8Analyzer)
         analyzer.history_data = [_record(i) for i in range(80, 0, -1)]
@@ -269,6 +288,8 @@ class KL8PredictionGuardTests(unittest.TestCase):
 
         self.assertEqual(result['resolved_strategies']['select_5']['pool_max_last_numbers'], 3)
         self.assertEqual(result['resolved_strategies']['select_6']['pool_max_last_numbers'], 4)
+        self.assertEqual(result['select_6']['prize_hit_thresholds'], ['>=3', '>=4'])
+        self.assertEqual(result['select_6']['hit_rate_priority_thresholds'], ['>=3', '>=4'])
         self.assertEqual(
             result['resolved_strategies']['select_10']['final_selection_mode'],
             'best_variant',
@@ -283,6 +304,7 @@ class KL8PredictionGuardTests(unittest.TestCase):
         )
         self.assertIn('repeat_follow', result['fu_shi_7']['variants'])
         self.assertIn('zone_spread', result['fu_shi_7']['variants'])
+        self.assertEqual(result['fu_shi_7']['prize_hit_thresholds'], ['>=3'])
         self.assertEqual(result['resolved_strategies']['fu_shi_7']['pool_max_last_numbers'], 4)
 
         self.assertIn('fu_shi_10_11', result)
