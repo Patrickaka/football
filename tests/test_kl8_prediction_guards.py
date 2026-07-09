@@ -16,6 +16,7 @@ from src.kl8 import (
     _adaptive_repeat_cap,
     _hit_rate_priority_score,
     _hit_rate_priority_thresholds,
+    _practical_validation_score,
     _shape_balanced_candidate_pool,
     _shape_profile,
 )
@@ -562,6 +563,41 @@ class KL8PredictionGuardTests(unittest.TestCase):
         best = result['best_by_play']['select_5']
         self.assertEqual(best['candidate'], 'hit_rate_first')
         self.assertGreater(best['validation_hit_rate_score'], 0)
+
+    def test_practical_score_prioritizes_prize_thresholds_over_mean_lift(self):
+        hit_score, hit_detail = _practical_validation_score(
+            {
+                'lift': 0.03,
+                'probabilities': {'>=2': 0.36, '>=3': 0.09},
+                'theoretical_probs': {'>=2': 0.30, '>=3': 0.07},
+                'profit_roi': -0.2,
+                'random_profit_roi': -0.3,
+                'return_multiple': 0.8,
+            },
+            'select_5',
+        )
+        mean_score, mean_detail = _practical_validation_score(
+            {
+                'lift': 0.12,
+                'probabilities': {'>=2': 0.30, '>=3': 0.07},
+                'theoretical_probs': {'>=2': 0.30, '>=3': 0.07},
+                'profit_roi': -0.2,
+                'random_profit_roi': -0.3,
+                'return_multiple': 0.8,
+            },
+            'select_5',
+        )
+
+        self.assertGreater(hit_score, mean_score)
+        self.assertGreater(hit_detail['hit_rate_score'], mean_detail['hit_rate_score'])
+
+    def test_seeded_random_validation_candidates_are_present(self):
+        candidates = kl8_module.VALIDATION_CANDIDATES
+
+        self.assertIn('random_shape_50', candidates)
+        self.assertIn('random_prize_floor_100', candidates)
+        self.assertEqual(candidates['random_shape_50']['feature_weights'], {'seeded_random': 1.0})
+        self.assertEqual(candidates['random_prize_floor_100']['final_selection_mode'], 'prize_floor')
 
     def test_per_play_tournament_final_test_uses_strategy_pool_config(self):
         analyzer = KL8Analyzer.__new__(KL8Analyzer)

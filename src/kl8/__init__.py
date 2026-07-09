@@ -47,7 +47,7 @@ from src.common.logger import setup_logger
 
 log = setup_logger('kl8')
 
-KL8_PREDICTOR_VERSION = "kl8-v9.2.5-all-play-prize-floor"
+KL8_PREDICTOR_VERSION = "kl8-v9.2.6-prize-target-random-baselines"
 
 # ─── v9.2: 只显示已验证策略模式 ───
 VERIFY_ONLY_MODE = False  # True=未验证玩法不输出号码; False=回退参考策略(始终输出号码)
@@ -119,6 +119,12 @@ FEATURE_CONFIG = {
 }
 
 # ─── 投票模型权重（v6：停用，等策略注册表接管）───
+FEATURE_CONFIG['seeded_random'] = {
+    'enabled': False,
+    'weight': 0.0,
+    'desc': 'deterministic random baseline for validation controls',
+}
+
 MODEL_CONFIG = {
     'bayesian': {'enabled': False, 'weight': 0.0, 'desc': '停用: 倾向热号,与排名频率冷号方向相反'},
     'rank':     {'enabled': True, 'weight': 1.0, 'desc': '排名模型(使用hot模式)'},
@@ -507,6 +513,42 @@ VALIDATION_CANDIDATES.update({
     },
 })
 
+# Deterministic random and shape-only controls. These are not intended to be
+# predictive; they make the validation slate compare heuristic signals against
+# neutral pools that obey the same final-selection rules.
+VALIDATION_CANDIDATES.update({
+    'random_shape_50': {
+        'strategy_id': 'candidate_random_shape_50',
+        'feature_weights': {'seeded_random': 1.0},
+        'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
+        'window_size': 50,
+        'repeat_direction': 'neutral',
+        'frequency_mode': 'neutral',
+        'pool_max_last_numbers': None,
+        'final_selection_mode': 'shape_balanced',
+    },
+    'random_prize_floor_100': {
+        'strategy_id': 'candidate_random_prize_floor_100',
+        'feature_weights': {'seeded_random': 1.0},
+        'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
+        'window_size': 100,
+        'repeat_direction': 'neutral',
+        'frequency_mode': 'neutral',
+        'pool_max_last_numbers': None,
+        'final_selection_mode': 'prize_floor',
+    },
+    'random_low_repeat_100': {
+        'strategy_id': 'candidate_random_low_repeat_100',
+        'feature_weights': {'seeded_random': 1.0},
+        'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
+        'window_size': 100,
+        'repeat_direction': 'neutral',
+        'frequency_mode': 'neutral',
+        'pool_max_last_numbers': 2,
+        'final_selection_mode': 'low_repeat',
+    },
+})
+
 # v9.2: CANDIDATE_STRATEGIES 保留为 VALIDATION_CANDIDATES 的别名（向后兼容）
 CANDIDATE_STRATEGIES = VALIDATION_CANDIDATES
 
@@ -524,6 +566,7 @@ ABLATION_FEATURES = {
     'adjacent': 0.15,
     'odd_even': 0.10,
     'big_small': 0.05,
+    'seeded_random': 1.0,
 }
 
 # ─── 策略试验结果记录表（v8新增）───
@@ -1300,6 +1343,33 @@ def _hit_rate_priority_score(metrics: Dict, play_type: str) -> Tuple[float, Dict
 
 
 # ─── 多重检验校正（v6新增）───
+
+def _practical_validation_score(metrics: Dict, play_type: str, mean_lift: Optional[float] = None) -> Tuple[float, Dict]:
+    """Rank candidates by prize-relevant hit rates before mean-hit lift."""
+    hit_rate_score, hit_rate_detail = _hit_rate_priority_score(metrics, play_type)
+    lift = _play_lift({play_type: metrics}, play_type) if mean_lift is None else float(mean_lift or 0)
+    roi = float(metrics.get('profit_roi', 0) or 0)
+    random_roi = float(metrics.get('random_profit_roi', 0) or 0)
+    roi_delta = roi - random_roi
+    return_multiple = float(metrics.get('return_multiple', 0) or 0)
+
+    score = (
+        hit_rate_score
+        + lift * 0.20
+        + max(0.0, roi_delta) * 0.08
+        + max(0.0, return_multiple - 1.0) * 0.04
+    )
+    if roi < random_roi:
+        score -= min(0.25, (random_roi - roi) * 0.05)
+
+    return score, {
+        'hit_rate_score': round(hit_rate_score, 6),
+        'hit_rate_lifts': hit_rate_detail,
+        'mean_lift': round(lift, 6),
+        'roi_delta_vs_random': round(roi_delta, 6),
+        'return_multiple': round(return_multiple, 6),
+    }
+
 
 def benjamini_hochberg_fdr(p_values: List[float]) -> List[float]:
     """Benjamini-Hochberg FDR校正
@@ -2680,6 +2750,13 @@ class KL8Analyzer:
             scores['big_small'] = 0.50 + 0.30 * (size_ratio - 0.5) * 2
         else:
             scores['big_small'] = 0.50 - 0.30 * (0.5 - size_ratio) * 2
+
+        based_on_issue = self.history_data[0].get('issue', '') if self.history_data else ''
+        seed_key = f'kl8_seeded_random_v1_{based_on_issue}_{num}'
+        scores['seeded_random'] = int(
+            hashlib.sha256(seed_key.encode()).hexdigest()[:12],
+            16,
+        ) / float(0xFFFFFFFFFFFF)
 
         return scores
 
@@ -5328,15 +5405,19 @@ class KL8RollingBacktest:
         repeat_directions = repeat_directions or ['neutral', 'follow']
         repeat_caps = repeat_caps or [None, 2, 3, 4]
         pool_diversify_options = pool_diversify_options or [True]
-        final_selection_modes = final_selection_modes or ['balanced', 'best_variant', 'low_repeat', 'zone_spread']
+        final_selection_modes = final_selection_modes or ['prize_floor', 'shape_balanced', 'balanced', 'best_variant', 'low_repeat', 'zone_spread']
         frequency_modes = frequency_modes or ['mean_reversion', 'hot']
 
         profiles = {
+            'random': {'seeded_random': 1.0},
+            'random_shape': {'seeded_random': 0.85, 'odd_even': 0.08, 'big_small': 0.07},
             'freq': {'frequency': 1.0, 'gap': 0.0, 'position_residual': 0.0, 'road_residual': 0.0, 'repeat': 0.0, 'odd_even': 0.0, 'big_small': 0.0},
             'freq_gap': {'frequency': 0.55, 'gap': 0.45, 'position_residual': 0.0, 'road_residual': 0.0, 'repeat': 0.0, 'odd_even': 0.0, 'big_small': 0.0},
             'freq_position': {'frequency': 0.70, 'gap': 0.0, 'position_residual': 0.30, 'road_residual': 0.0, 'repeat': 0.0, 'odd_even': 0.0, 'big_small': 0.0},
             'freq_road': {'frequency': 0.75, 'gap': 0.0, 'position_residual': 0.0, 'road_residual': 0.25, 'repeat': 0.0, 'odd_even': 0.0, 'big_small': 0.0},
             'freq_repeat': {'frequency': 0.60, 'gap': 0.0, 'position_residual': 0.0, 'road_residual': 0.0, 'repeat': 0.15, 'odd_even': 0.0, 'big_small': 0.0},
+            'hot_prize': {'frequency': 0.30, 'adjacent': 0.20, 'trend': 0.15, 'position_residual': 0.15, 'road_residual': 0.10, 'pair_cooccurrence': 0.10},
+            'gap_prize': {'frequency': 0.25, 'gap': 0.35, 'trend': 0.15, 'pair_cooccurrence': 0.15, 'position_residual': 0.10},
         }
 
         candidates = {}
@@ -5433,10 +5514,9 @@ class KL8RollingBacktest:
                 val_lift = _play_lift(val_result, play_type)
                 val_roi = val_metrics.get('profit_roi', 0)
                 random_roi = val_metrics.get('random_profit_roi', 0)
-                hit_rate_score, hit_rate_detail = _hit_rate_priority_score(val_metrics, play_type)
-                # 公平摇奖下 lift 真值为 0；ROI 依赖奖金表(可能为占位值)且同属噪声，
-                # 不参与打分，仅作展示。排名只是候选排序，不构成"有预测优势"的证据。
-                score = hit_rate_score + val_lift * 0.35
+                score, practical_detail = _practical_validation_score(val_metrics, play_type, val_lift)
+                hit_rate_score = practical_detail['hit_rate_score']
+                hit_rate_detail = practical_detail['hit_rate_lifts']
 
                 rankings[play_type].append({
                     'candidate': name,
@@ -5445,6 +5525,7 @@ class KL8RollingBacktest:
                     'validation_lift': round(val_lift, 6),
                     'validation_hit_rate_score': round(hit_rate_score, 6),
                     'validation_hit_rate_lifts': hit_rate_detail,
+                    'validation_practical_score_detail': practical_detail,
                     'validation_is_significant': bool(val_metrics.get('is_significant', False)),
                     'final_test_lift': None,
                     'final_test_hit_rate_score': None,
@@ -5493,16 +5574,17 @@ class KL8RollingBacktest:
                     continue
                 final_metrics = final_result.get(play_type, {})
                 final_lift = _play_lift(final_result, play_type)
-                final_hit_rate_score, final_hit_rate_detail = _hit_rate_priority_score(final_metrics, play_type)
+                final_score, final_practical_detail = _practical_validation_score(final_metrics, play_type, final_lift)
+                final_hit_rate_score = final_practical_detail['hit_rate_score']
+                final_hit_rate_detail = final_practical_detail['hit_rate_lifts']
                 item['final_test_lift'] = round(final_lift, 6)
                 item['final_test_hit_rate_score'] = round(final_hit_rate_score, 6)
                 item['final_test_hit_rate_lifts'] = final_hit_rate_detail
+                item['final_test_practical_score_detail'] = final_practical_detail
                 item['final_test_mean_hits'] = final_metrics.get('mean_hits', final_metrics.get('pool_mean_hits'))
                 item['score'] = round(
-                    item.get('validation_hit_rate_score', 0)
-                    + item.get('validation_lift', 0) * 0.35
-                    + max(final_hit_rate_score, 0) * 0.20
-                    + max(final_lift, 0) * 0.10,
+                    item.get('score', 0)
+                    + max(final_score, 0) * 0.25,
                     6,
                 )
 
@@ -5956,6 +6038,11 @@ class KL8RollingBacktest:
             val_roi = val_result.get(s_key, {}).get('profit_roi', 0)
             random_roi = val_result.get(s_key, {}).get('random_profit_roi', 0)
             roi_not_worse = val_roi >= random_roi
+            practical_score, practical_detail = _practical_validation_score(
+                val_result.get(s_key, {}),
+                play_type,
+                val_lift,
+            )
 
             # 收集
             val_p_values.append(raw_p)
@@ -5967,6 +6054,8 @@ class KL8RollingBacktest:
                 'n_positive': n_positive,
                 'prize_tier_passed': prize_tier_passed,
                 'roi_not_worse': roi_not_worse,
+                'practical_score': round(practical_score, 6),
+                'practical_detail': practical_detail,
                 'sub_lifts': sub_lifts,
             })
 
@@ -5994,6 +6083,7 @@ class KL8RollingBacktest:
                 'final_selection_mode': strategy.get('final_selection_mode', 'balanced'),
                 'raw_p_value': raw_p,
                 'validation_lift': round(val_lift, 4),
+                'practical_score': round(practical_score, 6),
                 'n_permutations': n_permutations,
                 'tested_at': time.strftime('%Y-%m-%dT%H:%M:%S'),
                 'tournament_round': 'per_play_validation',
@@ -6045,8 +6135,11 @@ class KL8RollingBacktest:
                 'qualified_candidates': [],
             }
 
-        # 选Lift最高的合格候选
-        best_candidate = max(qualified_candidates, key=lambda c: c['val_lift'])
+        # Pick by prize-threshold score first; mean-hit lift is a tie-breaker.
+        best_candidate = max(
+            qualified_candidates,
+            key=lambda c: (c.get('practical_score', 0), c.get('val_lift', 0)),
+        )
 
         # ── 第三轮：最终封存测试段只跑1次确认 ──
         strategy = best_candidate['strategy']
@@ -6128,6 +6221,8 @@ class KL8RollingBacktest:
             'play_type': play_type,
             'best_candidate': best_candidate['name'],
             'val_lift': round(best_candidate['val_lift'], 4),
+            'practical_score': round(best_candidate.get('practical_score', 0), 6),
+            'practical_detail': best_candidate.get('practical_detail', {}),
             'adjusted_p': round(best_candidate['adjusted_p'], 6),
             'n_positive_sub_windows': best_candidate['n_positive'],
             'prize_tier_passed': best_candidate['prize_tier_passed'],
@@ -6149,6 +6244,7 @@ class KL8RollingBacktest:
             'best_candidate': best_candidate['name'],
             'strategy_id': ACTIVE_STRATEGIES[play_type]['strategy_id'],
             'val_lift': round(best_candidate['val_lift'], 4),
+            'practical_score': round(best_candidate.get('practical_score', 0), 6),
             'final_test_lift': round(final_test_lift, 4),
             'summary': f'验证通过并激活: {best_candidate["name"]}',
             'train_results': train_results,
