@@ -47,7 +47,7 @@ from src.common.logger import setup_logger
 
 log = setup_logger('kl8')
 
-KL8_PREDICTOR_VERSION = "kl8-v9.2.6-prize-target-random-baselines"
+KL8_PREDICTOR_VERSION = "kl8-v9.2.7-balanced-hit-tier"
 
 # ─── v9.2: 只显示已验证策略模式 ───
 VERIFY_ONLY_MODE = False  # True=未验证玩法不输出号码; False=回退参考策略(始终输出号码)
@@ -698,24 +698,24 @@ def resolve_play_strategy(play_type: str, allow_reference: bool = False) -> Opti
             'is_validated': False,
         },
         'select_5': {
-            'strategy_id': 'select_5_ref_trend100_pair_best_variant',
+            'strategy_id': 'select_5_ref_trend100_pair_balanced',
             'feature_weights': {'frequency': 0.35, 'gap': 0.15, 'trend': 0.20, 'pair_cooccurrence': 0.15, 'position_residual': 0.10, 'position_residual_cross': 0.05, 'road_residual': 0.0, 'repeat': 0.0, 'odd_even': 0.0, 'big_small': 0.0},
             'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
             'window_size': 100,
             'repeat_direction': 'neutral',
             'pool_max_last_numbers': 3,
-            'final_selection_mode': 'best_variant',
+            'final_selection_mode': 'balanced',
             'prediction_mode': 'reference_unvalidated',
             'is_validated': False,
         },
         'select_6': {
-            'strategy_id': 'select_6_ref_trend100_best_variant',
+            'strategy_id': 'select_6_ref_trend100_balanced',
             'feature_weights': {'frequency': 0.35, 'gap': 0.15, 'trend': 0.20, 'pair_cooccurrence': 0.10, 'position_residual': 0.10, 'position_residual_cross': 0.10, 'road_residual': 0.0, 'repeat': 0.0, 'odd_even': 0.0, 'big_small': 0.0},
             'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
             'window_size': 100,
             'repeat_direction': 'neutral',
             'pool_max_last_numbers': 4,
-            'final_selection_mode': 'best_variant',
+            'final_selection_mode': 'balanced',
             'prediction_mode': 'reference_unvalidated',
             'is_validated': False,
         },

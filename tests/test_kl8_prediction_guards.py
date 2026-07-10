@@ -295,7 +295,7 @@ class KL8PredictionGuardTests(unittest.TestCase):
         )
         self.assertIn('pick count', result['error'])
 
-    def test_reference_select_5_6_and_10_use_best_variant_selection(self):
+    def test_reference_select_5_6_use_balanced_and_10_uses_best_variant_selection(self):
         original_verify_only = kl8_module.VERIFY_ONLY_MODE
         try:
             kl8_module.VERIFY_ONLY_MODE = False
@@ -305,11 +305,11 @@ class KL8PredictionGuardTests(unittest.TestCase):
         finally:
             kl8_module.VERIFY_ONLY_MODE = original_verify_only
 
-        self.assertEqual(select5['final_selection_mode'], 'best_variant')
-        self.assertEqual(select6['final_selection_mode'], 'best_variant')
+        self.assertEqual(select5['final_selection_mode'], 'balanced')
+        self.assertEqual(select6['final_selection_mode'], 'balanced')
         self.assertEqual(select10['final_selection_mode'], 'best_variant')
-        self.assertIn('best_variant', select5['strategy_id'])
-        self.assertIn('best_variant', select6['strategy_id'])
+        self.assertIn('balanced', select5['strategy_id'])
+        self.assertIn('balanced', select6['strategy_id'])
         self.assertIn('best_variant', select10['strategy_id'])
 
     def test_select6_hit_rate_priority_targets_prize_floor(self):
@@ -353,7 +353,9 @@ class KL8PredictionGuardTests(unittest.TestCase):
             self.assertEqual(result[key]['numbers'], sorted(result[key]['numbers']))
 
         for key in [f'select_{pick}' for pick in range(3, 11)]:
-            expected_mode = 'best_variant' if key in {'select_5', 'select_6', 'select_10'} else 'prize_floor'
+            expected_mode = 'best_variant' if key in {'select_10'} else 'prize_floor'
+            if key in {'select_5', 'select_6'}:
+                expected_mode = 'balanced'
             self.assertEqual(
                 result['resolved_strategies'][key]['final_selection_mode'],
                 expected_mode,
