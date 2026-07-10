@@ -4811,22 +4811,33 @@ function renderKL8(r) {
 
   // 候选池（仅在有已验证策略时显示）
   if (signalStatus === 'validated') {
-    const sel5 = r.select_5;
-    if (sel5 && sel5.candidates && sel5.candidates.length > 0) {
+    const candidatePlays = [
+      { key: 'select_5', label: '选5' },
+      { key: 'select_6', label: '选6' },
+      { key: 'select_10', label: '选10' },
+    ].filter(item => r[item.key]?.candidates?.length > 0);
+
+    if (candidatePlays.length > 0) {
       html += `<div class="card" style="margin-bottom:12px;padding:10px 14px">`;
-      html += `<div style="font-size:13px;font-weight:600;margin-bottom:8px">候选号码池 <span style="font-size:11px;color:#8b949e">(基于选5策略)</span></div>`;
-      html += `<div style="display:flex;flex-wrap:wrap;gap:4px;line-height:1.6">`;
-      for (const item of sel5.candidates.slice(0, 15)) {
-        const num = typeof item === 'object' ? item[0] : item;
-        const isAnyPick = selectTypes.some(st => (r[`select_${st}`]?.numbers || []).includes(num));
-        if (isAnyPick) {
-          html += `<span class="kl8-ball highlight-ball" style="width:28px;height:28px;font-size:11px">${String(num).padStart(2,'0')}</span> `;
-        } else {
-          html += `<span class="kl8-ball small-ball">${String(num).padStart(2,'0')}</span> `;
+      html += `<div style="font-size:13px;font-weight:600;margin-bottom:8px">候选号码池 <span style="font-size:11px;color:#8b949e">(按玩法独立展示)</span></div>`;
+      html += `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px">`;
+      for (const play of candidatePlays) {
+        const selectedSet = new Set(r[play.key]?.numbers || []);
+        html += `<div style="padding:8px;border:1px solid var(--line);border-radius:6px;background:var(--card2)">`;
+        html += `<div style="font-size:12px;font-weight:700;margin-bottom:6px">${esc(play.label)} Top15</div>`;
+        html += `<div style="display:flex;flex-wrap:wrap;gap:4px;line-height:1.6">`;
+        for (const item of r[play.key].candidates.slice(0, 15)) {
+          const num = typeof item === 'object' ? item[0] : item;
+          if (selectedSet.has(num)) {
+            html += `<span class="kl8-ball highlight-ball" style="width:28px;height:28px;font-size:11px">${String(num).padStart(2,'0')}</span> `;
+          } else {
+            html += `<span class="kl8-ball small-ball">${String(num).padStart(2,'0')}</span> `;
+          }
         }
+        html += `</div></div>`;
       }
       html += `</div>`;
-      html += `<div style="font-size:11px;color:var(--muted);margin-top:6px">以上号码为候选池排名前15，高亮球为任一玩法的推荐号</div>`;
+      html += `<div style="font-size:11px;color:var(--muted);margin-top:6px">高亮球为该玩法最终推荐号。</div>`;
       html += `</div>`;
     }
   }

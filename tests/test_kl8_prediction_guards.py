@@ -175,6 +175,39 @@ class KL8PredictionGuardTests(unittest.TestCase):
         self.assertFalse(set(result['numbers']) & set(range(1, 11)))
         self.assertEqual(result['excluded_numbers'], list(range(1, 11)))
         self.assertNotEqual(result['quality']['selection_mode'], 'low_repeat')
+        self.assertEqual(result['quality']['requested_selection_mode'], 'best_variant')
+
+    def test_recalculate_play_excluding_respects_strategy_selection_mode(self):
+        analyzer = KL8Analyzer.__new__(KL8Analyzer)
+        analyzer.history_data = [_record(i) for i in range(80, 0, -1)]
+        analyzer.using_simulated_data = False
+        analyzer.statistics = {'last_numbers': set(range(1, 21))}
+
+        original_build = KL8Analyzer.build_pool_by_strategy
+        original_resolve = kl8_module.resolve_play_strategy
+        try:
+            KL8Analyzer.build_pool_by_strategy = lambda self, strategy, pool_size=20: {
+                'selected': list(range(1, min(pool_size, 50) + 1)),
+                'candidates': [(n, float(100 - n)) for n in range(1, 51)],
+                'votes': {},
+            }
+            kl8_module.resolve_play_strategy = lambda play_type: {
+                'strategy_id': f'{play_type}_forced_prize_floor',
+                'feature_weights': {'frequency': 1.0},
+                'model_weights': {'rank': 1.0},
+                'window_size': 50,
+                'final_selection_mode': 'prize_floor',
+                'prediction_mode': 'reference_unvalidated',
+                'is_validated': False,
+            }
+            result = analyzer.recalculate_play_excluding('select_10', list(range(1, 11)))
+        finally:
+            KL8Analyzer.build_pool_by_strategy = original_build
+            kl8_module.resolve_play_strategy = original_resolve
+
+        self.assertNotIn('error', result)
+        self.assertEqual(result['quality']['requested_selection_mode'], 'prize_floor')
+        self.assertEqual(result['quality']['selection_mode'], 'prize_floor')
 
     def test_multi_model_voting_uses_broader_diversified_pool(self):
         analyzer = KL8Analyzer.__new__(KL8Analyzer)
@@ -262,6 +295,23 @@ class KL8PredictionGuardTests(unittest.TestCase):
         )
         self.assertIn('pick count', result['error'])
 
+    def test_reference_select_5_6_and_10_use_best_variant_selection(self):
+        original_verify_only = kl8_module.VERIFY_ONLY_MODE
+        try:
+            kl8_module.VERIFY_ONLY_MODE = False
+            select5 = kl8_module.resolve_play_strategy('select_5')
+            select6 = kl8_module.resolve_play_strategy('select_6')
+            select10 = kl8_module.resolve_play_strategy('select_10')
+        finally:
+            kl8_module.VERIFY_ONLY_MODE = original_verify_only
+
+        self.assertEqual(select5['final_selection_mode'], 'best_variant')
+        self.assertEqual(select6['final_selection_mode'], 'best_variant')
+        self.assertEqual(select10['final_selection_mode'], 'best_variant')
+        self.assertIn('best_variant', select5['strategy_id'])
+        self.assertIn('best_variant', select6['strategy_id'])
+        self.assertIn('best_variant', select10['strategy_id'])
+
     def test_select6_hit_rate_priority_targets_prize_floor(self):
         self.assertEqual(_hit_rate_priority_thresholds('select_5'), ['>=2', '>=3'])
         self.assertEqual(_hit_rate_priority_thresholds('select_6'), ['>=3', '>=4'])
@@ -303,9 +353,10 @@ class KL8PredictionGuardTests(unittest.TestCase):
             self.assertEqual(result[key]['numbers'], sorted(result[key]['numbers']))
 
         for key in [f'select_{pick}' for pick in range(3, 11)]:
+            expected_mode = 'best_variant' if key in {'select_5', 'select_6', 'select_10'} else 'prize_floor'
             self.assertEqual(
                 result['resolved_strategies'][key]['final_selection_mode'],
-                'prize_floor',
+                expected_mode,
             )
             self.assertIn('repeat_follow', result[key]['variants'])
             self.assertIn('zone_spread', result[key]['variants'])
@@ -317,7 +368,7 @@ class KL8PredictionGuardTests(unittest.TestCase):
         self.assertEqual(result['select_6']['hit_rate_priority_thresholds'], ['>=3', '>=4'])
         self.assertEqual(
             result['resolved_strategies']['select_10']['final_selection_mode'],
-            'prize_floor',
+            'best_variant',
         )
         self.assertEqual(result['resolved_strategies']['select_10']['pool_max_last_numbers'], 5)
 

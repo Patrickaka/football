@@ -698,24 +698,24 @@ def resolve_play_strategy(play_type: str, allow_reference: bool = False) -> Opti
             'is_validated': False,
         },
         'select_5': {
-            'strategy_id': 'select_5_ref_trend100_pair_prize_floor',
+            'strategy_id': 'select_5_ref_trend100_pair_best_variant',
             'feature_weights': {'frequency': 0.35, 'gap': 0.15, 'trend': 0.20, 'pair_cooccurrence': 0.15, 'position_residual': 0.10, 'position_residual_cross': 0.05, 'road_residual': 0.0, 'repeat': 0.0, 'odd_even': 0.0, 'big_small': 0.0},
             'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
             'window_size': 100,
             'repeat_direction': 'neutral',
             'pool_max_last_numbers': 3,
-            'final_selection_mode': 'prize_floor',
+            'final_selection_mode': 'best_variant',
             'prediction_mode': 'reference_unvalidated',
             'is_validated': False,
         },
         'select_6': {
-            'strategy_id': 'select_6_ref_trend100_prize_floor',
+            'strategy_id': 'select_6_ref_trend100_best_variant',
             'feature_weights': {'frequency': 0.35, 'gap': 0.15, 'trend': 0.20, 'pair_cooccurrence': 0.10, 'position_residual': 0.10, 'position_residual_cross': 0.10, 'road_residual': 0.0, 'repeat': 0.0, 'odd_even': 0.0, 'big_small': 0.0},
             'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
             'window_size': 100,
             'repeat_direction': 'neutral',
             'pool_max_last_numbers': 4,
-            'final_selection_mode': 'prize_floor',
+            'final_selection_mode': 'best_variant',
             'prediction_mode': 'reference_unvalidated',
             'is_validated': False,
         },
@@ -752,7 +752,7 @@ def resolve_play_strategy(play_type: str, allow_reference: bool = False) -> Opti
             'is_validated': False,
         },
         'select_10': {
-            'strategy_id': 'select_10_ref_trend100_follow_prize_floor',
+            'strategy_id': 'select_10_ref_trend100_follow_best_variant',
             'feature_weights': {'frequency': 0.30, 'gap': 0.15, 'trend': 0.20, 'pair_cooccurrence': 0.15, 'position_residual': 0.10, 'position_residual_cross': 0.05, 'road_residual': 0.05, 'repeat': 0.0, 'odd_even': 0.0, 'big_small': 0.0},
             'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
             'window_size': 100,
@@ -760,7 +760,7 @@ def resolve_play_strategy(play_type: str, allow_reference: bool = False) -> Opti
             'repeat_follow_score': 0.90,
             'repeat_non_follow_score': 0.50,
             'pool_max_last_numbers': 5,
-            'final_selection_mode': 'prize_floor',
+            'final_selection_mode': 'best_variant',
             'prediction_mode': 'reference_unvalidated',
             'is_validated': False,
         },
@@ -3533,6 +3533,7 @@ class KL8Analyzer:
         candidates: List[Tuple[int, float]],
         target_size: int,
         repeat_cap: int,
+        selection_mode: str = 'best_variant',
     ) -> Tuple[List[Tuple[int, float]], Dict]:
         """Try several deterministic recalculation shapes and keep the best one."""
         last_numbers = self.statistics.get('last_numbers', set())
@@ -3543,6 +3544,8 @@ class KL8Analyzer:
         def add(label: str, pool: List[Tuple[int, float]]):
             nums = tuple(num for num, _ in pool[:target_size])
             if len(nums) < target_size or nums in seen:
+                if len(nums) >= target_size and label == selection_mode:
+                    variants.append((label, pool[:target_size]))
                 return
             seen.add(nums)
             variants.append((label, pool[:target_size]))
@@ -3559,6 +3562,18 @@ class KL8Analyzer:
             target_size,
             last_numbers,
             max_last_numbers=min(target_size, repeat_cap + 1),
+        ))
+        add('low_repeat', _diversify_candidate_pool(
+            candidates,
+            target_size,
+            last_numbers,
+            max_last_numbers=max(0, repeat_cap - 1),
+        ))
+        add('prize_floor', _prize_floor_candidate_pool(
+            candidates,
+            target_size,
+            last_numbers,
+            max_last_numbers=repeat_cap,
         ))
 
         zone_spread_nums = []
@@ -3596,8 +3611,13 @@ class KL8Analyzer:
             scored.append((quality.get('quality_score', -1.0), label, pool, quality))
 
         scored.sort(key=lambda item: (-item[0], item[1]))
-        _, label, best_pool, quality = scored[0]
+        if selection_mode != 'best_variant':
+            selected = next((item for item in scored if item[1] == selection_mode), None)
+        else:
+            selected = None
+        _, label, best_pool, quality = selected or scored[0]
         quality['selection_mode'] = label
+        quality['requested_selection_mode'] = selection_mode
         quality['variant_count'] = len(scored)
         quality['variants'] = [
             {
@@ -3658,6 +3678,7 @@ class KL8Analyzer:
                 candidates,
                 pick_n,
                 repeat_cap,
+                strategy.get('final_selection_mode', 'best_variant'),
             )
             output_numbers = sorted(num for num, _ in final_pool)
             return {
@@ -3708,6 +3729,7 @@ class KL8Analyzer:
                 candidates,
                 pool_size,
                 repeat_cap,
+                strategy.get('final_selection_mode', 'best_variant'),
             )
             core_numbers = sorted(num for num, _ in final_pool)
             combo_list = [sorted(c) for c in combinations(core_numbers, base_pick)] if len(core_numbers) == pool_size else []
