@@ -297,6 +297,36 @@
     transform: translateY(0);
     box-shadow: 0 1px 3px rgba(68, 147, 248, 0.2);
   }
+  .pager {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin: 14px 0 18px;
+  }
+  .pager button,
+  .pager select {
+    background: var(--card2);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    color: var(--text);
+    padding: 7px 10px;
+    font-size: 13px;
+  }
+  .pager button {
+    cursor: pointer;
+  }
+  .pager button:disabled {
+    color: var(--muted);
+    cursor: not-allowed;
+    opacity: .55;
+  }
+  .pager .page-info {
+    color: var(--muted);
+    font-size: 13px;
+    padding: 0 4px;
+  }
 
   .league-group { margin-bottom: 18px; }
   .league-title { font-size: 13px; color: var(--accent2); font-weight: 600;
@@ -1783,6 +1813,11 @@ function getGoalsPrediction(topScores) {
 let beidanSource = 'okooo';
 let beidanDate = '';
 let beidanQualityFilter = 'all';
+let beidanSearchFilter = '';
+let beidanPage = 1;
+let beidanPageSize = 12;
+let beidanLastResult = null;
+let beidanSearchDebounceTimer = null;
 
 async function loadBeidan() {
   appBeidan.innerHTML = '<div class="status">加载中…</div>';
@@ -1841,12 +1876,73 @@ function beidanMatchPassesFilter(m) {
   return true;
 }
 
+function beidanMatchPassesSearch(m) {
+  const kw = (beidanSearchFilter || '').trim().toLowerCase();
+  if (!kw) return true;
+  return [
+    m.home,
+    m.away,
+    m.league,
+    m.num,
+    m.time,
+    m.spf?.prediction,
+    m.zjq?.prediction,
+  ].filter(Boolean).join(' ').toLowerCase().includes(kw);
+}
+
 function setBeidanQualityFilter(filter) {
   beidanQualityFilter = filter;
-  loadBeidan();
+  beidanPage = 1;
+  if (beidanLastResult) renderBeidan(beidanLastResult);
+  else loadBeidan();
+}
+
+function setBeidanPage(page) {
+  beidanPage = Math.max(1, Number(page) || 1);
+  if (beidanLastResult) renderBeidan(beidanLastResult);
+}
+
+function setBeidanPageSize(size) {
+  beidanPageSize = Math.max(5, Number(size) || 12);
+  beidanPage = 1;
+  if (beidanLastResult) renderBeidan(beidanLastResult);
+}
+
+function attachBeidanSearchListeners() {
+  const input = document.getElementById('beidan-search');
+  if (!input) return;
+  input.setAttribute('autocomplete', 'off');
+  input.addEventListener('compositionstart', () => {
+    input.dataset.composing = '1';
+  });
+  input.addEventListener('compositionend', () => {
+    delete input.dataset.composing;
+    handleBeidanSearch({ target: input });
+  });
+  input.addEventListener('input', handleBeidanSearch);
+}
+
+function handleBeidanSearch(e) {
+  const el = e.target;
+  if (el.dataset && el.dataset.composing) return;
+  beidanSearchFilter = el.value;
+  beidanPage = 1;
+  if (beidanSearchDebounceTimer) clearTimeout(beidanSearchDebounceTimer);
+  beidanSearchDebounceTimer = setTimeout(() => {
+    if (beidanLastResult) {
+      renderBeidan(beidanLastResult);
+      const input = document.getElementById('beidan-search');
+      if (input) {
+        input.focus();
+        const pos = input.value.length;
+        try { input.setSelectionRange(pos, pos); } catch (_) {}
+      }
+    }
+  }, 180);
 }
 
 function renderBeidan(result) {
+  beidanLastResult = result;
   let html = '';
   
   html += `<div class="beidan-toolbar">
@@ -1867,6 +1963,17 @@ function renderBeidan(result) {
       <button onclick="loadBeidan()" class="tb-refresh">🔄 刷新</button>
     </div>
     <div class="toolbar-row">
+      <div class="toolbar-group" style="flex:1;min-width:220px">
+        <span class="toolbar-label">搜索</span>
+        <div style="flex:1">
+          <input type="search" id="beidan-search" class="search"
+            placeholder="搜索球队、联赛、场次"
+            value="${esc(beidanSearchFilter || '')}"
+            style="width:100%;margin-bottom:0;padding:8px 12px;border-radius:8px;border:1px solid rgba(44,58,78,0.5);background:rgba(0,0,0,0.2);color:var(--text);font-size:13px"
+          />
+        </div>
+      </div>
+      <div class="toolbar-divider"></div>
       <div class="toolbar-group">
         <span class="toolbar-label">筛选</span>
         <div class="toolbar-buttons">
@@ -1890,13 +1997,31 @@ function renderBeidan(result) {
     return;
   }
 
-  const visibleRecommendations = result.recommendations.filter(beidanMatchPassesFilter);
-  html += `<div class="status" style="padding:4px 0 12px;font-size:13px">共 ${result.total_matches} 场比赛，当前显示 ${visibleRecommendations.length} 场</div>`;
+  const filteredRecommendations = result.recommendations
+    .filter(beidanMatchPassesFilter)
+    .filter(beidanMatchPassesSearch);
+  const totalPages = Math.max(1, Math.ceil(filteredRecommendations.length / beidanPageSize));
+  if (beidanPage > totalPages) beidanPage = totalPages;
+  const pageStart = (beidanPage - 1) * beidanPageSize;
+  const visibleRecommendations = filteredRecommendations.slice(pageStart, pageStart + beidanPageSize);
+  html += `<div class="status" style="padding:4px 0 12px;font-size:13px">共 ${result.total_matches} 场比赛，匹配 ${filteredRecommendations.length} 场，当前显示 ${visibleRecommendations.length} 场</div>`;
   html += renderBeidanHistorySummary(result.history_summary);
+  const pagerHtml = totalPages > 1 ? `<div class="pager">
+    <button onclick="setBeidanPage(1)" ${beidanPage <= 1 ? 'disabled' : ''}>首页</button>
+    <button onclick="setBeidanPage(${beidanPage - 1})" ${beidanPage <= 1 ? 'disabled' : ''}>上一页</button>
+    <span class="page-info">${beidanPage} / ${totalPages}</span>
+    <button onclick="setBeidanPage(${beidanPage + 1})" ${beidanPage >= totalPages ? 'disabled' : ''}>下一页</button>
+    <button onclick="setBeidanPage(${totalPages})" ${beidanPage >= totalPages ? 'disabled' : ''}>末页</button>
+    <select onchange="setBeidanPageSize(this.value)">
+      ${[8, 12, 20, 50].map(size => `<option value="${size}" ${beidanPageSize === size ? 'selected' : ''}>每页 ${size}</option>`).join('')}
+    </select>
+  </div>` : '';
+  html += pagerHtml;
 
   if (!visibleRecommendations.length) {
-    html += '<div class="status">当前筛选下暂无推荐</div>';
+    html += `<div class="status">${beidanSearchFilter ? '没有匹配的比赛' : '当前筛选下暂无推荐'}</div>`;
     appBeidan.innerHTML = html;
+    attachBeidanSearchListeners();
     return;
   }
   
@@ -2064,12 +2189,16 @@ function renderBeidan(result) {
       });
     html += '</div>';
   }
+  html += pagerHtml;
   
   appBeidan.innerHTML = html;
+  attachBeidanSearchListeners();
 }
 
 function switchBeidanSource(source) {
   beidanSource = source;
+  beidanPage = 1;
+  beidanLastResult = null;
   loadBeidan();
 }
 
