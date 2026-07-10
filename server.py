@@ -31,7 +31,6 @@ from src.lottery3d import run_prediction
 from src.lottery3d.ml import fetch_data, predict_current
 from src.lottery import get_lottery_analyzer, run_prediction as lottery_run_prediction
 from src.lottery.ml import predict_with_ml, clear_ml_cache
-from src.beidan import generate_beidan_recommendations, find_value_bets, summarize_beidan_history
 from src.kl8 import (
     get_kl8_analyzer, run_prediction as kl8_run_prediction,
     clear_cache as kl8_clear_cache, list_prediction_snapshots as kl8_list_snapshots,
@@ -52,6 +51,29 @@ KL8_PARAMETER_SEARCH_LOCK = threading.Lock()
 KL8_PARAMETER_SEARCH_REPORT_DIR = Path(data_path('kl8_parameter_search_reports'))
 
 
+def _current_kl8_predictor_version():
+    """Read the KL8 version from the module so cache checks follow code reloads."""
+    try:
+        import src.kl8 as kl8_module
+        return getattr(kl8_module, 'KL8_PREDICTOR_VERSION', KL8_PREDICTOR_VERSION)
+    except Exception:
+        return KL8_PREDICTOR_VERSION
+
+
+def _load_beidan_helpers():
+    try:
+        from src.beidan import (
+            generate_beidan_recommendations,
+            find_value_bets,
+            summarize_beidan_history,
+        )
+        return generate_beidan_recommendations, find_value_bets, summarize_beidan_history
+    except ModuleNotFoundError as exc:
+        if exc.name == 'requests':
+            raise RuntimeError('北单模块需要安装 requests；其他页面可正常使用') from exc
+        raise
+
+
 def _is_kl8_cache_current(cache_entry, now):
     if not _is_cache_valid(cache_entry, now):
         return False
@@ -64,7 +86,7 @@ def _is_kl8_cache_current(cache_entry, now):
         return False
     return (
         data.get('based_on_issue') == latest_issue
-        and data.get('statistics', {}).get('version') == KL8_PREDICTOR_VERSION
+        and data.get('statistics', {}).get('version') == _current_kl8_predictor_version()
     )
 
 # 回测模块（延迟导入以加速启动）
@@ -801,6 +823,7 @@ class Handler(BaseHTTPRequestHandler):
             
             self._log.info(f'北单推荐请求: date={date}, source={source}, types={bet_types}')
             
+            generate_beidan_recommendations, _, _ = _load_beidan_helpers()
             result = generate_beidan_recommendations(date=date, bet_types=bet_types, source=source)
             
             if 'error' in result:
@@ -836,6 +859,7 @@ class Handler(BaseHTTPRequestHandler):
             source = params.get('source', ['okooo'])[0]
             threshold = float(params.get('threshold', [0.05])[0])
             
+            _, find_value_bets, _ = _load_beidan_helpers()
             result = find_value_bets(date=date, threshold=threshold, source=source)
             
             if 'error' in result:
@@ -850,6 +874,7 @@ class Handler(BaseHTTPRequestHandler):
         """获取北单预测记录摘要"""
         try:
             limit = int(params.get('limit', ['200'])[0])
+            _, _, summarize_beidan_history = _load_beidan_helpers()
             return {'result': summarize_beidan_history(limit=limit)}
         except Exception as e:
             self._log.error('北单预测记录获取失败', exc_info=True)
