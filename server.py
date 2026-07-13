@@ -355,6 +355,21 @@ class Handler(BaseHTTPRequestHandler):
         elif path == '/api/basketball/value':
             params = parse_qs(route.query)
             self._serve_json(self._basketball_value_payload(params))
+        elif path == '/api/basketball/history':
+            params = parse_qs(route.query)
+            self._serve_json(self._basketball_history_payload(params))
+        elif path == '/api/basketball/elo':
+            params = parse_qs(route.query)
+            self._serve_json(self._basketball_elo_payload(params))
+        elif path == '/api/basketball/calibration':
+            params = parse_qs(route.query)
+            self._serve_json(self._basketball_calibration_payload(params))
+        elif path == '/api/basketball/stats':
+            params = parse_qs(route.query)
+            self._serve_json(self._basketball_stats_payload(params))
+        elif path == '/api/basketball/elo/update':
+            params = parse_qs(route.query)
+            self._serve_json(self._basketball_elo_update_payload(params))
         elif path == '/api/lottery':
             self._serve_json(self._lottery_payload())
         elif path == '/api/lottery-refresh':
@@ -1015,6 +1030,87 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:
             self._log.error('篮球价值投注失败', exc_info=True)
             return {'error': f'价值投注分析失败: {str(e)}'}
+
+    def _basketball_history_payload(self, params):
+        """获取篮球预测历史与统计"""
+        try:
+            limit = int(params.get('limit', ['50'])[0])
+
+            _, _, summarize_basketball_history = _load_basketball_helpers()
+            result = summarize_basketball_history(limit=limit)
+
+            return {'result': result}
+        except Exception as e:
+            self._log.error('篮球历史获取失败', exc_info=True)
+            return {'error': f'获取历史失败: {str(e)}'}
+
+    def _basketball_elo_payload(self, params):
+        """获取篮球 ELO 评分（指定球队或排名）"""
+        try:
+            from src.basketball.elo import get_elo_system
+            elo = get_elo_system()
+
+            team = params.get('team', [None])[0]
+            top_n = int(params.get('top', ['20'])[0])
+
+            if team:
+                info = elo.get_team_info(team)
+                return {'result': {'team': team, **info}}
+            else:
+                top_teams = elo.get_top_teams(limit=top_n)
+                return {'result': {'teams': top_teams, 'total': len(elo.ratings)}}
+        except Exception as e:
+            self._log.error('篮球 ELO 查询失败', exc_info=True)
+            return {'error': f'ELO 查询失败: {str(e)}'}
+
+    def _basketball_calibration_payload(self, params):
+        """获取篮球校准统计"""
+        try:
+            from src.basketball.calibration import get_calibrator
+            calibrator = get_calibrator()
+
+            bet_type = params.get('type', [None])[0]
+            league = params.get('league', [None])[0]
+
+            stats = calibrator.get_stats(bet_type=bet_type, league=league)
+            return {'result': {'stats': stats, 'total_buckets': len(stats)}}
+        except Exception as e:
+            self._log.error('篮球校准统计失败', exc_info=True)
+            return {'error': f'校准查询失败: {str(e)}'}
+
+    def _basketball_stats_payload(self, params):
+        """获取篮球预测准确率统计"""
+        try:
+            from src.basketball.records import get_prediction_stats
+            stats = get_prediction_stats()
+            return {'result': stats}
+        except Exception as e:
+            self._log.error('篮球统计失败', exc_info=True)
+            return {'error': f'统计查询失败: {str(e)}'}
+
+    def _basketball_elo_update_payload(self, params):
+        """手动更新篮球 ELO 评分（输入赛果）"""
+        try:
+            home = params.get('home', [''])[0]
+            away = params.get('away', [''])[0]
+            home_score = int(params.get('home_score', ['0'])[0])
+            away_score = int(params.get('away_score', ['0'])[0])
+            league = params.get('league', ['NBA'])[0]
+
+            if not home or not away:
+                return {'error': '缺少 home/away 参数'}
+
+            from src.basketball.elo import get_elo_system
+            elo = get_elo_system()
+            new_home, new_away = elo.update_ratings(home, away, home_score, away_score, league)
+
+            return {'result': {
+                'home': {'team': home, 'new_rating': new_home},
+                'away': {'team': away, 'new_rating': new_away},
+            }}
+        except Exception as e:
+            self._log.error('篮球 ELO 更新失败', exc_info=True)
+            return {'error': f'ELO 更新失败: {str(e)}'}
 
     def _calibrate_payload(self, params):
         """手动触发联赛重新校准"""
