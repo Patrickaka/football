@@ -1479,19 +1479,24 @@ class LotteryAnalyzer:
         else:
             scores['repeat'] = 0.30
 
-        # ---- 邻号概率得分 (v3.2: 修复逻辑 — 判断num是否为上期号码的邻号) ----
+        # ---- 邻号概率得分 ----
+        # 上期开奖号自身的 adjacent 不加分（已由 repeat 覆盖，避免双重计数）
         if len(self.history_data) >= 1:
-            last_back = self.history_data[0]['back']
-            # 构建上期后区号码的邻号集合
+            last_back = set(self.history_data[0]['back'])
             last_neighbors = set()
             for n in last_back:
                 if n - 1 >= 1:
                     last_neighbors.add(n - 1)
                 if n + 1 <= 12:
                     last_neighbors.add(n + 1)
-            # 判断当前号码是否在上期号码的邻号范围内
-            is_adjacent = num in last_neighbors
-            scores['adjacent'] = 0.75 if is_adjacent else 0.25
+            # 排除上期开奖号自身，只对真正的"邻号"给高分
+            true_neighbors = last_neighbors - last_back
+            if num in true_neighbors:
+                scores['adjacent'] = 0.75
+            elif num not in last_back:
+                scores['adjacent'] = 0.25
+            else:
+                scores['adjacent'] = 0.25  # 上期开奖号不给adjacent加成
         else:
             scores['adjacent'] = 0.30
 
