@@ -2671,11 +2671,17 @@ def calculate_online_stats() -> Dict:
     }
 
 
-def run_prediction(force_refresh=False):
+def run_prediction(force_refresh=False, enable_backtest=True,
+                   enable_ml=True, enable_fusion=True,
+                   compute_weights=True):
     """运行大乐透预测，返回 JSON 可序列化 dict。
 
     Args:
         force_refresh: 是否强制刷新缓存（默认 False，使用缓存）
+        enable_backtest: 是否启用滚动回测（默认 True）
+        enable_ml: 是否启用 ML 模型预测（默认 True）
+        enable_fusion: 是否启用规则+ML 融合推荐（默认 True）
+        compute_weights: 是否计算动态权重调整（默认 True）
     """
     global _prediction_cache, _cache_time
 
@@ -2715,14 +2721,21 @@ def run_prediction(force_refresh=False):
 
         # 滚动回测 (trials 取较大值: 50期小样本噪声极大，会误报显著性；
         # 200期更接近真实命中率，使 baseline_comparison 的显著性判断可信)
-        backtest = analyzer.rolling_backtest(trials=200)
+        if enable_backtest:
+            backtest = analyzer.rolling_backtest(trials=200)
+        else:
+            backtest = {'trials': 0, 'note': 'backtest disabled', 'baseline_comparison': {}}
 
         # 动态权重调整 (v2.2: 回测驱动)
-        optimized_weights = analyzer.dynamic_weight_adjustment()
-        weight_diff = {
-            k: round(optimized_weights.get(k, 0) - FEATURE_WEIGHTS.get(k, 0), 4)
-            for k in FEATURE_WEIGHTS
-        }
+        if compute_weights and enable_backtest:
+            optimized_weights = analyzer.dynamic_weight_adjustment()
+            weight_diff = {
+                k: round(optimized_weights.get(k, 0) - FEATURE_WEIGHTS.get(k, 0), 4)
+                for k in FEATURE_WEIGHTS
+            }
+        else:
+            optimized_weights = dict(FEATURE_WEIGHTS)
+            weight_diff = {k: 0.0 for k in FEATURE_WEIGHTS}
 
         # 多模型集成投票
         voting = analyzer.multi_model_voting()
@@ -2731,13 +2744,14 @@ def run_prediction(force_refresh=False):
         ml_prediction = None
         ml_backtest_result = None
         fusion_result = None
-        try:
-            from .ml import predict_with_ml, backtest_ml
-            ml_prediction = predict_with_ml(analyzer.history_data)
-            # ML 回测 (使用最近60期评估)
-            ml_backtest_result = backtest_ml(analyzer.history_data, trials=min(60, len(analyzer.history_data) - 130))
-        except Exception as e:
-            log.warning(f"ML模型预测失败（不影响整体功能）: {e}")
+        if enable_ml:
+            try:
+                from .ml import predict_with_ml, backtest_ml
+                ml_prediction = predict_with_ml(analyzer.history_data)
+                # ML 回测 (使用最近60期评估)
+                ml_backtest_result = backtest_ml(analyzer.history_data, trials=min(60, len(analyzer.history_data) - 130))
+            except Exception as e:
+                log.warning(f"ML模型预测失败（不影响整体功能）: {e}")
 
         # 多种方法推荐
         recommendations = {}
@@ -2760,7 +2774,7 @@ def run_prediction(force_refresh=False):
             }
 
         # v3.3: 规则+ML 融合推荐
-        if ml_prediction and ml_prediction.get('front_top'):
+        if enable_fusion and enable_ml and ml_prediction and ml_prediction.get('front_top'):
             try:
                 front_ranked, back_ranked = analyzer.rank_model(top_n=35)
                 rule_w, ml_w = compute_fusion_weights(backtest, ml_backtest_result or {})
@@ -2784,11 +2798,12 @@ def run_prediction(force_refresh=False):
             except Exception as e:
                 log.warning(f"规则+ML融合失败: {e}")
 
-        # 保存线上预测记录
+        # 保存线上预测记录（对下一期的预测，不是已开奖期号）
         latest_issue = data_quality.get('latest_issue', '')
         if latest_issue and not analyzer.using_simulated_data:
             try:
-                save_online_prediction(latest_issue, recommendations, fusion_result)
+                next_issue = str(int(latest_issue) + 1).zfill(len(latest_issue))
+                save_online_prediction(next_issue, recommendations, fusion_result)
             except Exception as e:
                 log.warning(f"保存预测记录失败: {e}")
 
