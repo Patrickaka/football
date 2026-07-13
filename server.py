@@ -168,9 +168,6 @@ _CACHE = {
     },
 }
 
-# 大乐透后台预热状态（避免冷启动504超时）
-_LOTTERY_WARMUP_DONE = threading.Event()
-
 _ROOT = Path(__file__).parent
 INDEX_FILE = _ROOT / 'web' / 'index.html'
 
@@ -1199,17 +1196,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._log.info('大乐透分析使用缓存（server 级）')
                 return {'result': cache['data']}
 
-            # 如果后台预热仍在进行，返回友好提示（避免504超时）
-            if not _LOTTERY_WARMUP_DONE.is_set():
-                self._log.info('大乐透预热中，返回等待状态')
-                return {'result': {
-                    'status': 'warming_up',
-                    'message': '大乐透分析正在后台预热中，请约 30 秒后刷新...',
-                    'predictions': {},
-                    'data_quality': {},
-                }}
-
-            # server 缓存失效且预热已完成，调用模块级预测函数
+            # server 缓存失效，调用模块级预测函数（含模块级内存缓存）
             self._log.info('大乐透分析重新计算')
             result = lottery_run_prediction(force_refresh=False)
 
@@ -2080,25 +2067,6 @@ def _start_background_sync():
     except Exception as e:
         log.warning(f"启动快乐8调度器失败: {e}")
 
-
-def _warmup_lottery_cache():
-    """后台预热线程：启动时异步计算大乐透分析，避免首次请求超时（504）"""
-    try:
-        log.info('大乐透预热开始...')
-        start = time.time()
-        result = lottery_run_prediction(force_refresh=False)
-        if 'error' not in result:
-            _CACHE['lottery']['data'] = result
-            _CACHE['lottery']['timestamp'] = time.time()
-            log.info('大乐透预热完成，耗时 %.1f秒', time.time() - start)
-        else:
-            log.warning('大乐透预热失败: %s', result.get('error'))
-    except Exception:
-        log.error('大乐透预热异常', exc_info=True)
-    finally:
-        _LOTTERY_WARMUP_DONE.set()
-
-
 def main():
     server = ThreadingHTTPServer((HOST, PORT), Handler)
     local_url = f'http://localhost:{PORT}'
@@ -2115,18 +2083,6 @@ def main():
     
     # 启动后台自动同步
     _start_background_sync()
-    
-    # 启动大乐透后台预热（避免首次请求504超时）
-    try:
-        warmup_thread = threading.Thread(
-            target=_warmup_lottery_cache,
-            daemon=True,
-            name='LotteryWarmup'
-        )
-        warmup_thread.start()
-        log.info('大乐透预热线程已启动（后台异步计算）')
-    except Exception as e:
-        log.warning(f'启动大乐透预热失败: {e}')
     
     log.info('=' * 50)
     try:
