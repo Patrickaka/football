@@ -1270,22 +1270,14 @@ class Handler(BaseHTTPRequestHandler):
                 ('rank', '排名策略'),
             ]
             recommendations = []
-            used_front = set()
-            used_back = set()
             for key, name in strategies:
-                rec = analyzer.generate_recommendation(
-                    key,
-                    exclude_front=list(used_front),
-                    exclude_back=list(used_back)
-                )
+                rec = analyzer.generate_recommendation(key)
                 recommendations.append({
                     'front': rec['front'],
                     'back': rec['back'],
                     'method': name,
                     'strategy': key,
                 })
-                used_front.update(rec['front'])
-                used_back.update(rec['back'])
 
             return {
                 'result': {

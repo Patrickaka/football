@@ -1671,10 +1671,12 @@ class LotteryAnalyzer:
 
     def _score_based_select(self, candidates: List[int], count: int,
                             is_front: bool = True,
-                            fallback_pool: List[int] = None) -> List[int]:
+                            fallback_pool: List[int] = None,
+                            weights_override: Dict[str, float] = None) -> List[int]:
         """基于评分的约束选择 (替代 random.sample)。
 
         当候选数量不足时，若提供 fallback_pool，则从 fallback_pool 中按评分补充。
+        weights_override: 策略自定义权重，为 None 时使用默认 FEATURE_WEIGHTS/BACK_FEATURE_WEIGHTS。
         """
         stats = self.statistics
 
@@ -1688,7 +1690,8 @@ class LotteryAnalyzer:
 
         # 获取每个候选的评分
         scored = []
-        weights = FEATURE_WEIGHTS if is_front else BACK_FEATURE_WEIGHTS
+        weights = weights_override if weights_override is not None else (
+            FEATURE_WEIGHTS if is_front else BACK_FEATURE_WEIGHTS)
         for num in candidates:
             features = self._calculate_feature_score(num, is_front=True) if is_front else self._calculate_back_feature_score(num)
             score = sum(
@@ -1858,19 +1861,39 @@ class LotteryAnalyzer:
             hot_back = [num for num, _ in self.statistics.get('hot_back', [])[:10]]
             front = self._score_based_select(
                 _filter(hot_front, exclude_front), 5, is_front=True,
-                fallback_pool=FRONT_NUMBERS)
+                fallback_pool=FRONT_NUMBERS,
+                weights_override={
+                    'frequency': 0.25, 'gap': 0.06, 'position': 0.14,
+                    'road': 0.10, 'sum': 0.12, 'trend': 0.15,
+                    'zone': 0.08, 'repeat': 0.10, 'adjacent': 0.10,
+                })
             back = self._score_based_select(
                 _filter(hot_back, exclude_back), 2, is_front=False,
-                fallback_pool=BACK_NUMBERS)
+                fallback_pool=BACK_NUMBERS,
+                weights_override={
+                    'frequency': 0.20, 'gap': 0.04, 'trend': 0.10,
+                    'road': 0.15, 'repeat': 0.06, 'adjacent': 0.20,
+                    'position': 0.15, 'sum': 0.10,
+                })
         elif method == 'cold':
             cold_front = [num for num, _ in self.statistics.get('cold_front', [])[:20]]
             cold_back = [num for num, _ in self.statistics.get('cold_back', [])[:10]]
             front = self._score_based_select(
                 _filter(cold_front, exclude_front), 5, is_front=True,
-                fallback_pool=FRONT_NUMBERS)
+                fallback_pool=FRONT_NUMBERS,
+                weights_override={
+                    'frequency': 0.05, 'gap': 0.25, 'position': 0.14,
+                    'road': 0.10, 'sum': 0.12, 'trend': 0.04,
+                    'zone': 0.10, 'repeat': 0.10, 'adjacent': 0.10,
+                })
             back = self._score_based_select(
                 _filter(cold_back, exclude_back), 2, is_front=False,
-                fallback_pool=BACK_NUMBERS)
+                fallback_pool=BACK_NUMBERS,
+                weights_override={
+                    'frequency': 0.02, 'gap': 0.30, 'trend': 0.02,
+                    'road': 0.15, 'repeat': 0.06, 'adjacent': 0.20,
+                    'position': 0.15, 'sum': 0.10,
+                })
         elif method == 'rank':
             front_ranked, back_ranked = self.rank_model(top_n=20)
             front_candidates = [num for num, _, _ in front_ranked[:20]]
