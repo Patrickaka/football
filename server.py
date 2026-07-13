@@ -1257,41 +1257,33 @@ class Handler(BaseHTTPRequestHandler):
             return {'success': False, 'error': str(e)}
 
     def _lottery_recommend_payload(self, params):
-        """获取大乐透推荐号码 - 返回多种策略推荐（全量分析，100期数据不会超时）"""
+        """获取大乐透推荐号码 - 轻量独立计算，不超时"""
         try:
-            # 独立全量计算，获取所有策略推荐（不受 _lottery_payload 轻量缓存影响）
-            result = lottery_run_prediction(force_refresh=True)
-            if 'error' in result:
-                return {'error': result['error']}
+            analyzer = get_lottery_analyzer()
+            # 只抓增量数据（不触发全量引导），<2秒
+            analyzer.fetch_latest_results(count=20, force_refresh=False)
 
-            recommendations = result.get('recommendations', {})
-
-            # 构造前端需要的数组，按策略分组展示
-            strategy_names = {
-                'balanced': '均衡策略',
-                'hot': '热号策略',
-                'cold': '冷号策略',
-                'rank': '排名策略',
-                'ml': 'ML预测',
-                'fusion': '融合推荐',
-            }
-
-            rec_list = []
-            for key, name in strategy_names.items():
-                if key in recommendations and recommendations[key]:
-                    rec = recommendations[key]
-                    rec_list.append({
-                        'front': rec.get('front', []),
-                        'back': rec.get('back', []),
-                        'method': name,
-                        'strategy': key,
-                    })
+            strategies = [
+                ('balanced', '均衡策略'),
+                ('hot', '热号策略'),
+                ('cold', '冷号策略'),
+                ('rank', '排名策略'),
+            ]
+            recommendations = []
+            for key, name in strategies:
+                rec = analyzer.generate_recommendation(key)
+                recommendations.append({
+                    'front': rec['front'],
+                    'back': rec['back'],
+                    'method': name,
+                    'strategy': key,
+                })
 
             return {
                 'result': {
                     'method': 'multi',
-                    'recommendations': rec_list,
-                    'count': len(rec_list)
+                    'recommendations': recommendations,
+                    'count': len(recommendations)
                 }
             }
         except Exception:
