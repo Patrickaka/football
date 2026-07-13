@@ -47,7 +47,7 @@ from src.common.logger import setup_logger
 
 log = setup_logger('kl8')
 
-KL8_PREDICTOR_VERSION = "kl8-v9.2.7-balanced-hit-tier"
+KL8_PREDICTOR_VERSION = "kl8-v9.2.9-high-tier-chase"
 
 # ─── v9.2: 只显示已验证策略模式 ───
 VERIFY_ONLY_MODE = False  # True=未验证玩法不输出号码; False=回退参考策略(始终输出号码)
@@ -698,24 +698,28 @@ def resolve_play_strategy(play_type: str, allow_reference: bool = False) -> Opti
             'is_validated': False,
         },
         'select_5': {
-            'strategy_id': 'select_5_ref_trend100_pair_balanced',
-            'feature_weights': {'frequency': 0.35, 'gap': 0.15, 'trend': 0.20, 'pair_cooccurrence': 0.15, 'position_residual': 0.10, 'position_residual_cross': 0.05, 'road_residual': 0.0, 'repeat': 0.0, 'odd_even': 0.0, 'big_small': 0.0},
+            'strategy_id': 'select_5_ref_high_tier_chase_v1',
+            'feature_weights': {'frequency': 0.30, 'gap': 0.10, 'trend': 0.20, 'pair_cooccurrence': 0.25, 'position_residual': 0.10, 'position_residual_cross': 0.05, 'road_residual': 0.0, 'repeat': 0.0, 'odd_even': 0.0, 'big_small': 0.0},
             'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
             'window_size': 100,
             'repeat_direction': 'neutral',
-            'pool_max_last_numbers': 3,
-            'final_selection_mode': 'balanced',
+            'pool_max_last_numbers': 5,
+            'final_max_last_numbers': 5,
+            'final_selection_mode': 'high_tier_chase',
+            'target_hits': 4,
             'prediction_mode': 'reference_unvalidated',
             'is_validated': False,
         },
         'select_6': {
-            'strategy_id': 'select_6_ref_trend100_balanced',
-            'feature_weights': {'frequency': 0.35, 'gap': 0.15, 'trend': 0.20, 'pair_cooccurrence': 0.10, 'position_residual': 0.10, 'position_residual_cross': 0.10, 'road_residual': 0.0, 'repeat': 0.0, 'odd_even': 0.0, 'big_small': 0.0},
+            'strategy_id': 'select_6_ref_high_tier_chase_v1',
+            'feature_weights': {'frequency': 0.30, 'gap': 0.10, 'trend': 0.20, 'pair_cooccurrence': 0.25, 'position_residual': 0.10, 'position_residual_cross': 0.05, 'road_residual': 0.0, 'repeat': 0.0, 'odd_even': 0.0, 'big_small': 0.0},
             'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
             'window_size': 100,
             'repeat_direction': 'neutral',
-            'pool_max_last_numbers': 4,
-            'final_selection_mode': 'balanced',
+            'pool_max_last_numbers': 6,
+            'final_max_last_numbers': 6,
+            'final_selection_mode': 'high_tier_chase',
+            'target_hits': 5,
             'prediction_mode': 'reference_unvalidated',
             'is_validated': False,
         },
@@ -1302,6 +1306,10 @@ def _prize_tier_thresholds(play_type: str) -> List[str]:
     pick_n = _parse_play_pick_n(play_type) or 5
     if pick_n <= 4:
         return ['>=2', '>=3']
+    if pick_n == 5:
+        return ['>=4', '>=3']
+    if pick_n == 6:
+        return ['>=5', '>=4']
     if pick_n <= 7:
         return ['>=3', '>=4']
     return ['>=4', '>=5']
@@ -1315,7 +1323,9 @@ def _hit_rate_priority_thresholds(play_type: str) -> List[str]:
     if pick_n <= 4:
         return ['>=2']
     if pick_n == 5:
-        return ['>=2', '>=3']
+        return ['>=4', '>=3']
+    if pick_n == 6:
+        return ['>=5', '>=4']
     if pick_n <= 7:
         return ['>=3', '>=4']
     return ['>=3', '>=4']
@@ -1327,8 +1337,8 @@ def _hit_rate_priority_score(metrics: Dict, play_type: str) -> Tuple[float, Dict
     theoretical = metrics.get('theoretical_probs') or {}
     thresholds = _hit_rate_priority_thresholds(play_type)
     weights = [0.70, 0.30] if len(thresholds) > 1 else [1.0]
-    if play_type == 'select_6':
-        weights = [0.82, 0.18]
+    if play_type in {'select_5', 'select_6'}:
+        weights = [0.86, 0.14]
 
     detail = {}
     score = 0.0
@@ -1368,6 +1378,48 @@ def _practical_validation_score(metrics: Dict, play_type: str, mean_lift: Option
         'mean_lift': round(lift, 6),
         'roi_delta_vs_random': round(roi_delta, 6),
         'return_multiple': round(return_multiple, 6),
+    }
+
+
+def _play_accuracy_profile(
+    play_type: str,
+    pick_n: int,
+    selected_mode: str,
+    variants: Optional[Dict] = None,
+    target_hits: Optional[int] = None,
+) -> Dict:
+    """Return the theoretical hit profile for a KL8 play."""
+    expected_hits = hypergeom_expected(pick_n)
+    probabilities = {
+        f'>={k}': round(hypergeom_p_ge(pick_n, k), 6)
+        for k in range(1, pick_n + 1)
+    }
+    exact = {
+        str(k): round(hypergeom_pmf(pick_n, k), 6)
+        for k in range(0, pick_n + 1)
+    }
+    if pick_n == 5:
+        practical_goal = '选5实战关注>=2，>=3属于明显更高档命中'
+    elif pick_n == 6:
+        practical_goal = '选6实战关注>=3，>=4属于明显更高档命中'
+    else:
+        practical_goal = '命中阈值按玩法奖级和回测优先级评估'
+
+    return {
+        'expected_hits_random': round(expected_hits, 4),
+        'zero_hit_probability_random': exact.get('0', 0.0),
+        'theoretical_probabilities': probabilities,
+        'exact_hit_probabilities': exact,
+        'key_thresholds': _hit_rate_priority_thresholds(play_type),
+        'target_hits': target_hits,
+        'target_probability_random': (
+            round(hypergeom_p_ge(pick_n, target_hits), 6)
+            if target_hits else None
+        ),
+        'selected_mode': selected_mode,
+        'variant_count': len(variants or {}),
+        'practical_goal': practical_goal,
+        'disclaimer': '快乐8每个号码理论开出率为25%，短期推荐命中0-2个属于常见随机波动。',
     }
 
 
@@ -1651,6 +1703,46 @@ def _prize_floor_candidate_pool(
     return [(num, score_lookup.get(num, score)) for num, score in selected[:target_size]]
 
 
+def _high_tier_chase_candidate_pool(
+    candidates: List[Tuple[int, float]],
+    target_size: int,
+    last_numbers: Optional[set] = None,
+    max_last_numbers: Optional[int] = None,
+) -> List[Tuple[int, float]]:
+    """Concentrated high-tier pool for select 5/6 chase targets.
+
+    To get close to 4/5 hits, the pick must behave like one strong cluster.
+    This intentionally preserves top-ranked candidates and only uses the repeat
+    cap as a soft fallback, avoiding the spread penalties used by balanced
+    modes.
+    """
+    if target_size <= 0 or not candidates:
+        return []
+
+    last_numbers = last_numbers or set()
+    repeat_cap = target_size if max_last_numbers is None else max(0, min(target_size, int(max_last_numbers)))
+    selected = []
+    deferred_repeats = []
+
+    for num, score in candidates:
+        if num in last_numbers and sum(1 for n, _ in selected if n in last_numbers) >= repeat_cap:
+            deferred_repeats.append((num, score))
+            continue
+        selected.append((num, score))
+        if len(selected) >= target_size:
+            return selected
+
+    seen = {num for num, _ in selected}
+    for num, score in deferred_repeats + candidates:
+        if num not in seen:
+            selected.append((num, score))
+            seen.add(num)
+        if len(selected) >= target_size:
+            break
+
+    return selected[:target_size]
+
+
 def _shape_targets(target_size: int) -> Dict:
     """Return neutral KL8 draw-shape targets scaled to the pick size."""
     zone_base, zone_rem = divmod(max(target_size, 0), 4)
@@ -1872,6 +1964,12 @@ def _select_final_candidate_pool(
     modes = {
         'top_ranked': candidates[:target_size],
         'concentrated': candidates[:target_size],
+        'high_tier_chase': _high_tier_chase_candidate_pool(
+            candidates,
+            target_size,
+            last_numbers,
+            max_last_numbers=repeat_cap,
+        ),
         'balanced': _diversify_candidate_pool(
             candidates,
             target_size,
@@ -3765,6 +3863,14 @@ class KL8Analyzer:
 
         last_numbers = self.statistics.get('last_numbers', set())
         concentrated = sorted(num for num, _ in candidates[:target_size])
+        high_tier_chase = sorted(
+            num for num, _ in _high_tier_chase_candidate_pool(
+                candidates,
+                target_size,
+                last_numbers,
+                max_last_numbers=repeat_cap,
+            )
+        )
         balanced = sorted(
             num for num, _ in _diversify_candidate_pool(
                 candidates,
@@ -3808,6 +3914,7 @@ class KL8Analyzer:
         )
 
         return {
+            'high_tier_chase': high_tier_chase,
             'balanced': balanced,
             'concentrated': concentrated,
             'low_repeat': low_repeat,
@@ -3892,8 +3999,10 @@ class KL8Analyzer:
                 'repeat_non_follow_score': strategy.get('repeat_non_follow_score', 0.50),
                 'pool_diversify': strategy.get('pool_diversify', True),
                 'pool_max_last_numbers': strategy.get('pool_max_last_numbers'),
+                'final_max_last_numbers': strategy.get('final_max_last_numbers'),
                 'frequency_mode': strategy.get('frequency_mode', 'mean_reversion'),
                 'final_selection_mode': strategy.get('final_selection_mode', 'balanced'),
+                'target_hits': strategy.get('target_hits'),
                 'prediction_mode': strategy['prediction_mode'],
                 'is_validated': strategy['is_validated'],
             }
@@ -3926,16 +4035,25 @@ class KL8Analyzer:
             numbers = sorted(num for num, _ in final_pool)
             variants = self._candidate_variants(pool_candidates, select_type, final_repeat_cap)
             shape_profile = _shape_profile(numbers, self.statistics.get('last_numbers', set()))
+            accuracy_profile = _play_accuracy_profile(
+                s_key,
+                select_type,
+                selected_mode,
+                variants,
+                target_hits=strategy.get('target_hits'),
+            )
 
             results[s_key] = {
                 'desc': config['desc'],
                 'pick': config['pick'],
                 'numbers': numbers,
                 'shape_profile': shape_profile,
+                'accuracy_profile': accuracy_profile,
                 'variants': variants,
                 'candidates': pool_candidates[:10],
                 'prize_hit_thresholds': _prize_tier_thresholds(s_key),
                 'hit_rate_priority_thresholds': _hit_rate_priority_thresholds(s_key),
+                'target_hits': strategy.get('target_hits'),
                 'strategy_id': strategy['strategy_id'],
                 'prediction_mode': strategy['prediction_mode'],
                 'is_validated': strategy['is_validated'],

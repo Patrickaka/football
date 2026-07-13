@@ -2,7 +2,7 @@
 import sys
 sys.path.insert(0, 'src')
 
-from src.kl8 import get_kl8_analyzer, run_prediction, KL8_PREDICTOR_VERSION, SELECT_TYPES
+from src.kl8 import get_kl8_analyzer, run_prediction, KL8_PREDICTOR_VERSION, SELECT_TYPES, KL8Analyzer
 
 def main():
     print(f"版本: {KL8_PREDICTOR_VERSION}")
@@ -12,8 +12,13 @@ def main():
     print(f"数据量: {len(analyzer.history_data)} 期")
     print(f"使用模拟数据: {analyzer.using_simulated_data}")
 
-    # 运行预测
-    result = run_prediction(force_refresh=True)
+    # 运行预测；基础测试不写快照，避免产生测试副作用。
+    original_save = KL8Analyzer._save_prediction_snapshot
+    try:
+        KL8Analyzer._save_prediction_snapshot = lambda self, prediction_result: None
+        result = run_prediction(force_refresh=True)
+    finally:
+        KL8Analyzer._save_prediction_snapshot = original_save
 
     # 打印各选型结果
     for st in SELECT_TYPES:
@@ -44,9 +49,10 @@ def main():
     # 排名Top10
     print(f"\n排名Top10:")
     for item in result['ranking'][:10]:
-        print(f"  号码{item['num']:02d}: 得分={item['score']:.4f}")
+        score = item.get('ranking_score', item.get('score', 0))
+        print(f"  号码{item['num']:02d}: 得分={score:.4f}")
 
-    print("\n✅ 快乐8模块基本功能测试通过!")
+    print("\n[OK] 快乐8模块基本功能测试通过!")
 
 if __name__ == '__main__':
     main()

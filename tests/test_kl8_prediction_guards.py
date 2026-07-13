@@ -295,7 +295,7 @@ class KL8PredictionGuardTests(unittest.TestCase):
         )
         self.assertIn('pick count', result['error'])
 
-    def test_reference_select_5_6_use_balanced_and_10_uses_best_variant_selection(self):
+    def test_reference_select_5_6_use_high_tier_chase_selection(self):
         original_verify_only = kl8_module.VERIFY_ONLY_MODE
         try:
             kl8_module.VERIFY_ONLY_MODE = False
@@ -305,16 +305,18 @@ class KL8PredictionGuardTests(unittest.TestCase):
         finally:
             kl8_module.VERIFY_ONLY_MODE = original_verify_only
 
-        self.assertEqual(select5['final_selection_mode'], 'balanced')
-        self.assertEqual(select6['final_selection_mode'], 'balanced')
+        self.assertEqual(select5['final_selection_mode'], 'high_tier_chase')
+        self.assertEqual(select6['final_selection_mode'], 'high_tier_chase')
         self.assertEqual(select10['final_selection_mode'], 'best_variant')
-        self.assertIn('balanced', select5['strategy_id'])
-        self.assertIn('balanced', select6['strategy_id'])
+        self.assertIn('high_tier_chase', select5['strategy_id'])
+        self.assertIn('high_tier_chase', select6['strategy_id'])
         self.assertIn('best_variant', select10['strategy_id'])
+        self.assertEqual(select5['target_hits'], 4)
+        self.assertEqual(select6['target_hits'], 5)
 
     def test_select6_hit_rate_priority_targets_prize_floor(self):
-        self.assertEqual(_hit_rate_priority_thresholds('select_5'), ['>=2', '>=3'])
-        self.assertEqual(_hit_rate_priority_thresholds('select_6'), ['>=3', '>=4'])
+        self.assertEqual(_hit_rate_priority_thresholds('select_5'), ['>=4', '>=3'])
+        self.assertEqual(_hit_rate_priority_thresholds('select_6'), ['>=5', '>=4'])
 
         select6_score, select6_detail = _hit_rate_priority_score(
             {
@@ -326,7 +328,7 @@ class KL8PredictionGuardTests(unittest.TestCase):
 
         self.assertGreater(select6_score, 0)
         self.assertNotIn('>=2', select6_detail)
-        self.assertIn('>=3', select6_detail)
+        self.assertIn('>=5', select6_detail)
         self.assertIn('>=4', select6_detail)
 
     def test_predict_all_includes_select_8_9_10_and_fushi_10_11(self):
@@ -354,8 +356,10 @@ class KL8PredictionGuardTests(unittest.TestCase):
 
         for key in [f'select_{pick}' for pick in range(3, 11)]:
             expected_mode = 'best_variant' if key in {'select_10'} else 'prize_floor'
-            if key in {'select_5', 'select_6'}:
-                expected_mode = 'balanced'
+            if key in {'select_5'}:
+                expected_mode = 'high_tier_chase'
+            if key in {'select_6'}:
+                expected_mode = 'high_tier_chase'
             self.assertEqual(
                 result['resolved_strategies'][key]['final_selection_mode'],
                 expected_mode,
@@ -364,10 +368,19 @@ class KL8PredictionGuardTests(unittest.TestCase):
             self.assertIn('zone_spread', result[key]['variants'])
             self.assertIn('prize_floor', result[key]['variants'])
 
-        self.assertEqual(result['resolved_strategies']['select_5']['pool_max_last_numbers'], 3)
-        self.assertEqual(result['resolved_strategies']['select_6']['pool_max_last_numbers'], 4)
-        self.assertEqual(result['select_6']['prize_hit_thresholds'], ['>=3', '>=4'])
-        self.assertEqual(result['select_6']['hit_rate_priority_thresholds'], ['>=3', '>=4'])
+        self.assertEqual(result['resolved_strategies']['select_5']['pool_max_last_numbers'], 5)
+        self.assertEqual(result['resolved_strategies']['select_6']['pool_max_last_numbers'], 6)
+        self.assertEqual(result['select_5']['prize_hit_thresholds'], ['>=4', '>=3'])
+        self.assertEqual(result['select_6']['prize_hit_thresholds'], ['>=5', '>=4'])
+        self.assertEqual(result['select_6']['hit_rate_priority_thresholds'], ['>=5', '>=4'])
+        self.assertEqual(result['select_5']['accuracy_profile']['expected_hits_random'], 1.25)
+        self.assertEqual(result['select_5']['accuracy_profile']['key_thresholds'], ['>=4', '>=3'])
+        self.assertEqual(result['select_5']['accuracy_profile']['target_hits'], 4)
+        self.assertEqual(result['select_6']['accuracy_profile']['expected_hits_random'], 1.5)
+        self.assertEqual(result['select_6']['accuracy_profile']['key_thresholds'], ['>=5', '>=4'])
+        self.assertEqual(result['select_6']['accuracy_profile']['target_hits'], 5)
+        self.assertEqual(result['select_6']['accuracy_profile']['selected_mode'], 'high_tier_chase')
+        self.assertIn('high_tier_chase', result['select_6']['variants'])
         self.assertEqual(
             result['resolved_strategies']['select_10']['final_selection_mode'],
             'best_variant',

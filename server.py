@@ -73,6 +73,18 @@ def _load_beidan_helpers():
             raise RuntimeError('北单模块需要安装 requests；其他页面可正常使用') from exc
         raise
 
+def _load_basketball_helpers():
+    try:
+        from src.basketball import (
+            generate_basketball_recommendations,
+            find_value_bets,
+            summarize_basketball_history,
+        )
+        return generate_basketball_recommendations, find_value_bets, summarize_basketball_history
+    except Exception as exc:
+        log.error(f"加载篮球模块失败: {exc}")
+        raise
+
 
 def _is_kl8_cache_current(cache_entry, now):
     if not _is_cache_valid(cache_entry, now):
@@ -334,6 +346,15 @@ class Handler(BaseHTTPRequestHandler):
         elif path == '/api/beidan/history':
             params = parse_qs(route.query)
             self._serve_json(self._beidan_history_payload(params))
+        elif path == '/api/basketball':
+            params = parse_qs(route.query)
+            self._serve_json(self._basketball_payload(params))
+        elif path == '/api/basketball/matches':
+            params = parse_qs(route.query)
+            self._serve_json(self._basketball_matches_payload(params))
+        elif path == '/api/basketball/value':
+            params = parse_qs(route.query)
+            self._serve_json(self._basketball_value_payload(params))
         elif path == '/api/lottery':
             self._serve_json(self._lottery_payload())
         elif path == '/api/lottery-refresh':
@@ -879,6 +900,121 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:
             self._log.error('北单预测记录获取失败', exc_info=True)
             return {'error': f'北单预测记录获取失败: {str(e)}'}
+
+    def _basketball_payload(self, params):
+        """获取篮球推荐预测"""
+        try:
+            date = params.get('date', [None])[0]
+            bet_types = params.get('types', ['spf,rqspf,dx'])[0].split(',')
+            
+            self._log.info(f'篮球推荐请求: date={date}, types={bet_types}')
+            
+            generate_basketball_recommendations, _, _ = _load_basketball_helpers()
+            result = generate_basketball_recommendations(date=date, bet_types=bet_types)
+            
+            if 'error' in result:
+                return result
+            
+            matches = []
+            for r in result.get('results', []):
+                match_data = r.get('match', {})
+                match_item = {
+                    'home': match_data.get('home', ''),
+                    'away': match_data.get('away', ''),
+                    'league': match_data.get('league', ''),
+                    'time': match_data.get('time', ''),
+                    'status': match_data.get('status', ''),
+                }
+                
+                spf = r.get('spf')
+                if spf and spf.get('available'):
+                    match_item['spf'] = {
+                        'prediction': spf.get('recommendation'),
+                        'probabilities': {
+                            '主胜': spf.get('home_prob'),
+                            '客胜': spf.get('away_prob'),
+                        },
+                        'odds': {
+                            '主胜': spf.get('home_odds'),
+                            '客胜': spf.get('away_odds'),
+                        },
+                    }
+                else:
+                    match_item['spf'] = {'error': spf.get('reason') if spf else 'no_data'}
+                
+                rqspf = r.get('rqspf')
+                if rqspf and rqspf.get('available'):
+                    match_item['rqspf'] = {
+                        'prediction': rqspf.get('recommendation'),
+                        'handicap': rqspf.get('handicap'),
+                        'probabilities': {
+                            '主胜': rqspf.get('home_prob'),
+                            '客胜': rqspf.get('away_prob'),
+                        },
+                        'odds': {
+                            '主胜': rqspf.get('home_odds'),
+                            '客胜': rqspf.get('away_odds'),
+                        },
+                    }
+                else:
+                    match_item['rqspf'] = {'error': rqspf.get('reason') if rqspf else 'no_data'}
+                
+                daxiao = r.get('dx')
+                if daxiao and daxiao.get('available'):
+                    match_item['daxiao'] = {
+                        'prediction': daxiao.get('recommendation'),
+                        'total': daxiao.get('total_line'),
+                        'probabilities': {
+                            '大分': daxiao.get('over_prob'),
+                            '小分': daxiao.get('under_prob'),
+                        },
+                        'odds': {
+                            '大分': daxiao.get('over_odds'),
+                            '小分': daxiao.get('under_odds'),
+                        },
+                    }
+                else:
+                    match_item['daxiao'] = {'error': daxiao.get('reason') if daxiao else 'no_data'}
+                
+                matches.append(match_item)
+            
+            return {'result': {
+                'date': result.get('date'),
+                'total_matches': len(matches),
+                'matches': matches,
+            }}
+        except Exception as e:
+            self._log.error('篮球推荐失败', exc_info=True)
+            return {'error': f'篮球推荐失败: {str(e)}'}
+
+    def _basketball_matches_payload(self, params):
+        """获取篮球比赛列表"""
+        try:
+            date = params.get('date', [None])[0]
+            
+            from src.basketball import fetch_basketball_schedule
+            matches = fetch_basketball_schedule(date=date)
+            
+            return {'matches': matches}
+        except Exception as e:
+            self._log.error('篮球比赛列表获取失败', exc_info=True)
+            return {'error': f'获取比赛列表失败: {str(e)}'}
+
+    def _basketball_value_payload(self, params):
+        """获取篮球价值投注推荐"""
+        try:
+            date = params.get('date', [None])[0]
+            threshold = float(params.get('threshold', [0.05])[0])
+            
+            _, find_value_bets, _ = _load_basketball_helpers()
+            generate_basketball_recommendations, _, _ = _load_basketball_helpers()
+            recommendations = generate_basketball_recommendations(date=date)
+            value_bets = find_value_bets(recommendations.get('results', []), threshold=threshold)
+            
+            return {'result': value_bets}
+        except Exception as e:
+            self._log.error('篮球价值投注失败', exc_info=True)
+            return {'error': f'价值投注分析失败: {str(e)}'}
 
     def _calibrate_payload(self, params):
         """手动触发联赛重新校准"""

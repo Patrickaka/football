@@ -1090,6 +1090,7 @@
   <div class="tabs" role="tablist">
     <button type="button" class="tab active" data-tab="football" role="tab">⚽ 足球预测</button>
     <button type="button" class="tab" data-tab="beidan" role="tab">🏈 北单</button>
+    <button type="button" class="tab" data-tab="basketball" role="tab">🏀 篮球</button>
     <button type="button" class="tab" data-tab="lottery3d" role="tab">🎲 福彩3D</button>
     <button type="button" class="tab" data-tab="lottery" role="tab">🎯 大乐透</button>
     <button type="button" class="tab" data-tab="kl8" role="tab">🎱 快乐8</button>
@@ -1103,6 +1104,9 @@
   </div>
   <div id="panel-beidan" class="tab-panel">
     <div id="app-beidan"></div>
+  </div>
+  <div id="panel-basketball" class="tab-panel">
+    <div id="app-basketball"></div>
   </div>
   <div id="panel-lottery" class="tab-panel">
     <div id="app-lottery"></div>
@@ -1128,6 +1132,10 @@
     <span class="nav-icon">🏈</span>
     <span>北单</span>
   </div>
+  <div class="bottom-nav-item" data-tab="basketball">
+    <span class="nav-icon">🏀</span>
+    <span>篮球</span>
+  </div>
   <div class="bottom-nav-item" data-tab="lottery3d">
     <span class="nav-icon">🎲</span>
     <span>3D</span>
@@ -1146,6 +1154,7 @@
 const app = document.getElementById('app');
 const app3d = document.getElementById('app-3d');
 const appBeidan = document.getElementById('app-beidan');
+const appBasketball = document.getElementById('app-basketball');
 const searchWrap = document.getElementById('search-wrap');
 const pageTitle = document.getElementById('page-title');
 const pageDesc = document.getElementById('page-desc');
@@ -1169,6 +1178,11 @@ const TAB_META = {
     title: '🏈 北单分析',
     desc: '数据来源：odds.500.com · 胜平负预测 + 总进球分析',
     disclaimer: '⚠ 以上分析仅为概率统计参考，体育赛事结果受多种不确定因素影响，不构成任何投注建议。请理性对待！',
+  },
+  basketball: {
+    title: '🏀 篮球分析',
+    desc: '数据来源：odds.500.com · 胜负 + 让分胜负 + 大小分',
+    disclaimer: '⚠ 以上分析仅为概率统计参考，篮球赛事结果受多种不确定因素影响，不构成任何投注建议。请理性对待！',
   },
   lottery3d: {
     title: '🎲 福彩3D预测',
@@ -2846,11 +2860,13 @@ function switchTab(tab) {
   pageTitle.textContent = meta.title;
   pageDesc.textContent = meta.desc;
   document.getElementById('disclaimer').innerHTML = meta.disclaimer;
-  location.hash = tab === 'lottery3d' ? '3d' : tab === 'beidan' ? 'beidan' : tab === 'lottery' ? 'lottery' : tab === 'kl8' ? 'kl8' : tab === 'predictions' ? 'predictions' : 'football';
+  location.hash = tab === 'lottery3d' ? '3d' : tab === 'beidan' ? 'beidan' : tab === 'basketball' ? 'basketball' : tab === 'lottery' ? 'lottery' : tab === 'kl8' ? 'kl8' : tab === 'predictions' ? 'predictions' : 'football';
   if (tab === 'football') {
     loadMatches();
   } else if (tab === 'beidan') {
     loadBeidan();
+  } else if (tab === 'basketball') {
+    loadBasketball();
   } else if (tab === 'lottery3d') {
     loadLottery3d(true);
   } else if (tab === 'lottery') {
@@ -5007,6 +5023,7 @@ function renderKL8(r) {
       }
       html += `</div>`;
       html += renderKL8ShapeProfile(sel.shape_profile, sel.numbers);
+      html += renderKL8AccuracyProfile(sel.accuracy_profile);
       if (sel.variants) {
         html += renderKL8VariantRows(sel.variants);
       }
@@ -5238,6 +5255,7 @@ function renderKL8Balls(numbers, size = 36) {
 function renderKL8VariantRows(variants) {
   if (!variants || typeof variants !== 'object') return '';
   const labels = {
+    high_tier_chase: '高档冲击',
     balanced: '均衡',
     concentrated: '集中',
     repeat_follow: '跟重号',
@@ -5246,7 +5264,7 @@ function renderKL8VariantRows(variants) {
   };
   labels.shape_balanced = '形态均衡';
   let html = `<div style="margin-top:8px;display:grid;gap:5px">`;
-  for (const key of ['balanced', 'concentrated', 'repeat_follow', 'zone_spread', 'shape_balanced', 'prize_floor']) {
+  for (const key of ['high_tier_chase', 'balanced', 'concentrated', 'repeat_follow', 'zone_spread', 'shape_balanced', 'prize_floor']) {
     const nums = variants[key] || [];
     if (!nums.length) continue;
     html += `<div style="font-size:11px;color:var(--muted);display:flex;align-items:center;gap:6px;flex-wrap:wrap">`;
@@ -5256,6 +5274,22 @@ function renderKL8VariantRows(variants) {
   }
   html += `</div>`;
   return html;
+}
+
+function renderKL8AccuracyProfile(profile) {
+  if (!profile || typeof profile !== 'object') return '';
+  const expected = Number(profile.expected_hits_random || 0).toFixed(2);
+  const zero = pct(Number(profile.zero_hit_probability_random || 0));
+  const probs = profile.theoretical_probabilities || {};
+  const keys = Array.isArray(profile.key_thresholds) ? profile.key_thresholds : [];
+  const keyText = keys.map(k => `${esc(k)} ${pct(Number(probs[k] || 0))}`).join(' | ');
+  const targetText = profile.target_hits
+    ? ` | target ${esc(profile.target_hits)} hit=${pct(Number(profile.target_probability_random || 0))}`
+    : '';
+  const mode = profile.selected_mode ? ` | mode ${esc(profile.selected_mode)}` : '';
+  return `<div style="font-size:11px;color:#8b949e;margin-top:6px;line-height:1.5">
+    random E=${expected} | P(0 hit)=${zero}${targetText}${keyText ? ` | ${keyText}` : ''}${mode}
+  </div>`;
 }
 
 function initKL8ExcludeState(options) {
@@ -5553,9 +5587,236 @@ async function fetchKL8Data() {
   }
 }
 
+let basketballLoaded = false;
+let basketballLastResult = null;
+let basketballPage = 1;
+let basketballPageSize = 12;
+let basketballSearchFilter = '';
+
+async function loadBasketball() {
+  if (basketballLoaded && basketballLastResult) {
+    renderBasketball(basketballLastResult);
+    return;
+  }
+  appBasketball.innerHTML = '<div class="status">加载中…</div>';
+  try {
+    const data = await fetchJson('/api/basketball?_=' + Date.now().toString());
+    if (data.error) {
+      appBasketball.innerHTML = `<div class="status error">✗ ${esc(data.error)}</div>`;
+      return;
+    }
+    basketballLoaded = true;
+    renderBasketball(data.result);
+  } catch (e) {
+    appBasketball.innerHTML = `<div class="status error">网络请求失败：${esc(e.message)}</div>`;
+  }
+}
+
+function basketballMatchPassesSearch(m) {
+  const kw = (basketballSearchFilter || '').trim().toLowerCase();
+  if (!kw) return true;
+  return [
+    m.home,
+    m.away,
+    m.league,
+    m.time,
+    m.spf?.prediction,
+    m.rqspf?.prediction,
+    m.daxiao?.prediction,
+  ].filter(Boolean).join(' ').toLowerCase().includes(kw);
+}
+
+function setBasketballPage(page) {
+  basketballPage = Math.max(1, Number(page) || 1);
+  if (basketballLastResult) renderBasketball(basketballLastResult);
+}
+
+function setBasketballPageSize(size) {
+  basketballPageSize = Math.max(5, Number(size) || 12);
+  basketballPage = 1;
+  if (basketballLastResult) renderBasketball(basketballLastResult);
+}
+
+function handleBasketballSearch(e) {
+  const el = e.target;
+  if (el.dataset && el.dataset.composing) return;
+  basketballSearchFilter = el.value;
+  basketballPage = 1;
+  if (basketballLastResult) renderBasketball(basketballLastResult);
+}
+
+function renderBasketball(result) {
+  basketballLastResult = result;
+  let html = '';
+  
+  html += `<div class="beidan-toolbar">
+    <div class="toolbar-row">
+      <div class="toolbar-group" style="flex:1;min-width:220px">
+        <span class="toolbar-label">搜索</span>
+        <div style="flex:1">
+          <input type="search" id="basketball-search" class="search"
+            placeholder="搜索球队、联赛"
+            value="${esc(basketballSearchFilter || '')}"
+            style="width:100%;margin-bottom:0;padding:8px 12px;border-radius:8px;border:1px solid rgba(44,58,78,0.5);background:rgba(0,0,0,0.2);color:var(--text);font-size:13px"
+          />
+        </div>
+      </div>
+      <button onclick="loadBasketball()" class="tb-refresh">🔄 刷新</button>
+    </div>
+  </div>`;
+  
+  if (!result.matches || !result.matches.length) {
+    html += '<div class="status">暂无比赛数据</div>';
+    appBasketball.innerHTML = html;
+    const input = document.getElementById('basketball-search');
+    if (input) {
+      input.addEventListener('input', handleBasketballSearch);
+    }
+    return;
+  }
+
+  const filteredMatches = result.matches.filter(basketballMatchPassesSearch);
+  const totalPages = Math.max(1, Math.ceil(filteredMatches.length / basketballPageSize));
+  if (basketballPage > totalPages) basketballPage = totalPages;
+  const pageStart = (basketballPage - 1) * basketballPageSize;
+  const visibleMatches = filteredMatches.slice(pageStart, pageStart + basketballPageSize);
+  
+  html += `<div class="status" style="padding:4px 0 12px;font-size:13px">共 ${result.total_matches || filteredMatches.length} 场比赛，当前显示 ${visibleMatches.length} 场</div>`;
+  
+  const pagerHtml = totalPages > 1 ? `<div class="pager">
+    <button onclick="setBasketballPage(1)" ${basketballPage <= 1 ? 'disabled' : ''}>首页</button>
+    <button onclick="setBasketballPage(${basketballPage - 1})" ${basketballPage <= 1 ? 'disabled' : ''}>上一页</button>
+    <span class="page-info">${basketballPage} / ${totalPages}</span>
+    <button onclick="setBasketballPage(${basketballPage + 1})" ${basketballPage >= totalPages ? 'disabled' : ''}>下一页</button>
+    <button onclick="setBasketballPage(${totalPages})" ${basketballPage >= totalPages ? 'disabled' : ''}>末页</button>
+    <select onchange="setBasketballPageSize(this.value)">
+      ${[8, 12, 20, 50].map(size => `<option value="${size}" ${basketballPageSize === size ? 'selected' : ''}>每页 ${size}</option>`).join('')}
+    </select>
+  </div>` : '';
+  html += pagerHtml;
+
+  if (!visibleMatches.length) {
+    html += `<div class="status">${basketballSearchFilter ? '没有匹配的比赛' : '当前筛选下暂无推荐'}</div>`;
+    appBasketball.innerHTML = html;
+    const input = document.getElementById('basketball-search');
+    if (input) {
+      input.addEventListener('input', handleBasketballSearch);
+    }
+    return;
+  }
+  
+  const groups = {};
+  visibleMatches.forEach(m => {
+    const league = m.league || '其它';
+    (groups[league] ||= []).push(m);
+  });
+  
+  for (const [league, matches] of Object.entries(groups)) {
+    html += `<div class="league-group"><div class="league-title">${esc(league)}</div>`;
+    matches.forEach(m => {
+      html += `<div class="match" style="padding:12px">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start">
+          <div style="flex:1">
+            <div style="font-weight:bold;font-size:15px;margin-bottom:4px">
+              ${esc(m.home)} <span style="color:var(--muted)">vs</span> ${esc(m.away)}
+            </div>
+            <div style="font-size:13px;color:var(--muted)">
+              ${esc(m.time || '')}
+            </div>
+          </div>
+        </div>`;
+        
+        if (m.spf && !m.spf.error) {
+          html += '<div style="margin-top:8px;padding:8px;background:var(--bg2);border-radius:8px">';
+          html += '<div style="font-size:12px;color:var(--muted);margin-bottom:6px">🏀 胜负</div>';
+          if (m.spf.odds) {
+            html += '<div style="display:flex;gap:12px">';
+            const items = [
+              { key: '主胜', color: '#ef4444', pred: m.spf.prediction === '主胜' },
+              { key: '客胜', color: '#22c55e', pred: m.spf.prediction === '客胜' },
+            ];
+            items.forEach(item => {
+              const prob = m.spf.probabilities?.[item.key] || 0;
+              const odd = m.spf.odds?.[item.key] || '-';
+              html += `<div style="flex:1;text-align:center;padding:6px;border-radius:6px${item.pred ? `;background:${item.color}20;color:${item.color};font-weight:bold` : ''}">
+                <div>${item.key}</div>
+                <div style="font-size:11px;color:var(--muted)">${((prob || 0) * 100).toFixed(0)}%</div>
+                <div style="font-size:12px">${odd}</div>
+              </div>`;
+            });
+            html += '</div>';
+          }
+          html += '</div>';
+        }
+        
+        if (m.rqspf && !m.rqspf.error) {
+          html += '<div style="margin-top:8px;padding:8px;background:var(--bg2);border-radius:8px">';
+          html += '<div style="font-size:12px;color:var(--muted);margin-bottom:6px">🎯 让分胜负</div>';
+          if (m.rqspf.handicap) {
+            html += `<div style="font-size:12px;color:#3b82f6;margin-bottom:6px">让分：${esc(m.rqspf.handicap)}</div>`;
+          }
+          if (m.rqspf.odds) {
+            html += '<div style="display:flex;gap:12px">';
+            const items = [
+              { key: '主胜', color: '#ef4444', pred: m.rqspf.prediction === '主胜' },
+              { key: '客胜', color: '#22c55e', pred: m.rqspf.prediction === '客胜' },
+            ];
+            items.forEach(item => {
+              const prob = m.spf?.probabilities?.[item.key] || 0;
+              const odd = m.rqspf.odds?.[item.key] || '-';
+              html += `<div style="flex:1;text-align:center;padding:6px;border-radius:6px${item.pred ? `;background:${item.color}20;color:${item.color};font-weight:bold` : ''}">
+                <div>${item.key}</div>
+                <div style="font-size:11px;color:var(--muted)">${((prob || 0) * 100).toFixed(0)}%</div>
+                <div style="font-size:12px">${odd}</div>
+              </div>`;
+            });
+            html += '</div>';
+          }
+          html += '</div>';
+        }
+        
+        if (m.daxiao && !m.daxiao.error) {
+          html += '<div style="margin-top:8px;padding:8px;background:var(--bg2);border-radius:8px">';
+          html += '<div style="font-size:12px;color:var(--muted);margin-bottom:6px">📊 大小分</div>';
+          if (m.daxiao.total) {
+            html += `<div style="font-size:12px;color:#3b82f6;margin-bottom:6px">总分盘：${esc(m.daxiao.total)}</div>`;
+          }
+          if (m.daxiao.odds) {
+            html += '<div style="display:flex;gap:12px">';
+            const items = [
+              { key: '大分', color: '#f59e0b', pred: m.daxiao.prediction === '大分' },
+              { key: '小分', color: '#8b5cf6', pred: m.daxiao.prediction === '小分' },
+            ];
+            items.forEach(item => {
+              const prob = m.daxiao.probabilities?.[item.key] || 0;
+              const odd = m.daxiao.odds?.[item.key] || '-';
+              html += `<div style="flex:1;text-align:center;padding:6px;border-radius:6px${item.pred ? `;background:${item.color}20;color:${item.color};font-weight:bold` : ''}">
+                <div>${item.key}</div>
+                <div style="font-size:11px;color:var(--muted)">${((prob || 0) * 100).toFixed(0)}%</div>
+                <div style="font-size:12px">${odd}</div>
+              </div>`;
+            });
+            html += '</div>';
+          }
+          html += '</div>';
+        }
+        
+        html += '</div>';
+    });
+    html += '</div>';
+  }
+  
+  appBasketball.innerHTML = html;
+  
+  const input = document.getElementById('basketball-search');
+  if (input) {
+    input.addEventListener('input', handleBasketballSearch);
+  }
+}
+
 function initPage() {
   const hash = location.hash.replace('#', '');
-  switchTab(hash === '3d' ? 'lottery3d' : hash === 'beidan' ? 'beidan' : hash === 'lottery' ? 'lottery' : hash === 'kl8' ? 'kl8' : hash === 'predictions' ? 'predictions' : 'football');
+  switchTab(hash === '3d' ? 'lottery3d' : hash === 'beidan' ? 'beidan' : hash === 'basketball' ? 'basketball' : hash === 'lottery' ? 'lottery' : hash === 'kl8' ? 'kl8' : hash === 'predictions' ? 'predictions' : 'football');
 }
 
 function fmtPctValue(value) {
