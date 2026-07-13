@@ -29,6 +29,7 @@ from ..common.logger import setup_logger
 from ..common.paths import data_path
 from ..common.data_cache import cached_fetch, is_cache_valid, save_cached_data
 from ..common import repositories
+from ..common import kv_store
 
 log = setup_logger('lottery')
 
@@ -52,7 +53,7 @@ FEATURE_WEIGHTS = {
 # 时间衰减因子 (最近一期权重1.0，20期前≈0.19，50期前≈0.016)
 TIME_DECAY_FACTOR = 0.92
 MIN_REAL_HISTORY_FOR_RANKING = 80  # 降低阈值: 120期真实数据足够支撑统计模型
-LOTTERY_PREDICTOR_VERSION = "dlt-v3.3-rank-dominant"
+LOTTERY_PREDICTOR_VERSION = "dlt-v3.3-fusion"
 FULL_HISTORY_FETCH_COUNT = 5000
 MIN_FULL_HISTORY_ISSUES = 500
 
@@ -2309,6 +2310,367 @@ def get_lottery_analyzer() -> LotteryAnalyzer:
     return _lottery_analyzer
 
 
+# ==================== 规则+ML融合预测 ====================
+
+def fuse_rule_ml(rule_front_ranked: List[Tuple], rule_back_ranked: List[Tuple],
+                 ml_prediction: Dict, rule_weight: float = 0.55,
+                 ml_weight: float = 0.45) -> Dict:
+    """融合规则排名模型和ML模型的预测结果
+
+    与 lottery3d 的融合逻辑一致: 基于回测表现的动态权重融合。
+
+    Args:
+        rule_front_ranked: 规则模型前区排名 [(num, score, features), ...]
+        rule_back_ranked: 规则模型后区排名 [(num, score, features), ...]
+        ml_prediction: ML模型预测结果 {front_probs, back_probs, ...}
+        rule_weight: 规则模型权重
+        ml_weight: ML模型权重
+
+    Returns:
+        {
+            'front_ranked': 融合后前区排名 [(num, fused_score, tag), ...],
+            'back_ranked': 融合后后区排名 [(num, fused_score, tag), ...],
+            'front_top12': 前区Top12推荐,
+            'back_top6': 后区Top6推荐,
+        }
+    """
+    total_w = rule_weight + ml_weight
+    rule_w = rule_weight / total_w
+    ml_w = ml_weight / total_w
+
+    # 归一化规则得分到 0-1
+    rule_front_scores = {}
+    if rule_front_ranked:
+        max_s = max(s for _, s, _ in rule_front_ranked)
+        min_s = min(s for _, s, _ in rule_front_ranked)
+        s_range = max_s - min_s if max_s > min_s else 1.0
+        for num, score, _ in rule_front_ranked:
+            rule_front_scores[num] = (score - min_s) / s_range
+    else:
+        rule_front_scores = {}
+
+    rule_back_scores = {}
+    if rule_back_ranked:
+        max_s = max(s for _, s, _ in rule_back_ranked)
+        min_s = min(s for _, s, _ in rule_back_ranked)
+        s_range = max_s - min_s if max_s > min_s else 1.0
+        for num, score, _ in rule_back_ranked:
+            rule_back_scores[num] = (score - min_s) / s_range
+    else:
+        rule_back_scores = {}
+
+    # ML概率
+    ml_front = ml_prediction.get('front_probs', {}) if ml_prediction else {}
+    ml_back = ml_prediction.get('back_probs', {}) if ml_prediction else {}
+
+    # 前区融合
+    all_front = set(rule_front_scores.keys()) | set(ml_front.keys())
+    front_fused = []
+    for num in sorted(all_front):
+        r_score = rule_front_scores.get(num, 0.0)
+        m_score = ml_front.get(num, 0.0)
+        fused = r_score * rule_w + m_score * ml_w
+        in_rule = num in rule_front_scores
+        in_ml = num in ml_front
+        if in_rule and in_ml:
+            tag = 'high_confidence'
+            fused += 0.1  # 双方一致加分
+        elif in_rule:
+            tag = 'rule_preferred'
+        elif in_ml:
+            tag = 'ml_preferred'
+        else:
+            tag = 'other'
+        front_fused.append((num, round(fused, 4), tag, in_rule, in_ml))
+
+    front_fused.sort(key=lambda x: -x[1])
+
+    # 后区融合
+    all_back = set(rule_back_scores.keys()) | set(ml_back.keys())
+    back_fused = []
+    for num in sorted(all_back):
+        r_score = rule_back_scores.get(num, 0.0)
+        m_score = ml_back.get(num, 0.0)
+        fused = r_score * rule_w + m_score * ml_w
+        in_rule = num in rule_back_scores
+        in_ml = num in ml_back
+        if in_rule and in_ml:
+            tag = 'high_confidence'
+            fused += 0.1
+        elif in_rule:
+            tag = 'rule_preferred'
+        elif in_ml:
+            tag = 'ml_preferred'
+        else:
+            tag = 'other'
+        back_fused.append((num, round(fused, 4), tag, in_rule, in_ml))
+
+    back_fused.sort(key=lambda x: -x[1])
+
+    return {
+        'front_ranked': front_fused,
+        'back_ranked': back_fused,
+        'front_top12': [num for num, _, _, _, _ in front_fused[:12]],
+        'back_top6': [num for num, _, _, _, _ in back_fused[:6]],
+        'rule_weight': rule_w,
+        'ml_weight': ml_w,
+    }
+
+
+def compute_fusion_weights(rule_backtest: Dict, ml_backtest: Dict) -> Tuple[float, float]:
+    """基于回测表现计算融合权重
+
+    Args:
+        rule_backtest: 规则模型回测结果
+        ml_backtest: ML模型回测结果
+
+    Returns:
+        (rule_weight, ml_weight)
+    """
+    if not ml_backtest or ml_backtest.get('error'):
+        return (1.0, 0.0)
+
+    # 使用前区≥2命中率作为核心指标
+    rule_front_ge2 = rule_backtest.get('rates', {}).get('front_ge2_rate', 0)
+    ml_front_ge2 = ml_backtest.get('front_ge2_rate', 0)
+
+    if ml_front_ge2 <= 0 or rule_front_ge2 <= 0:
+        return (0.55, 0.45)  # 默认权重
+
+    # ML相对规则模型的提升
+    lift = ml_front_ge2 / max(rule_front_ge2, 0.001)
+
+    if lift > 1.15:
+        # ML显著优: ML占60%
+        return (0.40, 0.60)
+    elif lift > 1.05:
+        # ML略优: ML占55%
+        return (0.45, 0.55)
+    elif lift > 0.95:
+        # 持平: 规则略优
+        return (0.55, 0.45)
+    elif lift > 0.85:
+        # ML略差: 规则主导
+        return (0.65, 0.35)
+    else:
+        # ML差: 规则主导
+        return (0.75, 0.25)
+
+
+# ==================== 线上预测记录系统 ====================
+
+DALETOU_PREDICTIONS_KEY = 'lottery_dlt_online_predictions'
+
+
+def load_online_predictions() -> List[Dict]:
+    """加载线上预测记录"""
+    try:
+        return kv_store.load(DALETOU_PREDICTIONS_KEY, [])
+    except Exception as e:
+        log.error(f"加载大乐透预测记录失败: {e}")
+        return []
+
+
+def save_online_prediction(period: str, recommendations: Dict,
+                           fusion_result: Dict = None) -> None:
+    """保存线上预测记录
+
+    Args:
+        period: 目标期号
+        recommendations: 各策略推荐 {method: {front, back}}
+        fusion_result: 融合结果 (可选)
+    """
+    try:
+        records = load_online_predictions()
+
+        record = {
+            'version': LOTTERY_PREDICTOR_VERSION,
+            'period': period,
+            'recommendations': {
+                method: {
+                    'front': rec.get('front', []),
+                    'back': rec.get('back', []),
+                }
+                for method, rec in recommendations.items()
+            },
+            'actual': None,
+            'settled': False,
+            'created_at': time.strftime('%Y-%m-%d %H:%M:%S'),
+        }
+
+        if fusion_result:
+            record['fusion'] = {
+                'front_top12': fusion_result.get('front_top12', []),
+                'back_top6': fusion_result.get('back_top6', []),
+                'weights': {
+                    'rule': fusion_result.get('rule_weight', 0.55),
+                    'ml': fusion_result.get('ml_weight', 0.45),
+                },
+            }
+
+        # 按期号去重
+        existing_idx = None
+        for i, r in enumerate(records):
+            if r.get('period') == period:
+                existing_idx = i
+                break
+
+        if existing_idx is not None:
+            if records[existing_idx].get('settled'):
+                log.info(f"预测记录已结算，跳过更新: {period}")
+                return
+            record['created_at'] = records[existing_idx].get('created_at', record['created_at'])
+            records[existing_idx] = record
+        else:
+            records.append(record)
+
+        # 保留最近200期
+        records = records[-200:]
+        kv_store.save(DALETOU_PREDICTIONS_KEY, records)
+        log.info(f"大乐透预测记录已保存: {period}")
+    except Exception as e:
+        log.error(f"保存大乐透预测记录失败: {e}")
+
+
+def settle_predictions(history_data: List[Dict]) -> int:
+    """结算未回填的预测记录
+
+    Args:
+        history_data: 历史开奖数据 (idx=0最新)
+
+    Returns:
+        结算的记录数
+    """
+    records = load_online_predictions()
+    if not records:
+        return 0
+
+    changed = False
+    settled_count = 0
+
+    period_index = {h['issue']: i for i, h in enumerate(history_data)}
+
+    for record in records:
+        if record.get('settled'):
+            continue
+
+        period = record.get('period')
+        if period not in period_index:
+            continue
+
+        idx = period_index[period]
+        actual_data = history_data[idx]
+        actual_front = set(actual_data['front'])
+        actual_back = set(actual_data['back'])
+
+        record['actual'] = {
+            'front': list(actual_front),
+            'back': list(actual_back),
+        }
+        record['settled'] = True
+        record['settled_at'] = time.strftime('%Y-%m-%d %H:%M:%S')
+
+        # 结算各策略命中
+        for method, rec in record.get('recommendations', {}).items():
+            pred_front = set(rec.get('front', []))
+            pred_back = set(rec.get('back', []))
+            record[f'{method}_front_hit'] = len(pred_front & actual_front)
+            record[f'{method}_back_hit'] = len(pred_back & actual_back)
+
+        # 结算融合命中
+        if record.get('fusion'):
+            fusion_front = set(record['fusion'].get('front_top12', []))
+            fusion_back = set(record['fusion'].get('back_top6', []))
+            record['fusion_front_hit'] = len(fusion_front & actual_front)
+            record['fusion_back_hit'] = len(fusion_back & actual_back)
+
+        changed = True
+        settled_count += 1
+
+    if changed:
+        kv_store.save(DALETOU_PREDICTIONS_KEY, records)
+        log.info(f"大乐透预测已结算 {settled_count} 条")
+
+    return settled_count
+
+
+def calculate_online_stats() -> Dict:
+    """计算线上实盘命中率统计
+
+    Returns:
+        {
+            'total_records': int,
+            'settled_count': int,
+            'by_method': {method: {front_ge1_rate, front_ge2_rate, back_ge1_rate, back_ge2_rate}},
+            'fusion': {front_ge1_rate, front_ge2_rate, back_ge1_rate, back_ge2_rate},
+            'baseline': 随机基准,
+        }
+    """
+    records = load_online_predictions()
+    settled = [r for r in records if r.get('settled')]
+    n = len(settled)
+
+    if n == 0:
+        return {
+            'total_records': len(records),
+            'settled_count': 0,
+            'by_method': {},
+            'fusion': {},
+        }
+
+    methods = set()
+    for r in settled:
+        methods.update(r.get('recommendations', {}).keys())
+
+    by_method = {}
+    for method in sorted(methods):
+        front_hits = [r.get(f'{method}_front_hit', 0) for r in settled]
+        back_hits = [r.get(f'{method}_back_hit', 0) for r in settled]
+        by_method[method] = {
+            'count': n,
+            'front_ge1_rate': round(sum(1 for h in front_hits if h >= 1) / n, 4),
+            'front_ge2_rate': round(sum(1 for h in front_hits if h >= 2) / n, 4),
+            'front_ge3_rate': round(sum(1 for h in front_hits if h >= 3) / n, 4),
+            'front_avg': round(sum(front_hits) / n, 2),
+            'back_ge1_rate': round(sum(1 for h in back_hits if h >= 1) / n, 4),
+            'back_ge2_rate': round(sum(1 for h in back_hits if h >= 2) / n, 4),
+            'back_avg': round(sum(back_hits) / n, 2),
+        }
+
+    # 融合统计
+    fusion_records = [r for r in settled if r.get('fusion')]
+    fusion_stats = {}
+    if fusion_records:
+        fk = len(fusion_records)
+        f_front_hits = [r.get('fusion_front_hit', 0) for r in fusion_records]
+        f_back_hits = [r.get('fusion_back_hit', 0) for r in fusion_records]
+        fusion_stats = {
+            'count': fk,
+            'front_ge1_rate': round(sum(1 for h in f_front_hits if h >= 1) / fk, 4),
+            'front_ge2_rate': round(sum(1 for h in f_front_hits if h >= 2) / fk, 4),
+            'front_ge3_rate': round(sum(1 for h in f_front_hits if h >= 3) / fk, 4),
+            'front_avg': round(sum(f_front_hits) / fk, 2),
+            'back_ge1_rate': round(sum(1 for h in f_back_hits if h >= 1) / fk, 4),
+            'back_ge2_rate': round(sum(1 for h in f_back_hits if h >= 2) / fk, 4),
+            'back_avg': round(sum(f_back_hits) / fk, 2),
+        }
+
+    return {
+        'total_records': len(records),
+        'settled_count': n,
+        'unsettled_count': len(records) - n,
+        'by_method': by_method,
+        'fusion': fusion_stats,
+        'baseline': {
+            'front_ge1': round(1 - math.comb(30, 5) / math.comb(35, 5), 4),
+            'front_ge2': 0.1389,
+            'front_ge3': 0.0139,
+            'back_ge1': 0.4545,
+            'back_ge2': 0.0455,
+        },
+    }
+
+
 def run_prediction(force_refresh=False):
     """运行大乐透预测，返回 JSON 可序列化 dict。
 
@@ -2365,11 +2727,15 @@ def run_prediction(force_refresh=False):
         # 多模型集成投票
         voting = analyzer.multi_model_voting()
 
-        # ML 模型预测 (v2.2: 新增)
+        # ML 模型预测 (v3.3: 融合版)
         ml_prediction = None
+        ml_backtest_result = None
+        fusion_result = None
         try:
-            from .ml import predict_with_ml
+            from .ml import predict_with_ml, backtest_ml
             ml_prediction = predict_with_ml(analyzer.history_data)
+            # ML 回测 (使用最近60期评估)
+            ml_backtest_result = backtest_ml(analyzer.history_data, trials=min(60, len(analyzer.history_data) - 130))
         except Exception as e:
             log.warning(f"ML模型预测失败（不影响整体功能）: {e}")
 
@@ -2393,6 +2759,50 @@ def run_prediction(force_refresh=False):
                 'back_model_scores': ml_prediction.get('back_model_scores', {}),
             }
 
+        # v3.3: 规则+ML 融合推荐
+        if ml_prediction and ml_prediction.get('front_top'):
+            try:
+                front_ranked, back_ranked = analyzer.rank_model(top_n=35)
+                rule_w, ml_w = compute_fusion_weights(backtest, ml_backtest_result or {})
+                fusion_result = fuse_rule_ml(
+                    front_ranked, back_ranked, ml_prediction,
+                    rule_weight=rule_w, ml_weight=ml_w
+                )
+                recommendations['fusion'] = {
+                    'front': fusion_result['front_top12'][:5],
+                    'back': fusion_result['back_top6'][:2],
+                    'method': 'fusion',
+                    'front_top12': fusion_result['front_top12'],
+                    'back_top6': fusion_result['back_top6'],
+                    'front_fused': fusion_result['front_ranked'][:20],
+                    'back_fused': fusion_result['back_ranked'][:10],
+                    'fusion_weights': {
+                        'rule': fusion_result['rule_weight'],
+                        'ml': fusion_result['ml_weight'],
+                    },
+                }
+            except Exception as e:
+                log.warning(f"规则+ML融合失败: {e}")
+
+        # 保存线上预测记录
+        latest_issue = data_quality.get('latest_issue', '')
+        if latest_issue and not analyzer.using_simulated_data:
+            try:
+                save_online_prediction(latest_issue, recommendations, fusion_result)
+            except Exception as e:
+                log.warning(f"保存预测记录失败: {e}")
+
+        # 结算待回填的预测
+        try:
+            settled = settle_predictions(analyzer.history_data)
+            if settled > 0:
+                log.info(f"已结算 {settled} 条大乐透预测")
+        except Exception as e:
+            log.warning(f"结算预测失败: {e}")
+
+        # 线上统计
+        online_stats = calculate_online_stats()
+
         algorithm_summary = {
             'version': LOTTERY_PREDICTOR_VERSION,
             'history_source': '500.com 全量历史 + 本地 doc_store 缓存',
@@ -2403,8 +2813,8 @@ def run_prediction(force_refresh=False):
             'scoring': [
                 '前区使用衰减频率、遗漏、位置、012路、和值、趋势、区间、重号、邻号综合排名。',
                 '后区使用独立的衰减频率、遗漏、位置、012路、趋势、重号、邻号与和值评分。',
-                '012路统计使用浮点衰减权重，避免旧版整数截断只统计最新一期。',
-                '推荐与排名均以排名模型为主导，ML 仅在可用且验证分数有效时弱权重辅助。',
+                'v3.3新增规则+ML动态权重融合，基于回测表现自动分配权重。',
+                'v3.3新增ML滚动回测和线上预测记录，支持闭环学习。',
             ],
             'front_weights': FEATURE_WEIGHTS,
             'back_weights': BACK_FEATURE_WEIGHTS,
@@ -2413,6 +2823,11 @@ def run_prediction(force_refresh=False):
                 'baseline_comparison': backtest.get('baseline_comparison'),
                 'note': backtest.get('note'),
             },
+            'ml_backtest': ml_backtest_result,
+            'fusion_weights': {
+                'rule': fusion_result['rule_weight'] if fusion_result else 0.55,
+                'ml': fusion_result['ml_weight'] if fusion_result else 0.45,
+            } if fusion_result else None,
         }
 
         result = {
@@ -2426,6 +2841,9 @@ def run_prediction(force_refresh=False):
             'optimized_weights': optimized_weights,
             'weight_adjustment': weight_diff,
             'ml_prediction': ml_prediction,
+            'ml_backtest': ml_backtest_result,
+            'fusion': fusion_result,
+            'online_stats': online_stats,
             'version': LOTTERY_PREDICTOR_VERSION,
         }
 

@@ -399,6 +399,10 @@ class Handler(BaseHTTPRequestHandler):
             self._serve_json(self._lottery_ml_payload())
         elif path == '/api/lottery/ml-refresh':
             self._serve_json(self._lottery_ml_refresh_payload())
+        elif path == '/api/lottery/history':
+            self._serve_json(self._lottery_history_payload())
+        elif path == '/api/lottery/stats':
+            self._serve_json(self._lottery_stats_payload())
         elif path == '/api/kl8':
             self._serve_json(self._kl8_payload())
         elif path == '/api/kl8-refresh':
@@ -1437,6 +1441,30 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:
             self._log.error('大乐透ML重新训练失败: %s', str(e), exc_info=True)
             return {'success': False, 'error': str(e)}
+
+    def _lottery_history_payload(self):
+        """大乐透线上预测历史记录"""
+        try:
+            from src.lottery import load_online_predictions
+            records = load_online_predictions()
+            return {
+                'records': records,
+                'total': len(records),
+                'settled': sum(1 for r in records if r.get('settled')),
+            }
+        except Exception as e:
+            self._log.error('大乐透历史记录失败: %s', str(e), exc_info=True)
+            return {'error': str(e)}
+
+    def _lottery_stats_payload(self):
+        """大乐透线上预测命中率统计"""
+        try:
+            from src.lottery import calculate_online_stats
+            stats = calculate_online_stats()
+            return stats
+        except Exception as e:
+            self._log.error('大乐透统计失败: %s', str(e), exc_info=True)
+            return {'error': str(e)}
 
     # ─── 快乐8相关路由 ───
 

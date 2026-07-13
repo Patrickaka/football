@@ -115,7 +115,7 @@ TIME_DECAY_MID = 60
 TIME_DECAY_MID_WEIGHT = 1.2
 TIME_DECAY_OLD_WEIGHT = 1.0
 
-LOTTERY_ML_VERSION = "dlt-ml-v3.2-efficient"
+LOTTERY_ML_VERSION = "dlt-ml-v3.3-backtest"
 
 
 def _native_number(x):
@@ -1034,16 +1034,19 @@ class DaletouMLPredictor:
         start_idx = max(0, n_history - TRAINING_WINDOW)
         window_data = self.history[start_idx:]
 
-        # v3.2优化: 只创建3个FeatureEngineer(早期/中期/近期)，而非每期一个
-        # 对于大多数特征(频率、遗漏、和值等)，3个采样点足够代表统计变化
+        # v3.3优化: 使用5个FeatureEngineer采样点(早期/早中/中期/中近/近期)
+        # 对于大多数特征(频率、遗漏、和值等)，5个采样点能更好捕捉统计变化趋势
         n_periods = len(window_data) - 1  # 不包含最新一期(用于预测)
         if n_periods < 5:
             return [], [], []
 
-        # 在窗口中选取3个特征计算点
+        # 在窗口中选取5个特征计算点
         fe_points = []
-        if n_periods >= 30:
-            # 早期(窗口开始)、中期(窗口中间)、近期(窗口末尾)
+        if n_periods >= 50:
+            fe_indices = [0, n_periods // 4, n_periods // 2, 3 * n_periods // 4, n_periods - 1]
+        elif n_periods >= 30:
+            fe_indices = [0, n_periods // 3, n_periods // 2, 2 * n_periods // 3, n_periods - 1]
+        elif n_periods >= 15:
             fe_indices = [0, n_periods // 2, n_periods - 1]
         else:
             fe_indices = [0, n_periods - 1]
@@ -1424,6 +1427,146 @@ class DaletouMLPredictor:
             'back_model_scores': {},
             'version': f"{LOTTERY_ML_VERSION}-fallback",
         }
+
+
+# ===================== ML 回测系统 =====================
+
+def backtest_ml(history_data: List[Dict], trials: int = 40,
+                train_window: int = TRAINING_WINDOW) -> Dict:
+    """滚动回测: 对最近 trials 期进行逐期模拟预测
+
+    使用与实盘一致的滚动窗口训练，评估ML模型在不同命中指标上的表现。
+
+    Args:
+        history_data: 历史开奖数据 (idx=0是最新)
+        trials: 回测期数
+        train_window: 训练窗口大小
+
+    Returns:
+        {
+            'trials': 实际回测期数,
+            'front_ge1_rate': 前区至少命中1个的比例,
+            'front_ge2_rate': 前区至少命中2个的比例,
+            'front_ge3_rate': 前区至少命中3个的比例,
+            'front_avg_matched': 前区平均命中个数,
+            'back_ge1_rate': 后区至少命中1个的比例,
+            'back_ge2_rate': 后区命中2个的比例,
+            'back_avg_matched': 后区平均命中个数,
+            'front_top_probs_error': 前区Top5概率与实际的排序误差,
+            'model_version': 模型版本,
+            'baseline': 随机基准,
+        }
+    """
+    n_history = len(history_data)
+    if n_history < train_window + trials:
+        effective_trials = max(3, n_history - train_window)
+        if effective_trials < 3:
+            return {'error': '历史数据不足以回测'}
+        trials = effective_trials
+
+    total_front_matched = 0
+    total_back_matched = 0
+    front_match_dist = {i: 0 for i in range(6)}
+    back_match_dist = {i: 0 for i in range(3)}
+    front_rank_errors = []
+
+    for i in range(trials):
+        # 使用i+1期之前的数据作为训练集(因为idx=0是最新)
+        test_data = history_data[i:]  # 排除最近i期
+        if len(test_data) < train_window + 1:
+            continue
+
+        actual = history_data[i]  # 第i期是我们要预测的
+        actual_front = set(actual['front'])
+        actual_back = set(actual['back'])
+
+        # 使用滚动窗口训练
+        train_data = test_data[:train_window]
+        predictor = DaletouMLPredictor(train_data)
+
+        try:
+            success = predictor.train()
+        except Exception as e:
+            log.debug(f"ML回测第{i}期训练失败: {e}")
+            continue
+
+        if not success or not predictor.trained:
+            result = predictor._default_predict()
+        else:
+            result = predictor.predict()
+
+        front_top = result.get('front_top', [])[:TOP_K_FRONT]
+        back_top = result.get('back_top', [])[:TOP_K_BACK]
+
+        front_matched = len(set(front_top) & actual_front)
+        back_matched = len(set(back_top) & actual_back)
+
+        total_front_matched += front_matched
+        total_back_matched += back_matched
+        front_match_dist[front_matched] += 1
+        back_match_dist[back_matched] += 1
+
+        # 计算排名误差: 实际号码在预测概率中的排名
+        front_probs = result.get('front_probs', {})
+        if front_probs:
+            sorted_nums = sorted(front_probs.keys(), key=lambda n: -front_probs[n])
+            for actual_num in actual_front:
+                try:
+                    rank = sorted_nums.index(actual_num) + 1
+                except ValueError:
+                    rank = 36
+                front_rank_errors.append(rank)
+
+    n_valid = sum(front_match_dist.values())
+    if n_valid == 0:
+        return {'error': '回测未产生有效预测'}
+
+    from ..common.logger import setup_logger
+    _log_bt = setup_logger('lottery_ml_backtest')
+    _log_bt.info(f"ML回测完成: {n_valid}期, 前区≥2={front_match_dist.get(2,0)+front_match_dist.get(3,0)+front_match_dist.get(4,0)+front_match_dist.get(5,0)}/{n_valid}")
+
+    # 随机基准 (超几何分布)
+    def _hypergeom(pop, winners, picks):
+        import math
+        dist = {}
+        for k in range(min(winners, picks) + 1):
+            if picks - k <= pop - winners:
+                dist[k] = (math.comb(winners, k) * math.comb(pop - winners, picks - k)
+                          / math.comb(pop, picks))
+        return dist
+
+    front_baseline = _hypergeom(35, 5, TOP_K_FRONT)
+    back_baseline = _hypergeom(12, 2, TOP_K_BACK)
+
+    front_ranks = front_rank_errors if front_rank_errors else [0]
+
+    result_dict = {
+        'trials': n_valid,
+        'train_window': train_window,
+        'model_version': LOTTERY_ML_VERSION,
+        'front_ge1_rate': round((n_valid - front_match_dist[0]) / n_valid, 4),
+        'front_ge2_rate': round(sum(front_match_dist[k] for k in range(2, 6)) / n_valid, 4),
+        'front_ge3_rate': round(sum(front_match_dist[k] for k in range(3, 6)) / n_valid, 4),
+        'front_avg_matched': round(total_front_matched / n_valid, 2),
+        'front_match_distribution': front_match_dist,
+        'back_ge1_rate': round((n_valid - back_match_dist[0]) / n_valid, 4),
+        'back_ge2_rate': round(back_match_dist.get(2, 0) / n_valid, 4),
+        'back_avg_matched': round(total_back_matched / n_valid, 2),
+        'back_match_distribution': back_match_dist,
+        'front_rank_avg': round(sum(front_ranks) / len(front_ranks), 1),
+        'front_rank_median': sorted(front_ranks)[len(front_ranks) // 2] if front_ranks else 0,
+        'front_top_pool_size': TOP_K_FRONT,
+        'back_top_pool_size': TOP_K_BACK,
+        'baseline': {
+            'front_ge1_rate': round(1 - front_baseline.get(0, 0), 4),
+            'front_ge2_rate': round(sum(v for k, v in front_baseline.items() if k >= 2), 4),
+            'front_ge3_rate': round(sum(v for k, v in front_baseline.items() if k >= 3), 4),
+            'back_ge1_rate': round(1 - back_baseline.get(0, 0), 4),
+            'back_ge2_rate': round(back_baseline.get(2, 0), 4),
+        },
+    }
+
+    return result_dict
 
 
 # ===================== 对外接口 =====================
