@@ -4448,11 +4448,20 @@ async function refreshLottery() {
   btn.style.cursor = 'not-allowed';
   
   const appLottery = document.getElementById('app-lottery');
-  appLottery.innerHTML = `<div class="status"><span class="spinner"></span>正在重新抓取数据并计算…</div>`;
+  appLottery.innerHTML = `<div class="status"><span class="spinner"></span>正在后台重新抓取数据并计算…</div>`;
   
   try {
     const result = await fetchJsonPost('/api/lottery-refresh');
     
+    // 异步后台模式：轮询等待完成
+    if (result.processing && result.task_id) {
+      const taskId = result.task_id;
+      appLottery.innerHTML = `<div class="status"><span class="spinner"></span>${esc(result.message || '后台处理中…')}<br><small style="color:var(--muted)">已耗时 0 秒</small></div>`;
+      await _pollLotteryTask(taskId, appLottery, btn);
+      return;
+    }
+    
+    // 兜底：同步返回结果
     if (result.success) {
       console.log('大乐透缓存刷新成功:', result);
       lotteryLoaded = false;
@@ -4467,6 +4476,56 @@ async function refreshLottery() {
     btn.style.opacity = '1';
     btn.style.cursor = 'pointer';
   }
+}
+
+async function _pollLotteryTask(taskId, appLottery, btn, maxWaitSec = 300) {
+  const startTime = Date.now();
+  const pollInterval = 3000; // 3秒轮询一次
+  while ((Date.now() - startTime) / 1000 < maxWaitSec) {
+    await new Promise(r => setTimeout(r, pollInterval));
+    try {
+      const statusData = await fetchJson('/api/lottery/task-status?_=' + Date.now());
+      const taskInfo = statusData[taskId];
+      if (!taskInfo) continue;
+      
+      const elapsedSec = Math.round((Date.now() - startTime) / 1000);
+      if (taskInfo.status === 'processing') {
+        appLottery.innerHTML = `<div class="status"><span class="spinner"></span>后台计算中…<br><small style="color:var(--muted)">已耗时 ${elapsedSec} 秒</small></div>`;
+        continue;
+      }
+      if (taskInfo.status === 'done') {
+        // 后台任务完成，重新加载缓存数据
+        lotteryLoaded = false;
+        await loadLottery();
+        _showToast(taskInfo.success ? '✅' : '⚠️', taskInfo.message || '计算完成', taskInfo.elapsed ? `耗时 ${taskInfo.elapsed}s` : '');
+        return;
+      }
+      if (taskInfo.status === 'error') {
+        appLottery.innerHTML = `<div class="status error">✗ 后台任务失败: ${esc(taskInfo.error || '未知错误')}</div>`;
+        return;
+      }
+    } catch (e) {
+      console.warn('轮询任务状态失败:', e);
+    }
+  }
+  // 超时
+  appLottery.innerHTML = `<div class="status error">后台任务超时（>${maxWaitSec}秒），请稍后手动刷新页面</div>`;
+}
+
+function _showToast(icon, message, detail) {
+  const toast = document.createElement('div');
+  toast.style.cssText = `
+    position: fixed; bottom: 30px; left: 50%; transform: translateX(-50%);
+    background: ${icon === '✅' ? '#2ea043' : '#f85149'}; color: white;
+    padding: 12px 24px; border-radius: 8px; font-size: 14px; z-index: 1000;
+    animation: fadeInUp 0.3s ease;
+  `;
+  toast.innerHTML = `${icon} ${esc(message)} ${detail ? '· ' + esc(detail) : ''}`;
+  document.body.appendChild(toast);
+  setTimeout(() => {
+    toast.style.animation = 'fadeOutDown 0.3s ease';
+    setTimeout(() => toast.remove(), 300);
+  }, 3000);
 }
 
 async function getLotteryRecommend() {
@@ -4673,7 +4732,7 @@ async function fetchLotteryData() {
   const appLottery = document.getElementById('app-lottery');
   const originalContent = appLottery.innerHTML;
   
-  appLottery.innerHTML = `<div class="status"><span class="spinner"></span>正在抓取最新开奖号码并重新分析…</div>`;
+  appLottery.innerHTML = `<div class="status"><span class="spinner"></span>正在后台抓取最新开奖号码并分析…</div>`;
   
   try {
     const data = await fetchJson('/api/lottery/fetch');
@@ -4682,67 +4741,30 @@ async function fetchLotteryData() {
       return;
     }
     
+    // 异步后台模式：轮询等待完成
+    if (data.processing && data.task_id) {
+      const taskId = data.task_id;
+      appLottery.innerHTML = `<div class="status"><span class="spinner"></span>${esc(data.message || '后台抓取+分析中…')}<br><small style="color:var(--muted)">已耗时 0 秒</small></div>`;
+      await _pollLotteryTask(taskId, appLottery, null);
+      return;
+    }
+    
+    // 兜底：同步返回结果（老模式）
     const result = data.result || {};
     const success = result.success || false;
     const message = result.message || '';
     const latestIssue = result.latest_issue || '';
     
-    // 如果服务器返回了重新分析的数据，直接渲染分析结果
     if (result.analysis) {
       lotteryLoaded = true;
       renderLottery(result.analysis);
-      
-      // 显示抓取结果提示
-      const toast = document.createElement('div');
-      toast.style.cssText = `
-        position: fixed;
-        bottom: 30px;
-        left: 50%;
-        transform: translateX(-50%);
-        background: ${success ? '#2ea043' : '#f85149'};
-        color: white;
-        padding: 12px 24px;
-        border-radius: 8px;
-        font-size: 14px;
-        z-index: 1000;
-        animation: fadeInUp 0.3s ease;
-      `;
-      toast.innerHTML = `${success ? '✅' : '❌'} ${message}${latestIssue ? ' · 最新期号: ' + latestIssue : ''}`;
-      document.body.appendChild(toast);
-      
-      setTimeout(() => {
-        toast.style.animation = 'fadeOutDown 0.3s ease';
-        setTimeout(() => toast.remove(), 300);
-      }, 3000);
+      _showToast(success ? '✅' : '❌', message, latestIssue ? '最新期号: ' + latestIssue : '');
       return;
     }
     
-    // 备用：重新加载页面
     lotteryLoaded = false;
     await loadLottery();
-    
-    // 显示抓取结果提示
-    const toast = document.createElement('div');
-    toast.style.cssText = `
-      position: fixed;
-      bottom: 30px;
-      left: 50%;
-      transform: translateX(-50%);
-      background: ${success ? '#2ea043' : '#f85149'};
-      color: white;
-      padding: 12px 24px;
-      border-radius: 8px;
-      font-size: 14px;
-      z-index: 1000;
-      animation: fadeInUp 0.3s ease;
-    `;
-    toast.innerHTML = `${success ? '✅' : '❌'} ${message}${latestIssue ? ' · 最新期号: ' + latestIssue : ''}`;
-    document.body.appendChild(toast);
-    
-    setTimeout(() => {
-      toast.style.animation = 'fadeOutDown 0.3s ease';
-      setTimeout(() => toast.remove(), 300);
-    }, 3000);
+    _showToast(success ? '✅' : '❌', message, latestIssue ? '最新期号: ' + latestIssue : '');
   } catch (e) {
     appLottery.innerHTML = `<div class="status error">抓取失败：${esc(e.message)}</div>`;
     setTimeout(() => {

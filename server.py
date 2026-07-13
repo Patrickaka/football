@@ -50,6 +50,70 @@ KL8_PARAMETER_SEARCH_JOBS = {}
 KL8_PARAMETER_SEARCH_LOCK = threading.Lock()
 KL8_PARAMETER_SEARCH_REPORT_DIR = Path(data_path('kl8_parameter_search_reports'))
 
+# ==================== 大乐透后台任务机制 ====================
+# 重计算（抓取+分析、刷新、ML重训）在后台线程执行，
+# API 立即返回 processing 状态，避免 HTTP 504 超时。
+
+_lottery_bg_tasks = {}   # task_id -> {status, message, start_time, result}
+_lottery_bg_lock = threading.Lock()
+
+
+def _lottery_bg_run(task_id, func, **kwargs):
+    """在后台线程执行重计算函数，完成后更新 _lottery_bg_tasks 和 _CACHE。"""
+    try:
+        result = func(**kwargs)
+        with _lottery_bg_lock:
+            _lottery_bg_tasks[task_id]['status'] = 'done'
+            _lottery_bg_tasks[task_id]['result'] = result
+            _lottery_bg_tasks[task_id]['elapsed'] = time.time() - _lottery_bg_tasks[task_id]['start_time']
+    except Exception as e:
+        log.error(f'大乐透后台任务 {task_id} 失败: {e}', exc_info=True)
+        with _lottery_bg_lock:
+            _lottery_bg_tasks[task_id]['status'] = 'error'
+            _lottery_bg_tasks[task_id]['error'] = str(e)
+
+
+def _lottery_start_bg_task(task_type, func, cache_key=None, cache_value_func=None, **kwargs):
+    """启动一个后台任务，返回 task_id。
+
+    后台完成后自动更新 _CACHE[cache_key]。
+    cache_value_func: 如果提供，用 info['result'] 计算实际存入缓存的值；
+                      否则直接存 info['result']。
+    """
+    task_id = f'{task_type}_{int(time.time())}'
+    with _lottery_bg_lock:
+        # 如果同类型任务正在进行，复用该 task_id
+        for tid, info in _lottery_bg_tasks.items():
+            if info['task_type'] == task_type and info['status'] == 'processing':
+                return tid
+        _lottery_bg_tasks[task_id] = {
+            'task_type': task_type,
+            'status': 'processing',
+            'message': '正在后台处理…',
+            'start_time': time.time(),
+            'result': None,
+            'error': None,
+            'elapsed': 0,
+        }
+
+    def _wrapped():
+        _lottery_bg_run(task_id, func, **kwargs)
+        # 完成后自动更新 server 缓存
+        with _lottery_bg_lock:
+            info = _lottery_bg_tasks.get(task_id)
+        if info and info['status'] == 'done' and cache_key:
+            cache_value = info['result']
+            if cache_value_func:
+                cache_value = cache_value_func(info['result'])
+            if cache_value:
+                _CACHE[cache_key]['data'] = cache_value
+                _CACHE[cache_key]['timestamp'] = time.time()
+                log.info(f'大乐透后台任务 {task_id} 完成，已更新缓存 {cache_key}')
+
+    t = threading.Thread(target=_wrapped, daemon=True)
+    t.start()
+    return task_id
+
 
 def _current_kl8_predictor_version():
     """Read the KL8 version from the module so cache checks follow code reloads."""
@@ -399,6 +463,8 @@ class Handler(BaseHTTPRequestHandler):
             self._serve_json(self._lottery_ml_payload())
         elif path == '/api/lottery/ml-refresh':
             self._serve_json(self._lottery_ml_refresh_payload())
+        elif path == '/api/lottery/task-status':
+            self._serve_json(self._lottery_task_status_payload())
         elif path == '/api/lottery/history':
             self._serve_json(self._lottery_history_payload())
         elif path == '/api/lottery/stats':
@@ -1222,38 +1288,42 @@ class Handler(BaseHTTPRequestHandler):
             return {'error': '大乐透分析失败'}
 
     def _lottery_refresh_payload(self, params=None):
-        """强制刷新大乐透数据缓存"""
+        """强制刷新大乐透数据缓存 — 异步后台执行，立即返回 task_id"""
         try:
-            self._log.info('大乐透强制刷新请求到达')
-            
+            self._log.info('大乐透强制刷新请求到达，启动后台任务')
+
             # 清除模块级缓存
             from src.lottery import clear_cache
             clear_cache()
-            
+
             # 清除服务器级缓存
             _CACHE['lottery']['data'] = None
             _CACHE['lottery']['timestamp'] = 0
-            
-            # 立即重新抓取并计算
-            self._log.info('大乐透强制刷新：重新抓取数据...')
-            start = time.time()
-            result = lottery_run_prediction(force_refresh=True)
-            elapsed = time.time() - start
-            
-            # 更新缓存
-            _CACHE['lottery']['data'] = result
-            _CACHE['lottery']['timestamp'] = time.time()
-            
-            self._log.info('大乐透强制刷新完成，耗时 %.2f秒', elapsed)
-            
-            return {
-                'success': True,
-                'message': '缓存已刷新',
-                'elapsed': round(elapsed, 2),
-                'data_count': result.get('data_quality', {}).get('issues') if isinstance(result, dict) else 0
-            }
+
+            # 后台任务：全量分析
+            def _bg_refresh():
+                log.info('大乐透后台全量分析开始...')
+                start = time.time()
+                result = lottery_run_prediction(force_refresh=True)
+                elapsed = time.time() - start
+                log.info('大乐透后台全量分析完成，耗时 %.2f秒', elapsed)
+                return {
+                    'success': True,
+                    'message': '缓存已刷新',
+                    'elapsed': round(elapsed, 2),
+                    'data_count': result.get('data_quality', {}).get('issues') if isinstance(result, dict) else 0,
+                    'analysis': result,
+                }
+
+            # 缓存存的是 analysis 部分（lottery_run_prediction 的原始返回值）
+            task_id = _lottery_start_bg_task(
+                'refresh', _bg_refresh,
+                cache_key='lottery',
+                cache_value_func=lambda r: r.get('analysis') if isinstance(r, dict) else r,
+            )
+            return {'processing': True, 'task_id': task_id, 'message': '正在后台重新抓取并计算…'}
         except Exception as e:
-            self._log.error('大乐透强制刷新失败: %s', str(e), exc_info=True)
+            self._log.error('大乐透刷新任务启动失败: %s', str(e), exc_info=True)
             return {'success': False, 'error': str(e)}
 
     def _lottery_recommend_payload(self, params):
@@ -1360,47 +1430,47 @@ class Handler(BaseHTTPRequestHandler):
             return {'error': '大乐透回测失败'}
 
     def _lottery_fetch_payload(self):
-        """动态抓取大乐透最新开奖号码（强制刷新并重新分析）"""
+        """动态抓取大乐透最新开奖号码 — 异步后台执行，立即返回 task_id"""
         try:
-            self._log.info('大乐透抓取并重新分析请求到达')
-            
-            # 清除服务器级缓存
+            self._log.info('大乐透抓取+分析请求到达，启动后台任务')
+
+            # 清除服务器级缓存（标记为需要刷新）
             _CACHE['lottery']['data'] = None
             _CACHE['lottery']['timestamp'] = 0
-            
+
             # 清除模块级缓存
             from src.lottery import FULL_HISTORY_FETCH_COUNT, clear_cache
             clear_cache()
-            
-            # 强制抓取最新数据
-            analyzer = get_lottery_analyzer()
-            fetch_result = analyzer.fetch_latest_results(
-                count=FULL_HISTORY_FETCH_COUNT,
-                force_refresh=True,
+            clear_ml_cache()
+
+            # 后台任务：先抓取数据，再全量分析
+            def _bg_fetch_and_analyze():
+                analyzer = get_lottery_analyzer()
+                fetch_result = analyzer.fetch_latest_results(
+                    count=FULL_HISTORY_FETCH_COUNT,
+                    force_refresh=True,
+                )
+                log.info('大乐透抓取完成，开始后台全量分析...')
+                analysis_result = lottery_run_prediction(force_refresh=True)
+                return {
+                    'success': fetch_result.get('success', False),
+                    'source': fetch_result.get('source'),
+                    'message': fetch_result.get('message'),
+                    'latest_issue': fetch_result.get('latest_issue'),
+                    'fetched_count': fetch_result.get('count', 0),
+                    'analysis': analysis_result,
+                }
+
+            # 缓存存的是 analysis 部分（与 /api/lottery 格式一致）
+            task_id = _lottery_start_bg_task(
+                'fetch', _bg_fetch_and_analyze,
+                cache_key='lottery',
+                cache_value_func=lambda r: r.get('analysis') if isinstance(r, dict) else r,
             )
-            
-            # 重新分析
-            self._log.info('大乐透抓取完成，开始重新分析...')
-            analysis_result = lottery_run_prediction(force_refresh=True)
-            
-            # 更新缓存
-            _CACHE['lottery']['data'] = analysis_result
-            _CACHE['lottery']['timestamp'] = time.time()
-            
-            # 合并结果
-            result = {
-                'success': fetch_result.get('success', False),
-                'source': fetch_result.get('source'),
-                'message': fetch_result.get('message'),
-                'latest_issue': fetch_result.get('latest_issue'),
-                'fetched_count': fetch_result.get('count', 0),
-                'analysis': analysis_result
-            }
-            
-            return {'result': result}
+            return {'processing': True, 'task_id': task_id, 'message': '正在后台抓取数据并分析…'}
         except Exception:
-            self._log.error('大乐透抓取失败', exc_info=True)
-            return {'error': '大乐透抓取失败'}
+            self._log.error('大乐透抓取任务启动失败', exc_info=True)
+            return {'error': '大乐透抓取任务启动失败'}
 
     def _lottery_ml_payload(self):
         """大乐透 ML 预测结果"""
@@ -1426,32 +1496,71 @@ class Handler(BaseHTTPRequestHandler):
             return {'error': '大乐透ML预测失败'}
 
     def _lottery_ml_refresh_payload(self):
-        """强制刷新大乐透ML预测（重新训练模型）"""
+        """强制刷新大乐透ML预测（重新训练模型）— 异步后台执行"""
         try:
             clear_ml_cache()
             _CACHE['lottery_ml']['data'] = None
             _CACHE['lottery_ml']['timestamp'] = 0
 
-            self._log.info('大乐透ML模型重新训练...')
-            start = time.time()
-            result = predict_with_ml(force_retrain=True)
-            elapsed = time.time() - start
+            self._log.info('大乐透ML模型后台重新训练启动')
 
-            _CACHE['lottery_ml']['data'] = result
-            _CACHE['lottery_ml']['timestamp'] = time.time()
+            def _bg_ml_refresh():
+                start = time.time()
+                ml_result = predict_with_ml(force_retrain=True)
+                elapsed = time.time() - start
+                log.info('大乐透ML后台训练完成，耗时 %.2f秒', elapsed)
+                return {
+                    'success': True,
+                    'elapsed': round(elapsed, 2),
+                    'models': {
+                        'front': list(ml_result.get('front_model_scores', {}).keys()),
+                        'back': list(ml_result.get('back_model_scores', {}).keys()),
+                    },
+                    'version': ml_result.get('version', 'unknown'),
+                    'ml_result': ml_result,
+                }
 
-            return {
-                'success': True,
-                'elapsed': round(elapsed, 2),
-                'models': {
-                    'front': list(result.get('front_model_scores', {}).keys()),
-                    'back': list(result.get('back_model_scores', {}).keys()),
-                },
-                'version': result.get('version', 'unknown'),
-            }
+            # 缓存存的是 ml_result（predict_with_ml 的原始返回值）
+            task_id = _lottery_start_bg_task(
+                'ml_refresh', _bg_ml_refresh,
+                cache_key='lottery_ml',
+                cache_value_func=lambda r: r.get('ml_result') if isinstance(r, dict) else r,
+            )
+            return {'processing': True, 'task_id': task_id, 'message': '正在后台训练ML模型…'}
         except Exception as e:
-            self._log.error('大乐透ML重新训练失败: %s', str(e), exc_info=True)
+            self._log.error('大乐透ML训练任务启动失败: %s', str(e), exc_info=True)
             return {'success': False, 'error': str(e)}
+
+    def _lottery_task_status_payload(self):
+        """查询大乐透后台任务状态"""
+        with _lottery_bg_lock:
+            tasks_snapshot = dict(_lottery_bg_tasks)
+        # 只返回最近的3个任务状态
+        recent_tasks = sorted(tasks_snapshot.items(), key=lambda x: -x[1]['start_time'])[:3]
+        result = {}
+        for tid, info in recent_tasks:
+            result[tid] = {
+                'status': info['status'],
+                'task_type': info['task_type'],
+                'message': info.get('message', ''),
+                'elapsed': round(info.get('elapsed', 0), 2) if info['status'] != 'processing' else round(time.time() - info['start_time'], 2),
+                'error': info.get('error'),
+            }
+            # 如果完成，附带简要结果信息
+            if info['status'] == 'done' and info['result']:
+                r = info['result']
+                if isinstance(r, dict):
+                    if r.get('success'):
+                        result[tid]['success'] = True
+                        result[tid]['message'] = r.get('message', '处理完成')
+                        result[tid]['elapsed'] = r.get('elapsed', result[tid]['elapsed'])
+                    elif r.get('analysis'):
+                        result[tid]['success'] = True
+                        result[tid]['message'] = '抓取+分析完成'
+                    else:
+                        result[tid]['success'] = True
+                        result[tid]['message'] = '处理完成'
+        return result
 
     def _lottery_history_payload(self):
         """大乐透线上预测历史记录"""
