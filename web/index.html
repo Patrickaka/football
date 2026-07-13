@@ -1429,9 +1429,23 @@ async function loadMatches() {
 
 let footballQualityFilter = 'all';
 let footballSort = 'time';
+let footballPage = 1;
+let footballPageSize = 12;
+
+function setFootballPage(page) {
+  footballPage = Math.max(1, Number(page) || 1);
+  renderFootballPredictions(allPredictions);
+}
+
+function setFootballPageSize(size) {
+  footballPageSize = Math.max(5, Number(size) || 12);
+  footballPage = 1;
+  renderFootballPredictions(allPredictions);
+}
 
 function setFootballSort(sort) {
   footballSort = sort;
+  footballPage = 1;
   loadAllPredictions();
 }
 
@@ -1463,6 +1477,7 @@ async function loadAllPredictions() {
 
 function setFootballQualityFilter(filter) {
   footballQualityFilter = filter;
+  footballPage = 1;
   loadMatches();
 }
 
@@ -1535,7 +1550,12 @@ function renderFootballPredictions(results) {
     return (`${m.home || ''}${m.away || ''}${m.league || ''}${m.num || ''}`).toLowerCase().includes(kw);
   };
   const visibleResults = results.filter(footballMatchPassesFilter).filter(keywordMatch);
-  html += `<div class="status" style="padding:4px 0 12px;font-size:13px">共 ${results.length} 场比赛，当前显示 ${visibleResults.length} 场</div>`;
+  const totalPages = Math.max(1, Math.ceil(visibleResults.length / footballPageSize));
+  if (footballPage > totalPages) footballPage = totalPages;
+  const pageStart = (footballPage - 1) * footballPageSize;
+  const pageResults = visibleResults.slice(pageStart, pageStart + footballPageSize);
+
+  html += `<div class="status" style="padding:4px 0 12px;font-size:13px">共 ${results.length} 场比赛，筛选后 ${visibleResults.length} 场，第 ${footballPage}/${totalPages} 页</div>`;
 
   if (!visibleResults.length) {
     html += `<div class="status">${kw ? '没有匹配的比赛' : '当前筛选下暂无推荐'}</div>`;
@@ -1653,8 +1673,9 @@ function renderFootballPredictions(results) {
         const timeB = b.match.time || '';
         return timeA.localeCompare(timeB, 'zh-CN');
       });
+      const pageItems = sortedItems.slice(pageStart, pageStart + footballPageSize);
       html += `<div class="league-group"><div class="league-title">⏱️ 按时间排序</div>`;
-      sortedItems.forEach(item => {
+      pageItems.forEach(item => {
         html += renderMatchItem(item);
       });
       html += '</div>';
@@ -1671,14 +1692,42 @@ function renderFootballPredictions(results) {
         return timeA.localeCompare(timeB, 'zh-CN');
       });
       
+      // 先收集所有按联赛排序的 items，再分页
+      const allLeagueSorted = [];
       sortedLeagues.forEach(league => {
-        const items = groups[league];
+        groups[league].forEach(item => allLeagueSorted.push(item));
+      });
+      const pageItems = allLeagueSorted.slice(pageStart, pageStart + footballPageSize);
+      
+      // 对当前页 items 重新分组
+      const pageGroups = {};
+      pageItems.forEach(item => {
+        const league = item.match.league || '其它';
+        (pageGroups[league] ||= []).push(item);
+      });
+      
+      Object.keys(pageGroups).forEach(league => {
+        const items = pageGroups[league];
         html += `<div class="league-group"><div class="league-title">${esc(league)}</div>`;
         items.forEach(item => {
           html += renderMatchItem(item);
         });
         html += '</div>';
       });
+    }
+    
+    // 分页组件
+    if (totalPages > 1) {
+      html += `<div class="pager" style="margin-top:16px">
+        <button onclick="setFootballPage(1)" ${footballPage <= 1 ? 'disabled' : ''}>首页</button>
+        <button onclick="setFootballPage(${footballPage - 1})" ${footballPage <= 1 ? 'disabled' : ''}>上一页</button>
+        <span class="page-info">${footballPage} / ${totalPages}</span>
+        <button onclick="setFootballPage(${footballPage + 1})" ${footballPage >= totalPages ? 'disabled' : ''}>下一页</button>
+        <button onclick="setFootballPage(${totalPages})" ${footballPage >= totalPages ? 'disabled' : ''}>末页</button>
+        <select onchange="setFootballPageSize(this.value)">
+          ${[8, 12, 20, 50].map(size => `<option value="${size}" ${footballPageSize === size ? 'selected' : ''}>每页 ${size}</option>`).join('')}
+        </select>
+      </div>`;
     }
     
     html += `<div style="margin-top:20px;padding-top:16px;border-top:1px solid var(--line)">
@@ -1714,6 +1763,7 @@ function handleFootballSearch(e) {
   // 输入法拼音未上屏时不触发筛选，避免"没输完就刷新"
   if (el.dataset && el.dataset.composing) return;
   listFilter = el.value;
+  footballPage = 1;
   if (searchDebounceTimer) clearTimeout(searchDebounceTimer);
   searchDebounceTimer = setTimeout(applyFootballSearch, 200);
 }
@@ -5692,7 +5742,7 @@ function renderBasketball(result) {
   const pageStart = (basketballPage - 1) * basketballPageSize;
   const visibleMatches = filteredMatches.slice(pageStart, pageStart + basketballPageSize);
   
-  html += `<div class="status" style="padding:4px 0 12px;font-size:13px">共 ${result.total_matches || filteredMatches.length} 场比赛，当前显示 ${visibleMatches.length} 场</div>`;
+  html += `<div class="status" style="padding:4px 0 12px;font-size:13px">共 ${result.total_matches || filteredMatches.length} 场比赛，筛选后 ${filteredMatches.length} 场，第 ${basketballPage}/${totalPages} 页</div>`;
   
   const pagerHtml = totalPages > 1 ? `<div class="pager">
     <button onclick="setBasketballPage(1)" ${basketballPage <= 1 ? 'disabled' : ''}>首页</button>
@@ -5704,6 +5754,7 @@ function renderBasketball(result) {
       ${[8, 12, 20, 50].map(size => `<option value="${size}" ${basketballPageSize === size ? 'selected' : ''}>每页 ${size}</option>`).join('')}
     </select>
   </div>` : '';
+  // 顶部翻页
   html += pagerHtml;
 
   if (!visibleMatches.length) {
@@ -5813,6 +5864,9 @@ function renderBasketball(result) {
     });
     html += '</div>';
   }
+  
+  // 底部翻页
+  html += pagerHtml;
   
   appBasketball.innerHTML = html;
   
