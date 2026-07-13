@@ -5637,6 +5637,20 @@ function setBasketballPageSize(size) {
   if (basketballLastResult) renderBasketball(basketballLastResult);
 }
 
+function attachBasketballSearchListeners() {
+  const input = document.getElementById('basketball-search');
+  if (!input) return;
+  input.setAttribute('autocomplete', 'off');
+  input.addEventListener('compositionstart', () => {
+    input.dataset.composing = '1';
+  });
+  input.addEventListener('compositionend', () => {
+    delete input.dataset.composing;
+    handleBasketballSearch({ target: input });
+  });
+  input.addEventListener('input', handleBasketballSearch);
+}
+
 function handleBasketballSearch(e) {
   const el = e.target;
   if (el.dataset && el.dataset.composing) return;
@@ -5668,10 +5682,7 @@ function renderBasketball(result) {
   if (!result.matches || !result.matches.length) {
     html += '<div class="status">暂无比赛数据</div>';
     appBasketball.innerHTML = html;
-    const input = document.getElementById('basketball-search');
-    if (input) {
-      input.addEventListener('input', handleBasketballSearch);
-    }
+    attachBasketballSearchListeners();
     return;
   }
 
@@ -5698,10 +5709,7 @@ function renderBasketball(result) {
   if (!visibleMatches.length) {
     html += `<div class="status">${basketballSearchFilter ? '没有匹配的比赛' : '当前筛选下暂无推荐'}</div>`;
     appBasketball.innerHTML = html;
-    const input = document.getElementById('basketball-search');
-    if (input) {
-      input.addEventListener('input', handleBasketballSearch);
-    }
+    attachBasketballSearchListeners();
     return;
   }
   
@@ -5808,10 +5816,7 @@ function renderBasketball(result) {
   
   appBasketball.innerHTML = html;
   
-  const input = document.getElementById('basketball-search');
-  if (input) {
-    input.addEventListener('input', handleBasketballSearch);
-  }
+  attachBasketballSearchListeners();
 }
 
 function initPage() {
