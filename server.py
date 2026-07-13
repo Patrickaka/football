@@ -1198,7 +1198,7 @@ class Handler(BaseHTTPRequestHandler):
 
             # server 缓存失效，调用模块级预测函数（含模块级内存缓存）
             self._log.info('大乐透分析重新计算')
-            result = lottery_run_prediction(force_refresh=True)
+            result = lottery_run_prediction(force_refresh=False)
 
             # 处理模块返回的错误
             if 'error' in result:
