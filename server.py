@@ -1196,9 +1196,17 @@ class Handler(BaseHTTPRequestHandler):
                 self._log.info('大乐透分析使用缓存（server 级）')
                 return {'result': cache['data']}
 
-            # server 缓存失效，调用模块级预测函数（含模块级内存缓存）
-            self._log.info('大乐透分析重新计算')
-            result = lottery_run_prediction(force_refresh=False)
+            # server 缓存失效，调用模块级预测函数
+            # 首次加载仅跑轻量分析（<5秒），跳过回测/ML/融合等重计算避免504超时
+            # 刷新按钮会走 _lottery_refresh_payload 触发全量分析
+            self._log.info('大乐透分析重新计算（轻量模式）')
+            result = lottery_run_prediction(
+                force_refresh=False,
+                enable_backtest=False,
+                enable_ml=False,
+                enable_fusion=False,
+                compute_weights=False,
+            )
 
             # 处理模块返回的错误
             if 'error' in result:
