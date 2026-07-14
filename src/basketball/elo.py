@@ -63,6 +63,42 @@ LEAGUE_AVG_SCORE = {
     '欧篮联': 80,
 }
 
+# 页面联赛名 → 规范键（ELO 表查找用）
+LEAGUE_NAME_ALIASES = {
+    '美职篮': 'NBA',
+    '美职男篮': 'NBA',
+    '美国男篮': 'NBA',
+    '全美男篮': 'NBA',
+    '中国男篮': 'CBA',
+    '中国职业联赛': 'CBA',
+    '大学篮球': 'NCAAB',
+    'NCAA': 'NCAAB',
+    'EuroLeague': '欧篮联',
+    'euroleague': '欧篮联',
+}
+
+
+def _resolve_league_lookup(league: str, table: dict, default):
+    """按完整匹配 → 子串包含 → 别名 解析联赛表项。"""
+    if not isinstance(league, str):
+        league = str(league) if league else ''
+    text = league.strip()
+    if not text:
+        return default
+    if text in table:
+        return table[text]
+    for key, val in table.items():
+        if key and key in text:
+            return val
+    for alias, canon in LEAGUE_NAME_ALIASES.items():
+        if alias in text and canon in table:
+            return table[canon]
+    return default
+
+
+def _league_avg_score(league: str) -> float:
+    return float(_resolve_league_lookup(league, LEAGUE_AVG_SCORE, 90))
+
 # 联赛权重系数（影响 K 因子）
 BB_LEAGUE_WEIGHTS = {
     'NBA': 1.15,
@@ -136,7 +172,7 @@ def _mov_multiplier(margin: float, league: str = '') -> float:
     multiplier = math.log(1 + abs_margin) / math.log(1 + 5)  # 以5分为基准1.0
 
     # 联赛得分水平归一化：高得分联赛(NBA)的分差价值需打折
-    avg_score = LEAGUE_AVG_SCORE.get(league, 90)
+    avg_score = _league_avg_score(league)
     normalization = 90.0 / avg_score  # NBA~0.80, CBA~0.90
     multiplier *= normalization
 
@@ -224,6 +260,16 @@ class BasketballELORatingSystem:
         if clean not in self.ratings:
             self._init_team(clean)
         return self.ratings.get(clean, INITIAL_ELO)
+
+    def games_played(self, team: str) -> int:
+        """有效历史场次数（不含 initialized），用于冷启动门控。"""
+        clean = _sanitize_team_name(team)
+        if clean is None:
+            return 0
+        hist = self.history.get(clean, [])
+        if not isinstance(hist, list):
+            return 0
+        return sum(1 for h in hist if isinstance(h, dict) and h.get('event') != 'initialized')
 
     def _init_team(self, team: str):
         """初始化新球队"""
@@ -392,10 +438,13 @@ class BasketballELORatingSystem:
                 'home_prob': 0.5, 'away_prob': 0.5,
                 'home_rating': INITIAL_ELO, 'away_rating': INITIAL_ELO,
                 'rating_diff': 0, 'home_form': 0.0, 'away_form': 0.0,
+                'home_games': 0, 'away_games': 0,
             }
 
         home_rating = self.get_rating(home_clean)
         away_rating = self.get_rating(away_clean)
+        home_games = self.games_played(home_clean)
+        away_games = self.games_played(away_clean)
 
         home_eff = home_rating + HOME_ADVANTAGE
         expected_home = self._expected_score(home_eff, away_rating)
@@ -413,6 +462,8 @@ class BasketballELORatingSystem:
             'rating_diff': round(home_rating - away_rating, 2),
             'home_form': round(home_form, 4),
             'away_form': round(away_form, 4),
+            'home_games': home_games,
+            'away_games': away_games,
         }
 
     def predict_total_score(self, home: str, away: str,
@@ -437,9 +488,11 @@ class BasketballELORatingSystem:
 
         home_rating = self.get_rating(home_clean or home)
         away_rating = self.get_rating(away_clean or away)
+        home_games = self.games_played(home_clean) if home_clean else 0
+        away_games = self.games_played(away_clean) if away_clean else 0
 
         # avg_score 是单队场均得分（如 NBA ≈ 112）
-        avg_score = LEAGUE_AVG_SCORE.get(league, 90)
+        avg_score = _league_avg_score(league)
 
         # ELO 高于平均 → 得分能力更强（每100 ELO 差约2分）
         home_offense = avg_score + (home_rating - INITIAL_ELO) * 0.02
@@ -460,6 +513,8 @@ class BasketballELORatingSystem:
             'expected_total': round(expected_total, 1),
             'expected_home_score': round(expected_home, 1),
             'expected_away_score': round(expected_away, 1),
+            'home_games': home_games,
+            'away_games': away_games,
         }
 
     def predict_margin(self, home: str, away: str,
@@ -489,6 +544,8 @@ class BasketballELORatingSystem:
         return {
             'expected_margin': round(expected_margin, 1),
             'home_win_prob': prob_data['home_prob'],
+            'home_games': int(prob_data.get('home_games', 0) or 0),
+            'away_games': int(prob_data.get('away_games', 0) or 0),
         }
 
     def get_team_info(self, team: str) -> Dict:

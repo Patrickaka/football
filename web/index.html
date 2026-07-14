@@ -5710,15 +5710,27 @@ let basketballLastResult = null;
 let basketballPage = 1;
 let basketballPageSize = 12;
 let basketballSearchFilter = '';
+let basketballSource = 'okooo';
 
-async function loadBasketball() {
-  if (basketballLoaded && basketballLastResult) {
+function switchBasketballSource(source) {
+  basketballSource = source || 'okooo';
+  basketballLoaded = false;
+  basketballLastResult = null;
+  loadBasketball(true);
+}
+
+async function loadBasketball(force) {
+  if (!force && basketballLoaded && basketballLastResult) {
     renderBasketball(basketballLastResult);
     return;
   }
   appBasketball.innerHTML = '<div class="status">加载中…</div>';
   try {
-    const data = await fetchJson('/api/basketball?_=' + Date.now().toString());
+    const qs = new URLSearchParams({
+      _: Date.now().toString(),
+      source: basketballSource || 'okooo',
+    });
+    const data = await fetchJson('/api/basketball?' + qs.toString());
     if (data.error) {
       appBasketball.innerHTML = `<div class="status error">✗ ${esc(data.error)}</div>`;
       return;
@@ -5793,7 +5805,12 @@ function renderBasketball(result) {
           />
         </div>
       </div>
-      <button onclick="loadBasketball()" class="tb-refresh">🔄 刷新</button>
+      <div class="toolbar-group">
+        <span class="toolbar-label">数据源</span>
+        <button onclick="switchBasketballSource('okooo')" class="tb-btn ${basketballSource === 'okooo' ? 'tb-active' : ''}">澳客</button>
+        <button onclick="switchBasketballSource('500')" class="tb-btn ${basketballSource === '500' ? 'tb-active' : ''}">500</button>
+      </div>
+      <button onclick="loadBasketball(true)" class="tb-refresh">🔄 刷新</button>
     </div>
   </div>`;
   
@@ -5809,8 +5826,9 @@ function renderBasketball(result) {
   if (basketballPage > totalPages) basketballPage = totalPages;
   const pageStart = (basketballPage - 1) * basketballPageSize;
   const visibleMatches = filteredMatches.slice(pageStart, pageStart + basketballPageSize);
+  const srcLabel = result.source === 'okooo' ? '澳客' : (result.source || basketballSource || 'okooo');
   
-  html += `<div class="status" style="padding:4px 0 12px;font-size:13px">共 ${result.total_matches || filteredMatches.length} 场比赛，筛选后 ${filteredMatches.length} 场，第 ${basketballPage}/${totalPages} 页</div>`;
+  html += `<div class="status" style="padding:4px 0 12px;font-size:13px">数据源 ${esc(srcLabel)}${result.version ? ' · ' + esc(result.version) : ''} · 共 ${result.total_matches || filteredMatches.length} 场，筛选后 ${filteredMatches.length} 场，第 ${basketballPage}/${totalPages} 页</div>`;
   
   const pagerHtml = totalPages > 1 ? `<div class="pager">
     <button onclick="setBasketballPage(1)" ${basketballPage <= 1 ? 'disabled' : ''}>首页</button>

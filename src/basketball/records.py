@@ -65,6 +65,8 @@ def save_predictions(date_str: str, matches: List[Dict], version: str = ''):
                 'away_prob': spf.get('away_prob'),
                 'confidence': spf.get('confidence'),
                 'elo_home_prob': spf.get('elo_home_prob'),
+                'elo_trust': spf.get('elo_trust'),
+                'market_home_prob': spf.get('market_home_prob'),
             } if spf else None,
 
             'rqspf': {
@@ -75,6 +77,8 @@ def save_predictions(date_str: str, matches: List[Dict], version: str = ''):
                 'away_prob': rqspf.get('away_prob'),
                 'confidence': rqspf.get('confidence'),
                 'elo_margin': rqspf.get('elo_margin'),
+                'elo_trust': rqspf.get('elo_trust'),
+                'market_home_prob': rqspf.get('market_home_prob'),
             } if rqspf else None,
 
             'dx': {
@@ -85,6 +89,8 @@ def save_predictions(date_str: str, matches: List[Dict], version: str = ''):
                 'under_prob': dx.get('under_prob'),
                 'confidence': dx.get('confidence'),
                 'elo_total': dx.get('elo_total'),
+                'elo_trust': dx.get('elo_trust'),
+                'market_over_prob': dx.get('market_over_prob'),
             } if dx else None,
 
             # 赛后结果（初始为 None）
@@ -155,11 +161,129 @@ def save_match_result(match_id: str, result: Dict):
         logger.info(f"篮球比赛结果已更新: {match_id}")
 
 
+def _evaluate_markets(record: Dict, home_score: int, away_score: int) -> Dict:
+    """评估各玩法命中；走盘/平推记为 void，不计入准确率与校准。"""
+    total_score = home_score + away_score
+    out = {
+        'spf_hit': None,
+        'rqspf_hit': None,
+        'dx_hit': None,
+        'spf_void': False,
+        'rqspf_void': False,
+        'dx_void': False,
+    }
+
+    spf = record.get('spf') or {}
+    if spf.get('available'):
+        if home_score == away_score:
+            out['spf_void'] = True
+        else:
+            actual = '主胜' if home_score > away_score else '客胜'
+            out['spf_hit'] = spf.get('recommendation') == actual
+
+    rqspf = record.get('rqspf') or {}
+    if rqspf.get('available'):
+        handicap_str = rqspf.get('handicap', '')
+        try:
+            handicap = float(handicap_str) if handicap_str not in (None, '') else 0.0
+        except (TypeError, ValueError):
+            handicap = 0.0
+        adjusted_diff = (home_score + handicap) - away_score
+        if abs(adjusted_diff) < 1e-9:
+            out['rqspf_void'] = True
+        else:
+            actual_rq = '让胜' if adjusted_diff > 0 else '让负'
+            out['rqspf_hit'] = rqspf.get('recommendation') == actual_rq
+
+    dx = record.get('dx') or {}
+    if dx.get('available'):
+        total_line = dx.get('total_line', 0)
+        try:
+            total_line = float(total_line) if total_line is not None else 0.0
+        except (TypeError, ValueError):
+            total_line = 0.0
+        if abs(total_score - total_line) < 1e-9:
+            out['dx_void'] = True
+        else:
+            actual_dx = '大分' if total_score > total_line else '小分'
+            out['dx_hit'] = dx.get('recommendation') == actual_dx
+
+    return out
+
+
+def settle_and_learn(match_id: str, home_score: int, away_score: int,
+                     league: str = '', status: str = 'finished') -> Dict:
+    """
+    赛果回填 + ELO 更新 + 校准反馈（幂等）。
+
+    同一 match_id 重复调用不会重复更新 ELO / 重复喂校准器。
+    """
+    records = kv_store.load(BB_PREDICTION_KEY, [])
+    if not isinstance(records, list):
+        return {'ok': False, 'error': 'no_records'}
+
+    target = None
+    for r in records:
+        if r.get('match_id') == match_id:
+            target = r
+            break
+    if target is None:
+        return {'ok': False, 'error': 'match_not_found', 'match_id': match_id}
+
+    prev = target.get('result') if isinstance(target.get('result'), dict) else {}
+    league_name = league or target.get('league', '') or 'NBA'
+    eval_hits = _evaluate_markets(target, int(home_score), int(away_score))
+
+    result = {
+        'home_score': int(home_score),
+        'away_score': int(away_score),
+        'status': status,
+        'settled_at': datetime.now().isoformat(),
+        'elo_updated': bool(prev.get('elo_updated')),
+        'calibration_fed': bool(prev.get('calibration_fed')),
+        **eval_hits,
+    }
+
+    # ELO：仅首次写入
+    if not result['elo_updated']:
+        try:
+            from .elo import get_elo_system
+            elo = get_elo_system()
+            elo.update_ratings(
+                target.get('home', ''),
+                target.get('away', ''),
+                int(home_score),
+                int(away_score),
+                league_name,
+            )
+            result['elo_updated'] = True
+        except Exception as e:
+            logger.warning(f"结算 ELO 更新失败: {e}")
+
+    target['result'] = result
+    kv_store.save(BB_PREDICTION_KEY, records)
+
+    # 校准：仅首次写入
+    fed = 0
+    if not result['calibration_fed']:
+        fed = _feed_one_record(target)
+        result['calibration_fed'] = True
+        target['result'] = result
+        kv_store.save(BB_PREDICTION_KEY, records)
+
+    return {
+        'ok': True,
+        'match_id': match_id,
+        'result': result,
+        'calibration_samples': fed,
+    }
+
+
 def get_prediction_stats() -> Dict:
     """
     获取预测统计（用于评估准确率）
 
-    只统计已结算的预测记录。
+    只统计已结算且非走盘的预测记录。
     """
     records = kv_store.load(BB_PREDICTION_KEY, [])
     if not isinstance(records, list):
@@ -170,60 +294,44 @@ def get_prediction_stats() -> Dict:
     stats = {
         'total_predictions': len(records),
         'settled_count': len(settled),
-        'spf': {'total': 0, 'correct': 0, 'accuracy': 0.0},
-        'rqspf': {'total': 0, 'correct': 0, 'accuracy': 0.0},
-        'dx': {'total': 0, 'correct': 0, 'accuracy': 0.0},
+        'spf': {'total': 0, 'correct': 0, 'void': 0, 'accuracy': 0.0},
+        'rqspf': {'total': 0, 'correct': 0, 'void': 0, 'accuracy': 0.0},
+        'dx': {'total': 0, 'correct': 0, 'void': 0, 'accuracy': 0.0},
     }
 
     for r in settled:
         result = r['result']
         home_score = result.get('home_score', 0)
         away_score = result.get('away_score', 0)
-        total_score = home_score + away_score
+        hits = _evaluate_markets(r, home_score, away_score)
 
-        # SPF 准确率
         spf = r.get('spf') or {}
         if spf.get('available'):
-            stats['spf']['total'] += 1
-            predicted = spf.get('recommendation')
-            actual = '主胜' if home_score > away_score else '客胜'
-            if predicted == actual:
-                stats['spf']['correct'] += 1
+            if hits['spf_void']:
+                stats['spf']['void'] += 1
+            else:
+                stats['spf']['total'] += 1
+                if hits['spf_hit']:
+                    stats['spf']['correct'] += 1
 
-        # RQSPF 准确率
         rqspf = r.get('rqspf') or {}
         if rqspf.get('available'):
-            stats['rqspf']['total'] += 1
-            handicap_str = rqspf.get('handicap', '')
-            try:
-                handicap = float(handicap_str) if handicap_str else 0.0
-            except (TypeError, ValueError):
-                handicap = 0.0
+            if hits['rqspf_void']:
+                stats['rqspf']['void'] += 1
+            else:
+                stats['rqspf']['total'] += 1
+                if hits['rqspf_hit']:
+                    stats['rqspf']['correct'] += 1
 
-            adjusted_diff = (home_score + handicap) - away_score
-            actual_rq = '让胜' if adjusted_diff > 0 else '让负'
-            predicted_rq = rqspf.get('recommendation')
-            if predicted_rq == actual_rq:
-                stats['rqspf']['correct'] += 1
-
-        # DX 准确率
         dx = r.get('dx') or {}
         if dx.get('available'):
-            stats['dx']['total'] += 1
-            total_line = dx.get('total_line', 0)
-            if total_line is None:
-                total_line = 0
-            try:
-                total_line = float(total_line)
-            except (TypeError, ValueError):
-                total_line = 0
+            if hits['dx_void']:
+                stats['dx']['void'] += 1
+            else:
+                stats['dx']['total'] += 1
+                if hits['dx_hit']:
+                    stats['dx']['correct'] += 1
 
-            actual_dx = '大分' if total_score > total_line else '小分'
-            predicted_dx = dx.get('recommendation')
-            if predicted_dx == actual_dx:
-                stats['dx']['correct'] += 1
-
-    # 计算准确率
     for key in ['spf', 'rqspf', 'dx']:
         if stats[key]['total'] > 0:
             stats[key]['accuracy'] = round(stats[key]['correct'] / stats[key]['total'], 4)
@@ -231,71 +339,68 @@ def get_prediction_stats() -> Dict:
     return stats
 
 
-def feed_calibration():
-    """
-    将已结算预测反馈给校准器
-
-    读取所有已结算记录，将每条预测的实际命中情况录入校准器。
-    """
+def _feed_one_record(r: Dict) -> int:
+    """将单条已结算记录写入校准器（跳过 void）。"""
     from .calibration import get_calibrator
 
+    result = r.get('result') or {}
+    home_score = result.get('home_score', 0)
+    away_score = result.get('away_score', 0)
+    league = r.get('league', '')
+    hits = _evaluate_markets(r, home_score, away_score)
+    calibrator = get_calibrator()
+    count = 0
+
+    spf = r.get('spf') or {}
+    if spf.get('available') and not hits['spf_void'] and hits['spf_hit'] is not None:
+        predicted = spf.get('recommendation')
+        prob = spf.get('home_prob', 0.5) if predicted == '主胜' else spf.get('away_prob', 0.5)
+        calibrator.record('spf', prob, bool(hits['spf_hit']), league, spf.get('confidence', 'medium'))
+        count += 1
+
+    rqspf = r.get('rqspf') or {}
+    if rqspf.get('available') and not hits['rqspf_void'] and hits['rqspf_hit'] is not None:
+        predicted_rq = rqspf.get('recommendation')
+        prob = rqspf.get('home_prob', 0.5) if predicted_rq == '让胜' else rqspf.get('away_prob', 0.5)
+        calibrator.record('rqspf', prob, bool(hits['rqspf_hit']), league, rqspf.get('confidence', 'medium'))
+        count += 1
+
+    dx = r.get('dx') or {}
+    if dx.get('available') and not hits['dx_void'] and hits['dx_hit'] is not None:
+        predicted_dx = dx.get('recommendation')
+        prob = dx.get('over_prob', 0.5) if predicted_dx == '大分' else dx.get('under_prob', 0.5)
+        calibrator.record('dx', prob, bool(hits['dx_hit']), league, dx.get('confidence', 'medium'))
+        count += 1
+
+    if count:
+        calibrator.save()
+    return count
+
+
+def feed_calibration():
+    """
+    将已结算且尚未喂过校准器的预测反馈（幂等）。
+    """
     records = kv_store.load(BB_PREDICTION_KEY, [])
     if not isinstance(records, list):
         return 0
 
-    calibrator = get_calibrator()
     count = 0
-
+    dirty = False
     for r in records:
         result = r.get('result')
         if not result:
             continue
+        if result.get('calibration_fed'):
+            continue
+        fed = _feed_one_record(r)
+        result['calibration_fed'] = True
+        r['result'] = result
+        count += fed
+        dirty = True
 
-        home_score = result.get('home_score', 0)
-        away_score = result.get('away_score', 0)
-        total_score = home_score + away_score
-        league = r.get('league', '')
+    if dirty:
+        kv_store.save(BB_PREDICTION_KEY, records)
 
-        # SPF
-        spf = r.get('spf') or {}
-        if spf.get('available'):
-            predicted = spf.get('recommendation')
-            actual = '主胜' if home_score > away_score else '客胜'
-            prob = spf.get('home_prob', 0.5) if predicted == '主胜' else spf.get('away_prob', 0.5)
-            calibrator.record('spf', prob, predicted == actual, league, spf.get('confidence', 'medium'))
-            count += 1
-
-        # RQSPF
-        rqspf = r.get('rqspf') or {}
-        if rqspf.get('available'):
-            handicap_str = rqspf.get('handicap', '')
-            try:
-                handicap = float(handicap_str) if handicap_str else 0.0
-            except (TypeError, ValueError):
-                handicap = 0.0
-            adjusted_diff = (home_score + handicap) - away_score
-            actual_rq = '让胜' if adjusted_diff > 0 else '让负'
-            predicted_rq = rqspf.get('recommendation')
-            prob = rqspf.get('home_prob', 0.5) if predicted_rq == '让胜' else rqspf.get('away_prob', 0.5)
-            calibrator.record('rqspf', prob, predicted_rq == actual_rq, league, rqspf.get('confidence', 'medium'))
-            count += 1
-
-        # DX
-        dx = r.get('dx') or {}
-        if dx.get('available'):
-            total_line = dx.get('total_line', 0)
-            if total_line is None:
-                total_line = 0
-            try:
-                total_line = float(total_line)
-            except (TypeError, ValueError):
-                total_line = 0
-            actual_dx = '大分' if total_score > total_line else '小分'
-            predicted_dx = dx.get('recommendation')
-            prob = dx.get('over_prob', 0.5) if predicted_dx == '大分' else dx.get('under_prob', 0.5)
-            calibrator.record('dx', prob, predicted_dx == actual_dx, league, dx.get('confidence', 'medium'))
-            count += 1
-
-    calibrator.save()
-    logger.info(f"校准反馈完成: {count} 条记录")
+    logger.info(f"校准反馈完成: {count} 条样本")
     return count

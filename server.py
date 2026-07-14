@@ -443,6 +443,12 @@ class Handler(BaseHTTPRequestHandler):
         elif path == '/api/basketball/elo/update':
             params = parse_qs(route.query)
             self._serve_json(self._basketball_elo_update_payload(params))
+        elif path == '/api/basketball/settle':
+            params = parse_qs(route.query)
+            self._serve_json(self._basketball_settle_payload(params))
+        elif path == '/api/basketball/feed_calibration':
+            params = parse_qs(route.query)
+            self._serve_json(self._basketball_feed_calibration_payload(params))
         elif path == '/api/lottery':
             self._serve_json(self._lottery_payload())
         elif path == '/api/lottery-refresh':
@@ -1000,11 +1006,14 @@ class Handler(BaseHTTPRequestHandler):
         try:
             date = params.get('date', [None])[0]
             bet_types = params.get('types', ['spf,rqspf,dx'])[0].split(',')
+            source = params.get('source', ['okooo'])[0]
             
-            self._log.info(f'篮球推荐请求: date={date}, types={bet_types}')
+            self._log.info(f'篮球推荐请求: date={date}, types={bet_types}, source={source}')
             
             generate_basketball_recommendations, _, _ = _load_basketball_helpers()
-            result = generate_basketball_recommendations(date=date, bet_types=bet_types)
+            result = generate_basketball_recommendations(
+                date=date, bet_types=bet_types, source=source
+            )
             
             if 'error' in result:
                 return result
@@ -1018,6 +1027,9 @@ class Handler(BaseHTTPRequestHandler):
                     'league': match_data.get('league', ''),
                     'time': match_data.get('time', ''),
                     'status': match_data.get('status', ''),
+                    'source': match_data.get('source') or result.get('source'),
+                    'num': match_data.get('num', ''),
+                    'okooo_id': match_data.get('okooo_id') or match_data.get('id'),
                 }
                 
                 spf = r.get('spf')
@@ -1032,6 +1044,9 @@ class Handler(BaseHTTPRequestHandler):
                             '主胜': spf.get('home_odds'),
                             '客胜': spf.get('away_odds'),
                         },
+                        'confidence': spf.get('confidence'),
+                        'books': spf.get('books_ml'),
+                        'elo_trust': spf.get('elo_trust'),
                     }
                 else:
                     match_item['spf'] = {'error': spf.get('reason') if spf else 'no_data'}
@@ -1049,6 +1064,9 @@ class Handler(BaseHTTPRequestHandler):
                             '主胜': rqspf.get('home_odds'),
                             '客胜': rqspf.get('away_odds'),
                         },
+                        'confidence': rqspf.get('confidence'),
+                        'books': rqspf.get('books_ah'),
+                        'elo_trust': rqspf.get('elo_trust'),
                     }
                 else:
                     match_item['rqspf'] = {'error': rqspf.get('reason') if rqspf else 'no_data'}
@@ -1066,6 +1084,9 @@ class Handler(BaseHTTPRequestHandler):
                             '大分': daxiao.get('over_odds'),
                             '小分': daxiao.get('under_odds'),
                         },
+                        'confidence': daxiao.get('confidence'),
+                        'books': daxiao.get('books_ou'),
+                        'elo_trust': daxiao.get('elo_trust'),
                     }
                 else:
                     match_item['daxiao'] = {'error': daxiao.get('reason') if daxiao else 'no_data'}
@@ -1074,6 +1095,8 @@ class Handler(BaseHTTPRequestHandler):
             
             return {'result': {
                 'date': result.get('date'),
+                'version': result.get('version'),
+                'source': result.get('source'),
                 'total_matches': len(matches),
                 'matches': matches,
             }}
@@ -1085,11 +1108,12 @@ class Handler(BaseHTTPRequestHandler):
         """获取篮球比赛列表"""
         try:
             date = params.get('date', [None])[0]
+            source = params.get('source', ['okooo'])[0]
             
             from src.basketball import fetch_basketball_schedule
-            matches = fetch_basketball_schedule(date=date)
+            matches = fetch_basketball_schedule(date=date, source=source)
             
-            return {'matches': matches}
+            return {'matches': matches, 'source': source}
         except Exception as e:
             self._log.error('篮球比赛列表获取失败', exc_info=True)
             return {'error': f'获取比赛列表失败: {str(e)}'}
@@ -1190,6 +1214,38 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:
             self._log.error('篮球 ELO 更新失败', exc_info=True)
             return {'error': f'ELO 更新失败: {str(e)}'}
+
+    def _basketball_settle_payload(self, params):
+        """赛果结算：写结果 + 更新 ELO + 喂校准器（幂等）"""
+        try:
+            match_id = params.get('match_id', [''])[0]
+            home_score = int(params.get('home_score', ['-1'])[0])
+            away_score = int(params.get('away_score', ['-1'])[0])
+            league = params.get('league', [''])[0]
+
+            if not match_id:
+                return {'error': '缺少 match_id 参数'}
+            if home_score < 0 or away_score < 0:
+                return {'error': '缺少有效 home_score/away_score'}
+
+            from src.basketball.records import settle_and_learn
+            result = settle_and_learn(match_id, home_score, away_score, league=league)
+            if not result.get('ok'):
+                return {'error': result.get('error', 'settle_failed'), 'detail': result}
+            return {'result': result}
+        except Exception as e:
+            self._log.error('篮球结算失败', exc_info=True)
+            return {'error': f'结算失败: {str(e)}'}
+
+    def _basketball_feed_calibration_payload(self, params):
+        """批量补喂未入校准器的已结算样本"""
+        try:
+            from src.basketball.records import feed_calibration
+            count = feed_calibration()
+            return {'result': {'fed': count}}
+        except Exception as e:
+            self._log.error('篮球校准反馈失败', exc_info=True)
+            return {'error': f'校准反馈失败: {str(e)}'}
 
     def _calibrate_payload(self, params):
         """手动触发联赛重新校准"""
