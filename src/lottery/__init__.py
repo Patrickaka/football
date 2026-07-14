@@ -53,9 +53,12 @@ FEATURE_WEIGHTS = {
 # 时间衰减因子 (最近一期权重1.0，20期前≈0.19，50期前≈0.016)
 TIME_DECAY_FACTOR = 0.92
 MIN_REAL_HISTORY_FOR_RANKING = 80  # 降低阈值: 120期真实数据足够支撑统计模型
-LOTTERY_PREDICTOR_VERSION = "dlt-v3.3-fusion"
+LOTTERY_PREDICTOR_VERSION = "dlt-v3.4-speed-mlfix"
 FULL_HISTORY_FETCH_COUNT = 100
 MIN_FULL_HISTORY_ISSUES = 500
+ROLLING_BACKTEST_TRIALS = 30
+FEATURE_BACKTEST_TRIALS = 40
+ML_BACKTEST_TRIALS = 10
 
 # v3.3: 消融验证 — 特征互补性比正信号本身更重要
 # 消融: zone关掉降10%(最关键), road降8%, sum降8%, repeat降6%, adjacent降6%(虽信号负但有互补)
@@ -1033,8 +1036,8 @@ class LotteryAnalyzer:
 
         return new_weights
 
-    def _run_feature_backtest(self, trials: int = 100) -> List[Dict]:
-        """执行特征级回测，收集每个号码的特征得分 (数据扩容后默认100期，配合显著性门控)"""
+    def _run_feature_backtest(self, trials: int = FEATURE_BACKTEST_TRIALS) -> List[Dict]:
+        """执行特征级回测，收集每个号码的特征得分（默认40期，兼顾速度与护栏样本量）"""
         if len(self.history_data) < trials + 10:
             return []
 
@@ -1835,13 +1838,15 @@ class LotteryAnalyzer:
 
     def generate_recommendation(self, method: str = 'balanced',
                                  exclude_front: List[int] = None,
-                                 exclude_back: List[int] = None) -> Dict:
+                                 exclude_back: List[int] = None,
+                                 voting_result: Dict = None) -> Dict:
         """生成推荐号码 (v2: 基于评分+约束选择)。
 
         Args:
             method: 推荐策略 balanced/hot/cold/rank。
             exclude_front: 已选前区号码，生成新组时避免重复。
             exclude_back: 已选后区号码，生成新组时避免重复。
+            voting_result: 预计算的 multi_model_voting 结果（避免 balanced 重复投票）。
         """
         exclude_front = set(exclude_front or [])
         exclude_back = set(exclude_back or [])
@@ -1905,10 +1910,19 @@ class LotteryAnalyzer:
                 _filter(back_candidates, exclude_back), 2, is_front=False,
                 fallback_pool=BACK_NUMBERS)
         else:
-            # 平衡模式 (集成投票)
-            result = self.multi_model_voting(front_n=20, back_n=10)
+            # 平衡模式：复用外部投票结果，避免二次 multi_model_voting
+            result = voting_result
+            if not result or not result.get('front_candidates'):
+                result = self.multi_model_voting(front_n=20, back_n=10)
             front_candidates = _filter(_expand_front_candidates(result), exclude_front)
             back_candidates = _filter(_expand_back_candidates(result), exclude_back)
+            # 候选不足时回退到排名模型候选
+            if len(front_candidates) < 5 or len(back_candidates) < 2:
+                fr, br = self.rank_model(top_n=20)
+                if len(front_candidates) < 5:
+                    front_candidates = _filter([n for n, _, _ in fr], exclude_front)
+                if len(back_candidates) < 2:
+                    back_candidates = _filter([n for n, _, _ in br], exclude_back)
             front = self._score_based_select(
                 front_candidates, 5, is_front=True,
                 fallback_pool=FRONT_NUMBERS)
@@ -2458,31 +2472,30 @@ def compute_fusion_weights(rule_backtest: Dict, ml_backtest: Dict) -> Tuple[floa
     if not ml_backtest or ml_backtest.get('error'):
         return (1.0, 0.0)
 
-    # 使用前区≥2命中率作为核心指标
-    rule_front_ge2 = rule_backtest.get('rates', {}).get('front_ge2_rate', 0)
-    ml_front_ge2 = ml_backtest.get('front_ge2_rate', 0)
+    # 使用前区≥2命中率作为核心指标（兼容顶层字段与 rates 嵌套）
+    rule_front_ge2 = (
+        rule_backtest.get('front_ge2_rate')
+        or (rule_backtest.get('rates') or {}).get('front_ge2_rate')
+        or 0
+    )
+    ml_front_ge2 = ml_backtest.get('front_ge2_rate') or 0
+    baseline = RANDOM_BASELINE.get('front_ge2_rate', 0.1389)
 
-    if ml_front_ge2 <= 0 or rule_front_ge2 <= 0:
-        return (0.55, 0.45)  # 默认权重
+    if ml_front_ge2 <= 0 and rule_front_ge2 <= 0:
+        return (0.70, 0.30)
 
-    # ML相对规则模型的提升
-    lift = ml_front_ge2 / max(rule_front_ge2, 0.001)
-
-    if lift > 1.15:
-        # ML显著优: ML占60%
-        return (0.40, 0.60)
-    elif lift > 1.05:
-        # ML略优: ML占55%
-        return (0.45, 0.55)
-    elif lift > 0.95:
-        # 持平: 规则略优
-        return (0.55, 0.45)
-    elif lift > 0.85:
-        # ML略差: 规则主导
-        return (0.65, 0.35)
-    else:
-        # ML差: 规则主导
+    # 相对随机基准的 lift；ML 未超过基准时压低权重，避免噪声模型拖累
+    rule_lift = max(rule_front_ge2 - baseline, 0.0)
+    ml_lift = max(ml_front_ge2 - baseline, 0.0)
+    if ml_lift <= 0 and rule_lift <= 0:
         return (0.75, 0.25)
+    if ml_lift <= 0:
+        return (0.85, 0.15)
+
+    total = rule_lift + ml_lift
+    rule_w = max(0.55, rule_lift / total)  # 规则底权重至少 55%
+    ml_w = 1.0 - rule_w
+    return (round(rule_w, 2), round(ml_w, 2))
 
 
 # ==================== 线上预测记录系统 ====================
@@ -2701,7 +2714,7 @@ def calculate_online_stats() -> Dict:
 
 def run_prediction(force_refresh=False, enable_backtest=True,
                    enable_ml=True, enable_fusion=True,
-                   compute_weights=True):
+                   compute_weights=False):
     """运行大乐透预测，返回 JSON 可序列化 dict。
 
     Args:
@@ -2709,7 +2722,7 @@ def run_prediction(force_refresh=False, enable_backtest=True,
         enable_backtest: 是否启用滚动回测（默认 True）
         enable_ml: 是否启用 ML 模型预测（默认 True）
         enable_fusion: 是否启用规则+ML 融合推荐（默认 True）
-        compute_weights: 是否计算动态权重调整（默认 True）
+        compute_weights: 是否计算动态权重（默认 False；特征回测较慢，仅排障时开启）
     """
     global _prediction_cache, _cache_time
 
@@ -2725,18 +2738,24 @@ def run_prediction(force_refresh=False, enable_backtest=True,
     try:
         analyzer = get_lottery_analyzer()
 
-        # 生产环境可能没有随版本提交运行时 doc_store JSON。若检测到短历史、
-        # 期号断层或模拟数据，直接全量引导，避免只抓近20期后仍保留脏基底。
+        # 仅在历史不足/脏数据时全量引导；日常 force_refresh 只增量抓近20期
         initial_quality = analyzer.assess_data_quality()
-        full_bootstrap = force_refresh or _needs_full_history_bootstrap(initial_quality)
+        full_bootstrap = _needs_full_history_bootstrap(initial_quality)
         fetch_count = FULL_HISTORY_FETCH_COUNT if full_bootstrap else 20
         fetch_result = analyzer.fetch_latest_results(
             count=fetch_count,
-            force_refresh=full_bootstrap,
+            force_refresh=True if force_refresh else full_bootstrap,
         )
         if full_bootstrap:
             log.info(
                 "大乐透全量历史引导完成: source=%s count=%s latest=%s",
+                fetch_result.get('source'),
+                fetch_result.get('count'),
+                fetch_result.get('latest_issue'),
+            )
+        elif force_refresh:
+            log.info(
+                "大乐透增量抓取完成: source=%s count=%s latest=%s",
                 fetch_result.get('source'),
                 fetch_result.get('count'),
                 fetch_result.get('latest_issue'),
@@ -2747,13 +2766,13 @@ def run_prediction(force_refresh=False, enable_backtest=True,
         recent = analyzer.get_recent_results(10)
         data_quality = analyzer.assess_data_quality()
 
-        # 滚动回测 (50期: 足够评估命中率统计显著性，同时大幅降低计算耗时)
+        # 滚动回测（默认30期，兼顾显著性与耗时）
         if enable_backtest:
-            backtest = analyzer.rolling_backtest(trials=50)
+            backtest = analyzer.rolling_backtest(trials=ROLLING_BACKTEST_TRIALS)
         else:
             backtest = {'trials': 0, 'note': 'backtest disabled', 'baseline_comparison': {}}
 
-        # 动态权重调整 (v2.2: 回测驱动)
+        # 动态权重：默认关闭重型特征回测；开启时用缩短的 FEATURE_BACKTEST_TRIALS
         if compute_weights and enable_backtest:
             optimized_weights = analyzer.dynamic_weight_adjustment()
             weight_diff = {
@@ -2764,26 +2783,38 @@ def run_prediction(force_refresh=False, enable_backtest=True,
             optimized_weights = dict(FEATURE_WEIGHTS)
             weight_diff = {k: 0.0 for k in FEATURE_WEIGHTS}
 
-        # 多模型集成投票
-        voting = analyzer.multi_model_voting()
-
-        # ML 模型预测 (v3.3: 融合版)
+        # ML 先跑（投票内若启用 ML 可复用今日缓存）
         ml_prediction = None
         ml_backtest_result = None
         fusion_result = None
         if enable_ml:
             try:
-                from .ml import predict_with_ml, backtest_ml
-                ml_prediction = predict_with_ml(analyzer.history_data)
-                # ML 回测 (使用最近10期评估，每期不重新训练，用已训练模型快速回测)
-                ml_backtest_result = backtest_ml(analyzer.history_data, trials=min(10, len(analyzer.history_data) - 130))
+                from .ml import (
+                    predict_with_ml, backtest_ml, clear_ml_cache, TRAINING_WINDOW as _ML_TW,
+                )
+                if force_refresh:
+                    clear_ml_cache()
+                ml_prediction = predict_with_ml(
+                    analyzer.history_data, force_retrain=bool(force_refresh)
+                )
+                ml_trials = min(
+                    ML_BACKTEST_TRIALS,
+                    max(3, len(analyzer.history_data) - _ML_TW),
+                )
+                ml_backtest_result = backtest_ml(
+                    analyzer.history_data, trials=ml_trials
+                )
             except Exception as e:
                 log.warning(f"ML模型预测失败（不影响整体功能）: {e}")
 
-        # 多种方法推荐
+        # 多模型投票一次，balanced 推荐复用
+        voting = analyzer.multi_model_voting(front_n=20, back_n=10)
+
         recommendations = {}
         for method in ['balanced', 'hot', 'cold', 'rank']:
-            rec = analyzer.generate_recommendation(method)
+            rec = analyzer.generate_recommendation(
+                method, voting_result=voting if method == 'balanced' else None
+            )
             recommendations[method] = rec
 
         # ML推荐 (v2.2新增策略)

@@ -1301,20 +1301,29 @@ class Handler(BaseHTTPRequestHandler):
         try:
             self._log.info('大乐透强制刷新请求到达，启动后台任务')
 
-            # 清除模块级缓存
+            # 清除模块级缓存 + ML 缓存（与推荐口径一致）
             from src.lottery import clear_cache
             clear_cache()
+            clear_ml_cache()
 
             # 清除服务器级缓存
             _CACHE['lottery']['data'] = None
             _CACHE['lottery']['timestamp'] = 0
+            _CACHE['lottery_ml']['data'] = None
+            _CACHE['lottery_ml']['timestamp'] = 0
 
-            # 后台任务：全量分析
+            # 后台任务：增量抓取 + 分析（历史充足时不再全量引导）
             def _bg_refresh(task_id):
-                _lottery_update_task_message(task_id, '开始全量分析...')
+                _lottery_update_task_message(task_id, '开始分析（增量抓取+ML）...')
                 log.info('大乐透后台全量分析开始...')
                 start = time.time()
-                result = lottery_run_prediction(force_refresh=True)
+                result = lottery_run_prediction(
+                    force_refresh=True,
+                    enable_backtest=True,
+                    enable_ml=True,
+                    enable_fusion=True,
+                    compute_weights=False,
+                )
                 elapsed = time.time() - start
                 log.info('大乐透后台全量分析完成，耗时 %.2f秒', elapsed)
                 return {
@@ -1345,13 +1354,16 @@ class Handler(BaseHTTPRequestHandler):
 
             strategies = [
                 ('balanced', '均衡策略'),
+                ('rank', '排名策略'),
                 ('hot', '热号策略'),
                 ('cold', '冷号策略'),
-                ('rank', '排名策略'),
             ]
+            voting = analyzer.multi_model_voting(front_n=20, back_n=10)
             recommendations = []
             for key, name in strategies:
-                rec = analyzer.generate_recommendation(key)
+                rec = analyzer.generate_recommendation(
+                    key, voting_result=voting if key == 'balanced' else None
+                )
                 recommendations.append({
                     'front': rec['front'],
                     'back': rec['back'],
@@ -1359,11 +1371,23 @@ class Handler(BaseHTTPRequestHandler):
                     'strategy': key,
                 })
 
+            # 主推荐：纯排名 Top5/Top2（回测相对最稳）放在最前
+            front_ranked, back_ranked = analyzer.rank_model(top_n=12)
+            primary = {
+                'front': sorted([n for n, _, _ in front_ranked[:5]]),
+                'back': sorted([n for n, _, _ in back_ranked[:2]]),
+                'method': '主推（排名）',
+                'strategy': 'primary_rank',
+            }
+            recommendations.insert(0, primary)
+
             return {
                 'result': {
                     'method': 'multi',
                     'recommendations': recommendations,
-                    'count': len(recommendations)
+                    'count': len(recommendations),
+                    'voting_front': [c['number'] for c in (voting.get('front_candidates') or [])[:12]],
+                    'voting_back': [c['number'] for c in (voting.get('back_candidates') or [])[:6]],
                 }
             }
         except Exception:

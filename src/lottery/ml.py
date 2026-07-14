@@ -115,7 +115,7 @@ TIME_DECAY_MID = 60
 TIME_DECAY_MID_WEIGHT = 1.2
 TIME_DECAY_OLD_WEIGHT = 1.0
 
-LOTTERY_ML_VERSION = "dlt-ml-v3.3-backtest"
+LOTTERY_ML_VERSION = "dlt-ml-v3.4-recent-window"
 
 
 def _native_number(x):
@@ -1030,17 +1030,17 @@ class DaletouMLPredictor:
         numbers = FRONT_NUMBERS if is_front else BACK_NUMBERS
         n_history = len(self.history)
 
-        # 使用滚动窗口
-        start_idx = max(0, n_history - TRAINING_WINDOW)
-        window_data = self.history[start_idx:]
+        # history[0]=最新。训练用最近 TRAINING_WINDOW 期（旧版错误取了最旧端）
+        window_data = self.history[:TRAINING_WINDOW]
+        if len(window_data) < 6:
+            return [], [], []
 
-        # v3.3优化: 使用5个FeatureEngineer采样点(早期/早中/中期/中近/近期)
-        # 对于大多数特征(频率、遗漏、和值等)，5个采样点能更好捕捉统计变化趋势
-        n_periods = len(window_data) - 1  # 不包含最新一期(用于预测)
+        # 跳过最新一期作标签；对其余期用「更旧」历史建特征，保证无泄漏
+        # window: [newest, ..., older]；训练样本为 window[0..-2]，特征用 window[i+1:]
+        n_periods = len(window_data) - 1
         if n_periods < 5:
             return [], [], []
 
-        # 在窗口中选取5个特征计算点
         fe_points = []
         if n_periods >= 50:
             fe_indices = [0, n_periods // 4, n_periods // 2, 3 * n_periods // 4, n_periods - 1]
@@ -1052,8 +1052,8 @@ class DaletouMLPredictor:
             fe_indices = [0, n_periods - 1]
 
         for fe_idx in fe_indices:
-            # 使用该期之后的数据(即该期"之前"的历史,因为history[0]是最新的)
-            fe_history = self.history[start_idx + fe_idx + 1:]
+            # history[0]最新：fe_idx 之后的切片是更旧历史
+            fe_history = window_data[fe_idx + 1:]
             if len(fe_history) >= 10:
                 fe = DaletouFeatureEngineer(fe_history, window=min(90, len(fe_history)))
                 fe_points.append((fe_idx, fe))
@@ -1065,11 +1065,13 @@ class DaletouMLPredictor:
         y_all = []
         w_all = []
 
-        for period_idx, period in enumerate(window_data[:-1]):
+        # 从旧到新写入，便于后续 TRAIN_RATIO 时序切分（后段=较近期）
+        for period_idx in range(n_periods - 1, -1, -1):
+            period = window_data[period_idx]
             actual = set(period['front'] if is_front else period['back'])
-            period_weight = self._time_weight(period_idx, len(window_data) - 1)
+            # period_idx=0 仍是最新期，权重最高
+            period_weight = self._time_weight(period_idx, n_periods)
 
-            # 找最近的FeatureEngineer(按时间距离)
             best_fe = None
             best_dist = float('inf')
             for fe_idx, fe in fe_points:
@@ -1081,25 +1083,12 @@ class DaletouMLPredictor:
             if best_fe is None:
                 continue
 
-            # 对依赖"上期号码"的特征做时序修正:
-            # 使用该期之前的那一期作为"上期"(而非FeatureEngineer中的最新期)
-            prev_period_idx = start_idx + period_idx + 1
-            if prev_period_idx < len(self.history):
-                last_draw = self.history[prev_period_idx]['front'] if is_front else self.history[prev_period_idx]['back']
-                prev2_idx = prev_period_idx + 1
-                last2_draw = None
-                if prev2_idx < len(self.history):
-                    last2_draw = self.history[prev2_idx]['front'] if is_front else self.history[prev2_idx]['back']
-
-                # 临时替换FeatureEngineer的"上期"引用
-                original_history = best_fe.history
-                # 构造一个简化的临时history使得history[0]是正确的"上期"
-                temp_history = [self.history[prev_period_idx]] + list(best_fe.recent)
+            prev_period_idx = period_idx + 1
+            original_history = best_fe.history
+            if prev_period_idx < len(window_data):
+                temp_history = [window_data[prev_period_idx]] + list(best_fe.recent)
                 best_fe.history = temp_history
                 best_fe.recent = temp_history[:best_fe.window] if len(temp_history) >= best_fe.window else temp_history
-            else:
-                last_draw = None
-                last2_draw = None
 
             for num in numbers:
                 if is_front:
@@ -1111,20 +1100,16 @@ class DaletouMLPredictor:
                 y_all.append(1 if num in actual else 0)
                 w_all.append(period_weight * (2.0 if num in actual else 1.0))
 
-            # 恢复原始history
-            if best_fe is not None:
-                best_fe.history = original_history
-                best_fe.recent = original_history[:best_fe.window] if len(original_history) >= best_fe.window else list(original_history)
+            best_fe.history = original_history
+            best_fe.recent = original_history[:best_fe.window] if len(original_history) >= best_fe.window else list(original_history)
 
         return X_all, y_all, w_all
 
     def _time_weight(self, idx, total):
-        """时间衰减权重"""
-        # idx 越小 = 越旧, idx 越大 = 越近
-        recent_from_end = total - idx
-        if recent_from_end <= TIME_DECAY_RECENT:
+        """时间衰减权重。history 为 newest-first：idx 越小越近。"""
+        if idx <= TIME_DECAY_RECENT:
             return TIME_DECAY_RECENT_WEIGHT
-        elif recent_from_end <= TIME_DECAY_MID:
+        elif idx <= TIME_DECAY_MID:
             return TIME_DECAY_MID_WEIGHT
         else:
             return TIME_DECAY_OLD_WEIGHT
@@ -1267,29 +1252,28 @@ class DaletouMLPredictor:
             except Exception as e:
                 log.warning(f"大乐透 ML {area_name}: LightGBM训练失败: {e}")
 
-        # 纯Python随机森林（兜底，仅当外部ML库不可用时使用）
-        try:
-            # 减少样本量加速纯Python训练
-            n_samples = min(800, len(X_train))
-            if len(X_train) > n_samples:
-                # 随机采样子集
-                rng_sub = random.Random(42)
-                indices = rng_sub.sample(range(len(X_train)), n_samples)
-                X_sub = [X_train[i] for i in indices]
-                y_sub = [y_train[i] for i in indices]
-                w_sub = [w_train[i] for i in indices] if w_train else None
-            else:
-                X_sub, y_sub, w_sub = X_train, y_train, w_train
+        # 纯Python随机森林：仅当外部 GBDT 全部不可用时兜底
+        if not models:
+            try:
+                n_samples = min(800, len(X_train))
+                if len(X_train) > n_samples:
+                    rng_sub = random.Random(42)
+                    indices = rng_sub.sample(range(len(X_train)), n_samples)
+                    X_sub = [X_train[i] for i in indices]
+                    y_sub = [y_train[i] for i in indices]
+                    w_sub = [w_train[i] for i in indices] if w_train else None
+                else:
+                    X_sub, y_sub, w_sub = X_train, y_train, w_train
 
-            model = SimpleRandomForest(n_trees=15, max_depth=3, feature_subset_ratio=0.6)
-            model.fit(X_sub, y_sub, sample_weights=w_sub)
-            val_pred = model.predict_proba(X_val)
-            score = self._calc_auc(y_val, val_pred)
-            models['random_forest'] = model
-            scores['random_forest'] = score
-            log.info(f"大乐透 ML {area_name}: RandomForest AUC={score:.4f}")
-        except Exception as e:
-            log.warning(f"大乐透 ML {area_name}: RandomForest训练失败: {e}")
+                model = SimpleRandomForest(n_trees=15, max_depth=3, feature_subset_ratio=0.6)
+                model.fit(X_sub, y_sub, sample_weights=w_sub)
+                val_pred = model.predict_proba(X_val)
+                score = self._calc_auc(y_val, val_pred)
+                models['random_forest'] = model
+                scores['random_forest'] = score
+                log.info(f"大乐透 ML {area_name}: RandomForest AUC={score:.4f}")
+            except Exception as e:
+                log.warning(f"大乐透 ML {area_name}: RandomForest训练失败: {e}")
 
         return models, scores
 
@@ -1433,29 +1417,10 @@ class DaletouMLPredictor:
 
 def backtest_ml(history_data: List[Dict], trials: int = 40,
                 train_window: int = TRAINING_WINDOW) -> Dict:
-    """滚动回测: 对最近 trials 期进行逐期模拟预测
+    """快速滚动回测：训一次，再对最近 trials 期逐期 predict。
 
-    使用与实盘一致的滚动窗口训练，评估ML模型在不同命中指标上的表现。
-
-    Args:
-        history_data: 历史开奖数据 (idx=0是最新)
-        trials: 回测期数
-        train_window: 训练窗口大小
-
-    Returns:
-        {
-            'trials': 实际回测期数,
-            'front_ge1_rate': 前区至少命中1个的比例,
-            'front_ge2_rate': 前区至少命中2个的比例,
-            'front_ge3_rate': 前区至少命中3个的比例,
-            'front_avg_matched': 前区平均命中个数,
-            'back_ge1_rate': 后区至少命中1个的比例,
-            'back_ge2_rate': 后区命中2个的比例,
-            'back_avg_matched': 后区平均命中个数,
-            'front_top_probs_error': 前区Top5概率与实际的排序误差,
-            'model_version': 模型版本,
-            'baseline': 随机基准,
-        }
+    history[0]=最新。模型在 history[trials:] 的最近 train_window 期上训练，
+    保证训练数据不包含回测窗口内的开奖；逐期预测时用 history[i+1:] 建特征。
     """
     n_history = len(history_data)
     if n_history < train_window + trials:
@@ -1470,30 +1435,36 @@ def backtest_ml(history_data: List[Dict], trials: int = 40,
     back_match_dist = {i: 0 for i in range(3)}
     front_rank_errors = []
 
-    for i in range(trials):
-        # 使用i+1期之前的数据作为训练集(因为idx=0是最新)
-        test_data = history_data[i:]  # 排除最近i期
-        if len(test_data) < train_window + 1:
-            continue
+    # 一次训练：回测窗口之后（更旧）的最近 train_window 期
+    train_data = history_data[trials:trials + train_window]
+    if len(train_data) < 40:
+        return {'error': '训练数据不足'}
 
-        actual = history_data[i]  # 第i期是我们要预测的
+    predictor = DaletouMLPredictor(train_data)
+    try:
+        success = predictor.train()
+    except Exception as e:
+        log.warning(f"ML回测训练失败: {e}")
+        return {'error': f'训练失败: {e}'}
+
+    if not success or not predictor.trained:
+        return {'error': 'ML回测模型未训练成功'}
+
+    original_history = predictor.history
+    for i in range(trials):
+        actual = history_data[i]
         actual_front = set(actual['front'])
         actual_back = set(actual['back'])
 
-        # 使用滚动窗口训练
-        train_data = test_data[:train_window]
-        predictor = DaletouMLPredictor(train_data)
-
-        try:
-            success = predictor.train()
-        except Exception as e:
-            log.debug(f"ML回测第{i}期训练失败: {e}")
+        # 特征用「该期之前」的历史，避免偷看当期
+        predictor.history = history_data[i + 1:]
+        if len(predictor.history) < 10:
             continue
-
-        if not success or not predictor.trained:
-            result = predictor._default_predict()
-        else:
+        try:
             result = predictor.predict()
+        except Exception as e:
+            log.debug(f"ML回测第{i}期预测失败: {e}")
+            continue
 
         front_top = result.get('front_top', [])[:TOP_K_FRONT]
         back_top = result.get('back_top', [])[:TOP_K_BACK]
@@ -1506,7 +1477,6 @@ def backtest_ml(history_data: List[Dict], trials: int = 40,
         front_match_dist[front_matched] += 1
         back_match_dist[back_matched] += 1
 
-        # 计算排名误差: 实际号码在预测概率中的排名
         front_probs = result.get('front_probs', {})
         if front_probs:
             sorted_nums = sorted(front_probs.keys(), key=lambda n: -front_probs[n])
@@ -1517,33 +1487,36 @@ def backtest_ml(history_data: List[Dict], trials: int = 40,
                     rank = 36
                 front_rank_errors.append(rank)
 
+    predictor.history = original_history
+
     n_valid = sum(front_match_dist.values())
     if n_valid == 0:
         return {'error': '回测未产生有效预测'}
 
-    from ..common.logger import setup_logger
-    _log_bt = setup_logger('lottery_ml_backtest')
-    _log_bt.info(f"ML回测完成: {n_valid}期, 前区≥2={front_match_dist.get(2,0)+front_match_dist.get(3,0)+front_match_dist.get(4,0)+front_match_dist.get(5,0)}/{n_valid}")
+    log.info(
+        f"ML回测完成(单次训练): {n_valid}期, "
+        f"前区≥2={sum(front_match_dist[k] for k in range(2, 6))}/{n_valid}"
+    )
 
-    # 随机基准 (超几何分布)
     def _hypergeom(pop, winners, picks):
-        import math
         dist = {}
         for k in range(min(winners, picks) + 1):
             if picks - k <= pop - winners:
-                dist[k] = (math.comb(winners, k) * math.comb(pop - winners, picks - k)
-                          / math.comb(pop, picks))
+                dist[k] = (
+                    math.comb(winners, k) * math.comb(pop - winners, picks - k)
+                    / math.comb(pop, picks)
+                )
         return dist
 
     front_baseline = _hypergeom(35, 5, TOP_K_FRONT)
     back_baseline = _hypergeom(12, 2, TOP_K_BACK)
-
     front_ranks = front_rank_errors if front_rank_errors else [0]
 
-    result_dict = {
+    return {
         'trials': n_valid,
         'train_window': train_window,
         'model_version': LOTTERY_ML_VERSION,
+        'mode': 'train_once_roll_predict',
         'front_ge1_rate': round((n_valid - front_match_dist[0]) / n_valid, 4),
         'front_ge2_rate': round(sum(front_match_dist[k] for k in range(2, 6)) / n_valid, 4),
         'front_ge3_rate': round(sum(front_match_dist[k] for k in range(3, 6)) / n_valid, 4),
@@ -1565,8 +1538,6 @@ def backtest_ml(history_data: List[Dict], trials: int = 40,
             'back_ge2_rate': round(back_baseline.get(2, 0), 4),
         },
     }
-
-    return result_dict
 
 
 # ===================== 对外接口 =====================
