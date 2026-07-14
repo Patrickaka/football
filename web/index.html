@@ -4826,6 +4826,7 @@ async function fetchLotteryData() {
 let kl8Loaded = false;
 let kl8LastData = null;
 let kl8ExcludeState = null;
+let kl8KillState = null;
 let kl8SettlementWindowSize = 30;
 
 async function loadKL8() {
@@ -5222,6 +5223,7 @@ function renderKL8(r) {
   html += `<div style="display:flex;gap:12px;margin-top:16px;flex-wrap:wrap">`;
   html += `<button class="kl8-refresh-btn" onclick="refreshKL8()">↻ 重新计算</button>`;
   html += `<button class="kl8-refresh-btn" style="background:#d29922" onclick="openKL8ExcludeModal()">剔除号码重新计算</button>`;
+  html += `<button class="kl8-refresh-btn" style="background:#f85149" onclick="openKL8KillModal()">杀号计算</button>`;
   html += `<button class="kl8-refresh-btn" style="background:#4493f8" onclick="fetchKL8Data()">🔄 抓取最新开奖数据</button>`;
   html += `<button class="kl8-refresh-btn" style="background:#8957e5" onclick="runKL8ParameterSearch()">快速参数搜索</button>`;
   html += `</div>`;
@@ -5486,6 +5488,199 @@ function openKL8ExcludeModal() {
 function closeKL8ExcludeModal() {
   const target = document.getElementById('kl8-exclude-modal');
   if (target) target.innerHTML = '';
+}
+
+function parseKL8NumberInput(value) {
+  const invalid = [];
+  const seen = new Set();
+  const numbers = [];
+  String(value || '')
+    .split(/[\s,，、;；]+/)
+    .map(x => x.trim())
+    .filter(Boolean)
+    .forEach(raw => {
+      if (!/^\d+$/.test(raw)) {
+        invalid.push(raw);
+        return;
+      }
+      const num = Number(raw);
+      if (num < 1 || num > 80) {
+        invalid.push(raw);
+        return;
+      }
+      if (!seen.has(num)) {
+        seen.add(num);
+        numbers.push(num);
+      }
+    });
+  numbers.sort((a, b) => a - b);
+  return { numbers, invalid };
+}
+
+function initKL8KillState(options) {
+  kl8KillState = {
+    options: options.map(item => ({
+      ...item,
+      currentNumbers: [...item.numbers],
+      excludedNumbers: [],
+      manualKillNumbers: [],
+      requiredPick: item.numbers.length,
+      round: 0,
+      initialized: false,
+    })),
+  };
+}
+
+function getKL8KillOption(key) {
+  return kl8KillState?.options?.find(item => item.key === key);
+}
+
+function renderKL8KillCards(selectedKey) {
+  const options = kl8KillState?.options || [];
+  return options.map((item, idx) => {
+    const checked = item.key === (selectedKey || options[0]?.key) || (!selectedKey && idx === 0);
+    const disabled = !item.currentNumbers.length || item.currentNumbers.length < item.requiredPick;
+    let html = `<label class="kl8-select-card" style="cursor:${disabled ? 'not-allowed' : 'pointer'};margin:0;opacity:${disabled ? '.58' : '1'}">`;
+    html += `<div class="kl8-select-title"><input type="radio" name="kl8-kill-play" value="${esc(item.key)}" ${checked ? 'checked' : ''} ${disabled ? 'disabled' : ''}> ${esc(item.label)}</div>`;
+    html += `<div class="kl8-numbers-row" style="margin-top:8px">${renderKL8Balls(item.currentNumbers, 32)}</div>`;
+    if (item.manualKillNumbers.length) {
+      html += `<div style="font-size:12px;color:#f85149;margin-top:8px">杀号: ${item.manualKillNumbers.map(n => String(n).padStart(2,'0')).join(', ')}</div>`;
+    }
+    if (item.excludedNumbers.length) {
+      html += `<div style="font-size:12px;color:var(--muted);margin-top:6px">累计排除: ${item.excludedNumbers.map(n => String(n).padStart(2,'0')).join(', ')}</div>`;
+    }
+    if (disabled) {
+      html += `<div class="note" style="margin-top:6px;color:var(--warn)">剩余号码不足，不能继续杀号计算</div>`;
+    }
+    html += `</label>`;
+    return html;
+  }).join('');
+}
+
+function refreshKL8KillCards(selectedKey) {
+  const wrap = document.getElementById('kl8-kill-options');
+  if (wrap) wrap.innerHTML = renderKL8KillCards(selectedKey);
+}
+
+function openKL8KillModal() {
+  const target = document.getElementById('kl8-exclude-modal');
+  if (!target) return;
+  const options = getKL8ExcludeOptions();
+  if (!options.length) {
+    target.innerHTML = `<div class="status error" style="margin-top:12px">当前没有可杀号计算的快乐8号码</div>`;
+    return;
+  }
+  initKL8KillState(options);
+
+  let html = `<div style="position:fixed;inset:0;background:rgba(1,4,9,.72);z-index:9999;display:flex;align-items:center;justify-content:center;padding:18px">`;
+  html += `<div class="card" style="width:min(760px,96vw);max-height:86vh;overflow:auto;border:1px solid #f85149">`;
+  html += `<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px">`;
+  html += `<div class="section-title" style="font-size:16px;margin:0">杀号计算</div>`;
+  html += `<button class="kl8-refresh-btn" style="padding:6px 10px;background:#30363d" onclick="closeKL8KillModal()">关闭</button>`;
+  html += `</div>`;
+  html += `<div class="note" style="margin-bottom:12px">输入你要杀掉的号码后先计算一次；之后每点一次“杀号计算”，会把当前结果整组加入排除列表再推荐，不影响“剔除号码重新计算”。</div>`;
+  html += `<textarea id="kl8-kill-input" class="search" style="min-height:70px;margin-bottom:10px" placeholder="输入杀号，例如：03, 12, 25 或 03 12 25"></textarea>`;
+  html += `<div id="kl8-kill-options" style="display:grid;gap:10px">`;
+  html += renderKL8KillCards(options[0].key);
+  html += `</div>`;
+  html += `<div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:14px">`;
+  html += `<button class="kl8-refresh-btn" style="background:#f85149" onclick="runKL8KillRecalculate()">杀号计算</button>`;
+  html += `<button class="kl8-refresh-btn" style="background:#30363d" onclick="closeKL8KillModal()">取消</button>`;
+  html += `</div>`;
+  html += `<div id="kl8-kill-result" style="margin-top:14px"></div>`;
+  html += `</div></div>`;
+  target.innerHTML = html;
+}
+
+function closeKL8KillModal() {
+  const target = document.getElementById('kl8-exclude-modal');
+  if (target) target.innerHTML = '';
+}
+
+async function runKL8KillRecalculate() {
+  const resultTarget = document.getElementById('kl8-kill-result');
+  const selected = document.querySelector('input[name="kl8-kill-play"]:checked');
+  if (!resultTarget || !selected) return;
+  const option = getKL8KillOption(selected.value);
+  if (!option) return;
+
+  const parsed = parseKL8NumberInput(document.getElementById('kl8-kill-input')?.value || '');
+  if (parsed.invalid.length) {
+    resultTarget.innerHTML = `<div class="status error">杀号格式错误或超出1-80: ${esc(parsed.invalid.join(', '))}</div>`;
+    return;
+  }
+  if (!option.initialized && !parsed.numbers.length) {
+    resultTarget.innerHTML = `<div class="status error">请先输入至少1个杀号</div>`;
+    return;
+  }
+
+  const removeNow = option.initialized ? [...(option.currentNumbers || [])] : [];
+  if (option.initialized && (!removeNow.length || removeNow.length < option.requiredPick)) {
+    resultTarget.innerHTML = `<div class="status error">${esc(option.label)} 剩余号码不足，不能继续杀号计算</div>`;
+    refreshKL8KillCards(option.key);
+    return;
+  }
+
+  const manualKillNumbers = option.initialized ? option.manualKillNumbers : parsed.numbers;
+  const excludeNumbers = [...new Set([
+    ...(option.excludedNumbers || []),
+    ...manualKillNumbers,
+    ...removeNow,
+  ])].sort((a, b) => a - b);
+
+  resultTarget.innerHTML = `<div class="status"><span class="spinner"></span>正在排除杀号并重新计算 ${esc(option.label)}...</div>`;
+  try {
+    const url = '/api/kl8/exclude-recalculate?play_type='
+      + encodeURIComponent(option.key)
+      + '&numbers=' + encodeURIComponent(excludeNumbers.join(','))
+      + '&_=' + Date.now();
+    const data = await fetchJson(url);
+    if (data.error) throw new Error(data.error);
+    const result = data.result || {};
+    if (result.error) throw new Error(result.error);
+    const newNumbers = result.numbers || result.top7_numbers || result.core_numbers || [];
+    const quality = result.quality || {};
+    if (!newNumbers.length || newNumbers.length < option.requiredPick) {
+      option.currentNumbers = [];
+      option.excludedNumbers = result.excluded_numbers || excludeNumbers;
+      option.manualKillNumbers = manualKillNumbers;
+      option.initialized = true;
+      refreshKL8KillCards(option.key);
+      throw new Error(`${option.label} 候选号码不足，已停止输出新结果`);
+    }
+
+    option.currentNumbers = newNumbers;
+    option.excludedNumbers = result.excluded_numbers || excludeNumbers;
+    option.manualKillNumbers = manualKillNumbers;
+    option.initialized = true;
+    option.round = (option.round || 0) + 1;
+    const candidates = (result.candidates || []).map(item => Array.isArray(item) ? item[0] : item).slice(0, 12);
+    refreshKL8KillCards(option.key);
+
+    let html = `<div class="kl8-select-card" style="border-color:#f85149">`;
+    html += `<div class="kl8-select-title">${esc(option.label)} 杀号计算第 ${option.round} 次结果</div>`;
+    html += `<div style="font-size:12px;color:#f85149;margin-bottom:8px">杀号: ${manualKillNumbers.map(n => String(n).padStart(2,'0')).join(', ')}</div>`;
+    if (removeNow.length) {
+      html += `<div style="font-size:12px;color:var(--muted);margin-bottom:8px">本次继续排除: ${removeNow.map(n => String(n).padStart(2,'0')).join(', ')}</div>`;
+    }
+    html += `<div style="font-size:12px;color:var(--muted);margin-bottom:8px">累计排除: ${option.excludedNumbers.map(n => String(n).padStart(2,'0')).join(', ')}</div>`;
+    html += `<div class="kl8-numbers-row">${renderKL8Balls(newNumbers, 40)}</div>`;
+    html += renderKL8ShapeProfile(quality.shape_profile, newNumbers);
+    if (quality.quality_score !== undefined) {
+      const modeLabels = { concentrated: '高分集中', balanced: '均衡分散', repeat_follow: '适度跟重', zone_spread: '区间扩散', shape_balanced: '形态均衡', prize_floor: '奖级冲击' };
+      html += `<div style="font-size:12px;color:var(--muted);margin-top:8px">质量分: ${esc(quality.quality_score)} · 模式: ${esc(modeLabels[quality.selection_mode] || quality.selection_mode || '-')} · 重号: ${esc(quality.repeat_count ?? '-')} / ${esc(quality.repeat_cap ?? '-')} · 区间: ${esc(quality.zone_count ?? '-')} · 路数: ${esc(quality.road_count ?? '-')}</div>`;
+    }
+    if (candidates.length) {
+      html += `<div style="font-size:12px;color:var(--muted);margin-top:8px">候补池: ${candidates.map(n => String(n).padStart(2,'0')).join(', ')}</div>`;
+    }
+    if (result.total_combinations) {
+      html += `<div style="font-size:12px;color:var(--muted);margin-top:6px">组合数: ${esc(result.total_combinations)}</div>`;
+    }
+    html += `</div>`;
+    resultTarget.innerHTML = html;
+  } catch (e) {
+    resultTarget.innerHTML = `<div class="status error">${esc(e.message)}</div>`;
+  }
 }
 
 async function runKL8ExcludeRecalculate() {
