@@ -1352,42 +1352,16 @@ class Handler(BaseHTTPRequestHandler):
             # 只抓增量数据（不触发全量引导），<2秒
             analyzer.fetch_latest_results(count=20, force_refresh=False)
 
-            strategies = [
-                ('balanced', '均衡策略'),
-                ('rank', '排名策略'),
-                ('hot', '热号策略'),
-                ('cold', '冷号策略'),
-            ]
-            voting = analyzer.multi_model_voting(front_n=20, back_n=10)
-            recommendations = []
-            for key, name in strategies:
-                rec = analyzer.generate_recommendation(
-                    key, voting_result=voting if key == 'balanced' else None
-                )
-                recommendations.append({
-                    'front': rec['front'],
-                    'back': rec['back'],
-                    'method': name,
-                    'strategy': key,
-                })
-
-            # 主推荐：纯排名 Top5/Top2（回测相对最稳）放在最前
-            front_ranked, back_ranked = analyzer.rank_model(top_n=12)
-            primary = {
-                'front': sorted([n for n, _, _ in front_ranked[:5]]),
-                'back': sorted([n for n, _, _ in back_ranked[:2]]),
-                'method': '主推（排名）',
-                'strategy': 'primary_rank',
-            }
-            recommendations.insert(0, primary)
+            multi = analyzer.generate_multi_strategy_recommendations()
+            recommendations = multi.get('recommendations') or []
 
             return {
                 'result': {
                     'method': 'multi',
                     'recommendations': recommendations,
                     'count': len(recommendations),
-                    'voting_front': [c['number'] for c in (voting.get('front_candidates') or [])[:12]],
-                    'voting_back': [c['number'] for c in (voting.get('back_candidates') or [])[:6]],
+                    'voting_front': multi.get('voting_front') or [],
+                    'voting_back': multi.get('voting_back') or [],
                 }
             }
         except Exception:

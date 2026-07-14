@@ -53,7 +53,7 @@ FEATURE_WEIGHTS = {
 # 时间衰减因子 (最近一期权重1.0，20期前≈0.19，50期前≈0.016)
 TIME_DECAY_FACTOR = 0.92
 MIN_REAL_HISTORY_FOR_RANKING = 80  # 降低阈值: 120期真实数据足够支撑统计模型
-LOTTERY_PREDICTOR_VERSION = "dlt-v3.4-speed-mlfix"
+LOTTERY_PREDICTOR_VERSION = "dlt-v3.5-back-diversity"
 FULL_HISTORY_FETCH_COUNT = 100
 MIN_FULL_HISTORY_ISSUES = 500
 ROLLING_BACKTEST_TRIALS = 30
@@ -91,17 +91,17 @@ RANDOM_BASELINE = {
     'back_ge2_rate': 0.0455,
 }
 
-# 后区专用权重（v3.3: 保持v3.2配置 — 权重比例极敏感, 微调反而降分）
-# v3.3核心优化在投票模型权重(rank=4.0绝对主导), 而非特征权重
+# 后区专用权重（v3.4: 下调 adjacent，避免后区推荐被上期临号锁死）
+# 后区仅 12 码，临号天然覆盖面大；adjacent 给 0.30 会主导 Top2，多策略后区趋同。
 BACK_FEATURE_WEIGHTS = {
-    'frequency': 0.05,     # 信号=0.500 → 近零(纯噪声)
-    'gap': 0.10,           # 信号=0.499 → 低(微负)
-    'trend': 0.05,         # 信号=0.493 → 低(负信号)
-    'road': 0.15,          # 信号=0.517 → 高(正信号)
-    'repeat': 0.10,        # 信号=0.493 → 低(负信号! 从0.22大幅降低)
-    'adjacent': 0.30,      # 信号=0.524 → 最高权重(最佳正信号!)
-    'position': 0.15,      # 信号=0.505 → 高(微正信号) — 消融验证position关掉升分但降低权重反降分
-    'sum': 0.10,           # 保持适度权重 — 消融验证sum核心但提升权重反降分
+    'frequency': 0.10,
+    'gap': 0.15,
+    'trend': 0.10,
+    'road': 0.15,
+    'repeat': 0.10,
+    'adjacent': 0.10,      # 原 0.30 → 0.10，与其他特征同量级
+    'position': 0.15,
+    'sum': 0.15,
 }
 
 # 二阶马尔可夫权重
@@ -1343,7 +1343,7 @@ class LotteryAnalyzer:
         for num in BACK_NUMBERS:
             base = freq.get(num, 0)
             if num in adjacent_nums:
-                base *= 1.4  # 邻号加权
+                base *= 1.12  # 邻号微弱加权（原 1.4 过强）
             scores[num] = base
 
         return [num for num, _ in sorted(scores.items(), key=lambda x: -x[1])[:top_n]]
@@ -1495,13 +1495,13 @@ class LotteryAnalyzer:
             # 排除上期开奖号自身，只对真正的"邻号"给高分
             true_neighbors = last_neighbors - last_back
             if num in true_neighbors:
-                scores['adjacent'] = 0.75
+                scores['adjacent'] = 0.58  # 微弱加成，不再用 0.75 碾压
             elif num not in last_back:
-                scores['adjacent'] = 0.25
+                scores['adjacent'] = 0.42
             else:
-                scores['adjacent'] = 0.25  # 上期开奖号不给adjacent加成
+                scores['adjacent'] = 0.42  # 上期开奖号不给adjacent加成
         else:
-            scores['adjacent'] = 0.30
+            scores['adjacent'] = 0.45
 
         # ---- 位置得分 (后区2位) ----
         # 后区号码的位置分布: 第一位vs第二位
@@ -1628,11 +1628,9 @@ class LotteryAnalyzer:
             self._model_markov_back(top_n=8),
             self._model_rank_back(top_n=8),
         ]
-        # v3.3: 后区排名绝对主导(回测证实: 纯排名≥1=50.0%远优于投票40.0%)
-        # bayesian=0.1(信号0.500=噪声), repeat=0.1(信号0.493=负信号!),
-        # adjacent=0.5(信号0.524=正,但投票稀释rank效果,保留微弱辅助),
-        # markov=0.1(回测有害), rank=4.0(纯排名回测50.0%超随机+19.9%)
-        back_model_weights = [0.1, 0.1, 0.5, 0.1, 4.0]
+        # v3.4: 后区排名仍主导；相邻模型权重下调，避免投票后区扎堆临号
+        # bayesian=0.1, repeat=0.1, adjacent=0.2(原0.5), markov=0.1, rank=4.0
+        back_model_weights = [0.1, 0.1, 0.2, 0.1, 4.0]
 
         for model_idx, model_result in enumerate(back_models):
             mw = back_model_weights[model_idx]
@@ -1675,18 +1673,27 @@ class LotteryAnalyzer:
     def _score_based_select(self, candidates: List[int], count: int,
                             is_front: bool = True,
                             fallback_pool: List[int] = None,
-                            weights_override: Dict[str, float] = None) -> List[int]:
+                            weights_override: Dict[str, float] = None,
+                            exclude: set = None) -> List[int]:
         """基于评分的约束选择 (替代 random.sample)。
 
         当候选数量不足时，若提供 fallback_pool，则从 fallback_pool 中按评分补充。
         weights_override: 策略自定义权重，为 None 时使用默认 FEATURE_WEIGHTS/BACK_FEATURE_WEIGHTS。
+        exclude: 组间去重已用号码，选号与 fallback 均避开。
         """
         stats = self.statistics
+        exclude = set(exclude or [])
+        candidates = [n for n in candidates if n not in exclude]
 
-        # 如果候选不足，用 fallback_pool 补充
+        # 如果候选不足，用 fallback_pool 补充（仍避开 exclude）
         if fallback_pool and len(candidates) < count:
-            pool = list(dict.fromkeys(list(candidates) + [n for n in fallback_pool if n not in candidates]))
-            candidates = pool
+            pool = [n for n in fallback_pool if n not in exclude and n not in candidates]
+            candidates = list(dict.fromkeys(list(candidates) + pool))
+
+        # 池子仍不足时放宽：只保证取够 count（极少发生）
+        if len(candidates) < count and fallback_pool:
+            pool = [n for n in fallback_pool if n not in candidates]
+            candidates = list(dict.fromkeys(list(candidates) + pool))
 
         if not stats or len(candidates) < count:
             return sorted(candidates[:count])
@@ -1867,18 +1874,20 @@ class LotteryAnalyzer:
             front = self._score_based_select(
                 _filter(hot_front, exclude_front), 5, is_front=True,
                 fallback_pool=FRONT_NUMBERS,
+                exclude=exclude_front,
                 weights_override={
                     'frequency': 0.25, 'gap': 0.06, 'position': 0.14,
                     'road': 0.10, 'sum': 0.12, 'trend': 0.15,
-                    'zone': 0.08, 'repeat': 0.10, 'adjacent': 0.10,
+                    'zone': 0.08, 'repeat': 0.10, 'adjacent': 0.05,
                 })
             back = self._score_based_select(
                 _filter(hot_back, exclude_back), 2, is_front=False,
                 fallback_pool=BACK_NUMBERS,
+                exclude=exclude_back,
                 weights_override={
-                    'frequency': 0.20, 'gap': 0.04, 'trend': 0.10,
-                    'road': 0.15, 'repeat': 0.06, 'adjacent': 0.20,
-                    'position': 0.15, 'sum': 0.10,
+                    'frequency': 0.22, 'gap': 0.08, 'trend': 0.12,
+                    'road': 0.15, 'repeat': 0.08, 'adjacent': 0.08,
+                    'position': 0.15, 'sum': 0.12,
                 })
         elif method == 'cold':
             cold_front = [num for num, _ in self.statistics.get('cold_front', [])[:20]]
@@ -1886,18 +1895,20 @@ class LotteryAnalyzer:
             front = self._score_based_select(
                 _filter(cold_front, exclude_front), 5, is_front=True,
                 fallback_pool=FRONT_NUMBERS,
+                exclude=exclude_front,
                 weights_override={
                     'frequency': 0.05, 'gap': 0.25, 'position': 0.14,
                     'road': 0.10, 'sum': 0.12, 'trend': 0.04,
-                    'zone': 0.10, 'repeat': 0.10, 'adjacent': 0.10,
+                    'zone': 0.10, 'repeat': 0.10, 'adjacent': 0.05,
                 })
             back = self._score_based_select(
                 _filter(cold_back, exclude_back), 2, is_front=False,
                 fallback_pool=BACK_NUMBERS,
+                exclude=exclude_back,
                 weights_override={
-                    'frequency': 0.02, 'gap': 0.30, 'trend': 0.02,
-                    'road': 0.15, 'repeat': 0.06, 'adjacent': 0.20,
-                    'position': 0.15, 'sum': 0.10,
+                    'frequency': 0.05, 'gap': 0.32, 'trend': 0.05,
+                    'road': 0.15, 'repeat': 0.08, 'adjacent': 0.08,
+                    'position': 0.15, 'sum': 0.12,
                 })
         elif method == 'rank':
             front_ranked, back_ranked = self.rank_model(top_n=20)
@@ -1905,10 +1916,10 @@ class LotteryAnalyzer:
             back_candidates = [num for num, _, _ in back_ranked[:10]]
             front = self._score_based_select(
                 _filter(front_candidates, exclude_front), 5, is_front=True,
-                fallback_pool=FRONT_NUMBERS)
+                fallback_pool=FRONT_NUMBERS, exclude=exclude_front)
             back = self._score_based_select(
                 _filter(back_candidates, exclude_back), 2, is_front=False,
-                fallback_pool=BACK_NUMBERS)
+                fallback_pool=BACK_NUMBERS, exclude=exclude_back)
         else:
             # 平衡模式：复用外部投票结果，避免二次 multi_model_voting
             result = voting_result
@@ -1925,15 +1936,99 @@ class LotteryAnalyzer:
                     back_candidates = _filter([n for n, _, _ in br], exclude_back)
             front = self._score_based_select(
                 front_candidates, 5, is_front=True,
-                fallback_pool=FRONT_NUMBERS)
+                fallback_pool=FRONT_NUMBERS, exclude=exclude_front)
             back = self._score_based_select(
                 back_candidates, 2, is_front=False,
-                fallback_pool=BACK_NUMBERS)
+                fallback_pool=BACK_NUMBERS, exclude=exclude_back)
 
         return {
             'front': front,
             'back': back,
             'method': method
+        }
+
+    def generate_multi_strategy_recommendations(self, voting_result: Dict = None) -> Dict:
+        """生成多策略推荐，组间互斥避免「多组完全重号」。
+
+        主推取排名 Top5/Top2；后续策略依次避开已用号码，保证每组前后区组合不同。
+        """
+        voting = voting_result or self.multi_model_voting(front_n=20, back_n=10)
+        used_front = set()
+        used_back = set()
+        recommendations = []
+
+        front_ranked, back_ranked = self.rank_model(top_n=20)
+        primary = {
+            'front': sorted([n for n, _, _ in front_ranked[:5]]),
+            'back': sorted([n for n, _, _ in back_ranked[:2]]),
+            'method': '主推（排名）',
+            'strategy': 'primary_rank',
+        }
+        recommendations.append(primary)
+        used_front.update(primary['front'])
+        used_back.update(primary['back'])
+
+        strategies = [
+            ('balanced', '均衡策略'),
+            ('rank', '排名策略'),
+            ('hot', '热号策略'),
+            ('cold', '冷号策略'),
+        ]
+        seen_tickets = {
+            (tuple(primary['front']), tuple(primary['back']))
+        }
+
+        for key, name in strategies:
+            # 后区盘口小：若已用超过 8 个，只排除「曾整组出现过的后区组合」不够，
+            # 优先排除 used_back；不够 2 个可用时再放宽。
+            exclude_f = list(used_front)
+            exclude_b = list(used_back)
+            if len(BACK_NUMBERS) - len(used_back) < 2:
+                exclude_b = []
+
+            rec = self.generate_recommendation(
+                key,
+                exclude_front=exclude_f,
+                exclude_back=exclude_b,
+                voting_result=voting if key == 'balanced' else None,
+            )
+            ticket = (tuple(rec['front']), tuple(rec['back']))
+            if ticket in seen_tickets:
+                # 强制再避一次：前区排除已用，后区排除已用（必要时放宽前区保留后区差异）
+                rec = self.generate_recommendation(
+                    key,
+                    exclude_front=list(used_front),
+                    exclude_back=list(used_back) if len(BACK_NUMBERS) - len(used_back) >= 2 else [],
+                    voting_result=voting if key == 'balanced' else None,
+                )
+                ticket = (tuple(rec['front']), tuple(rec['back']))
+                # 若前区仍撞车，至少打散后区
+                if ticket in seen_tickets and len(BACK_NUMBERS) - len(used_back) >= 2:
+                    alt_back = self._score_based_select(
+                        [n for n in BACK_NUMBERS if n not in used_back],
+                        2, is_front=False,
+                        fallback_pool=BACK_NUMBERS,
+                        exclude=used_back,
+                    )
+                    rec = {**rec, 'front': rec['front'], 'back': alt_back}
+                    ticket = (tuple(rec['front']), tuple(rec['back']))
+
+            item = {
+                'front': rec['front'],
+                'back': rec['back'],
+                'method': name,
+                'strategy': key,
+            }
+            recommendations.append(item)
+            seen_tickets.add(ticket)
+            used_front.update(rec['front'])
+            used_back.update(rec['back'])
+
+        return {
+            'recommendations': recommendations,
+            'voting_front': [c['number'] for c in (voting.get('front_candidates') or [])[:12]],
+            'voting_back': [c['number'] for c in (voting.get('back_candidates') or [])[:6]],
+            'voting': voting,
         }
 
     # ==================== 回测功能 ====================
@@ -2807,15 +2902,18 @@ def run_prediction(force_refresh=False, enable_backtest=True,
             except Exception as e:
                 log.warning(f"ML模型预测失败（不影响整体功能）: {e}")
 
-        # 多模型投票一次，balanced 推荐复用
+        # 多模型投票一次；多策略推荐组间互斥，避免主推/均衡/排名三组重号
         voting = analyzer.multi_model_voting(front_n=20, back_n=10)
-
+        multi = analyzer.generate_multi_strategy_recommendations(voting_result=voting)
         recommendations = {}
-        for method in ['balanced', 'hot', 'cold', 'rank']:
-            rec = analyzer.generate_recommendation(
-                method, voting_result=voting if method == 'balanced' else None
-            )
-            recommendations[method] = rec
+        for item in multi.get('recommendations') or []:
+            key = item.get('strategy') or item.get('method') or 'unknown'
+            recommendations[key] = {
+                'front': item.get('front', []),
+                'back': item.get('back', []),
+                'method': key,
+                'label': item.get('method'),
+            }
 
         # ML推荐 (v2.2新增策略)
         if ml_prediction and ml_prediction.get('front_top'):
