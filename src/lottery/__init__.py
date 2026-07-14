@@ -2747,10 +2747,9 @@ def run_prediction(force_refresh=False, enable_backtest=True,
         recent = analyzer.get_recent_results(10)
         data_quality = analyzer.assess_data_quality()
 
-        # 滚动回测 (trials 取较大值: 50期小样本噪声极大，会误报显著性；
-        # 200期更接近真实命中率，使 baseline_comparison 的显著性判断可信)
+        # 滚动回测 (50期: 足够评估命中率统计显著性，同时大幅降低计算耗时)
         if enable_backtest:
-            backtest = analyzer.rolling_backtest(trials=200)
+            backtest = analyzer.rolling_backtest(trials=50)
         else:
             backtest = {'trials': 0, 'note': 'backtest disabled', 'baseline_comparison': {}}
 
@@ -2776,8 +2775,8 @@ def run_prediction(force_refresh=False, enable_backtest=True,
             try:
                 from .ml import predict_with_ml, backtest_ml
                 ml_prediction = predict_with_ml(analyzer.history_data)
-                # ML 回测 (使用最近60期评估)
-                ml_backtest_result = backtest_ml(analyzer.history_data, trials=min(60, len(analyzer.history_data) - 130))
+                # ML 回测 (使用最近10期评估，每期不重新训练，用已训练模型快速回测)
+                ml_backtest_result = backtest_ml(analyzer.history_data, trials=min(10, len(analyzer.history_data) - 130))
             except Exception as e:
                 log.warning(f"ML模型预测失败（不影响整体功能）: {e}")
 

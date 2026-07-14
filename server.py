@@ -61,7 +61,7 @@ _lottery_bg_lock = threading.Lock()
 def _lottery_bg_run(task_id, func, **kwargs):
     """在后台线程执行重计算函数，完成后更新 _lottery_bg_tasks 和 _CACHE。"""
     try:
-        result = func(**kwargs)
+        result = func(task_id=task_id, **kwargs)
         with _lottery_bg_lock:
             _lottery_bg_tasks[task_id]['status'] = 'done'
             _lottery_bg_tasks[task_id]['result'] = result
@@ -71,6 +71,15 @@ def _lottery_bg_run(task_id, func, **kwargs):
         with _lottery_bg_lock:
             _lottery_bg_tasks[task_id]['status'] = 'error'
             _lottery_bg_tasks[task_id]['error'] = str(e)
+
+
+def _lottery_update_task_message(task_id, message):
+    """更新后台任务的消息（用于前端展示当前步骤）。"""
+    with _lottery_bg_lock:
+        info = _lottery_bg_tasks.get(task_id)
+        if info and info['status'] == 'processing':
+            info['message'] = message
+            log.info(f'大乐透后台任务 {task_id}: {message}')
 
 
 def _lottery_start_bg_task(task_type, func, cache_key=None, cache_value_func=None, **kwargs):
@@ -1301,7 +1310,8 @@ class Handler(BaseHTTPRequestHandler):
             _CACHE['lottery']['timestamp'] = 0
 
             # 后台任务：全量分析
-            def _bg_refresh():
+            def _bg_refresh(task_id):
+                _lottery_update_task_message(task_id, '开始全量分析...')
                 log.info('大乐透后台全量分析开始...')
                 start = time.time()
                 result = lottery_run_prediction(force_refresh=True)
@@ -1444,12 +1454,14 @@ class Handler(BaseHTTPRequestHandler):
             clear_ml_cache()
 
             # 后台任务：先抓取数据，再全量分析
-            def _bg_fetch_and_analyze():
+            def _bg_fetch_and_analyze(task_id):
+                _lottery_update_task_message(task_id, '正在抓取最新开奖数据...')
                 analyzer = get_lottery_analyzer()
                 fetch_result = analyzer.fetch_latest_results(
                     count=FULL_HISTORY_FETCH_COUNT,
                     force_refresh=True,
                 )
+                _lottery_update_task_message(task_id, '抓取完成，开始全量分析...')
                 log.info('大乐透抓取完成，开始后台全量分析...')
                 analysis_result = lottery_run_prediction(force_refresh=True)
                 return {
@@ -1504,10 +1516,12 @@ class Handler(BaseHTTPRequestHandler):
 
             self._log.info('大乐透ML模型后台重新训练启动')
 
-            def _bg_ml_refresh():
+            def _bg_ml_refresh(task_id):
+                _lottery_update_task_message(task_id, '正在训练前区模型...')
                 start = time.time()
                 ml_result = predict_with_ml(force_retrain=True)
                 elapsed = time.time() - start
+                _lottery_update_task_message(task_id, 'ML模型训练完成')
                 log.info('大乐透ML后台训练完成，耗时 %.2f秒', elapsed)
                 return {
                     'success': True,
@@ -1535,15 +1549,18 @@ class Handler(BaseHTTPRequestHandler):
         """查询大乐透后台任务状态"""
         with _lottery_bg_lock:
             tasks_snapshot = dict(_lottery_bg_tasks)
-        # 只返回最近的3个任务状态
-        recent_tasks = sorted(tasks_snapshot.items(), key=lambda x: -x[1]['start_time'])[:3]
+        # 保留最近 10 个任务状态，避免长时间任务被清理
+        recent_tasks = sorted(tasks_snapshot.items(), key=lambda x: -x[1]['start_time'])[:10]
         result = {}
         for tid, info in recent_tasks:
+            elapsed = info.get('elapsed', 0)
+            if info['status'] == 'processing':
+                elapsed = time.time() - info['start_time']
             result[tid] = {
                 'status': info['status'],
                 'task_type': info['task_type'],
                 'message': info.get('message', ''),
-                'elapsed': round(info.get('elapsed', 0), 2) if info['status'] != 'processing' else round(time.time() - info['start_time'], 2),
+                'elapsed': round(elapsed, 2),
                 'error': info.get('error'),
             }
             # 如果完成，附带简要结果信息
