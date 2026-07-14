@@ -28,6 +28,13 @@ if hasattr(sys.stdout, "reconfigure"):
 URL = "https://www.8300.cn/kjhhis/3/2000.html"
 
 RECENT_WINDOWS = (30, 45, 60, 90)
+
+# 贴合近窗实开：超短窗权重（与长窗并行叠加，让推荐随开奖滚动）
+REALIZED_WINDOWS = (3, 8, 15)
+W_REALIZED = {3: 3.2, 8: 2.2, 15: 1.4}
+W_LAST_DRAW_DIGIT = 2.8      # 上期出现过的号码
+W_LAST_DRAW_POS = 3.5        # 上期同位复现（直选更敏感）
+W_RECENT_ZU6_DIGIT = 2.0     # 近几期组六实开号码
 RECENT_WINDOW = 90  # 展示用最大窗口
 # 窗口权重回测参数（保守收缩）
 WINDOW_BACKTEST_TRIALS = 100  # 增加回测期数，减少偶然因素影响
@@ -197,22 +204,23 @@ ZU6_RECENT_DECAY = 0.6
 ZU6_USE_KILL = False
 
 # 组六专用单码评分权重（v4.6: 降热号追捧，抬欠号回补 + 共现，避免五码低于理论）
-W_ZU6_HOT = 1.6
-W_ZU6_MISS = 2.0
+W_ZU6_HOT = 2.2
+W_ZU6_MISS = 0.8          # 欠号回补减弱：更重近期实开而非追冷
 W_ZU6_POS = 0.8
 W_ZU6_PAIR = 2.4
-W_ZU6_BLEND = 1.0
-W_ZU6_OVERHEAT = 1.8  # 近窗过热略降权
+W_ZU6_BLEND = 0.6         # 过热惩罚减弱，避免把刚开出的热号压下去
+W_ZU6_OVERHEAT = 0.6
 ZU6_MISS_WINDOW = 120
-ZU6_HOT_WINDOW = 30
+ZU6_HOT_WINDOW = 20
 ZU6_PAIR_WINDOW = 90
+ZU6_REALIZED_ANCHOR = 2   # 主推中尽量保留上期实开号码个数
+
+PREDICTOR_VERSION = "3d-v4.9-track-draws"
+ML_MODEL_VERSION = "ml-v6"
 
 # 窗口权重持久化键
 WINDOW_WEIGHTS_KV_KEY = "lottery3d_window_weights"
 
-# 预测版本号
-PREDICTOR_VERSION = "3d-v4.7-zhixuan-calibrate"
-ML_MODEL_VERSION = "ml-v6"
 MIN_DATA_PERIODS_FOR_ML_FUSION = 300
 ML_CACHE_MAX_AGE_SECONDS = 36 * 3600
 
@@ -2261,6 +2269,53 @@ def digit_scores(numbers, window=RECENT_WINDOW, dynamic=None):
     return score, freq_all
 
 
+def recent_realized_digit_bonus(numbers):
+    """按近期实开频率给单码加分，让推荐跟着开奖滚动。"""
+    bonus = [0.0] * 10
+    if not numbers:
+        return bonus
+
+    last = numbers[-1]
+    for d in set(last):
+        bonus[d] += W_LAST_DRAW_DIGIT
+
+    for w, wt in W_REALIZED.items():
+        recent = _recent_slice(numbers, w)
+        if not recent:
+            continue
+        freq = Counter(d for n in recent for d in n)
+        peak = max(freq.values()) if freq else 1
+        for d, cnt in freq.items():
+            bonus[d] += wt * (cnt / peak)
+
+    # 近几期组六实开码再抬一档（组六期占多数）
+    zu6_recent = [n for n in numbers[-12:] if classify_form(n) == "zu6"]
+    if zu6_recent:
+        zf = Counter(d for n in zu6_recent for d in set(n))
+        zpeak = max(zf.values()) if zf else 1
+        for d, cnt in zf.items():
+            bonus[d] += W_RECENT_ZU6_DIGIT * (cnt / zpeak)
+    return bonus
+
+
+def recent_realized_position_bonus(numbers, position):
+    """分位：上期同位 + 近窗该位实开频率。"""
+    bonus = [0.0] * 10
+    if not numbers:
+        return bonus
+    last_d = numbers[-1][position]
+    bonus[last_d] += W_LAST_DRAW_POS
+    for w, wt in W_REALIZED.items():
+        recent = [n[position] for n in _recent_slice(numbers, w)]
+        if not recent:
+            continue
+        freq = Counter(recent)
+        peak = max(freq.values()) if freq else 1
+        for d, cnt in freq.items():
+            bonus[d] += wt * 0.85 * (cnt / peak)
+    return bonus
+
+
 def ensemble_digit_scores(numbers, window_weights, dynamic=None):
     combined = [0.0] * 10
     freq_combined = Counter()
@@ -2270,11 +2325,11 @@ def ensemble_digit_scores(numbers, window_weights, dynamic=None):
             combined[d] += wt * sc[d]
         for d, c in freq.items():
             freq_combined[d] += wt * c
-    
-    # 注意：熵值奖励和回补奖励已经在 digit_scores() 内添加过，
-    # 这里不再重复添加，避免双重加权
-    # entropy_model() 和 rebound_model() 的奖励已在 digit_scores() 中处理
-    
+
+    # 实开锚定：与长窗解耦，强制推荐跟着最近几期走
+    for d, b in enumerate(recent_realized_digit_bonus(numbers)):
+        combined[d] += b
+
     return combined, freq_combined
 
 
@@ -2293,33 +2348,35 @@ def zu6_cooccurrence_freq(numbers, window=ZU6_PAIR_WINDOW):
 
 
 def zu6_digit_scores(numbers, window_weights=None, dynamic=None):
-    """组六单码评分：全局底座 + 组六共现/欠号，并对近窗过热微降权。
-
-    回测(近250期组六开奖)显示纯追热的 Top5 全中低于理论(~6% vs 8%)，
-    欠号回补+过热降权+组合优化后更贴近/略超理论。
-    """
+    """组六单码评分：长窗底座 + 近窗实开锚定 + 轻量欠号/共现。"""
     if window_weights is None:
         window_weights = default_window_weights()
 
     score, _ = ensemble_digit_scores(numbers, window_weights, dynamic=dynamic)
     score = list(score)
 
+    # 再叠一层实开锚定（组六更看号码集合）
+    for d, b in enumerate(recent_realized_digit_bonus(numbers)):
+        score[d] += b * 0.55
+
     zu6_draws = [n for n in numbers if classify_form(n) == "zu6"]
     if zu6_draws:
-        recent_zu6 = _recent_slice(zu6_draws, min(90, len(zu6_draws)))
+        recent_zu6 = _recent_slice(zu6_draws, min(40, len(zu6_draws)))
         freq = exp_weighted_counts([d for n in recent_zu6 for d in set(n)])
         peak = max(freq.values()) if freq else 1.0
         for d, cnt in freq.items():
-            score[d] += W_ZU6_HOT * 0.28 * (cnt / peak)
+            score[d] += W_ZU6_HOT * 0.35 * (cnt / peak)
 
         for pos in range(3):
             pos_sc = ensemble_position_digit_scores(
                 numbers, pos, window_weights, dynamic=dynamic
             )
+            for d, b in enumerate(recent_realized_position_bonus(numbers, pos)):
+                pos_sc[d] += b
             for d, _ in sorted(enumerate(pos_sc), key=lambda x: -x[1])[:3]:
                 score[d] += W_ZU6_POS * 0.18
 
-    # 欠号回补：近窗未出现越久，越接近“均值回归”加分（轻量，避免赌徒谬误过猛）
+    # 欠号回补：轻量（主要避免完全丢掉冷号覆盖）
     look = numbers[-ZU6_MISS_WINDOW:] if numbers else []
     last_seen = {d: len(look) for d in range(10)}
     for idx, n in enumerate(reversed(look)):
@@ -2329,17 +2386,17 @@ def zu6_digit_scores(numbers, window_weights=None, dynamic=None):
     avg_gap = sum(last_seen.values()) / 10.0
     for d in range(10):
         gap = last_seen[d]
-        if avg_gap > 0 and gap > avg_gap * 1.25:
-            score[d] += W_ZU6_MISS * 0.35 * min((gap / avg_gap - 1.0), 2.0)
+        if avg_gap > 0 and gap > avg_gap * 1.6:
+            score[d] += W_ZU6_MISS * 0.25 * min((gap / avg_gap - 1.0), 1.5)
 
-    # 近窗过热/欠热均衡：热号略降、偏低略抬（避免追热把覆盖拖到理论线下）
+    # 近窗只做轻微均衡，不再大力压热号
     hot_window = numbers[-ZU6_HOT_WINDOW:] if numbers else []
     if hot_window:
         hot_freq = Counter(d for n in hot_window for d in set(n))
         hot_peak = max(hot_freq.values()) if hot_freq else 1
         for d in range(10):
             rate = hot_freq.get(d, 0) / hot_peak
-            score[d] += W_ZU6_BLEND * 1.1 * (0.5 - rate)
+            score[d] += W_ZU6_BLEND * 0.45 * (0.5 - rate)
 
     return score
 
@@ -2394,6 +2451,8 @@ def ensemble_position_digit_scores(numbers, position, window_weights, dynamic=No
         ps = position_digit_scores(numbers, position, window=w, dynamic=dynamic)
         for d in range(10):
             sc[d] += wt * ps[d]
+    for d, b in enumerate(recent_realized_position_bonus(numbers, position)):
+        sc[d] += b
     return sc
 
 
@@ -2826,7 +2885,7 @@ def pick_zu6_pool(
     score, kill=None, pool_size=ZU6_POOL_SIZE,
     use_kill=ZU6_USE_KILL, pair_freq=None, numbers=None,
 ):
-    """组六复式选号：Top 候选中组合搜索（共现+均衡），不再是死板 TopN。"""
+    """组六复式选号：Top 候选中组合搜索；尽量保留上期实开号码。"""
     kill_eff = kill if use_kill else None
     if pair_freq is None and numbers is not None:
         pair_freq = zu6_cooccurrence_freq(numbers)
@@ -2834,6 +2893,18 @@ def pick_zu6_pool(
     rank = sorted(range(10), key=lambda d: -_effective_digit_score(score, d, kill_eff))
     cand_n = max(ZU6_CANDIDATE_SIZE, pool_size)
     candidates = rank[:cand_n]
+
+    # 上期实开码强制进入候选，避免长窗把刚开的号挤出去
+    if numbers:
+        for d in set(numbers[-1]):
+            if d not in candidates:
+                candidates.append(d)
+        # 近 3 期高频码也保底进候选
+        recent_freq = Counter(d for n in numbers[-3:] for d in n)
+        for d, _ in recent_freq.most_common(4):
+            if d not in candidates:
+                candidates.append(d)
+
     if len(candidates) <= pool_size:
         return sorted(candidates)
 
@@ -2841,6 +2912,28 @@ def pick_zu6_pool(
         combinations(candidates, pool_size),
         key=lambda c: _zu6_combo_score(c, score, kill_eff, pair_freq),
     )
+    best = set(best)
+
+    # 锚定：尽量保留上期实开号码
+    if numbers and ZU6_REALIZED_ANCHOR > 0:
+        last_digits = list(dict.fromkeys(numbers[-1]))  # 保序去重
+        need = min(ZU6_REALIZED_ANCHOR, len(last_digits), pool_size)
+        have = [d for d in last_digits if d in best]
+        missing = [d for d in last_digits if d not in best]
+        for d in missing:
+            if len(have) >= need:
+                break
+            # 换成当前池里「不在上期、且分最低」的码
+            replace_candidates = sorted(
+                (x for x in best if x not in last_digits),
+                key=lambda x: _effective_digit_score(score, x, kill_eff),
+            )
+            if not replace_candidates:
+                break
+            best.remove(replace_candidates[0])
+            best.add(d)
+            have.append(d)
+
     return sorted(best)
 
 
