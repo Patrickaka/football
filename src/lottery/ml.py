@@ -115,7 +115,7 @@ TIME_DECAY_MID = 60
 TIME_DECAY_MID_WEIGHT = 1.2
 TIME_DECAY_OLD_WEIGHT = 1.0
 
-LOTTERY_ML_VERSION = "dlt-ml-v3.4-recent-window"
+LOTTERY_ML_VERSION = "dlt-ml-v3.5-feature-names"
 
 
 def _native_number(x):
@@ -129,6 +129,26 @@ def _native_number(x):
     if isinstance(x, float):
         return float(x)
     return x
+
+
+def _features_frame(rows, feature_names=None):
+    """把特征转成带列名的 DataFrame，避免 LGBM/sklearn 的 feature names 警告。
+
+    rows: List[List[float]] 或单行 List[float]
+    """
+    try:
+        import numpy as np
+        import pandas as pd
+    except Exception:
+        return rows
+
+    arr = np.asarray(rows, dtype=np.float64)
+    if arr.ndim == 1:
+        arr = arr.reshape(1, -1)
+    if feature_names and len(feature_names) == arr.shape[1]:
+        return pd.DataFrame(arr, columns=list(feature_names))
+    # 无列名时也用 DataFrame 占位，保证 fit/predict 一致
+    return pd.DataFrame(arr, columns=[f'f{i}' for i in range(arr.shape[1])])
 
 
 # ===================== 特征工程 =====================
@@ -1145,7 +1165,8 @@ class DaletouMLPredictor:
 
         # 训练前区模型
         self.front_models, self.front_scores = self._train_models(
-            X_train_f, y_train_f, w_train_f, X_val_f, y_val_f, "前区"
+            X_train_f, y_train_f, w_train_f, X_val_f, y_val_f, "前区",
+            feature_names=selected_front_names,
         )
 
         # 后区训练
@@ -1171,7 +1192,8 @@ class DaletouMLPredictor:
         y_val_b = y_back[split:]
 
         self.back_models, self.back_scores = self._train_models(
-            X_train_b, y_train_b, w_train_b, X_val_b, y_val_b, "后区"
+            X_train_b, y_train_b, w_train_b, X_val_b, y_val_b, "后区",
+            feature_names=selected_back_names,
         )
 
         self.trained = True
@@ -1179,10 +1201,13 @@ class DaletouMLPredictor:
                  f"后区模型: {list(self.back_models.keys())}")
         return True
 
-    def _train_models(self, X_train, y_train, w_train, X_val, y_val, area_name):
+    def _train_models(self, X_train, y_train, w_train, X_val, y_val, area_name,
+                      feature_names=None):
         """训练多个模型"""
         models = {}
         scores = {}
+        X_train_df = _features_frame(X_train, feature_names)
+        X_val_df = _features_frame(X_val, feature_names)
 
         # CatBoost
         if HAS_CATBOOST:
@@ -1197,8 +1222,8 @@ class DaletouMLPredictor:
                     auto_class_weights='Balanced',
                     random_seed=42,
                 )
-                model.fit(X_train, y_train, sample_weight=w_train)
-                val_pred = model.predict_proba(X_val)[:, 1]
+                model.fit(X_train_df, y_train, sample_weight=w_train)
+                val_pred = model.predict_proba(X_val_df)[:, 1]
                 score = self._calc_auc(y_val, val_pred)
                 models['catboost'] = model
                 scores['catboost'] = score
@@ -1220,8 +1245,8 @@ class DaletouMLPredictor:
                     eval_metric='logloss',
                     scale_pos_weight=6.0 if area_name == "前区" else 5.0,
                 )
-                model.fit(X_train, y_train, sample_weight=w_train)
-                val_pred = model.predict_proba(X_val)[:, 1]
+                model.fit(X_train_df, y_train, sample_weight=w_train)
+                val_pred = model.predict_proba(X_val_df)[:, 1]
                 score = self._calc_auc(y_val, val_pred)
                 models['xgboost'] = model
                 scores['xgboost'] = score
@@ -1243,8 +1268,8 @@ class DaletouMLPredictor:
                     is_unbalance=True,
                     verbose=-1,
                 )
-                model.fit(X_train, y_train, sample_weight=w_train)
-                val_pred = model.predict_proba(X_val)[:, 1]
+                model.fit(X_train_df, y_train, sample_weight=w_train)
+                val_pred = model.predict_proba(X_val_df)[:, 1]
                 score = self._calc_auc(y_val, val_pred)
                 models['lightgbm'] = model
                 scores['lightgbm'] = score
@@ -1337,7 +1362,10 @@ class DaletouMLPredictor:
         for num in FRONT_NUMBERS:
             raw_features = fe.build_front_features(num)
             selected = [raw_features[i] for i in self.front_feature_indices]
-            prob = self._ensemble_predict(selected, self.front_models, self.front_scores)
+            prob = self._ensemble_predict(
+                selected, self.front_models, self.front_scores,
+                feature_names=self.front_feature_names_selected,
+            )
             front_probs[num] = _native_number(prob)
 
         # 后区预测
@@ -1345,7 +1373,10 @@ class DaletouMLPredictor:
         for num in BACK_NUMBERS:
             raw_features = fe.build_back_features(num)
             selected = [raw_features[i] for i in self.back_feature_indices]
-            prob = self._ensemble_predict(selected, self.back_models, self.back_scores)
+            prob = self._ensemble_predict(
+                selected, self.back_models, self.back_scores,
+                feature_names=self.back_feature_names_selected,
+            )
             back_probs[num] = _native_number(prob)
 
         front_top = sorted(front_probs.keys(), key=lambda n: -front_probs[n])[:TOP_K_FRONT]
@@ -1363,20 +1394,21 @@ class DaletouMLPredictor:
             'version': LOTTERY_ML_VERSION,
         }
 
-    def _ensemble_predict(self, features, models, scores):
+    def _ensemble_predict(self, features, models, scores, feature_names=None):
         """动态权重集成预测"""
         if not models:
             return 0.5
 
         total_score = sum(scores.values()) or 1.0
         weights = {k: v / total_score for k, v in scores.items()}
+        X = _features_frame([features], feature_names)
 
         ensemble_prob = 0.0
         for name, model in models.items():
             w = weights.get(name, 0.25)
             try:
                 if name in ('catboost', 'xgboost', 'lightgbm'):
-                    prob = model.predict_proba([features])[0][1]
+                    prob = model.predict_proba(X)[0][1]
                 elif name == 'random_forest':
                     prob = model.predict_proba([features])[0]
                 else:
