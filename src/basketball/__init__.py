@@ -31,7 +31,7 @@ from ..common import kv_store
 log = setup_logger('basketball')
 
 # 版本号
-BASKETBALL_VERSION = '2026-07-14-v3.1-okooo'
+BASKETBALL_VERSION = '2026-07-14-v3.2-official-picks'
 BASKETBALL_HISTORY_KEY = 'basketball_prediction_history'
 BASKETBALL_HISTORY_LIMIT = 500
 
@@ -118,6 +118,42 @@ FUSION_WEIGHTS = {
         'league': 0.20,
     },
 }
+
+OFFICIAL_PICK_MIN_PROB = {
+    'spf': 0.60,
+    'rqspf': 0.60,
+    'dx': 0.59,
+}
+
+
+def _official_pick_status(bet_type: str, pick_prob: float, confidence: str) -> Dict[str, object]:
+    """Separate a displayed lean from an official pick counted in hit-rate stats."""
+    min_prob = OFFICIAL_PICK_MIN_PROB.get(bet_type, 0.60)
+    try:
+        pick_prob = float(pick_prob)
+    except (TypeError, ValueError):
+        pick_prob = 0.0
+
+    if confidence == 'low':
+        return {
+            'playable': False,
+            'official': False,
+            'skip_reason': 'low_confidence',
+            'min_prob': min_prob,
+        }
+    if pick_prob < min_prob:
+        return {
+            'playable': False,
+            'official': False,
+            'skip_reason': 'prob_below_threshold',
+            'min_prob': min_prob,
+        }
+    return {
+        'playable': True,
+        'official': True,
+        'skip_reason': None,
+        'min_prob': min_prob,
+    }
 
 
 def _elo_sample_trust(home_games: int, away_games: int,
@@ -309,6 +345,8 @@ def analyze_spf(match, market_bundle=None):
         log.debug(f"校准未应用: {e}")
 
     recommendation = '主胜' if p_home > p_away else '客胜'
+    pick_prob = p_home if recommendation == '主胜' else p_away
+    official = _official_pick_status('spf', pick_prob, confidence)
 
     return {
         'available': True,
@@ -317,6 +355,8 @@ def analyze_spf(match, market_bundle=None):
         'home_odds': home_odds,
         'away_odds': away_odds,
         'recommendation': recommendation,
+        'pick_prob': round(pick_prob, 4),
+        **official,
         'confidence': confidence,
         'elo_home_prob': round(p_home_elo, 4),
         'elo_rating_diff': elo_rating_diff,
@@ -452,6 +492,8 @@ def analyze_rqspf(match, market_bundle=None):
         log.debug(f"校准未应用: {e}")
 
     recommendation = '让胜' if p_home > p_away else '让负'
+    pick_prob = p_home if recommendation == '让胜' else p_away
+    official = _official_pick_status('rqspf', pick_prob, confidence)
 
     return {
         'available': True,
@@ -461,6 +503,8 @@ def analyze_rqspf(match, market_bundle=None):
         'home_odds': rq_home_odds,
         'away_odds': rq_away_odds,
         'recommendation': recommendation,
+        'pick_prob': round(pick_prob, 4),
+        **official,
         'confidence': confidence,
         'elo_margin': round(elo_margin, 1),
         'elo_trust': round(elo_trust, 3),
@@ -603,6 +647,8 @@ def analyze_daxiao(match, market_bundle=None):
         log.debug(f"校准未应用: {e}")
 
     recommendation = '大分' if p_over > p_under else '小分'
+    pick_prob = p_over if recommendation == '大分' else p_under
+    official = _official_pick_status('dx', pick_prob, confidence)
 
     return {
         'available': True,
@@ -612,6 +658,8 @@ def analyze_daxiao(match, market_bundle=None):
         'over_odds': over_odds,
         'under_odds': under_odds,
         'recommendation': recommendation,
+        'pick_prob': round(pick_prob, 4),
+        **official,
         'confidence': confidence,
         'elo_total': round(elo_total, 1),
         'elo_trust': round(elo_trust, 3),

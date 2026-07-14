@@ -61,6 +61,10 @@ def save_predictions(date_str: str, matches: List[Dict], version: str = ''):
             'spf': {
                 'available': spf.get('available', False),
                 'recommendation': spf.get('recommendation'),
+                'pick_prob': spf.get('pick_prob'),
+                'playable': spf.get('playable', True),
+                'official': spf.get('official', spf.get('playable', True)),
+                'skip_reason': spf.get('skip_reason'),
                 'home_prob': spf.get('home_prob'),
                 'away_prob': spf.get('away_prob'),
                 'confidence': spf.get('confidence'),
@@ -72,6 +76,10 @@ def save_predictions(date_str: str, matches: List[Dict], version: str = ''):
             'rqspf': {
                 'available': rqspf.get('available', False),
                 'recommendation': rqspf.get('recommendation'),
+                'pick_prob': rqspf.get('pick_prob'),
+                'playable': rqspf.get('playable', True),
+                'official': rqspf.get('official', rqspf.get('playable', True)),
+                'skip_reason': rqspf.get('skip_reason'),
                 'handicap': rqspf.get('handicap'),
                 'home_prob': rqspf.get('home_prob'),
                 'away_prob': rqspf.get('away_prob'),
@@ -84,6 +92,10 @@ def save_predictions(date_str: str, matches: List[Dict], version: str = ''):
             'dx': {
                 'available': dx.get('available', False),
                 'recommendation': dx.get('recommendation'),
+                'pick_prob': dx.get('pick_prob'),
+                'playable': dx.get('playable', True),
+                'official': dx.get('official', dx.get('playable', True)),
+                'skip_reason': dx.get('skip_reason'),
                 'total_line': dx.get('total_line'),
                 'over_prob': dx.get('over_prob'),
                 'under_prob': dx.get('under_prob'),
@@ -174,7 +186,7 @@ def _evaluate_markets(record: Dict, home_score: int, away_score: int) -> Dict:
     }
 
     spf = record.get('spf') or {}
-    if spf.get('available'):
+    if spf.get('available') and spf.get('playable', True):
         if home_score == away_score:
             out['spf_void'] = True
         else:
@@ -182,7 +194,7 @@ def _evaluate_markets(record: Dict, home_score: int, away_score: int) -> Dict:
             out['spf_hit'] = spf.get('recommendation') == actual
 
     rqspf = record.get('rqspf') or {}
-    if rqspf.get('available'):
+    if rqspf.get('available') and rqspf.get('playable', True):
         handicap_str = rqspf.get('handicap', '')
         try:
             handicap = float(handicap_str) if handicap_str not in (None, '') else 0.0
@@ -196,7 +208,7 @@ def _evaluate_markets(record: Dict, home_score: int, away_score: int) -> Dict:
             out['rqspf_hit'] = rqspf.get('recommendation') == actual_rq
 
     dx = record.get('dx') or {}
-    if dx.get('available'):
+    if dx.get('available') and dx.get('playable', True):
         total_line = dx.get('total_line', 0)
         try:
             total_line = float(total_line) if total_line is not None else 0.0
@@ -294,6 +306,7 @@ def get_prediction_stats() -> Dict:
     stats = {
         'total_predictions': len(records),
         'settled_count': len(settled),
+        'official_predictions': 0,
         'spf': {'total': 0, 'correct': 0, 'void': 0, 'accuracy': 0.0},
         'rqspf': {'total': 0, 'correct': 0, 'void': 0, 'accuracy': 0.0},
         'dx': {'total': 0, 'correct': 0, 'void': 0, 'accuracy': 0.0},
@@ -306,7 +319,8 @@ def get_prediction_stats() -> Dict:
         hits = _evaluate_markets(r, home_score, away_score)
 
         spf = r.get('spf') or {}
-        if spf.get('available'):
+        if spf.get('available') and spf.get('playable', True):
+            stats['official_predictions'] += 1
             if hits['spf_void']:
                 stats['spf']['void'] += 1
             else:
@@ -315,7 +329,8 @@ def get_prediction_stats() -> Dict:
                     stats['spf']['correct'] += 1
 
         rqspf = r.get('rqspf') or {}
-        if rqspf.get('available'):
+        if rqspf.get('available') and rqspf.get('playable', True):
+            stats['official_predictions'] += 1
             if hits['rqspf_void']:
                 stats['rqspf']['void'] += 1
             else:
@@ -324,7 +339,8 @@ def get_prediction_stats() -> Dict:
                     stats['rqspf']['correct'] += 1
 
         dx = r.get('dx') or {}
-        if dx.get('available'):
+        if dx.get('available') and dx.get('playable', True):
+            stats['official_predictions'] += 1
             if hits['dx_void']:
                 stats['dx']['void'] += 1
             else:
@@ -352,21 +368,21 @@ def _feed_one_record(r: Dict) -> int:
     count = 0
 
     spf = r.get('spf') or {}
-    if spf.get('available') and not hits['spf_void'] and hits['spf_hit'] is not None:
+    if spf.get('available') and spf.get('playable', True) and not hits['spf_void'] and hits['spf_hit'] is not None:
         predicted = spf.get('recommendation')
         prob = spf.get('home_prob', 0.5) if predicted == '主胜' else spf.get('away_prob', 0.5)
         calibrator.record('spf', prob, bool(hits['spf_hit']), league, spf.get('confidence', 'medium'))
         count += 1
 
     rqspf = r.get('rqspf') or {}
-    if rqspf.get('available') and not hits['rqspf_void'] and hits['rqspf_hit'] is not None:
+    if rqspf.get('available') and rqspf.get('playable', True) and not hits['rqspf_void'] and hits['rqspf_hit'] is not None:
         predicted_rq = rqspf.get('recommendation')
         prob = rqspf.get('home_prob', 0.5) if predicted_rq == '让胜' else rqspf.get('away_prob', 0.5)
         calibrator.record('rqspf', prob, bool(hits['rqspf_hit']), league, rqspf.get('confidence', 'medium'))
         count += 1
 
     dx = r.get('dx') or {}
-    if dx.get('available') and not hits['dx_void'] and hits['dx_hit'] is not None:
+    if dx.get('available') and dx.get('playable', True) and not hits['dx_void'] and hits['dx_hit'] is not None:
         predicted_dx = dx.get('recommendation')
         prob = dx.get('over_prob', 0.5) if predicted_dx == '大分' else dx.get('under_prob', 0.5)
         calibrator.record('dx', prob, bool(hits['dx_hit']), league, dx.get('confidence', 'medium'))
