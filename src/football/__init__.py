@@ -4932,11 +4932,11 @@ def predict_scores(asian, euro, total, team_strength=None, league_profile=None,
         lam_away = max(0.08, lam_away)
         
         distribution = 'negative_binomial' if model_type == 'negative_binomial' else 'poisson'
-        matrix = build_score_matrix(lam_home, lam_away, distribution=distribution,
+        rho = _estimate_dc_rho(lam_home, lam_away, p_draw)
+        matrix = build_score_matrix(lam_home, lam_away, rho=rho, distribution=distribution,
                                     league_profile=league_profile)
         matrix = calibrate_to_euro(matrix, p_home, p_draw, p_away)
         target_total = line
-        rho = 0.0
 
     # ========== 新增：结合历史盘口比分库进行融合 ==========
     market_db_used = False

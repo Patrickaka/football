@@ -83,6 +83,35 @@ class GoalCountCalibrator:
         
         return f"{league}_{bucketed_line:.2f}_{bucketed_asian:+.2f}_{bucketed_expected:.2f}"
     
+    def _ensure_bucket(self, bucket_key, league, total_line=None, asian=None, expected_total=None):
+        """惰性创建分桶（兼容粗粒度回退桶）"""
+        if bucket_key in self.db:
+            return
+        self.db[bucket_key] = {
+            'league': league,
+            'total_line': round(total_line * 4) / 4 if total_line is not None else None,
+            'asian_bucket': round(asian * 2) / 2 if asian is not None else None,
+            'expected_total_bucket': round(expected_total * 2) / 2 if expected_total is not None else None,
+            'sample_count': 0,
+            'weighted_sample_count': 0.0,
+            'predicted_distributions': [],
+            'actual_goals': [],
+            'sample_weights': [],
+            'calibration_factors': {},
+        }
+
+    def _update_bucket(self, bucket_key, league, total_line, asian, expected_total,
+                       predicted_goal_dist, actual_total_goals, sample_weight):
+        """向指定分桶追加一条记录并重算校准因子"""
+        self._ensure_bucket(bucket_key, league, total_line, asian, expected_total)
+        b = self.db[bucket_key]
+        b['sample_count'] += 1
+        b['weighted_sample_count'] = b.get('weighted_sample_count', b['sample_count'] - 1) + sample_weight
+        b['predicted_distributions'].append(predicted_goal_dist)
+        b['actual_goals'].append(actual_total_goals)
+        b.setdefault('sample_weights', []).append(sample_weight)
+        self._update_calibration_factors(bucket_key)
+
     def record_result(self, league: str, total_line: float, 
                       predicted_goal_dist: Dict[int, float],
                       actual_total_goals: int,
@@ -90,15 +119,7 @@ class GoalCountCalibrator:
                       asian: float = 0.0,
                       sample_weight: float = 1.0):
         """
-        记录赛后结果
-        
-        参数：
-            league: 联赛名称
-            total_line: 大小球盘口线
-            predicted_goal_dist: 预测的进球数分布
-            actual_total_goals: 实际总进球数
-            expected_total_goals: 模型期望总进球数
-            asian: 亚盘让球
+        记录赛后结果（精确 4 维分桶 + 粗粒度回退桶，提高校准覆盖率）
         """
         try:
             sample_weight = max(0.0, min(1.0, float(sample_weight)))
@@ -107,34 +128,19 @@ class GoalCountCalibrator:
         if sample_weight <= 0:
             return
 
+        # 精确 4 维分桶
         bucket_key = self._get_bucket_key(league, total_line, asian, expected_total_goals)
-        
-        if bucket_key not in self.db:
-            self.db[bucket_key] = {
-                'league': league,
-                'total_line': round(total_line * 4) / 4,
-                'asian_bucket': round(asian * 2) / 2,
-                'expected_total_bucket': round(expected_total_goals * 2) / 2,
-                'sample_count': 0,
-                'weighted_sample_count': 0.0,
-                'predicted_distributions': [],  # 存储历史预测分布用于分析
-                'actual_goals': [],             # 存储实际进球数
-                'sample_weights': [],
-                'calibration_factors': {},      # 预计算的校准因子
-            }
-        
-        # 添加记录
-        self.db[bucket_key]['sample_count'] += 1
-        self.db[bucket_key]['weighted_sample_count'] = self.db[bucket_key].get(
-            'weighted_sample_count',
-            self.db[bucket_key]['sample_count'] - 1,
-        ) + sample_weight
-        self.db[bucket_key]['predicted_distributions'].append(predicted_goal_dist)
-        self.db[bucket_key]['actual_goals'].append(actual_total_goals)
-        self.db[bucket_key].setdefault('sample_weights', []).append(sample_weight)
-        
-        # 更新校准因子
-        self._update_calibration_factors(bucket_key)
+        self._update_bucket(bucket_key, league, total_line, asian, expected_total_goals,
+                            predicted_goal_dist, actual_total_goals, sample_weight)
+
+        # 粗粒度回退桶：联赛 × 大小球线、纯联赛（历史样本少时仍能校准）
+        bucketed_line = round(total_line * 4) / 4
+        coarse_league_line = f"coarse|{league}_{bucketed_line:.2f}"
+        coarse_league_only = f"coarse|{league}"
+        self._update_bucket(coarse_league_line, league, bucketed_line, None, bucketed_line,
+                            predicted_goal_dist, actual_total_goals, sample_weight)
+        self._update_bucket(coarse_league_only, league, None, None, None,
+                            predicted_goal_dist, actual_total_goals, sample_weight)
     
     def _update_calibration_factors(self, bucket_key: str):
         """
@@ -195,27 +201,42 @@ class GoalCountCalibrator:
         bucket['calibration_factors'] = calibration_factors
     
     def get_calibration_factors(self, league: str, total_line: float,
-                                expected_total: float, asian: float = 0.0) -> Dict[int, float]:
+                                expected_total: float, asian: float = 0.0,
+                                min_samples: int = 10) -> Dict[int, float]:
         """
-        获取分桶的校准因子
-        
-        参数：
-            league: 联赛名称
-            total_line: 大小球盘口线
-            expected_total: 模型预测总进球数
-            asian: 亚盘让球
+        获取分桶的校准因子（精确桶 → 联赛×大小球线 → 纯联赛 粗粒度回退）
         
         返回：
-            校准因子字典 {进球数: 校准因子}
+            校准因子字典 {进球数: 校准因子}；无可用分桶返回 {}
         """
-        bucket_key = self._get_bucket_key(league, total_line, asian, expected_total)
-        
-        if bucket_key in self.db:
-            factors = self.db[bucket_key].get('calibration_factors', {})
-            if factors and self.db[bucket_key].get('weighted_sample_count', self.db[bucket_key].get('sample_count', 0)) >= 10:
-                return factors
-        
-        # 如果没有匹配的分桶或样本不足，返回空字典（不校准）
+        def _ok(key):
+            if key not in self.db:
+                return None
+            b = self.db[key]
+            if not b.get('calibration_factors'):
+                return None
+            n = b.get('weighted_sample_count', b.get('sample_count', 0))
+            return b['calibration_factors'] if n >= min_samples else None
+
+        # 1) 精确 4 维分桶
+        full = self._get_bucket_key(league, total_line, asian, expected_total)
+        f = _ok(full)
+        if f:
+            return f
+
+        # 2) 回退：联赛 × 大小球线
+        bucketed_line = round(total_line * 4) / 4
+        cl = f"coarse|{league}_{bucketed_line:.2f}"
+        f = _ok(cl)
+        if f:
+            return f
+
+        # 3) 回退：纯联赛
+        co = f"coarse|{league}"
+        f = _ok(co)
+        if f:
+            return f
+
         return {}
     
     def calibrate_goal_dist(self, league: str, total_line: float,
@@ -237,7 +258,7 @@ class GoalCountCalibrator:
         返回：
             校准后的进球数分布
         """
-        factors = self.get_calibration_factors(league, total_line, expected_total, asian)
+        factors = self.get_calibration_factors(league, total_line, expected_total, asian, min_samples=min_samples)
         
         if not factors:
             # 没有校准因子，返回原始分布
@@ -271,6 +292,8 @@ class GoalCountCalibrator:
         """
         stats = []
         for bucket_key, bucket in self.db.items():
+            if bucket_key.startswith('coarse|'):
+                continue
             if league and bucket.get('league') != league:
                 continue
             
@@ -300,6 +323,8 @@ class GoalCountCalibrator:
         results = []
         
         for bucket_key, bucket in self.db.items():
+            if bucket_key.startswith('coarse|'):
+                continue
             if league and bucket.get('league') != league:
                 continue
             
