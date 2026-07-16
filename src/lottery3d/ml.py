@@ -1,26 +1,35 @@
-# 福彩 3D 预测器 V6.0 - 多模型集成版（CatBoost/XGBoost/LightGBM + 特征选择 + 动态权重）
+# 福彩 3D 预测器 V7.0 - 多模型集成版（CatBoost/XGBoost/LightGBM + 增强特征 + 分层采样 + early stopping）
 # Python 3.10+
 """
-基于多模型集成的福彩 3D 预测系统
+基于多模型集成的福彩 3D 预测系统（V7.0 增强版）
 
-主要改进：
-1. 支持 CatBoost/XGBoost/LightGBM 多模型自动选择
-2. 特征选择（互信息 + 方差过滤）
-3. 动态权重集成（根据模型表现自动调整权重）
-4. 概率校准
+主要改进（v7 vs v6）：
+1. 更深的模型架构（depth 2→4, iterations 30→100），捕获复杂非线性关系
+2. Early stopping 防止过拟合
+3. 二阶马尔可夫转移特征（捕获更长程的模式依赖）
+4. 分层负采样（按和值分组，确保负例分布均匀）
+5. 滚动窗口趋势特征（和值/跨度趋势、数字间隔统计）
+6. 数字冷热等级特征
+7. 形态连续趋势特征
+8. 更大的训练窗口（120→200期）
 
-特征工程：
-  - 每个数字的热度得分（3 个数字的各自热度）
+特征工程（54维 vs 原36维）：
+  - 每个数字的热度得分（3个数字的各自热度）
   - 每个位置的热度得分
-  - 每个位置的马尔可夫转移概率
+  - 每个位置的一阶+二阶马尔可夫转移概率
   - 数字的遗漏值
-  - 和值、跨度、奇偶比、大小比等组合特征
-  - 与上期号码的相似度（相同位置相同个数、任意位置相同个数）
+  - 数字间隔统计（期望回补间隔、出现次数）
+  - 数字冷热等级
+  - 和值、跨度、和值偏离度、跨度偏离度
+  - 奇偶比、大小比、012路匹配度等组合特征
+  - 与上期/上两期号码的相似度
+  - 形态趋势特征（连续次数、切换标记）
 
 训练策略：
   - 正例：历史每一期的开奖号码
-  - 负例：每期随机抽取 30 个未开出的号码
-  - 时序验证：前 80% 期训练，后 20% 期验证
+  - 负例：每期分层抽取 100 个未开出的号码
+  - 时序验证：前 80% 期训练，后 20% 期验证（按期切分）
+  - Early stopping 防止过拟合
   - 多模型集成：CatBoost > XGBoost > LightGBM > 纯 Python
 
 预测：
@@ -78,21 +87,21 @@ if hasattr(sys.stdout, "reconfigure"):
 
 URL = "https://www.8300.cn/kjhhis/3/2000.html"  # 与规则模型统一拉取约 2000 期历史
 
-# 模型参数
-BACKTEST_TRIALS = 40  # 临时降低回测期数，适配当前200期数据（最低需要160期）
+# 模型参数（v7优化版：更深模型、更大窗口、更丰富特征）
+BACKTEST_TRIALS = 60  # 增加回测期数，更稳定评估模型表现
 TRAIN_RATIO = 0.8  # 时序划分比例
-NEGATIVE_SAMPLES_PER_PERIOD = 80  # 每期负例采样数（增加覆盖，降低随机负样本偏差）
+NEGATIVE_SAMPLES_PER_PERIOD = 100  # 每期负例采样数（增加覆盖，分层采样降低偏差）
 TOP_K = 15  # 推荐注数
-FEATURE_SUBSET_RATIO = 0.8  # 特征选择保留比例
-MIN_VARIANCE = 0.001  # 方差过滤阈值
-TRAINING_WINDOW = 120  # 滚动训练样本窗口（期数），临时降低以适配小数据量
-FEATURE_HISTORY_WINDOW = 90  # 特征工程历史窗口（训练/回测/实盘统一）
+FEATURE_SUBSET_RATIO = 0.85  # 特征选择保留比例（略提高，保留更多信号）
+MIN_VARIANCE = 0.0005  # 方差过滤阈值（放宽，保留弱信号特征）
+TRAINING_WINDOW = 200  # 滚动训练样本窗口（增加至200期，捕获更长周期模式）
+FEATURE_HISTORY_WINDOW = 100  # 特征工程历史窗口（增加至100期）
 
-# 时间衰减训练参数
+# 时间衰减训练参数（更激进的新近期权重）
 TIME_DECAY_RECENT = 30  # 最近 30 期
-TIME_DECAY_RECENT_WEIGHT = 1.5  # 最近 30 期权重
+TIME_DECAY_RECENT_WEIGHT = 2.0  # 最近 30 期权重（提升至2.0，更重视近期模式）
 TIME_DECAY_MID = 60  # 最近 60 期
-TIME_DECAY_MID_WEIGHT = 1.2  # 最近 60 期权重
+TIME_DECAY_MID_WEIGHT = 1.4  # 最近 60 期权重
 TIME_DECAY_OLD_WEIGHT = 1.0  # 历史数据权重
 
 
@@ -213,14 +222,26 @@ def digit_overlap_count(triple, last_draw):
     return len(set(triple) & set(last_draw))
 
 
+def classify_form(triple):
+    """分类号码形态：zu6（组六/3个不同）、zu3（组三/2个相同）、baozi（豹子/3个相同）"""
+    unique = len(set(triple))
+    if unique == 3:
+        return "zu6"
+    elif unique == 2:
+        return "zu3"
+    else:
+        return "baozi"
+
+
 class FeatureEngineer:
     """特征工程类"""
     
-    def __init__(self, numbers, window=90):
+    def __init__(self, numbers, window=100):
         self.numbers = numbers
         self.window = window
         self.recent = numbers[-window:] if len(numbers) > window else list(numbers)
         self.last_draw = numbers[-1] if numbers else None
+        self.last_two = numbers[-2] if len(numbers) >= 2 else None
         
         # 预计算统计量
         self._precompute()
@@ -241,11 +262,20 @@ class FeatureEngineer:
             self.freq_pos.append(freq)
             self.total_pos.append(sum(freq.values()) or 1.0)
         
-        # 马尔可夫转移
+        # 马尔可夫转移（一阶 + 二阶）
         self.markov_trans = []
+        self.markov2_trans = []
         for pos in range(3):
             trans = build_markov(self.numbers, pos)
             self.markov_trans.append(trans)
+            if len(self.numbers) >= 3:
+                trans2 = defaultdict(Counter)
+                for i in range(len(self.numbers) - 2):
+                    a, b, c = self.numbers[i][pos], self.numbers[i + 1][pos], self.numbers[i + 2][pos]
+                    trans2[(a, b)][c] += 1
+                self.markov2_trans.append(trans2)
+            else:
+                self.markov2_trans.append(defaultdict(Counter))
         
         # 遗漏值
         self.miss_global = {d: miss_value(self.numbers, d) for d in range(10)}
@@ -254,71 +284,180 @@ class FeatureEngineer:
             for pos in range(3)
         ]
         
+        # 最近N期数字出现间隔统计
+        self.interval_stats = {}
+        for d in range(10):
+            intervals = []
+            last_seen = None
+            for i, n in enumerate(self.recent):
+                if d in n:
+                    if last_seen is not None:
+                        intervals.append(i - last_seen)
+                    last_seen = i
+            if intervals:
+                self.interval_stats[d] = {
+                    "mean": sum(intervals) / len(intervals),
+                    "min": min(intervals),
+                    "max": max(intervals),
+                    "count": len(intervals),
+                }
+            else:
+                self.interval_stats[d] = {"mean": len(self.recent), "min": len(self.recent), "max": len(self.recent), "count": 0}
+        
         # 形态统计
         self.oe_freq = Counter()
         self.bs_freq = Counter()
+        self.forms = []  # 形态序列
+        self.form_streaks = []  # 连续出现次数
+        current_form = None
+        current_streak = 0
         for n in self.recent:
             self.oe_freq[odd_even_key(n)] += 1
             self.bs_freq[big_small_key(n)] += 1
+            f = classify_form(n)
+            self.forms.append(f)
+            if f == current_form:
+                current_streak += 1
+            else:
+                if current_form:
+                    self.form_streaks.append((current_form, current_streak))
+                current_form = f
+                current_streak = 1
+        if current_form:
+            self.form_streaks.append((current_form, current_streak))
+        
+        # 连号频率
+        self.consec_count = sum(1 for n in self.recent if has_consecutive_digits(*n))
+        self.consec_rate = self.consec_count / len(self.recent) if self.recent else 0.0
         
         # 和值跨度统计
         self.sums = [sum(n) for n in self.recent]
         self.spans = [max(n) - min(n) for n in self.recent]
         self.sum_freq = Counter(self.sums)
         self.span_freq = Counter(self.spans)
+        
+        # 和值趋势统计（最近20期的移动平均和标准差）
+        if len(self.sums) >= 20:
+            recent_sums = self.sums[-20:]
+            self.sum_mean_20 = sum(recent_sums) / 20
+            self.sum_std_20 = (sum((s - self.sum_mean_20) ** 2 for s in recent_sums) / 20) ** 0.5
+            self.sum_trend = sum(
+                (i - 9.5) * (recent_sums[i] - self.sum_mean_20) for i in range(20)
+            ) / sum((i - 9.5) ** 2 for i in range(20)) if self.sum_std_20 > 0 else 0.0
+        else:
+            self.sum_mean_20 = sum(self.sums) / len(self.sums) if self.sums else 13.5
+            self.sum_std_20 = 1.0
+            self.sum_trend = 0.0
+        
+        # 跨度趋势
+        if len(self.spans) >= 20:
+            recent_spans = self.spans[-20:]
+            self.span_mean_20 = sum(recent_spans) / 20
+            self.span_std_20 = (sum((s - self.span_mean_20) ** 2 for s in recent_spans) / 20) ** 0.5
+        else:
+            self.span_mean_20 = sum(self.spans) / len(self.spans) if self.spans else 4.5
+            self.span_std_20 = 1.0
+        
+        # 数字冷热等级（基于近期出现频率）
+        total_appearances = sum(self.freq_global.values()) or 1
+        avg_appearance = total_appearances / 10
+        self.digit_tier = {}
+        for d in range(10):
+            f = self.freq_global.get(d, 0)
+            if f >= avg_appearance * 1.3:
+                self.digit_tier[d] = 2  # 热号
+            elif f >= avg_appearance * 0.7:
+                self.digit_tier[d] = 1  # 温号
+            else:
+                self.digit_tier[d] = 0  # 冷号
+        
+        # 012路频率统计
+        self.road_freq = Counter()
+        for n in self.recent:
+            for d in n:
+                self.road_freq[d % 3] += 1
+        self.road_total = sum(self.road_freq.values()) or 1
     
     def build_features(self, a, b, c):
-        """为单个直选组合 (a,b,c) 构造特征向量"""
+        """为单个直选组合 (a,b,c) 构造特征向量（v7增强版：36维→54维）"""
         features = []
         triple = (a, b, c)
         
-        # 1. 每个数字的全局热度得分（3 个特征）
+        # 1. 每个数字的全局热度得分（3个特征）
         for d in triple:
             features.append(self.freq_global.get(d, 0) / self.total_global)
         
-        # 2. 每个位置的热度得分（3 个特征）
+        # 2. 每个位置的热度得分（3个特征）
         for pos, d in enumerate(triple):
             features.append(self.freq_pos[pos].get(d, 0) / self.total_pos[pos])
         
-        # 3. 每个位置的马尔可夫转移概率（3 个特征）
+        # 3. 每个位置的一阶马尔可夫转移概率（3个特征）
         for pos, d in enumerate(triple):
             prev_d = self.last_draw[pos] if self.last_draw else 0
             trans = self.markov_trans[pos].get(prev_d, Counter())
             prob = markov_prob_smoothed(trans, range(10)).get(d, 0.1)
             features.append(prob)
         
-        # 4. 每个数字的遗漏值（3 个特征）
+        # 4. 每个位置的二阶马尔可夫转移概率（3个特征）★ 新增
+        for pos, d in enumerate(triple):
+            if self.last_two and self.last_draw:
+                key = (self.last_two[pos], self.last_draw[pos])
+                trans2 = self.markov2_trans[pos].get(key, Counter())
+                prob2 = markov_prob_smoothed(trans2, range(10)).get(d, 0.1)
+            else:
+                prob2 = 0.1
+            features.append(prob2)
+        
+        # 5. 每个数字的遗漏值（3个特征）
         for d in triple:
             features.append(self.miss_global.get(d, 0))
         
-        # 5. 每个位置的遗漏值（3 个特征）
+        # 6. 每个位置的遗漏值（3个特征）
         for pos, d in enumerate(triple):
             features.append(self.miss_pos[pos].get(d, 0))
         
-        # 6. 和值特征（2 个特征）
+        # 7. 数字间隔统计（每个数字3个特征：均值间隔、最小间隔、出现次数）★ 新增
+        for d in triple:
+            stats = self.interval_stats.get(d, {"mean": 100, "min": 100, "max": 100, "count": 0})
+            features.append(max(0, stats["mean"] - self.miss_global.get(d, 0)))  # 期望回补间隔
+            features.append(stats["count"])  # 窗口内出现次数
+        
+        # 8. 数字冷热等级（3个特征）★ 新增
+        for d in triple:
+            features.append(self.digit_tier.get(d, 1))
+        
+        # 9. 和值特征（2个特征）
         s = a + b + c
         features.append(s)  # 和值
         features.append(self.sum_freq.get(s, 0))  # 和值频次
         
-        # 7. 跨度特征（2 个特征）
+        # 10. 和值偏离度（和值与近期趋势的偏离）★ 新增
+        sum_deviation = abs(s - self.sum_mean_20) / max(self.sum_std_20, 1.0)
+        features.append(sum_deviation)
+        
+        # 11. 跨度特征（2个特征）
         span = max(a, b, c) - min(a, b, c)
         features.append(span)  # 跨度
         features.append(self.span_freq.get(span, 0))  # 跨度频次
         
-        # 8. 奇偶比（2 个特征）
+        # 12. 跨度偏离度 ★ 新增
+        span_deviation = abs(span - self.span_mean_20) / max(self.span_std_20, 1.0)
+        features.append(span_deviation)
+        
+        # 13. 奇偶比（2个特征）
         oe = odd_even_key(triple)
         features.append(oe[0])  # 奇数个数
         features.append(self.oe_freq.get(oe, 0))  # 奇偶比频次
         
-        # 9. 大小比（2 个特征）
+        # 14. 大小比（2个特征）
         bs = big_small_key(triple)
         features.append(bs[0])  # 大数个数
         features.append(self.bs_freq.get(bs, 0))  # 大小比频次
         
-        # 10. 连号特征（1 个特征）
+        # 15. 连号特征（1个特征）
         features.append(1 if has_consecutive_digits(a, b, c) else 0)
         
-        # 11. 与上期的相似度（3 个特征）
+        # 16. 与上期的相似度（3个特征）
         if self.last_draw:
             features.append(position_repeat_count(triple, self.last_draw))  # 同位重复个数
             features.append(digit_overlap_count(triple, self.last_draw))  # 集合交集大小
@@ -330,12 +469,22 @@ class FeatureEngineer:
         else:
             features.extend([0, 0, 0])
         
-        # 12. 012 路特征（2 个特征）
+        # 17. 与上两期的关系 ★ 新增
+        if self.last_two:
+            features.append(digit_overlap_count(triple, self.last_two))
+        else:
+            features.append(0)
+        
+        # 18. 012 路特征（2个特征）
         roads = [road(d) for d in triple]
         features.append(sum(roads))  # 012 路和
         features.append(max(Counter(roads).values()))  # 最集中路数
         
-        # 13. 邻号特征（1 个特征）
+        # 19. 012路匹配度（与近期路数分布的匹配度）★ 新增
+        road_match = sum(self.road_freq.get(r % 3, 0) / self.road_total for r in triple) / 3
+        features.append(road_match)
+        
+        # 20. 邻号特征（1个特征）
         if self.last_draw:
             nb = set()
             for d in self.last_draw:
@@ -344,16 +493,30 @@ class FeatureEngineer:
         else:
             features.append(0)
         
-        # 14. 豹子/组三/组六特征（2 个特征）
+        # 21. 豹子/组三/组六特征（2个特征）
         unique_count = len(set(triple))
         features.append(1 if unique_count == 1 else 0)  # 豹子
         features.append(1 if unique_count == 2 else 0)  # 组三
         
-        # 15. 质数个数（1 个特征）
+        # 22. 形态匹配度（与当前形态趋势的匹配）★ 新增
+        if self.forms:
+            last_form = self.forms[-1]
+            current_form = "zu6" if unique_count == 3 else ("zu3" if unique_count == 2 else "baozi")
+            # 最近形态的连续次数
+            if self.form_streaks:
+                last_streak_form, last_streak_len = self.form_streaks[-1]
+                features.append(last_streak_len)  # 当前形态连续次数
+                features.append(1 if current_form != last_streak_form else 0)  # 形态是否切换
+            else:
+                features.extend([0, 0])
+        else:
+            features.extend([0, 0])
+        
+        # 23. 质数个数（1个特征）
         primes = {2, 3, 5, 7}
         features.append(sum(1 for d in triple if d in primes))
         
-        # 16. 大中小分布（3 个特征）
+        # 24. 大中小分布（3个特征）
         for d in triple:
             if d <= 2:
                 features.append(1)
@@ -365,7 +528,7 @@ class FeatureEngineer:
         return features
     
     def get_feature_names(self):
-        """返回特征名称列表"""
+        """返回特征名称列表（v7增强版：54维）"""
         names = []
         
         # 1-3. 数字全局热度
@@ -376,49 +539,77 @@ class FeatureEngineer:
         for i in range(3):
             names.append(f"pos_{i}_freq")
         
-        # 7-9. 马尔可夫概率
+        # 7-9. 一阶马尔可夫概率
         for i in range(3):
-            names.append(f"pos_{i}_markov")
+            names.append(f"pos_{i}_markov1")
         
-        # 10-12. 全局遗漏
+        # 10-12. 二阶马尔可夫概率
+        for i in range(3):
+            names.append(f"pos_{i}_markov2")
+        
+        # 13-15. 全局遗漏
         for i in range(3):
             names.append(f"digit_{i}_miss_global")
         
-        # 13-15. 分位遗漏
+        # 16-18. 分位遗漏
         for i in range(3):
             names.append(f"pos_{i}_miss")
         
-        # 16-17. 和值
+        # 19-24. 数字间隔统计
+        for i in range(3):
+            names.append(f"digit_{i}_exp_interval")
+            names.append(f"digit_{i}_appear_count")
+        
+        # 25-27. 数字冷热等级
+        for i in range(3):
+            names.append(f"digit_{i}_tier")
+        
+        # 28-29. 和值
         names.extend(["sum", "sum_freq"])
         
-        # 18-19. 跨度
+        # 30. 和值偏离度
+        names.append("sum_deviation")
+        
+        # 31-32. 跨度
         names.extend(["span", "span_freq"])
         
-        # 20-21. 奇偶
+        # 33. 跨度偏离度
+        names.append("span_deviation")
+        
+        # 34-35. 奇偶
         names.extend(["odd_count", "oe_freq"])
         
-        # 22-23. 大小
+        # 36-37. 大小
         names.extend(["big_count", "bs_freq"])
         
-        # 24. 连号
+        # 38. 连号
         names.append("has_consecutive")
         
-        # 25-27. 上期相似度
+        # 39-41. 上期相似度
         names.extend(["pos_repeat", "digit_overlap", "repeat_count"])
         
-        # 28-29. 012 路
+        # 42. 与上两期交集
+        names.append("overlap_last2")
+        
+        # 43-44. 012 路
         names.extend(["road_sum", "road_max"])
         
-        # 30. 邻号
+        # 45. 012路匹配度
+        names.append("road_match")
+        
+        # 46. 邻号
         names.append("neighbor_overlap")
         
-        # 31-32. 形态
+        # 47-48. 形态
         names.extend(["is_baozi", "is_zu3"])
         
-        # 33. 质数
+        # 49-50. 形态趋势
+        names.extend(["form_streak", "form_switch"])
+        
+        # 51. 质数
         names.append("prime_count")
         
-        # 34-36. 大中小
+        # 52-54. 大中小
         for i in range(3):
             names.append(f"digit_{i}_size_cat")
         
@@ -426,15 +617,16 @@ class FeatureEngineer:
 
 
 class SimpleDecisionTree:
-    """简易决策树（用于分类）"""
+    """简易决策树（用于分类，优化版：分位数分裂加速）"""
     
-    def __init__(self, max_depth=4, min_samples_split=10, feature_subset_ratio=1.0, rng=None):
+    def __init__(self, max_depth=4, min_samples_split=10, feature_subset_ratio=1.0, rng=None, max_splits_per_feature=20):
         self.max_depth = max_depth
         self.min_samples_split = min_samples_split
         self.feature_subset_ratio = feature_subset_ratio
         self.rng = rng if rng else random.Random(42)
         self.tree = None
         self.feature_indices = None
+        self.max_splits_per_feature = max_splits_per_feature  # 每个特征最多评估的分裂点数量
     
     def _gini(self, y):
         """计算基尼不纯度"""
@@ -445,7 +637,7 @@ class SimpleDecisionTree:
         return 1 - p0**2 - p1**2
     
     def _best_split(self, X, y, feature_indices):
-        """寻找最佳分裂点"""
+        """寻找最佳分裂点（分位数加速版）"""
         best_gain = -1
         best_feature = None
         best_threshold = None
@@ -454,13 +646,19 @@ class SimpleDecisionTree:
         n = len(y)
         
         for feature_idx in feature_indices:
-            values = sorted(set(X[i][feature_idx] for i in range(len(X))))
+            values = [X[i][feature_idx] for i in range(n)]
+            sorted_indices = sorted(range(n), key=lambda i: values[i])
             
-            for i in range(len(values) - 1):
-                threshold = (values[i] + values[i + 1]) / 2
+            # 使用分位数采样式分裂点（大幅加速）
+            step = max(1, n // (self.max_splits_per_feature + 1))
+            split_indices = list(range(step, n - 1, step))
+            
+            for si in split_indices:
+                threshold = (values[sorted_indices[si]] + values[sorted_indices[si + 1]]) / 2
                 
-                left_y = [y[j] for j in range(n) if X[j][feature_idx] <= threshold]
-                right_y = [y[j] for j in range(n) if X[j][feature_idx] > threshold]
+                # 在已排序数组中切分
+                left_y = [y[sorted_indices[j]] for j in range(si + 1)]
+                right_y = [y[sorted_indices[j]] for j in range(si + 1, n)]
                 
                 if len(left_y) == 0 or len(right_y) == 0:
                     continue
@@ -535,13 +733,14 @@ class SimpleDecisionTree:
 
 
 class SimpleRandomForest:
-    """简易随机森林（多棵树投票）"""
+    """简易随机森林（多棵树投票，优化版）"""
     
-    def __init__(self, n_trees=50, max_depth=4, min_samples_split=10, feature_subset_ratio=0.6, rng=None):
+    def __init__(self, n_trees=50, max_depth=4, min_samples_split=10, feature_subset_ratio=0.6, max_splits_per_feature=20, rng=None):
         self.n_trees = n_trees
         self.max_depth = max_depth
         self.min_samples_split = min_samples_split
         self.feature_subset_ratio = feature_subset_ratio
+        self.max_splits_per_feature = max_splits_per_feature
         self.rng = rng if rng else random.Random(42)
         self.trees = []
     
@@ -561,6 +760,7 @@ class SimpleRandomForest:
                 max_depth=self.max_depth,
                 min_samples_split=self.min_samples_split,
                 feature_subset_ratio=self.feature_subset_ratio,
+                max_splits_per_feature=self.max_splits_per_feature,
                 rng=self.rng
             )
             tree.fit(X_boot, y_boot)
@@ -584,13 +784,15 @@ class SimpleRandomForest:
 
 def build_training_data(numbers, neg_samples=NEGATIVE_SAMPLES_PER_PERIOD, rng=None):
     """
-    构造训练数据（优化版 - 减少采样数）
+    构造训练数据（v7优化版 - 分层负采样 + 时间衰减）
     正例：历史每一期的开奖号码
-    负例：每期随机抽取 neg_samples 个未开出的号码
+    负例：每期分层抽取 neg_samples 个未开出的号码
+    
+    分层策略：将1000个组合按和值分组，每层按比例采样，确保负例分布均匀
     
     时间衰减：
-    - 最近 30 期：权重 1.5
-    - 最近 60 期：权重 1.2
+    - 最近 30 期：权重 2.0
+    - 最近 60 期：权重 1.4
     - 历史数据：权重 1.0
     
     返回：
@@ -605,18 +807,15 @@ def build_training_data(numbers, neg_samples=NEGATIVE_SAMPLES_PER_PERIOD, rng=No
     X = []
     y = []
     sample_weights = []
-    group_ids = []  # 用于标记每个样本属于哪一期
+    group_ids = []
     
-    # 需要足够的历史数据来构建特征
     min_history = 60
     if len(numbers) <= min_history:
         return None, None, None, None
     
-    # 使用滑动窗口，只使用最近的数据构建特征
     window_size = FEATURE_HISTORY_WINDOW
     
     for i in range(min_history, len(numbers)):
-        # 使用滑动窗口构建特征
         start = max(0, i - window_size)
         train_numbers = numbers[start:i]
         actual = numbers[i]
@@ -637,24 +836,68 @@ def build_training_data(numbers, neg_samples=NEGATIVE_SAMPLES_PER_PERIOD, rng=No
         X.append(features)
         y.append(1)
         sample_weights.append(weight)
-        group_ids.append(i)  # 标记属于第 i 期
+        group_ids.append(i)
         
-        # 负例：neg_samples 个（排除已开出的号码）
+        # 负例：分层采样（按和值分组，确保分布均匀）
+        actual_sum = sum(actual)
         neg_count = 0
-        tried = set()
-        for _ in range(neg_samples * 2):
-            if neg_count >= neg_samples:
+        
+        # 预计算所有可能负例并按和值分组
+        sum_groups = {s: [] for s in range(28)}  # 和值范围 0-27
+        actual_tuple = tuple(actual) if not isinstance(actual, tuple) else actual
+        tried = {actual_tuple}
+        for a in range(10):
+            for b in range(10):
+                for c in range(10):
+                    combo = (a, b, c)
+                    if combo in tried:
+                        continue
+                    s = a + b + c
+                    sum_groups[s].append(combo)
+        
+        # 计算每层采样配额（按该和值在全部组合中的比例分配）
+        total_combos = 1000 - 1  # 排除实际开奖号
+        sum_group_sizes = {s: len(combos) for s, combos in sum_groups.items()}
+        
+        # 先确保每个有组合的和值组至少采样1个（如果配额允许）
+        valid_groups = [s for s, combos in sum_groups.items() if combos]
+        samples_per_group = {}
+        remaining = neg_samples
+        for s in valid_groups:
+            quota = max(1, int(neg_samples * sum_group_sizes[s] / total_combos))
+            actual_quota = min(quota, sum_group_sizes[s], remaining)
+            samples_per_group[s] = actual_quota
+            remaining -= actual_quota
+        
+        # 随机打乱和值组列表，追加剩余配额
+        shuffled_groups = list(valid_groups)
+        rng.shuffle(shuffled_groups)
+        for s in shuffled_groups:
+            if remaining <= 0:
                 break
-            combo = tuple(rng.randint(0, 9) for _ in range(3))
-            if combo in tried or combo == actual:
+            available = sum_group_sizes[s] - samples_per_group.get(s, 0)
+            extra = min(remaining, available)
+            samples_per_group[s] = samples_per_group.get(s, 0) + extra
+            remaining -= extra
+        
+        # 从每组随机采样
+        for s, quota in samples_per_group.items():
+            if quota <= 0:
                 continue
-            tried.add(combo)
-            features = fe.build_features(*combo)
-            X.append(features)
-            y.append(0)
-            sample_weights.append(weight)
-            group_ids.append(i)  # 负例同样标记为第 i 期
-            neg_count += 1
+            combos = sum_groups[s]
+            rng.shuffle(combos)
+            for combo in combos[:quota]:
+                if neg_count >= neg_samples:
+                    break
+                if combo in tried:
+                    continue
+                tried.add(combo)
+                features = fe.build_features(*combo)
+                X.append(features)
+                y.append(0)
+                sample_weights.append(weight)
+                group_ids.append(i)
+                neg_count += 1
     
     return X, y, sample_weights, group_ids
 
@@ -697,8 +940,8 @@ def select_features(X, y, feature_names, keep_ratio=FEATURE_SUBSET_RATIO):
     return selected_indices, selected_names
 
 
-def train_single_model(X, y, model_name, sample_weight=None):
-    """训练单个模型（支持样本权重）"""
+def train_single_model(X, y, model_name, sample_weight=None, eval_set=None):
+    """训练单个模型（v7增强版：更深的树、更多迭代、early stopping）"""
     y_list = list(y)
     n_neg = sum(1 for yi in y_list if yi == 0)
     n_pos = sum(1 for yi in y_list if yi == 1)
@@ -707,47 +950,75 @@ def train_single_model(X, y, model_name, sample_weight=None):
     try:
         if model_name == "catboost" and HAS_CATBOOST:
             model = CatBoostClassifier(
-                iterations=30,     # 保守迭代次数，减少过拟合
-                depth=2,           # 更浅的树，减少过拟合
-                learning_rate=0.05, # 更小的学习率，更稳定
-                l2_leaf_reg=20,    # 更强的正则化
-                random_strength=2,  # 增加随机性防止过拟合
+                iterations=100,    # 更多迭代次数，配合early_stopping
+                depth=4,           # 更深的树，捕获复杂交互
+                learning_rate=0.03, # 更小的学习率，配合更多迭代
+                l2_leaf_reg=15,    # L2正则化
+                random_strength=1.5,
                 scale_pos_weight=scale_pos_weight,
                 random_state=42,
                 verbose=False,
                 task_type="CPU",
-                # 注意：early_stopping_rounds 需要配合 eval_set 使用，当前未传验证集
+                early_stopping_rounds=20,  # early stopping防过拟合
+                # 注：eval_set在外部传入
             )
-            model.fit(X, y, sample_weight=sample_weight)
+            if eval_set is not None:
+                model.fit(X, y, sample_weight=sample_weight, eval_set=eval_set)
+            else:
+                model.fit(X, y, sample_weight=sample_weight)
             return model, "catboost"
         
         elif model_name == "xgboost" and HAS_XGBOOST:
             model = XGBClassifier(
-                n_estimators=30,   # 保守迭代次数
-                max_depth=2,       # 更浅的树
-                learning_rate=0.05, # 更小的学习率
-                reg_lambda=20,     # L2正则化
+                n_estimators=100,  # 更多迭代
+                max_depth=4,       # 更深的树
+                learning_rate=0.03, # 更小的学习率
+                reg_lambda=15,     # L2正则化
+                reg_alpha=5,       # L1正则化
+                subsample=0.8,     # 行采样
+                colsample_bytree=0.8,  # 列采样
                 scale_pos_weight=scale_pos_weight,
                 random_state=42,
-                use_label_encoder=False,
                 eval_metric='logloss',
-                verbosity=0
+                verbosity=0,
+                early_stopping_rounds=20,
             )
-            model.fit(X, y, sample_weight=sample_weight)
+            if eval_set is not None:
+                model.fit(X, y, sample_weight=sample_weight, eval_set=eval_set)
+            else:
+                model.fit(X, y, sample_weight=sample_weight)
             return model, "xgboost"
         
         elif model_name == "lightgbm" and HAS_LIGHTGBM:
+            try:
+                import numpy as np
+                X_arr = np.array(X) if not isinstance(X, np.ndarray) else X
+                y_arr = np.array(y) if not isinstance(y, np.ndarray) else y
+                eval_set_data = None
+                if eval_set is not None:
+                    eval_X = np.array(eval_set[0]) if not isinstance(eval_set[0], np.ndarray) else eval_set[0]
+                    eval_y = np.array(eval_set[1]) if not isinstance(eval_set[1], np.ndarray) else eval_set[1]
+                    eval_set_data = [(eval_X, eval_y)]
+            except Exception:
+                eval_set_data = None
+            
             model = lgb.LGBMClassifier(
-                n_estimators=30,   # 保守迭代次数
-                max_depth=2,       # 更浅的树
-                learning_rate=0.05, # 更小的学习率
-                reg_lambda=20,     # L2正则化
+                n_estimators=100,
+                max_depth=4,
+                learning_rate=0.03,
+                reg_lambda=15,
+                reg_alpha=5,
+                subsample=0.8,
+                colsample_bytree=0.8,
                 scale_pos_weight=scale_pos_weight,
                 random_state=42,
                 verbose=-1,
-                force_col_wise=True
+                force_col_wise=True,
             )
-            model.fit(X, y, sample_weight=sample_weight)
+            if eval_set_data is not None:
+                model.fit(X_arr, y_arr, sample_weight=sample_weight, eval_set=eval_set_data)
+            else:
+                model.fit(X_arr, y_arr, sample_weight=sample_weight)
             return model, "lightgbm"
     except Exception as e:
         log.warning(f"训练 {model_name} 失败: {e}")
@@ -825,10 +1096,15 @@ def train_ensemble(X, y, models_to_try=None, sample_weight=None, group_ids=None)
     X_valid = [[x[i] for i in selected_indices] for x in X_valid_raw] if X_valid_raw else None
     X_full = [[x[i] for i in selected_indices] for x in X]
 
+    # 构建eval_set用于early stopping
+    eval_set = None
+    if X_valid and y_valid:
+        eval_set = (X_valid, y_valid)
+
     model_scores = {}
 
     for model_name in models_to_try:
-        probe, used_name = train_single_model(X_train, y_train, model_name, sample_weight=w_train)
+        probe, used_name = train_single_model(X_train, y_train, model_name, sample_weight=w_train, eval_set=eval_set)
         if not probe:
             continue
         try:
@@ -846,7 +1122,7 @@ def train_ensemble(X, y, models_to_try=None, sample_weight=None, group_ids=None)
 
     trained_models = []
     for model_name in models_to_try:
-        model, used_name = train_single_model(X_full, y, model_name, sample_weight=w_full)
+        model, used_name = train_single_model(X_full, y, model_name, sample_weight=w_full, eval_set=eval_set)
         if model:
             score = model_scores.get(used_name, 0.5)
             trained_models.append((model, used_name, score))
@@ -854,7 +1130,7 @@ def train_ensemble(X, y, models_to_try=None, sample_weight=None, group_ids=None)
 
     if not trained_models:
         log.warning("所有 ML 模型训练失败，使用纯 Python 随机森林")
-        model = SimpleRandomForest(n_trees=20, max_depth=3, min_samples_split=20)
+        model = SimpleRandomForest(n_trees=30, max_depth=4, min_samples_split=15)
         model.fit(X_full, y)
         trained_models.append((model, "random_forest", 0.5))
     
@@ -1044,7 +1320,7 @@ def save_ml_backtest_history(result):
         history = kv_store.load("lottery3d_ml_backtest_history", [])
         record = {
             "base_period": result.get("base_period"),
-            "model_version": "ml-v6",
+            "model_version": "ml-v7",
             "top30_rate": result["top30_rate"],
             "top3_rate": result["top3_rate"],
             "top100_rate": result["top100_rate"],
@@ -1200,7 +1476,7 @@ def print_ml_report(result, top_k=TOP_K):
         return
     
     print("\n" + "=" * 70)
-    print("【福彩 3D ML 预测结果 V6.0 - 多模型集成版】")
+    print("【福彩 3D ML 预测结果 V7.0 - 多模型集成版】")
     print("=" * 70)
     model_type = result.get('model_type', 'unknown')
     model_info = result.get('model_info', '未知模型')
@@ -1239,7 +1515,7 @@ def print_ml_report(result, top_k=TOP_K):
 def main():
     import argparse
     
-    parser = argparse.ArgumentParser(description="福彩 3D 预测器 V6.0 (多模型集成版：CatBoost/XGBoost/LightGBM)")
+    parser = argparse.ArgumentParser(description="福彩 3D 预测器 V7.0 (多模型集成版：CatBoost/XGBoost/LightGBM)")
     parser.add_argument(
         "--backtest",
         action="store_true",
