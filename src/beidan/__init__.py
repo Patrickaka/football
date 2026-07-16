@@ -219,19 +219,54 @@ def predict_scores_by_poisson(home_prob, draw_prob, away_prob, league='', handic
 
 # Dixon-Coles 低比分相关修正系数（文献常用 -0.1~-0.2，回测取 -0.15 最优）
 DC_RHO = -0.15
-# 大小球隐含总进球与联赛先验的融合权重
-OU_TOTAL_BLEND = 0.7
+# 大小球隐含总进球与联赛先验的融合权重（盘口噪声大，联赛均值主导，避免分布过度右移）
+OU_TOTAL_BLEND = 0.4
+# 目标总进球合理区间（公平赛事真实均值约 2.6，峰值 2-3；硬约束避免 4/5/7+ 主导）
+TARGET_TOTAL_MIN = 1.8
+TARGET_TOTAL_MAX = 3.6
+# 盘口趋势因子的软约束区间（防止亚洲/总进球历史因子极端放大）
+FACTOR_MIN = 0.85
+FACTOR_MAX = 1.15
 # 主客 λ 强度分配系数（与比分预测保持一致，原 zjq 的 0.05 过弱）
 STRENGTH_SPLIT = SCORE_SPLIT  # = 0.35
 
 
-def implied_total_from_ou(over_odds, under_odds):
-    """由大小球赔率反推隐含总进球数 λ_total（Poisson 假设）"""
-    if not over_odds or not under_odds:
+def _to_euro_odds(x):
+    """亚洲盘贴水(water)转欧赔。
+
+    okooo/bet365 的大小球盘口常给「贴水」格式（如大球 0.83 / 小球 1.0），
+    其值域约 0.5~1.3，欧赔 = 贴水 + 1.0。若直接当作欧赔用 1/odds 会严重高估。
+    经验阈值 <=1.2 视为贴水，否则视为欧赔。
+    """
+    if x is None:
         return None
     try:
-        po = 1.0 / float(over_odds)
-        pu = 1.0 / float(under_odds)
+        x = float(x)
+    except (ValueError, TypeError):
+        return None
+    if x <= 0:
+        return None
+    if x <= 1.2:
+        return x + 1.0
+    return x
+
+
+def implied_total_from_ou(over_odds, under_odds):
+    """由大小球盘口反推隐含总进球数 λ_total（Poisson 假设）。
+
+    兼容两种格式：
+      - 欧赔格式（如 1.85 / 1.95）：直接用 1/odds
+      - 亚洲盘贴水格式（如 0.83 / 1.0，okooo/bet365 常见）：先 _to_euro_odds 转换
+    """
+    if not over_odds or not under_odds:
+        return None
+    oe = _to_euro_odds(over_odds)
+    ue = _to_euro_odds(under_odds)
+    if not oe or not ue:
+        return None
+    try:
+        po = 1.0 / oe
+        pu = 1.0 / ue
     except (ValueError, TypeError):
         return None
     tot = po + pu
@@ -288,7 +323,13 @@ def aggregate_goals_from_scores(score_dist):
 
 def match_target_total(league='', total_over_odds=None, total_under_odds=None,
                        asian_factor=1.0, goals_factor=1.0):
-    """计算比赛目标总进球：大小球隐含总进球与联赛均值融合，再叠加盘口趋势因子"""
+    """计算比赛目标总进球：大小球隐含总进球与联赛均值融合，再叠加盘口趋势因子。
+
+    关键修正：
+      - 盘口隐含总进球经 _to_euro_odds 正确处理亚洲盘贴水格式
+      - 盘口权重降至 OU_TOTAL_BLEND（联赛均值主导），避免噪声盘口主导
+      - 趋势因子做软约束，目标总进球做硬约束到合理区间
+    """
     league_profile = LEAGUE_PROFILES.get(league, {'avg_goals': 2.6, 'draw_rate': 0.27})
     avg_goals = league_profile['avg_goals']
     ou_total = implied_total_from_ou(total_over_odds, total_under_odds)
@@ -296,7 +337,15 @@ def match_target_total(league='', total_over_odds=None, total_under_odds=None,
         target = OU_TOTAL_BLEND * ou_total + (1 - OU_TOTAL_BLEND) * avg_goals
     else:
         target = avg_goals
-    return target * asian_factor * goals_factor
+    # 盘口趋势因子软约束，防止亚洲/总进球历史极端放大
+    try:
+        asian_factor = max(FACTOR_MIN, min(FACTOR_MAX, float(asian_factor)))
+        goals_factor = max(FACTOR_MIN, min(FACTOR_MAX, float(goals_factor)))
+    except (ValueError, TypeError):
+        asian_factor, goals_factor = 1.0, 1.0
+    target = target * asian_factor * goals_factor
+    # 目标总进球硬约束到合理区间（公平赛事峰值 2-3）
+    return max(TARGET_TOTAL_MIN, min(TARGET_TOTAL_MAX, target))
 
 
 def match_lambdas(home_prob, draw_prob, away_prob, target_total,
