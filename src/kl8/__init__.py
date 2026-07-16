@@ -82,6 +82,15 @@ SELECT_CONFIG = {
 SELECT_TYPES = tuple(sorted(SELECT_CONFIG))
 SELECT_PLAY_KEYS = tuple(f'select_{st}' for st in SELECT_TYPES)
 FUSHI_CONFIG = {
+    'fu_shi_4': {
+        'desc': '选4复式7码',
+        'base_pick': 4,
+        'pool_size': 7,
+        'numbers_field': 'top4_numbers',
+        'scores_field': 'top4_scores',
+        'pool_label': '7个核心号码',
+        'prize_key': 'select_4',
+    },
     'fu_shi_7': {
         'desc': '选5复式7码',
         'base_pick': 5,
@@ -179,6 +188,12 @@ ACTIVE_STRATEGIES = {
         'window_size': 0,
     },
     'select_10': {
+        'strategy_id': '',
+        'feature_weights': {},
+        'model_weights': {},
+        'window_size': 0,
+    },
+    'fu_shi_4': {
         'strategy_id': '',
         'feature_weights': {},
         'model_weights': {},
@@ -677,6 +692,17 @@ def resolve_play_strategy(play_type: str, allow_reference: bool = False) -> Opti
     # v9.2.1: 每个玩法使用不同的默认策略配置（小窗口+多特征组合）
     # v9.3: 加入趋势(trend)、组合共现(pair_cooccurrence)、细粒化位置残差(position_residual_cross)特征
     _REFERENCE_STRATEGIES_BY_PLAY = {
+        'fu_shi_4': {
+            'strategy_id': 'fu_shi_4_ref_trend100_mix_prize_floor',
+            'feature_weights': {'frequency': 0.35, 'gap': 0.20, 'trend': 0.20, 'pair_cooccurrence': 0.15, 'position_residual': 0.075, 'position_residual_cross': 0.075, 'road_residual': 0.0, 'repeat': 0.0, 'odd_even': 0.0, 'big_small': 0.0},
+            'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
+            'window_size': 100,
+            'repeat_direction': 'neutral',
+            'pool_max_last_numbers': 4,
+            'final_selection_mode': 'prize_floor',
+            'prediction_mode': 'reference_unvalidated',
+            'is_validated': False,
+        },
         'select_3': {
             'strategy_id': 'select_3_ref_trend50_prize_floor',
             'feature_weights': {'frequency': 0.40, 'gap': 0.20, 'trend': 0.25, 'pair_cooccurrence': 0.10, 'position_residual': 0.05, 'position_residual_cross': 0.0, 'road_residual': 0.0, 'repeat': 0.0, 'odd_even': 0.0, 'big_small': 0.0},
@@ -705,8 +731,8 @@ def resolve_play_strategy(play_type: str, allow_reference: bool = False) -> Opti
             'repeat_direction': 'neutral',
             'pool_max_last_numbers': 5,
             'final_max_last_numbers': 5,
-            'final_selection_mode': 'high_tier_chase',
-            'target_hits': 4,
+            'final_selection_mode': 'balanced',
+            'target_hits': 3,
             'prediction_mode': 'reference_unvalidated',
             'is_validated': False,
         },
@@ -718,8 +744,8 @@ def resolve_play_strategy(play_type: str, allow_reference: bool = False) -> Opti
             'repeat_direction': 'neutral',
             'pool_max_last_numbers': 6,
             'final_max_last_numbers': 6,
-            'final_selection_mode': 'high_tier_chase',
-            'target_hits': 5,
+            'final_selection_mode': 'balanced',
+            'target_hits': 3,
             'prediction_mode': 'reference_unvalidated',
             'is_validated': False,
         },
@@ -1302,6 +1328,9 @@ def _play_lift(result: Dict, play_type: str) -> float:
 
 def _prize_tier_thresholds(play_type: str) -> List[str]:
     if play_type in FUSHI_CONFIG:
+        base = FUSHI_CONFIG[play_type]['base_pick']
+        if base <= 4:
+            return ['>=2', '>=3']
         return ['>=3'] if FUSHI_CONFIG[play_type]['pool_size'] <= 7 else ['>=4', '>=5']
     pick_n = _parse_play_pick_n(play_type) or 5
     if pick_n <= 4:
@@ -1318,6 +1347,9 @@ def _prize_tier_thresholds(play_type: str) -> List[str]:
 def _hit_rate_priority_thresholds(play_type: str) -> List[str]:
     """Thresholds used to rank candidates for practical hit-rate goals."""
     if play_type in FUSHI_CONFIG:
+        base = FUSHI_CONFIG[play_type]['base_pick']
+        if base <= 4:
+            return ['>=2']
         return ['>=3', '>=4'] if FUSHI_CONFIG[play_type]['pool_size'] <= 7 else ['>=4', '>=5']
     pick_n = _parse_play_pick_n(play_type) or 5
     if pick_n <= 4:
@@ -1399,9 +1431,9 @@ def _play_accuracy_profile(
         for k in range(0, pick_n + 1)
     }
     if pick_n == 5:
-        practical_goal = '选5实战关注>=2，>=3属于明显更高档命中'
+        practical_goal = '选5中奖需中3个（理论概率约9.7%）；中2个不中奖属正常随机波动，请勿误判为预测失准'
     elif pick_n == 6:
-        practical_goal = '选6实战关注>=3，>=4属于明显更高档命中'
+        practical_goal = '选6中奖需中3个（理论概率约16%）；中2个不中奖属正常随机波动'
     else:
         practical_goal = '命中阈值按玩法奖级和回测优先级评估'
 
@@ -2163,6 +2195,7 @@ def load_prize_table() -> Dict:
         'select_9': {'9': 3000000, '8': 100000, '7': 10000, '6': 1000, '5': 100, '4': 5, '3': 0, '2': 0, '1': 0, '0': 0, 'bet': 2},
         'select_10': {'10': 5000000, '9': 200000, '8': 20000, '7': 2000, '6': 200, '5': 10, '4': 0, '3': 0, '2': 0, '1': 0, '0': 0, 'bet': 2},
         'fu_shi_7': {'5': 10000, '4': 500, '3': 30, '2': 5, '1': 0, '0': 0, 'bet_per_combo': 2},
+        'fu_shi_4': {'4': 100, '3': 20, '2': 5, '1': 0, '0': 0, 'bet_per_combo': 2},
         'fu_shi_10_11': {'prize_key': 'select_10', 'base_pick': 10, 'pool_size': 11, 'bet_per_combo': 2},
     }
 

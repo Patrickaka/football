@@ -4976,18 +4976,73 @@ function renderKL8ShapeProfile(profile, numbers = [], compact = false) {
   `).join('')}</div>`;
 }
 
+// 超几何: 80选20, 选 pick 个, 命中所选 >= k 的概率
+function kl8HypergeomPGe(pick, k) {
+  function comb(a, b) {
+    if (b < 0 || b > a) return 0;
+    b = Math.min(b, a - b);
+    let r = 1;
+    for (let i = 0; i < b; i++) r = r * (a - i) / (i + 1);
+    return r;
+  }
+  const N = 80, K = 20;
+  let p = 0;
+  for (let j = k; j <= pick; j++) {
+    p += comb(K, j) * comb(N - K, pick - j) / comb(N, pick);
+  }
+  return p;
+}
+
+// 玩法中奖率 & 易中推荐 面板
+function renderKL8WinRateGuide(r) {
+  const WIN = { 3: 2, 4: 2, 5: 3, 6: 3, 7: 4, 8: 4, 9: 4, 10: 5 };
+  const rows = [];
+  for (const n of [3, 4, 5, 6, 7, 8, 9, 10]) {
+    const exp = n * 0.25;
+    const wr = kl8HypergeomPGe(n, WIN[n]);
+    rows.push({ n, exp, wr, easy: wr >= 0.15 });
+  }
+  rows.sort((a, b) => b.wr - a.wr);
+  const cells = rows.map(o => {
+    const cls = o.easy ? 'good' : 'warn';
+    const tag = o.easy ? '易中' : '难中';
+    return `<div class="kl8-shape-chip ${cls}" style="min-width:108px">
+      <div class="shape-k">选${o.n} <span style="font-size:10px">· ${tag}</span></div>
+      <div class="shape-v">中奖率 ${(o.wr * 100).toFixed(1)}%</div>
+      <div style="font-size:10px;color:var(--muted);margin-top:2px">期望中${o.exp.toFixed(2)}个·需中${WIN[o.n]}个</div>
+    </div>`;
+  }).join('');
+
+  const easy = rows.filter(o => o.easy).map(o => `选${o.n}`).join('、');
+  const hard = rows.filter(o => !o.easy).map(o => `选${o.n}`).join('、');
+
+  return `<div class="card" style="margin-bottom:16px;border:1px solid #4493f8">
+    <div class="section-title" style="font-size:15px;margin-bottom:10px">📊 玩法中奖率 & 易中推荐</div>
+    <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px">${cells}</div>
+    <div style="font-size:13px;line-height:1.8">
+      <div>✅ <b style="color:#2ea043">容易中</b>：${easy}（中2~3个即中奖，单注中奖率 15%~26%）</div>
+      <div>⚠️ <b style="color:#d29922">较难中</b>：${hard}（中奖需中3~5个，单注中奖率仅 6%~10%）</div>
+      <div style="margin-top:6px;color:var(--muted)">💡 你常看到的"最多中2个、不中是常态"，其实是<b>选5/选10 这类大盘玩法</b>的数学常态——它们期望只中 1.25 / 2.5 个，中奖门槛却要中 3 / 5 个。<b>想稳定中2个就中奖，优先玩选4（中2即中奖，概率26%）；想一注中更多，用复式覆盖多注。</b></div>
+    </div>
+  </div>`;
+}
+
 function renderKL8(r) {
   kl8LastData = r;
   const appKL8 = document.getElementById('app-kl8');
   let html = '';
   const selectTypes = [3, 4, 5, 6, 7, 8, 9, 10];
   const fushiTypes = [
-    { key: 'fu_shi_7', label: '选5复式 — 7码复式', field: 'top7_numbers', coreLabel: '7个核心号码' },
-    { key: 'fu_shi_10_11', label: '选10复式 — 11码复式', field: 'top11_numbers', coreLabel: '11个核心号码' },
+    { key: 'fu_shi_4', label: '选4复式 — 7码复式', field: 'top4_numbers', coreLabel: '7个核心号码', basePick: 4 },
+    { key: 'fu_shi_7', label: '选5复式 — 7码复式', field: 'top7_numbers', coreLabel: '7个核心号码', basePick: 5 },
+    { key: 'fu_shi_10_11', label: '选10复式 — 11码复式', field: 'top11_numbers', coreLabel: '11个核心号码', basePick: 10 },
   ];
 
   html += `<div class="section-title">【快乐8数据分析】</div>`;
   html += `<div class="note" style="color:var(--accent2);margin-bottom:12px">⚠ 快乐8开奖具有随机性，以上分析仅为历史统计参考，不构成任何投注建议。请理性对待！</div>`;
+
+  // ── 玩法中奖率 & 易中推荐（优化：直接回答"为何最多中2个"）──
+  html += renderKL8WinRateGuide(r);
 
   // v9.2: 三种状态 — 补数中 / 验证中 / 已验证
   const signalStatus = r.statistics?.signal_status || 'unknown';
@@ -5205,6 +5260,9 @@ function renderKL8(r) {
         }
       }
       html += `</div>`;
+      const kl8WinTh = { 3: 2, 4: 2, 5: 3, 6: 3, 7: 4, 8: 4, 9: 4, 10: 5 };
+      const kl8WR = (kl8HypergeomPGe(st, kl8WinTh[st]) * 100).toFixed(1);
+      html += `<div style="font-size:11px;color:#8b949e;margin:4px 0 2px">中奖门槛: 中${kl8WinTh[st]}个即中奖 · 单注中奖率 <b style="color:${kl8WR >= 15 ? '#2ea043' : '#d29922'}">${kl8WR}%</b> · 期望中${(st * 0.25).toFixed(2)}个</div>`;
       html += renderKL8ShapeProfile(sel.shape_profile, sel.numbers);
       html += renderKL8AccuracyProfile(sel.accuracy_profile);
       if (sel.variants) {
@@ -5238,6 +5296,10 @@ function renderKL8(r) {
     }
     html += `<div class="section-title" style="font-size:14px;margin-bottom:8px">${esc(f.coreLabel)}</div>`;
     html += `<div class="kl8-fushi-top7">`;
+    const fushiBasePick = f.comboPick || f.basePick || (f.key === 'fu_shi_10_11' ? 10 : 5);
+    const fushiWinTh = fushiBasePick <= 4 ? 2 : (fushiBasePick <= 7 ? 3 : 5);
+    const fushiExpWins = (fushi.total_combinations * kl8HypergeomPGe(fushiBasePick, fushiWinTh)).toFixed(1);
+    html += `<div style="font-size:12px;color:#8b949e;margin:6px 0">每注中奖门槛: 中${fushiWinTh}个 · 期望中奖注数 ≈ <b style="color:#2ea043">${fushiExpWins}</b> 注（共 ${fushi.total_combinations} 注）</div>`;
     for (const n of coreNumbers) {
       html += `<span class="kl8-ball highlight-ball" style="width:44px;height:44px;font-size:18px">${String(n).padStart(2,'0')}</span>`;
     }
