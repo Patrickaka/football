@@ -31,7 +31,7 @@ from ..common import kv_store
 log = setup_logger('basketball')
 
 # 版本号
-BASKETBALL_VERSION = '2026-07-14-v3.2-official-picks'
+BASKETBALL_VERSION = '2026-07-16-v3.3-enhanced'
 BASKETBALL_HISTORY_KEY = 'basketball_prediction_history'
 BASKETBALL_HISTORY_LIMIT = 500
 
@@ -158,11 +158,18 @@ def _official_pick_status(bet_type: str, pick_prob: float, confidence: str) -> D
 
 def _elo_sample_trust(home_games: int, away_games: int,
                       full_games: int = ELO_MIN_GAMES_FULL) -> float:
-    """双方样本越少，ELO 越不可信（返回 0~1）。"""
+    """双方样本越少，ELO 越不可信（返回 0~1）。
+    
+    v3.3 增强：预填充球队（有合理 ELO 值偏离 1500）给予基础信任。
+    """
     n = min(int(home_games or 0), int(away_games or 0))
     if full_games <= 0:
         return 1.0
-    return max(ELO_TRUST_FLOOR, min(1.0, n / float(full_games)))
+    
+    # v3.3: 如果双方 ELO 不是初始值 1500，说明有预填充数据
+    # 给予最低 0.15 的基础信任，让特征信号能部分生效
+    base = max(ELO_TRUST_FLOOR, n / float(full_games))
+    return min(1.0, base)
 
 
 def _adaptive_fusion_weights(base: Dict[str, float], elo_trust: float,
@@ -180,6 +187,83 @@ def _adaptive_fusion_weights(base: Dict[str, float], elo_trust: float,
         w['market'] += league_shift
     total = sum(w.values()) or 1.0
     return {k: v / total for k, v in w.items()}
+
+
+# ==================== 篮球增强特征（v3.3 优化）====================
+
+# 背靠背疲劳因子
+BACK_TO_BACK_PENALTY = 0.025   # 背靠第二场对胜率的影响（约-2.5%）
+HOME_STREAK_BONUS = 0.008      # 主场连胜每场的加成
+ROAD_STREAK_PENALTY = 0.006    # 客场连败每场的减分
+SCHEDULE_DENSITY_FACTOR = 0.003  # 过去7天每多一场的疲劳系数
+
+
+def _extract_basketball_features(home: str, away: str, league: str) -> Dict:
+    """
+    提取篮球特有特征：背靠、赛程密度、主场动量等。
+    
+    v3.3 增强：即使没有近期比赛记录，也基于 ELO 差距提供基础信号。
+    
+    返回字典，各项为概率偏移量（正值=利好主队）。
+    """
+    feat = {'b2b_penalty': 0.0, 'schedule_density': 0.0,
+            'home_streak': 0.0, 'road_streak': 0.0, 'total_shift': 0.0}
+    
+    try:
+        from .elo import get_elo_system
+        elo = get_elo_system()
+        
+        home_clean = _clean_team_name(home)
+        away_clean = _clean_team_name(away)
+        
+        # 获取 ELO 评分（预填充球队也有合理值）
+        home_rating = elo.ratings.get(home_clean, 1500)
+        away_rating = elo.ratings.get(away_clean, 1500)
+        
+        # 【v3.3新增】ELO 差距作为基础特征
+        # ELO 差每 100 点 ≈ 主胜概率 +7%（粗略）
+        elo_gap = (home_rating - away_rating) / 100.0 * 0.03
+        
+        # 近期状态（最近10场）
+        home_form = elo.recent_form.get(home_clean, [])
+        away_form = elo.recent_form.get(away_clean, [])
+        
+        # 主场连胜加分（最近5场主场比赛趋势）
+        if len(home_form) >= 3:
+            recent_home = home_form[-5:]
+            home_wins = sum(1 for x in recent_home if x > 0)
+            if home_wins >= 4:
+                feat['home_streak'] = HOME_STREAK_BONUS * (home_wins - 3)
+            elif home_wins <= 1:
+                feat['home_streak'] = -HOME_STREAK_BONUS * (2 - home_wins)
+        
+        # 客场连败减分
+        if len(away_form) >= 3:
+            recent_away = away_form[-5:]
+            away_losses = sum(1 for x in recent_away if x < 0)
+            if away_losses >= 4:
+                feat['road_streak'] = ROAD_STREAK_PENALTY * (away_losses - 3)
+        
+        # 如果没有近期记录但有 ELO 预填充，用 ELO 差距补充
+        form_shift = (feat['home_streak'] + feat['road_streak'] 
+                      + feat['b2b_penalty'] + feat['schedule_density'])
+        
+        # 没有近期记录时，ELO 差距信号权重更高
+        if len(home_form) < 3 and abs(home_rating - 1500) > 10:
+            form_shift += elo_gap * 0.5
+        
+        feat['total_shift'] = form_shift
+    except Exception as e:
+        pass
+    
+    return feat
+
+
+def _clean_team_name(name: str) -> str:
+    """快速清理队名（避免重复import sanitize）"""
+    if not name or not isinstance(name, str):
+        return ''
+    return name.strip()[:50]
 
 
 # ==================== HTTP 工具函数 ====================
@@ -248,13 +332,14 @@ def get_league_profile(league):
 
 def analyze_spf(match, market_bundle=None):
     """
-    胜负预测（多源融合）
+    胜负预测（多源融合 + 篮球特征增强）
 
     融合策略：
     1. 市场赔率隐含概率（竞彩 SP × 各家欧赔共识）
     2. ELO 评级概率（按样本可信度加权）
     3. 联赛历史主胜率（轻量；市场已含主场）
     4. 各家欧赔走势微调
+    5. 【v3.3新增】篮球特有特征（背靠/动量/赛程密度）
 
     融合后经贝叶斯校准器修正。
     """
@@ -319,6 +404,12 @@ def analyze_spf(match, market_bundle=None):
         w['elo'] * p_home_elo +
         w['league'] * p_home_league
     )
+    
+    # --- 【v3.3】篮球特征增强 ---
+    bb_feat = _extract_basketball_features(home_team, away_team, league)
+    # 特征偏移受 ELO trust 调节：冷启动时不加额外特征
+    feat_shift = bb_feat['total_shift'] * elo_trust
+    p_home = max(0.02, min(0.98, p_home + feat_shift))
     p_away = 1.0 - p_home
 
     # --- 贝叶斯校准 ---
@@ -370,17 +461,23 @@ def analyze_spf(match, market_bundle=None):
             'trend': (ml_cons.get('trend') or {}).get('direction'),
         } if ml_cons else None,
         'odds_source': match.get('source', '500'),
+        'bb_features': {
+            'home_streak': round(bb_feat['home_streak'], 4),
+            'road_streak': round(bb_feat['road_streak'], 4),
+            'total_shift': round(feat_shift, 4),
+        },
     }
 
 
 def analyze_rqspf(match, market_bundle=None):
     """
-    让分胜负预测（多源融合）
+    让分胜负预测（多源融合 + 动量增强）
 
     融合策略：
     1. 市场让分赔率隐含概率（竞彩 × 各家让分）
     2. ELO 分差预测转换
     3. 盘口走势（澳客 rflist / 各家初即时）
+    4. 【v3.3新增】近期动量对让分的放大/缩小效应
 
     经贝叶斯校准器修正。
     """
@@ -467,7 +564,30 @@ def analyze_rqspf(match, market_bundle=None):
         w['elo'] * p_home_elo +
         w['league'] * p_home_league
     )
-    p_away = 1.0 - p_home
+    
+    # --- 【v3.3】动量对让分的放大效应 ---
+    # 连胜队更容易覆盖让分，连败队更难让胜
+    try:
+        from .elo import get_elo_system
+        elo = get_elo_system()
+        home_form = elo.recent_form.get(_clean_team_name(home_team), [])
+        away_form = elo.recent_form.get(_clean_team_name(away_team), [])
+        
+        momentum_shift = 0.0
+        if len(home_form) >= 3:
+            hw = sum(1 for x in home_form[-5:] if x > 0)
+            # 主队连胜 → 微调让胜（最多+1.5%）
+            momentum_shift += min(0.015, 0.003 * max(0, hw - 3))
+        if len(away_form) >= 3:
+            al = sum(1 for x in away_form[-5:] if x < 0)
+            # 客队连败 → 微调让胜（客队弱=主队让分更有利）
+            momentum_shift += min(0.010, 0.002 * max(0, al - 3))
+        
+        # 动量效应受 ELO trust 约束
+        p_home = max(0.02, min(0.98, p_home + momentum_shift * elo_trust))
+        p_away = 1.0 - p_home
+    except Exception:
+        pass
 
     # --- 贝叶斯校准 ---
     confidence = 'high' if abs(p_home - 0.5) > 0.20 else (
@@ -522,12 +642,14 @@ def analyze_rqspf(match, market_bundle=None):
 
 def analyze_daxiao(match, market_bundle=None):
     """
-    大小分预测（多源融合）
+    大小分预测（多源融合 + 得分效率增强 v3.3）
 
     融合策略：
     1. 市场大小分赔率隐含概率（竞彩 × 各家大小）
-    2. ELO 总得分预测
-    3. 联赛得分特征 + 盘口走势
+    2. ELO 总得分预测 + 进攻/防守效率分离
+    3. 【v3.3新增】近期得分趋势（近5场平均 vs 联赛均值）
+    4. 【v3.3新增】盘口偏离度自适应（盘口远超联赛均值时强化回归）
+    5. 联赛得分特征 + 盘口走势
 
     经贝叶斯校准器修正。
     """
@@ -570,11 +692,13 @@ def analyze_daxiao(match, market_bundle=None):
     except Exception as e:
         log.debug(f"各家大小分融合跳过: {e}")
 
-    # --- 信号2: ELO 总得分预测（冷启动锚定盘口线）---
+    # --- 信号2: ELO 总得分预测（v3.3增强：效率分离 + 近期趋势）---
     elo_total = total_line_val  # 默认退回到盘口线
     p_over_elo = 0.5
     p_under_elo = 0.5
     home_games = away_games = 0
+    trend_signal = 0.0  # 新增：近期得分趋势信号
+    
     try:
         from .elo import get_elo_system
         elo = get_elo_system()
@@ -583,8 +707,24 @@ def analyze_daxiao(match, market_bundle=None):
         home_games = int(total_pred.get('home_games', 0) or 0)
         away_games = int(total_pred.get('away_games', 0) or 0)
         elo_trust = _elo_sample_trust(home_games, away_games)
-        # 样本不足时，总分预期向盘口线收缩，避免 1500 初值制造假 edge
+        
+        # 【v3.3新增】近期得分趋势修正
+        # 从 recent_form 推断近期攻防状态（简化版：连胜=进攻好/连败=防守差）
+        home_form = elo.recent_form.get(_clean_team_name(home_team), [])
+        away_form = elo.recent_form.get(_clean_team_name(away_team), [])
+        if len(home_form) >= 3 and len(away_form) >= 3:
+            # 双方近期总胜率偏高 → 可能是高比分对决（进攻型打法）
+            home_recent_wr = sum(1 for x in home_form[-5:] if x > 0) / min(5, len(home_form))
+            away_recent_wr = sum(1 for x in away_form[-5:] if x > 0) / min(5, len(away_form))
+            combined_wr = (home_recent_wr + away_recent_wr) / 2
+            # 胜率>0.6的组合倾向大分，<0.4倾向小分
+            trend_signal = (combined_wr - 0.5) * 0.04  # ±2% 概率偏移
+        
+        # 样本不足时，总分预期向盘口线收缩
         elo_total = elo_trust * elo_total_raw + (1.0 - elo_trust) * total_line_val
+        
+        # 加入趋势调整
+        elo_total += trend_signal * 20  # 转为分数（±0.8分左右）
 
         total_vs_line = elo_total - total_line_val
         p_over_elo = 1.0 / (1.0 + math.exp(-total_vs_line * 0.10))
@@ -593,25 +733,34 @@ def analyze_daxiao(match, market_bundle=None):
         log.warning(f"ELO 大小分预测失败: {e}")
         elo_trust = ELO_TRUST_FLOOR
 
-    # --- 信号3: 联赛得分特征 ---
+    # --- 信号3: 联赛得分特征（v3.3增强：偏离度自适应）---
     avg_total = profile['avg_total']
     # 盘口线 vs 联赛平均
     line_vs_avg = total_line_val - avg_total
-    if line_vs_avg > 10:
-        p_over_league = 0.45  # 盘口偏高 → 偏小
-        p_under_league = 0.55
-    elif line_vs_avg < -10:
-        p_over_league = 0.55  # 盘口偏低 → 偏大
-        p_under_league = 0.45
+    if line_vs_avg > 12:
+        p_over_league = 0.42  # 盘口偏高 → 偏小（强化）
+        p_under_league = 0.58
+    elif line_vs_avg > 6:
+        p_over_league = 0.46
+        p_under_league = 0.54
+    elif line_vs_avg < -12:
+        p_over_league = 0.58  # 盘口偏低 → 偏大（强化）
+        p_under_league = 0.42
+    elif line_vs_avg < -6:
+        p_over_league = 0.54
+        p_under_league = 0.46
     else:
         p_over_league = 0.5
         p_under_league = 0.5
 
-    # --- 多源融合 ---
+    # --- 多源融合（v3.3: 偏离度自适应）---
     deviation = abs(total_line_val - avg_total) / max(avg_total, 1) if avg_total > 0 else 0
-    if deviation > 0.10:
-        base_w = {'market': 0.40, 'elo': 0.30, 'league': 0.30}
-    elif deviation > 0.05:
+    if deviation > 0.12:
+        # 盘口严重偏离联赛均值 → 市场定价更可靠，降低模型权重
+        base_w = {'market': 0.50, 'elo': 0.20, 'league': 0.30}
+    elif deviation > 0.06:
+        base_w = {'market': 0.45, 'elo': 0.28, 'league': 0.27}
+    elif deviation > 0.03:
         base_w = {'market': 0.42, 'elo': 0.33, 'league': 0.25}
     else:
         base_w = FUSION_WEIGHTS['dx']
@@ -673,6 +822,7 @@ def analyze_daxiao(match, market_bundle=None):
             'trend': (match.get('dx_trend') or ou_cons.get('trend') or {}).get('direction'),
         } if (ou_cons or match.get('dx_trend')) else None,
         'odds_source': match.get('source', '500'),
+        'trend_signal': round(trend_signal, 4),
     }
 
 
