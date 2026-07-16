@@ -92,6 +92,14 @@
   .edu .body { font-size: 12.5px; color: var(--muted); line-height: 1.7; margin-top: 8px; }
   .edu .body b { color: var(--text); }
   .edu .body .hl { color: var(--accent2); }
+
+  /* 3D 高级分析折叠区：默认收起，只保留核心推荐号码在视图内 */
+  .adv { background: var(--card); border: 1px solid var(--line); border-left: 3px solid var(--accent2); border-radius: 8px; margin: 10px 0; padding: 2px 12px; }
+  .adv > summary { cursor: pointer; font-size: 13px; font-weight: 600; color: var(--accent2); list-style: none; padding: 9px 0; }
+  .adv > summary::-webkit-details-marker { display: none; }
+  .adv > summary::before { content: '▸ '; }
+  .adv[open] > summary::before { content: '▾ '; }
+  .adv > :not(summary) { margin-top: 4px; }
   .miss-row { font-size: 13px; padding: 3px 0; color: var(--text); }
   .miss-row .miss-n { color: var(--warn); font-weight: 600; }
   .blend-row { display: flex; gap: 10px; flex-wrap: wrap; margin: 8px 0; font-size: 14px; }
@@ -2983,6 +2991,7 @@ function renderLottery3d(r) {
   // ── 科普卡片：诚实说明本工具的局限 ──
   const sig = bt && bt.significance;
   const pTxt = sig ? sig.pvalue.toFixed(3) : '≈0.1';
+  html += `<details class="adv" id="adv3d"><summary>📊 高级分析 / 诊断（形态·和值·直选·回测·策略，点击展开）</summary>`;
   html += `<details class="edu">
     <summary>为什么本工具不能提高中奖率？（点开看原理）</summary>
     <div class="body">
@@ -3189,6 +3198,13 @@ function renderLottery3d(r) {
   });
   html += `</div>`;
 
+  // ── 核心推荐区（默认展示，你最关心的号码）──
+  html += `</details>`;
+  html += `<div class="highlight" style="border-color:var(--accent2)">
+    <div class="row"><span class="k">上期开奖</span><span class="v">${esc(r.period)} 期 · <b style="letter-spacing:3px">${esc(r.last_draw)}</b></span></div>
+    <div class="note" style="margin:6px 0 0">v5.0 切合实开：选码经分布校准+上期降权，含上期码比例贴合随机（不再绑上期）；公平摇奖无法保证更高命中率。</div>
+  </div>`;
+
   // ── 组六主推（默认五码）──
   html += `<div class="section-title">【组六主推 ${z6Primary.size || 5} 码】（推荐打法 · 组六期理论约 ${pct(z6Primary.conditional_hit_rate || 0.083)}）</div>`;
   html += `<div class="highlight">
@@ -3199,10 +3215,10 @@ function renderLottery3d(r) {
     <div class="note">四码全中理论只有 2.4%/期（组六期约 3.3%），连挂十几二十期很正常。预算够时优先 5/6 码。</div>
   </div>`;
 
-  html += `<div class="section-title">【预算四码】（覆盖窄 · 组六期约 ${pct(z6.conditional_hit_rate || 0.033)}）</div>`;
-  html += `<div class="card">
-    <div class="row"><span class="k">四码</span><span class="v" style="letter-spacing:3px;font-weight:700;color:var(--accent2)">${esc(z6.digits_str)}</span></div>
-    <div class="sub">覆盖 4 注 · ${(z6.combos || []).join(', ')}</div>
+  html += `<div class="section-title">【预算四码 · 你主玩】（覆盖窄 · 组六期约 ${pct(z6.conditional_hit_rate || 0.033)}）</div>`;
+  html += `<div class="highlight" style="border-color:var(--accent2)">
+    <div class="big" style="color:var(--accent2)">${esc(z6.digits_str)}</div>
+    <div class="sub">覆盖 4 注 · ${(z6.combos || []).join(', ')} <span class="muted">· 四码全中理论仅 3.3%/期(组六期)，连挂十几二十期正常</span></div>
   </div>`;
 
   if (z6Variants.length > 1) {
@@ -3227,7 +3243,8 @@ function renderLottery3d(r) {
     </div>`;
   }
 
-  // ── 直选 ──
+  // ── 直选 / 诊断 / 回测（折叠）──
+  html += `<details class="adv"><summary>直选推荐 / 诊断 / 回测 / 策略（点击展开）</summary>`;
   html += `<div class="section-title">【直选推荐 ${n} 注】（百十个位顺序一致）</div>`;
   html += `<div class="card">
     <div class="note" style="margin-bottom:10px">杀码参考 ${esc(r.kill.join(', '))}（含杀码组合降权，非硬杀）</div>`;
@@ -3465,6 +3482,8 @@ function renderLottery3d(r) {
     <button id="refresh-3d-backtest" style="background:linear-gradient(145deg,rgba(68,147,248,0.15),rgba(44,100,180,0.1));border:1px solid rgba(68,147,248,0.4);border-radius:10px;color:#4493f8;padding:10px 16px;font-size:13px;font-weight:600;cursor:pointer;transition:all .2s;box-shadow:0 2px 6px rgba(68,147,248,0.15)">🔄 刷新+回测</button>
     <button id="run-ml" style="background:linear-gradient(145deg,rgba(210,153,34,0.15),rgba(180,120,20,0.1));border:1px solid rgba(210,153,34,0.4);border-radius:10px;color:var(--warn);padding:10px 16px;font-size:13px;font-weight:600;cursor:pointer;transition:all .2s;box-shadow:0 2px 6px rgba(210,153,34,0.15)">🤖 运行 ML 预测</button>
   </div>`;
+
+  html += `</details>`;
 
   app3d.innerHTML = html;
   document.getElementById('refresh-3d').onclick = () => refreshLottery3d();
