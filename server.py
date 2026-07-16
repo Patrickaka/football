@@ -797,21 +797,21 @@ class Handler(BaseHTTPRequestHandler):
             return {'error': '3D 预测失败'}
 
     def _lottery_3d_refresh_payload(self, params=None):
-        """强制刷新3D数据缓存"""
+        """强制刷新3D数据缓存 — 异步后台执行，立即返回 task_id（避免504超时）"""
         try:
             params = params or {}
             enable_backtest = str((params.get('backtest') or ['0'])[0]).lower() in ('1', 'true', 'yes', 'on')
-            self._log.info('3D 强制刷新请求到达')
-            
-            # 清除模块级缓存
+            self._log.info('3D 强制刷新请求到达，启动后台任务')
+
+            # 清除模块级缓存（快速，同步完成）
             from src.lottery3d import clear_cache
-            from src.lottery3d.ml import clear_ml_cache, fetch_data as fetch_ml_data
+            from src.lottery3d.ml import clear_ml_cache
             from src.common.data_cache import clear_cache as clear_fetch_cache
             clear_cache()
             clear_ml_cache()
             clear_fetch_cache('lottery3d')
             clear_fetch_cache('lottery3d_ml')
-            
+
             # 清除服务器级缓存
             _CACHE['3d']['data'] = None
             _CACHE['3d']['timestamp'] = 0
@@ -819,37 +819,48 @@ class Handler(BaseHTTPRequestHandler):
             _CACHE['3d_ml']['timestamp'] = 0
             _CACHE['3d_data']['data'] = None
             _CACHE['3d_data']['timestamp'] = 0
-            
-            # 立即重新抓取并计算
-            self._log.info('3D 强制刷新：重新抓取数据...')
-            start = time.time()
-            result = run_prediction(force_refresh=True, enable_backtest=enable_backtest, compute_weights=True)
-            ml_data = fetch_ml_data(force_refresh=True)
-            elapsed = time.time() - start
-            
-            if 'error' in result:
-                return {'success': False, 'error': result['error']}
-            
-            # 更新缓存
-            _CACHE['3d']['data'] = result
-            _CACHE['3d']['timestamp'] = time.time()
-            _CACHE['3d_data']['data'] = ml_data
-            _CACHE['3d_data']['timestamp'] = time.time()
-            
-            self._log.info('3D 强制刷新完成，耗时 %.2f秒', elapsed)
-            
-            return {
-                'success': True,
-                'message': '缓存已刷新',
-                'elapsed': round(elapsed, 2),
-                'data_count': result.get('total_periods', 0),
-                'ml_data_count': len(ml_data) if ml_data else 0,
-                'backtest_enabled': enable_backtest,
-                'data_quality': result.get('data_quality'),
-                'ml_status': result.get('ml_status')
-            }
+
+            # 后台任务：抓取 + 预测 + 窗口权重重算 + ML（耗时较长，放后台不阻塞HTTP）
+            def _bg_3d_refresh(task_id, with_backtest=False):
+                _lottery_update_task_message(task_id, '重新抓取历史开奖数据…')
+                self._log.info('3D 后台刷新：重新抓取并计算...')
+                start = time.time()
+                result = run_prediction(
+                    force_refresh=True, enable_backtest=with_backtest, compute_weights=True
+                )
+                _lottery_update_task_message(task_id, '抓取并更新ML数据…')
+                ml_data = fetch_data(force_refresh=True)  # 模块级 fetch_data = src.lottery3d.ml.fetch_data
+                elapsed = time.time() - start
+                self._log.info('3D 后台刷新完成，耗时 %.2f秒', elapsed)
+
+                if 'error' in result:
+                    return {'success': False, 'error': result['error']}
+
+                # 同时回填 ML 数据缓存（不阻塞前端，供 /api/3d-ml 使用）
+                _CACHE['3d_data']['data'] = ml_data
+                _CACHE['3d_data']['timestamp'] = time.time()
+
+                return {
+                    'success': True,
+                    'message': '缓存已刷新',
+                    'elapsed': round(elapsed, 2),
+                    'data_count': result.get('total_periods', 0),
+                    'ml_data_count': len(ml_data) if ml_data else 0,
+                    'backtest_enabled': with_backtest,
+                    'data_quality': result.get('data_quality'),
+                    'ml_status': result.get('ml_status'),
+                    'result': result,
+                }
+
+            task_id = _lottery_start_bg_task(
+                '3d-refresh', _bg_3d_refresh,
+                cache_key='3d',
+                cache_value_func=lambda r: r.get('result') if isinstance(r, dict) else r,
+                with_backtest=enable_backtest,
+            )
+            return {'processing': True, 'task_id': task_id, 'message': '正在后台重新抓取数据并计算…'}
         except Exception as e:
-            self._log.error('3D 强制刷新失败: %s', str(e), exc_info=True)
+            self._log.error('3D 强制刷新任务启动失败: %s', str(e), exc_info=True)
             return {'success': False, 'error': str(e)}
 
     def _lottery_3d_ml_payload(self):

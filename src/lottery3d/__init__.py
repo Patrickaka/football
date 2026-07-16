@@ -121,6 +121,12 @@ ZU6_FOUR_SIZE = 4
 ZU6_PRIMARY_SIZE = 5  # 主推改五码：组六期理论全中 ~8.3%，四码仅 ~3.3%
 ZU6_CANDIDATE_SIZE = 8
 
+# 组六分布校准：把组六单码评分拉向真实开奖历史分布，避免推荐池过度集中于近期热号
+ZU6_DIST_CALIBRATION_ENABLED = True
+ZU6_DIST_CALIBRATION_LAM = 0.4  # 强度：0=关闭，1=完全贴合均匀分布；0.4 温和降偏，避免命中率崩盘
+ZU6_REALIZED_ANCHOR = 0   # 主推中不再强制保留上期实开号码（原2→0：消除过度锚定）
+ZU6_LAST_DRAW_PENALTY = 1.5  # 上期开奖码在组六选码中的降权（让推荐含上期码比例≈随机水平，不锚定也不刻意回避）
+
 # Top50 随机扰动：避免同分号长期霸榜
 # 稳定基础版：关闭随机噪声
 RANDOM_NOISE = 0.0  # 关闭随机噪声
@@ -213,7 +219,6 @@ W_ZU6_OVERHEAT = 0.6
 ZU6_MISS_WINDOW = 120
 ZU6_HOT_WINDOW = 20
 ZU6_PAIR_WINDOW = 90
-ZU6_REALIZED_ANCHOR = 2   # 主推中尽量保留上期实开号码个数
 
 PREDICTOR_VERSION = "3d-v5.0"  # v5.0: 启用miss+neighbor特性、新增20期窗口、优化融合
 ML_MODEL_VERSION = "ml-v7"
@@ -2366,9 +2371,9 @@ def zu6_digit_scores(numbers, window_weights=None, dynamic=None):
     score, _ = ensemble_digit_scores(numbers, window_weights, dynamic=dynamic)
     score = list(score)
 
-    # 再叠一层实开锚定（组六更看号码集合）
+    # 再叠一层实开锚定（组六更看号码集合）。权重降低：避免推荐明显绑在上期开奖号。
     for d, b in enumerate(recent_realized_digit_bonus(numbers)):
-        score[d] += b * 0.55
+        score[d] += b * 0.25
 
     zu6_draws = [n for n in numbers if classify_form(n) == "zu6"]
     if zu6_draws:
@@ -2376,7 +2381,7 @@ def zu6_digit_scores(numbers, window_weights=None, dynamic=None):
         freq = exp_weighted_counts([d for n in recent_zu6 for d in set(n)])
         peak = max(freq.values()) if freq else 1.0
         for d, cnt in freq.items():
-            score[d] += W_ZU6_HOT * 0.35 * (cnt / peak)
+            score[d] += W_ZU6_HOT * 0.15 * (cnt / peak)
 
         for pos in range(3):
             pos_sc = ensemble_position_digit_scores(
@@ -2385,7 +2390,7 @@ def zu6_digit_scores(numbers, window_weights=None, dynamic=None):
             for d, b in enumerate(recent_realized_position_bonus(numbers, pos)):
                 pos_sc[d] += b
             for d, _ in sorted(enumerate(pos_sc), key=lambda x: -x[1])[:3]:
-                score[d] += W_ZU6_POS * 0.18
+                score[d] += W_ZU6_POS * 0.08
 
     # 欠号回补：轻量（主要避免完全丢掉冷号覆盖）
     look = numbers[-ZU6_MISS_WINDOW:] if numbers else []
@@ -2398,7 +2403,7 @@ def zu6_digit_scores(numbers, window_weights=None, dynamic=None):
     for d in range(10):
         gap = last_seen[d]
         if avg_gap > 0 and gap > avg_gap * 1.6:
-            score[d] += W_ZU6_MISS * 0.25 * min((gap / avg_gap - 1.0), 1.5)
+            score[d] += W_ZU6_MISS * 0.15 * min((gap / avg_gap - 1.0), 1.5)
 
     # 近窗只做轻微均衡，不再大力压热号
     hot_window = numbers[-ZU6_HOT_WINDOW:] if numbers else []
@@ -2407,7 +2412,7 @@ def zu6_digit_scores(numbers, window_weights=None, dynamic=None):
         hot_peak = max(hot_freq.values()) if hot_freq else 1
         for d in range(10):
             rate = hot_freq.get(d, 0) / hot_peak
-            score[d] += W_ZU6_BLEND * 0.45 * (0.5 - rate)
+            score[d] += W_ZU6_BLEND * 0.25 * (0.5 - rate)
 
     return score
 
@@ -2748,7 +2753,7 @@ def pick_zu6_four(score, kill=None, use_kill=ZU6_USE_KILL, numbers=None, pair_fr
 # ============================================================
 # 融合算法超参数（回测最优）
 ZU6_FUSION_W_SCORE = 1.0     # 基础评分权重（不过权，s>1反而降低命中率）
-ZU6_FUSION_W_RECENT = 1.3    # 近期实开锚定权重（关键！r=1.3 最优）
+ZU6_FUSION_W_RECENT = 0.6    # 近期实开锚定权重（原1.3: 分布校准后降至0.6，避免过度绑在上期）
 ZU6_FUSION_W_MISS = 0.5      # 遗漏回补权重（轻量即可）
 ZU6_FUSION_W_PAIR = 0.8      # 共现协同权重
 ZU6_FUSION_CAND_SIZE = 7     # 候选池大小（Top7 + 锚定补充）
@@ -2818,11 +2823,13 @@ def pick_zu6_four_optimized(score, kill=None, numbers=None, pair_freq=None,
     # 取 Top7 作为候选池核心
     candidates = [d for _, d in combined[:ZU6_FUSION_CAND_SIZE]]
 
-    # 上期实开码强制进候选（已验证有效的信号）
+    # 上期实开码不再强制进候选：分布校准已兼顾长期走势，强制锚定会导致
+    # 推荐明显绑在上期开奖号上，反而"不切合真实开奖"。
+
+    # 上期开奖码降权：让 4码 不那么"跟"上期
     if numbers:
-        for d in set(numbers[-1]):
-            if d not in candidates:
-                candidates.append(d)
+        last_draw = set(numbers[-1])
+        combined = [(s - ZU6_LAST_DRAW_PENALTY if d in last_draw else s, d) for (s, d) in combined]
 
     # ---- 在候选中搜索最优4元组 ----
     def combo_rank(combo):
@@ -2935,9 +2942,15 @@ def build_zu6_four_variants(score, kill=None, limit=4, numbers=None, pair_freq=N
     if pair_freq is None and numbers is not None:
         pair_freq = zu6_cooccurrence_freq(numbers)
     kill_eff = kill if ZU6_USE_KILL else None
-    rank = sorted(range(10), key=lambda d: -_effective_digit_score(score, d, kill_eff))
+    # 上期开奖码降权：与主推/预算四码保持一致，避免变体仍明显锚定上期
+    eff_score = list(score)
+    if numbers:
+        last_draw = set(numbers[-1])
+        for d in last_draw:
+            eff_score[d] -= ZU6_LAST_DRAW_PENALTY
+    rank = sorted(range(10), key=lambda d: -_effective_digit_score(eff_score, d, kill_eff))
     candidate_pool = rank[:ZU6_CANDIDATE_SIZE]
-    primary = tuple(pick_zu6_four(score, kill, numbers=numbers, pair_freq=pair_freq))
+    primary = tuple(pick_zu6_four(eff_score, kill, numbers=numbers, pair_freq=pair_freq))
     variants = []
     seen = set()
 
@@ -2951,7 +2964,7 @@ def build_zu6_four_variants(score, kill=None, limit=4, numbers=None, pair_freq=N
     add("预算四码", primary)
     balanced = max(
         combinations(candidate_pool, 4),
-        key=lambda c: _zu6_combo_score(c, score, kill, pair_freq),
+        key=lambda c: _zu6_combo_score(c, eff_score, kill, pair_freq),
     )
     add("共现优化", balanced)
 
@@ -2962,13 +2975,13 @@ def build_zu6_four_variants(score, kill=None, limit=4, numbers=None, pair_freq=N
 
     wide = max(
         combinations(candidate_pool, 4),
-        key=lambda c: _zu6_four_balance_score(c, score, kill) + (max(c) - min(c)) * 0.3,
+        key=lambda c: _zu6_four_balance_score(c, eff_score, kill) + (max(c) - min(c)) * 0.3,
     )
     add("扩散", wide)
 
     for combo in sorted(
         combinations(candidate_pool, 4),
-        key=lambda c: _zu6_combo_score(c, score, kill, pair_freq),
+        key=lambda c: _zu6_combo_score(c, eff_score, kill, pair_freq),
         reverse=True,
     ):
         add("备选", combo)
@@ -3007,54 +3020,32 @@ def pick_zu6_pool(
     score, kill=None, pool_size=ZU6_POOL_SIZE,
     use_kill=ZU6_USE_KILL, pair_freq=None, numbers=None,
 ):
-    """组六复式选号：Top 候选中组合搜索；尽量保留上期实开号码。"""
+    """组六复式选号：Top 候选中组合搜索；分布校准+上期降权，避免过度锚定。"""
     kill_eff = kill if use_kill else None
     if pair_freq is None and numbers is not None:
         pair_freq = zu6_cooccurrence_freq(numbers)
 
-    rank = sorted(range(10), key=lambda d: -_effective_digit_score(score, d, kill_eff))
+    # 上期开奖码降权：让 5码 不那么"跟"上期
+    effective_score = list(score)
+    if numbers:
+        last_draw = set(numbers[-1])
+        for d in last_draw:
+            effective_score[d] -= ZU6_LAST_DRAW_PENALTY
+
+    rank = sorted(range(10), key=lambda d: -_effective_digit_score(effective_score, d, kill_eff))
     cand_n = max(ZU6_CANDIDATE_SIZE, pool_size)
     candidates = rank[:cand_n]
 
-    # 上期实开码强制进入候选，避免长窗把刚开的号挤出去
-    if numbers:
-        for d in set(numbers[-1]):
-            if d not in candidates:
-                candidates.append(d)
-        # 近 3 期高频码也保底进候选
-        recent_freq = Counter(d for n in numbers[-3:] for d in n)
-        for d, _ in recent_freq.most_common(4):
-            if d not in candidates:
-                candidates.append(d)
+    # 注意：上期码/近期热码不再强制进候选。分布校准已经抑制过度热号集中；
+    # 强制锚定会让推荐池明显绑在上期开奖号上，不符合真实摇奖形态。
 
     if len(candidates) <= pool_size:
         return sorted(candidates)
 
     best = max(
         combinations(candidates, pool_size),
-        key=lambda c: _zu6_combo_score(c, score, kill_eff, pair_freq),
+        key=lambda c: _zu6_combo_score(c, effective_score, kill_eff, pair_freq),
     )
-    best = set(best)
-
-    # 锚定：尽量保留上期实开号码
-    if numbers and ZU6_REALIZED_ANCHOR > 0:
-        last_digits = list(dict.fromkeys(numbers[-1]))  # 保序去重
-        need = min(ZU6_REALIZED_ANCHOR, len(last_digits), pool_size)
-        have = [d for d in last_digits if d in best]
-        missing = [d for d in last_digits if d not in best]
-        for d in missing:
-            if len(have) >= need:
-                break
-            # 换成当前池里「不在上期、且分最低」的码
-            replace_candidates = sorted(
-                (x for x in best if x not in last_digits),
-                key=lambda x: _effective_digit_score(score, x, kill_eff),
-            )
-            if not replace_candidates:
-                break
-            best.remove(replace_candidates[0])
-            best.add(d)
-            have.append(d)
 
     return sorted(best)
 
@@ -3581,6 +3572,31 @@ def apply_distribution_calibration(weights, numbers, lam=DIST_CALIBRATION_LAM):
             break
 
     return [(scores[i], t) for i, (w, t) in enumerate(weights)]
+
+
+def apply_zu6_digit_calibration(scores, numbers=None, lam=ZU6_DIST_CALIBRATION_LAM):
+    """组六单码分 IPF 分布校准：让选出的数字集合更贴近真实开奖分布。
+
+    真实公平摇奖下，0-9 每个数字在长期中应等概率出现。原 zu6_digit_scores
+    叠加了较多近期热号信号，导致推荐池明显绑在上期开奖号上。本函数用 IPF
+    （迭代比例拟合）把单码分对应的 soft-selection 概率拉向均匀目标，同时
+    通过较少迭代保留一定走势信号。
+
+    scores: 0..9 单码评分列表；numbers: 占位参数（保持调用兼容）。
+    """
+    if not ZU6_DIST_CALIBRATION_ENABLED or lam <= 0:
+        return scores
+    LOG = math.log
+    target_log = LOG(0.1)
+    cur = list(scores)
+    # IPF 迭代：5 轮足以大幅压扁热号，又不会完全退化成均匀随机
+    for _ in range(5):
+        mx = max(cur)
+        ex = [math.exp((s - mx)) for s in cur]
+        inv_Z = 1.0 / (sum(ex) or 1.0)
+        log_cur = [LOG(max(e * inv_Z, 1e-4)) for e in ex]
+        cur = [cur[d] + lam * (target_log - log_cur[d]) for d in range(10)]
+    return cur
 
 
 def rank_triplets(score, danma, kill, meta, top_n=20, enable_exploration=True, apply_noise=True, enable_cold_hot_balance=True, recent_recommendations=None, enable_diversity=True, enable_correlation=True):
@@ -4443,6 +4459,9 @@ def run_prediction(data=None, force_refresh=False, enable_backtest=False, enable
     )
     form_prob = analyze_form_probability(numbers, window_weights=window_weights)
     zu6_score = zu6_digit_scores(numbers, window_weights, dynamic=meta.get("dynamic"))
+    # 组六单码分布校准：让选码集合贴近真实开奖历史分布，抑制过度热号集中
+    if ZU6_DIST_CALIBRATION_ENABLED:
+        zu6_score = apply_zu6_digit_calibration(zu6_score, numbers, lam=ZU6_DIST_CALIBRATION_LAM)
     if ZU6_RECENT_PENALTY > 0:
         current_period_zu6 = periods[-1] if periods else None
         recent_zu6 = [

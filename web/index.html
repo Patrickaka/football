@@ -3007,7 +3007,7 @@ function renderLottery3d(r) {
       <span>豹子 ${pct(f.blend.baozi)}</span>
     </div>
     <div class="note" style="margin:8px 0;border-left:3px solid var(--accent2);padding-left:8px">
-      <b>v4.9 贴合实开</b>：推荐随近几期真实开奖滚动（上期号码优先保留），组六主推五码；公平摇奖无法保证更高命中率，四码仍易长期不中。
+      <b>v5.0 切合实开</b>：组六选码经分布校准+上期降权，推荐含上期码比例贴合随机水平（不再明显绑上期），主推五码；公平摇奖无法保证更高命中率，四码仍易长期不中。
     </div>
     <div class="row"><span class="k">组六主推${z6Primary.size || 5}码</span><span class="v" style="letter-spacing:3px;font-size:20px;font-weight:700;color:var(--accent2)">${esc(z6Primary.digits_str)}</span></div>
     <div class="row"><span class="k">覆盖组六</span><span class="v">${esc((z6Primary.combos || []).join(', '))} · ${z6Primary.notes || ''}注 · 组六期理论约 ${pct(z6Primary.conditional_hit_rate || 0.083)}</span></div>
@@ -3482,6 +3482,43 @@ async function refreshLottery3d(withBacktest = false) {
   try {
     const result = await fetchJsonPost('/api/3d-refresh' + (withBacktest ? '?backtest=1' : ''));
     
+    // 异步后台模式：轮询等待完成（避免504超时）
+    if (result.processing && result.task_id) {
+      const taskId = result.task_id;
+      const startTime = Date.now();
+      const pollInterval = 3000;
+      const maxWaitSec = 1200;
+      while ((Date.now() - startTime) / 1000 < maxWaitSec) {
+        await new Promise(r => setTimeout(r, pollInterval));
+        try {
+          const statusData = await fetchJson('/api/lottery/task-status?_=' + Date.now());
+          const taskInfo = statusData[taskId];
+          if (!taskInfo) continue;  // 任务记录可能被清理，继续轮询
+          const elapsedSec = Math.round((Date.now() - startTime) / 1000);
+          if (taskInfo.status === 'processing') {
+            let msg = `后台计算中…<br><small style="color:var(--muted)">已耗时 ${elapsedSec} 秒</small>`;
+            if (taskInfo.message) msg += `<br><small style="color:var(--muted)">${esc(taskInfo.message)}</small>`;
+            if (elapsedSec > 300) msg += `<br><small style="color:var(--muted)">计算量较大，请继续等待，关闭页面不影响后台运行</small>`;
+            app3d.innerHTML = `<div class="status"><span class="spinner"></span>${msg}</div>`;
+            continue;
+          }
+          if (taskInfo.status === 'done') {
+            await loadLottery3d(true);
+            return;
+          }
+          if (taskInfo.status === 'error') {
+            app3d.innerHTML = `<div class="status error">✗ 刷新失败: ${esc(taskInfo.error || '未知错误')}</div>`;
+            return;
+          }
+        } catch (e) {
+          console.error('轮询3D任务状态失败:', e);
+        }
+      }
+      app3d.innerHTML = `<div class="status error">✗ 刷新超时（已超过20分钟），请稍后手动刷新</div>`;
+      return;
+    }
+    
+    // 兜底：同步返回结果
     if (result.success) {
       console.log('3D缓存刷新成功:', result);
       // 刷新成功后重新加载数据
