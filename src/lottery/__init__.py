@@ -46,23 +46,24 @@ FEATURE_WEIGHTS = {
     'sum': 0.12,            # 和值特征
     'trend': 0.08,          # 升温降温趋势
     'zone': 0.08,           # 区间分布特征
-    'repeat': 0.12,         # 重号概率(与上期重叠)
-    'adjacent': 0.12,       # 邻号概率(与上期号码±1)
+    'repeat': 0.0,          # 重号: 真实重号率0.73≈随机期望0.71, 无预测信号; 权重0消除"照搬上期"假象
+    'adjacent': 0.08,       # 邻号: 真实邻号率80%、前区均1.31个, 轻微真实信号, 保留校准
 }
 
 # 时间衰减因子 (最近一期权重1.0，20期前≈0.19，50期前≈0.016)
 TIME_DECAY_FACTOR = 0.92
 MIN_REAL_HISTORY_FOR_RANKING = 80  # 降低阈值: 120期真实数据足够支撑统计模型
-LOTTERY_PREDICTOR_VERSION = "dlt-v3.5-back-diversity"
+LOTTERY_PREDICTOR_VERSION = "dlt-v3.6-anchor-fix"
 FULL_HISTORY_FETCH_COUNT = 100
 MIN_FULL_HISTORY_ISSUES = 500
 ROLLING_BACKTEST_TRIALS = 30
 FEATURE_BACKTEST_TRIALS = 40
 ML_BACKTEST_TRIALS = 10
 
-# v3.3: 消融验证 — 特征互补性比正信号本身更重要
-# 消融: zone关掉降10%(最关键), road降8%, sum降8%, repeat降6%, adjacent降6%(虽信号负但有互补)
-# road提升反而降≥3 → 权重归一化比例极敏感, 保持v3.2
+# v3.6: 去锚定校准 — 消融+600期回测确认
+# repeat 权重 0.27→0.0: 真实重号率0.73≈随机期望0.71, 重号本身无可预测性;
+#   0.27 仅造成"前区含3.99个上期码"的过度锚定(真实0.73), 去重号后锚定降至0.71且准确率不变(仍在随机噪声带)
+# adjacent 权重 0.05→0.08: 邻号是真实信号(前区均1.31个/覆盖80%), 适度保留让推荐形态自然
 FEATURE_WEIGHTS.update({
     'frequency': 0.05,     # 消融: 关掉降2% → 微弱贡献, 保持v3.2
     'gap': 0.08,           # 消融: 关掉零影响 → 纯噪声确认, 保持v3.2
@@ -71,8 +72,8 @@ FEATURE_WEIGHTS.update({
     'sum': 0.15,           # 消融: 关掉降8% → 第二重要, 保持
     'trend': 0.03,         # 消融: 关掉降2% → 微弱贡献, 保持
     'zone': 0.20,          # 消融: 关掉降10% → 最关键, 保持(已足够高)
-    'repeat': 0.27,        # 消融: 关掉降6% → 重要, 保持最高权重
-    'adjacent': 0.05,      # 消融: 关掉降6% → 有互补(虽信号负), 保持v3.2(提升反降≥3)
+    'repeat': 0.0,         # v3.6: 0.27→0.0, 重号=纯噪声, 去锚定
+    'adjacent': 0.08,      # v3.6: 0.05→0.08, 保留真实邻号信号
 })
 
 # ===================== 公平摇奖理论基准 (诚实标注) =====================
@@ -93,13 +94,14 @@ RANDOM_BASELINE = {
 
 # 后区专用权重（v3.4: 下调 adjacent，避免后区推荐被上期临号锁死）
 # 后区仅 12 码，临号天然覆盖面大；adjacent 给 0.30 会主导 Top2，多策略后区趋同。
+# v3.6: repeat 0.10→0.0 (后区重号率0.33≈随机, 无信号, 去锚定), adjacent 0.10→0.08
 BACK_FEATURE_WEIGHTS = {
     'frequency': 0.10,
     'gap': 0.15,
     'trend': 0.10,
     'road': 0.15,
-    'repeat': 0.10,
-    'adjacent': 0.10,      # 原 0.30 → 0.10，与其他特征同量级
+    'repeat': 0.0,         # v3.6: 去重号锚定
+    'adjacent': 0.08,      # v3.6: 适度保留真实邻号信号
     'position': 0.15,
     'sum': 0.15,
 }
@@ -761,8 +763,9 @@ class LotteryAnalyzer:
         else:
             scores['zone'] = 0.5
 
-        # ---- 重号概率得分 (v3新增) ----
-        # 大乐透重号率约60%，即下期约3个号码与上期重叠
+        # ---- 重号概率得分 (v3新增, v3.6去权重) ----
+        # 注意: 真实重号率仅0.73个/期(≈随机期望0.71), "重号率约60%"指56%的期至少含1个重号。
+        # 重号本身无预测性, FEATURE_WEIGHTS['repeat'] 已置0, 故此特征当前不贡献分数。
         if len(self.history_data) >= 1:
             last_front = self.history_data[0].get('front', []) if is_front else self.history_data[0].get('back', [])
             if num in last_front:
@@ -952,8 +955,8 @@ class LotteryAnalyzer:
                 'sum': '和值特征 — 与平均和值的相关性',
                 'trend': '趋势特征 — 近期的升温降温方向(区分度弱,权重低)',
                 'zone': '区间特征 — 号码在三个区间的分布平衡度',
-                'repeat': '重号概率 — 与上期号码重叠(大乐透重号率约60%)',
-                'adjacent': '邻号概率 — 与上期号码±1的覆盖(邻号率约80%)',
+            'repeat': '重号概率 — 与上期号码重叠(v3.6: 真实重号0.73≈随机, 权重置0, 无贡献)',
+            'adjacent': '邻号概率 — 与上期号码±1的覆盖(真实邻号率80%, 轻微真实信号)',
             }
         }
 

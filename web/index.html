@@ -4296,7 +4296,8 @@ function renderLottery(r) {
     <div class="sub">${latestIssue} 期 · ${latestDate}</div>
   </div>`;
   
-  // ── 基本统计 ──
+  // ── 基本统计（折叠：默认只关心推荐号码）──
+  html += `<details class="adv" id="advlottery"><summary>📊 数据分析 / 统计（点击展开）</summary>`;
   html += `<div class="card">
     <div class="row"><span class="k">数据期数</span><span class="v">${stats.total_issues || 0} 期</span></div>
     <div class="row"><span class="k">前区号码范围</span><span class="v">01 - 35</span></div>
@@ -4442,10 +4443,6 @@ function renderLottery(r) {
   html += `<div class="row"><span class="k">后区012路（独立）</span><span class="v">${lotteryRoadText(backRoad.total)}</span></div>`;
   html += `</div>`;
   
-  // ── 快速推荐 ──
-  html += `<div class="section-title">🎯 快速推荐</div>`;
-  html += `<div id="lottery-recommend"></div>`;
-  
   // ── 排名模型 TOP10 ──
   html += `<div class="section-title">🏆 排名模型（Top-10）</div>`;
   html += `<div class="card">
@@ -4511,8 +4508,15 @@ function renderLottery(r) {
       </div>
     </div>
     <button type="button" style="width:100%;padding:10px;background:var(--card2);color:var(--text);border:1px solid var(--line);border-radius:8px;font-size:14px;cursor:pointer;margin-bottom:8px" onclick="getLotteryEnsemble()">🗳️ 启动投票</button>
-    <button type="button" id="refresh-lottery" style="width:100%;padding:10px;background:var(--card2);color:var(--accent2);border:1px solid var(--line);border-radius:8px;font-size:14px;cursor:pointer" onclick="refreshLottery()">↻ 重新抓取并计算</button>
   </div>`;
+  html += `</details>`;
+  
+  // ── 🎯 快速推荐（默认可见：你关心的推荐号码）──
+  html += `<div class="section-title">🎯 快速推荐（前区5 + 后区2）</div>`;
+  html += `<div id="lottery-recommend"></div>`;
+  
+  // ── 重新抓取（默认可见）──
+  html += `<button type="button" id="refresh-lottery" style="width:100%;margin-top:12px;padding:12px;background:var(--accent2);color:#fff;border:none;border-radius:8px;font-size:15px;cursor:pointer;font-weight:600" onclick="refreshLottery()">↻ 重新抓取并计算</button>`;
   
   appLottery.innerHTML = html;
   
