@@ -1102,6 +1102,7 @@
     <button type="button" class="tab" data-tab="lottery3d" role="tab">🎲 福彩3D</button>
     <button type="button" class="tab" data-tab="lottery" role="tab">🎯 大乐透</button>
     <button type="button" class="tab" data-tab="kl8" role="tab">🎱 快乐8</button>
+    <button type="button" class="tab" data-tab="ssq" role="tab">🎱 双色球</button>
   </div>
   <div id="panel-football" class="tab-panel active">
     <div id="search-wrap" style="display:none"></div>
@@ -1124,6 +1125,9 @@
   </div>
   <div id="panel-predictions" class="tab-panel">
     <div id="app-predictions"></div>
+  </div>
+  <div id="panel-ssq" class="tab-panel">
+    <div id="app-ssq"></div>
   </div>
   <div class="disclaimer" id="disclaimer">
     ⚠ 以上分析仅为概率统计参考，不构成任何投注建议。请理性对待！
@@ -1155,6 +1159,10 @@
   <div class="bottom-nav-item" data-tab="kl8">
     <span class="nav-icon">🎱</span>
     <span>快乐8</span>
+  </div>
+  <div class="bottom-nav-item" data-tab="ssq">
+    <span class="nav-icon">🎱</span>
+    <span>双色球</span>
   </div>
 </nav>
 
@@ -1206,6 +1214,11 @@ const TAB_META = {
     title: '📋 预测记录',
     desc: '自动赛果同步 · 预测历史 · 回测统计',
     disclaimer: '⚠ 预测记录由系统自动保存和更新，无需人工维护。',
+  },
+  ssq: {
+    title: '🎱 双色球预测',
+    desc: '数据来源：500.com 历史开奖 · 频率 + 冷热 + 近期趋势加权预测',
+    disclaimer: '⚠ 双色球开奖具有随机性，以上分析仅为历史统计参考，不构成任何投注建议。请理性对待！',
   },
 };
 
@@ -2918,7 +2931,7 @@ function switchTab(tab) {
   pageTitle.textContent = meta.title;
   pageDesc.textContent = meta.desc;
   document.getElementById('disclaimer').innerHTML = meta.disclaimer;
-  location.hash = tab === 'lottery3d' ? '3d' : tab === 'beidan' ? 'beidan' : tab === 'basketball' ? 'basketball' : tab === 'lottery' ? 'lottery' : tab === 'kl8' ? 'kl8' : tab === 'predictions' ? 'predictions' : 'football';
+  location.hash = tab === 'lottery3d' ? '3d' : tab === 'beidan' ? 'beidan' : tab === 'basketball' ? 'basketball' : tab === 'lottery' ? 'lottery' : tab === 'kl8' ? 'kl8' : tab === 'predictions' ? 'predictions' : tab === 'ssq' ? 'ssq' : 'football';
   if (tab === 'football') {
     loadMatches();
   } else if (tab === 'beidan') {
@@ -2933,7 +2946,115 @@ function switchTab(tab) {
     loadKL8();
   } else if (tab === 'predictions') {
     loadPredictions();
+  } else if (tab === 'ssq') {
+    loadSsq();
   }
+}
+
+// ── 双色球预测面板 ──
+let ssqLoaded = false;
+async function loadSsq(force) {
+  if (ssqLoaded && !force) return;
+  const app = document.getElementById('app-ssq');
+  app.innerHTML = `<div class="status"><span class="spinner"></span>正在加载双色球数据…</div>`;
+  try {
+    const data = await fetchJson('/api/ssq?_=' + Date.now());
+    if (data.error) { app.innerHTML = `<div class="status error">✗ ${esc(data.error)}</div>`; return; }
+    ssqLoaded = true;
+    renderSsq(data.result);
+  } catch (e) {
+    app.innerHTML = `<div class="status error">加载失败：${esc(e.message)}</div>`;
+  }
+}
+
+async function fetchSsqData() {
+  const app = document.getElementById('app-ssq');
+  app.innerHTML = `<div class="status"><span class="spinner"></span>正在抓取最新双色球开奖…</div>`;
+  try {
+    await fetchJson('/api/ssq-refresh?_=' + Date.now());
+    ssqLoaded = false;
+    await loadSsq(true);
+  } catch (e) {
+    app.innerHTML = `<div class="status error">刷新失败：${esc(e.message)}</div>`;
+  }
+}
+
+function renderSsq(r) {
+  const app = document.getElementById('app-ssq');
+  const history = r.history || [];
+  const pred = r.prediction || {};
+  const sets = pred.sets || [];
+  const analysis = r.analysis || {};
+  const meta = r.meta || {};
+  const latest = history.length ? history[0] : null;
+  const p2 = n => String(n).padStart(2, '0');
+
+  let html = '';
+  html += `<div class="section-title">【双色球数据分析】</div>`;
+
+  // 最新一期
+  if (latest) {
+    const red = latest.red.map(p2).join(' ');
+    const blue = p2(latest.blue);
+    html += `<div class="highlight">
+      <div style="font-size:14px;color:var(--muted);margin-bottom:4px">最新一期</div>
+      <div class="big" style="font-size:24px;color:#f85149">红球 ${red}</div>
+      <div class="big" style="font-size:20px;color:#4493f8">蓝球 ${blue}</div>
+      <div class="sub">${esc(latest.period)} 期${r.next_period ? ' · 下一期 ' + esc(r.next_period) + ' 期' : ''}</div>
+    </div>`;
+  }
+
+  // 预测结果
+  html += `<div class="section-title">预测结果</div>`;
+  html += `<div class="card">`;
+  sets.forEach((s, i) => {
+    const red = s.red.map(p2).join(' ');
+    const blue = p2(s.blue);
+    const label = i === 0 ? '主推' : '推荐 ' + (i + 1);
+    html += `<div class="lottery-row" style="${i > 0 ? 'border-top:1px solid var(--line);margin-top:8px;padding-top:8px' : ''}">
+      <div class="lottery-issue">${label}</div>
+      <div class="lottery-numbers">
+        <span class="lottery-front">${red}</span>
+        <span class="lottery-plus">+</span>
+        <span class="lottery-back">${blue}</span>
+      </div>
+    </div>`;
+  });
+  html += `<button type="button" style="width:100%;margin-top:10px;padding:10px;background:#4493f8;color:#fff;border:none;border-radius:8px;font-size:14px;cursor:pointer" onclick="fetchSsqData()">🔄 抓取最新开奖号码</button>`;
+  html += `</div>`;
+
+  // 近期开奖结果
+  html += `<div class="section-title">近期开奖结果</div>`;
+  html += `<div class="card lottery-results">`;
+  history.forEach((item, i) => {
+    const red = item.red.map(p2).join(' ');
+    const blue = p2(item.blue);
+    html += `<div class="lottery-row" style="${i > 0 ? 'border-top:1px solid var(--line);margin-top:8px;padding-top:8px' : ''}">
+      <div class="lottery-issue">${esc(item.period)}</div>
+      <div class="lottery-numbers">
+        <span class="lottery-front">${red}</span>
+        <span class="lottery-plus">+</span>
+        <span class="lottery-back">${blue}</span>
+      </div>
+    </div>`;
+  });
+  html += `</div>`;
+
+  // 红球/蓝球冷热（默认折叠）
+  const hasHot = (analysis.hot_red && analysis.hot_red.length) || (analysis.hot_blue && analysis.hot_blue.length);
+  if (hasHot) {
+    html += `<details class="adv"><summary>🔥 红球/蓝球冷热参考（点击展开）</summary>`;
+    html += `<div class="card">
+      <div class="row"><span class="k">热红球</span><span class="v">${(analysis.hot_red || []).map(p2).join(' ')}</span></div>
+      <div class="row"><span class="k">冷红球</span><span class="v">${(analysis.cold_red || []).map(p2).join(' ')}</span></div>
+      <div class="row"><span class="k">热蓝球</span><span class="v">${(analysis.hot_blue || []).map(p2).join(' ')}</span></div>
+      <div class="row"><span class="k">冷蓝球</span><span class="v">${(analysis.cold_blue || []).map(p2).join(' ')}</span></div>
+      <div class="row"><span class="k">统计期数</span><span class="v">${meta.total_draws || 0} 期</span></div>
+      <div class="row"><span class="k">号码范围</span><span class="v">红球 ${esc(meta.red_range || '1-33')} · 蓝球 ${esc(meta.blue_range || '1-16')}</span></div>
+    </div></details>`;
+  }
+
+  app.innerHTML = html;
 }
 
 document.querySelectorAll('[data-tab]').forEach(el => {
