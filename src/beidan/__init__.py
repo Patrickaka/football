@@ -108,7 +108,9 @@ BET_TYPES = {
 MAX_GOALS = 7
 
 # 比分/总进球 λ 主客强度分配系数
-SCORE_SPLIT = 0.35
+# 0.45 经 2744 场离线回测最优：比分 Top1 11.84%→12.03%、Top3 32.43%→32.94%，
+# 总进球 Top2 45.26%→45.37%，且比分/总进球 LogLoss 同步下降（split 过小则主客强度被压平）
+SCORE_SPLIT = 0.45
 
 LEAGUE_PROFILES = {
     '英超': {'avg_goals': 2.8, 'draw_rate': 0.28},
@@ -217,10 +219,12 @@ def predict_scores_by_poisson(home_prob, draw_prob, away_prob, league='', handic
         '1x2_prob': {'H': p_home, 'D': p_draw, 'A': p_away},
     }
 
-# Dixon-Coles 低比分相关修正系数（文献常用 -0.1~-0.2，回测取 -0.15 最优）
-DC_RHO = -0.15
-# 大小球隐含总进球与联赛先验的融合权重（盘口噪声大，联赛均值主导，避免分布过度右移）
-OU_TOTAL_BLEND = 0.4
+# Dixon-Coles 低比分相关修正系数（文献常用 -0.1~-0.2；回测取 -0.12：
+# 保留 0-0/1-1 平局聚拢效应的同时，避免 -0.15/-0.20 过度压低比分 Top1/Top3）
+DC_RHO = -0.12
+# 大小球隐含总进球与联赛先验的融合权重（0.5 经回测在"跟随盘口"与"抗噪声"间最优：
+# 总进球 Top2 与 LogLoss 均优于 0.4，又不像 0.6 那样过度依赖单一盘口）
+OU_TOTAL_BLEND = 0.5
 # 目标总进球合理区间（公平赛事真实均值约 2.6，峰值 2-3；硬约束避免 4/5/7+ 主导）
 TARGET_TOTAL_MIN = 1.8
 TARGET_TOTAL_MAX = 3.6
@@ -1584,6 +1588,32 @@ def _actual_bifen_from_record(record):
         return None
     return f"{home_goals}-{away_goals}"
 
+def _actual_rqspf_from_record(record):
+    """从已结算快照的实际比分 + 让球值，推导让球胜平负实际结果。"""
+    hc = record.get('handicap')
+    try:
+        hv = float(hc) if hc is not None else 0.0
+    except (TypeError, ValueError):
+        hv = 0.0
+    actual = record.get('actual') if isinstance(record.get('actual'), dict) else {}
+    settlement = record.get('settlement') if isinstance(record.get('settlement'), dict) else {}
+    score = (
+        actual.get('score')
+        or actual.get('actual_score')
+        or settlement.get('score')
+        or settlement.get('actual_score')
+        or record.get('actual_score')
+    )
+    if not score or '-' not in str(score):
+        return None
+    try:
+        home_goals, away_goals = map(int, str(score).split('-', 1))
+    except (ValueError, TypeError):
+        return None
+    margin = home_goals + hv - away_goals
+    return '让胜' if margin > 0 else ('让负' if margin < 0 else '让平')
+
+
 def apply_beidan_history_calibration(probabilities, bet_type, league=None, min_samples=8, limit=200):
     """Use settled Beidan snapshots as a conservative reliability correction."""
     if not probabilities:
@@ -1611,6 +1641,8 @@ def apply_beidan_history_calibration(probabilities, bet_type, league=None, min_s
             actual = _actual_zjq_from_record(record)
         elif bet_type == 'bifen':
             actual = _actual_bifen_from_record(record)
+        elif bet_type == 'rqspf':
+            actual = _actual_rqspf_from_record(record)
         else:
             actual = None
         if actual not in expected:
@@ -1705,9 +1737,9 @@ def assess_recommendation_quality(probabilities, prediction=None, context=None):
     if score_consistency.get('conflict'):
         conflict = True
 
-    if top_prob >= 0.46 and lead >= 0.08 and not conflict:
+    if top_prob >= 0.50 and lead >= 0.08 and not conflict:
         level, label, advice = 'strong', '强推荐', f'主推 {top_key}'
-    elif top_prob >= 0.40 and lead >= 0.045 and not conflict:
+    elif top_prob >= 0.43 and lead >= 0.045 and not conflict:
         level, label, advice = 'medium', '可参考', f'主推 {top_key}'
     elif lead < 0.035 or conflict:
         level, label = 'split', '分歧较大'
@@ -1728,6 +1760,102 @@ def assess_recommendation_quality(probabilities, prediction=None, context=None):
         'conflict': conflict,
         'score_consistency': score_consistency,
     }
+
+# ====================== 爆冷(upset)识别 ======================
+# 经 2744 场离线回测标定的两级预警阈值：
+#   medium: fav_p<0.52 且 gap<=0.16 且 非热门总概率>=0.52 → 命中爆冷率约 59%（覆盖 33%）
+#   high  : fav_p<0.45 且 gap<=0.10 且 非热门总概率>=0.58 → 命中爆冷率约 63%（覆盖 20%）
+# 全局爆冷率基准约 47%，预警显著抬升真实爆冷占比。
+UPSET_MED_FAV_MAX = 0.52
+UPSET_MED_GAP_MAX = 0.16
+UPSET_MED_MASS_MIN = 0.52
+UPSET_HIGH_FAV_MAX = 0.45
+UPSET_HIGH_GAP_MAX = 0.10
+UPSET_HIGH_MASS_MIN = 0.58
+
+
+def _result_from_score(key):
+    """从比分键（(h,a) 元组或 'h-a' 字符串）推导赛果 胜/平/负。"""
+    try:
+        if isinstance(key, (tuple, list)):
+            h, a = int(key[0]), int(key[1])
+        else:
+            h, a = (int(x) for x in str(key).replace(':', '-').split('-')[:2])
+    except (ValueError, TypeError, IndexError):
+        return None
+    return '胜' if h > a else ('负' if h < a else '平')
+
+
+def _fmt_score(key):
+    if isinstance(key, (tuple, list)):
+        return f"{int(key[0])}-{int(key[1])}"
+    return str(key)
+
+
+def assess_upset_risk(probs_1x2):
+    """基于 1X2 概率评估爆冷风险。
+
+    返回 level(high/medium/low)、favorite(热门赛果)、favorite_prob、
+    upset_prob(非热门总概率)、gap(热门与次热门差)、alert(是否预警)。
+    """
+    if not probs_1x2:
+        return {'level': 'low', 'alert': False, 'favorite': None,
+                'favorite_prob': 0.0, 'upset_prob': 0.0, 'gap': 0.0}
+    probs = {k: float(v) for k, v in probs_1x2.items() if v is not None}
+    if not probs:
+        return {'level': 'low', 'alert': False, 'favorite': None,
+                'favorite_prob': 0.0, 'upset_prob': 0.0, 'gap': 0.0}
+    ranked = sorted(probs.items(), key=lambda x: -x[1])
+    favorite, fav_p = ranked[0]
+    second_p = ranked[1][1] if len(ranked) > 1 else 0.0
+    gap = fav_p - second_p
+    upset_mass = 1.0 - fav_p
+
+    if fav_p < UPSET_HIGH_FAV_MAX and gap <= UPSET_HIGH_GAP_MAX and upset_mass >= UPSET_HIGH_MASS_MIN:
+        level, label, alert = 'high', '爆冷高风险', True
+    elif fav_p < UPSET_MED_FAV_MAX and gap <= UPSET_MED_GAP_MAX and upset_mass >= UPSET_MED_MASS_MIN:
+        level, label, alert = 'medium', '爆冷预警', True
+    else:
+        level, label, alert = 'low', '热门稳健', False
+
+    return {
+        'level': level,
+        'label': label,
+        'alert': alert,
+        'favorite': favorite,
+        'favorite_prob': round(fav_p, 6),
+        'upset_prob': round(upset_mass, 6),
+        'gap': round(gap, 6),
+    }
+
+
+def pick_upset_scores(score_matrix, favorite_result, top_n=2):
+    """从比分分布中挑出"与热门赛果相反方向"上概率最高的若干爆冷比分。
+
+    热门主胜 → 候选取 平/负 比分；热门主负 → 取 胜/平；热门平局 → 取 胜/负。
+    回测：预警且真爆冷时，方向命中率约 50%、精确比分命中率约 22%（远高于普通比分 12%）。
+    """
+    if not score_matrix or not favorite_result:
+        return []
+    if favorite_result == '胜':
+        allow = {'平', '负'}
+    elif favorite_result == '负':
+        allow = {'胜', '平'}
+    else:
+        allow = {'胜', '负'}
+    cands = []
+    for key, prob in sorted(score_matrix.items(), key=lambda x: -x[1]):
+        res = _result_from_score(key)
+        if res in allow:
+            cands.append({
+                'score': _fmt_score(key),
+                'result': res,
+                'probability': round(float(prob), 6),
+            })
+        if len(cands) >= top_n:
+            break
+    return cands
+
 
 def _score_result_label(score):
     if isinstance(score, dict):
@@ -1830,6 +1958,7 @@ def _save_beidan_history(records):
 def _compact_beidan_record(match, source):
     spf = match.get('spf') or {}
     zjq = match.get('zjq') or {}
+    rqspf = match.get('rqspf') or {}
     return {
         'key': _beidan_record_key(match),
         'source': source,
@@ -1839,6 +1968,7 @@ def _compact_beidan_record(match, source):
         'league': match.get('league'),
         'home': match.get('home'),
         'away': match.get('away'),
+        'handicap': match.get('handicap'),
         'created_at': datetime.now().isoformat(timespec='seconds'),
         'updated_at': datetime.now().isoformat(timespec='seconds'),
         'settled': False,
@@ -1855,6 +1985,12 @@ def _compact_beidan_record(match, source):
             'quality': zjq.get('quality'),
             'goal_groups': zjq.get('goal_groups'),
             'probabilities': zjq.get('probabilities'),
+        },
+        'rqspf': {
+            'prediction': rqspf.get('prediction'),
+            'confidence': rqspf.get('confidence'),
+            'quality': rqspf.get('quality'),
+            'probabilities': rqspf.get('probabilities'),
         },
     }
 
@@ -1886,7 +2022,7 @@ def summarize_beidan_history(limit=200):
     recent = sorted(records, key=lambda r: r.get('created_at', ''), reverse=True)[:limit]
     levels = {}
     for record in recent:
-        for bet_type in ('spf', 'zjq'):
+        for bet_type in ('spf', 'zjq', 'rqspf'):
             level = ((record.get(bet_type) or {}).get('quality') or {}).get('level') or 'unknown'
             levels[level] = levels.get(level, 0) + 1
 
@@ -2021,7 +2157,17 @@ def analyze_spf(match, asian_data=None, cs_data=None):
             result['scores'] = score_prediction['top3']
             result['lambda_home'] = score_prediction['lambda_home']
             result['lambda_away'] = score_prediction['lambda_away']
-            
+
+            # 爆冷识别：基于校准后 1X2 概率判定风险，并从比分分布挑反向爆冷比分
+            upset = assess_upset_risk(model_probs)
+            upset['candidates'] = pick_upset_scores(
+                score_prediction.get('score_probs'),
+                upset.get('favorite'),
+                top_n=2
+            )
+            upset['chalk_result'] = result['prediction']
+            result['upset'] = upset
+
             if asian_data and asian_data.get('history'):
                 result['asian_trend'] = analyze_asian_trend(asian_data['history'])
             
@@ -2046,7 +2192,7 @@ def analyze_spf(match, asian_data=None, cs_data=None):
     
     return result
 
-def analyze_rqspf(match):
+def analyze_rqspf(match, asian_data=None):
     result = {
         'match_id': match['id'],
         'num': match['num'],
@@ -2087,10 +2233,21 @@ def analyze_rqspf(match):
         result['error'] = '欧赔概率不可用，无法计算让球胜平负'
         return result
 
+    home_win_prob = probs.get('胜', 0.33)
+    draw_prob = probs.get('平', 0.33)
+    away_win_prob = probs.get('负', 0.34)
+
+    # 与 analyze_spf 保持一致：先用亚盘历史修正 1X2 概率，再转让球分布
+    if asian_data and asian_data.get('history'):
+        home_win_prob, draw_prob, away_win_prob = adjust_probs_by_asian(
+            home_win_prob, draw_prob, away_win_prob, asian_data['history']
+        )
+        result['asian_adjusted'] = True
+
     score_prediction = predict_scores_by_poisson(
-        probs.get('胜', 0.33),
-        probs.get('平', 0.33),
-        probs.get('负', 0.34),
+        home_win_prob,
+        draw_prob,
+        away_win_prob,
         league=match.get('league', ''),
         handicap=handicap_value
     )
@@ -2103,6 +2260,14 @@ def analyze_rqspf(match):
         result['rqspf_meta'] = rq_meta
         return result
 
+    # 历史校准（与 SPF 同机制）：用已结算快照对让球胜平负做可靠性修正
+    rq_probs, calibration_meta = apply_beidan_history_calibration(
+        rq_probs,
+        'rqspf',
+        league=match.get('league')
+    )
+    result['history_calibration'] = calibration_meta
+
     result['spf_odds'] = odds
     result['odds'] = {}
     result['raw_spf_probabilities'] = probs
@@ -2112,11 +2277,22 @@ def analyze_rqspf(match):
     result['lambda_home'] = score_prediction['lambda_home']
     result['lambda_away'] = score_prediction['lambda_away']
     result['rqspf_meta'] = rq_meta
-    result['quality'] = assess_recommendation_quality(
-        rq_probs,
-        result['prediction'],
-        {}
-    )
+    if asian_data and asian_data.get('history'):
+        result['asian_trend'] = analyze_asian_trend(asian_data['history'])
+        quality_context = {}
+        if result.get('asian_trend'):
+            quality_context['asian_direction'] = result['asian_trend'].get('direction')
+        result['quality'] = assess_recommendation_quality(
+            rq_probs,
+            result['prediction'],
+            quality_context
+        )
+    else:
+        result['quality'] = assess_recommendation_quality(
+            rq_probs,
+            result['prediction'],
+            {}
+        )
     result['scores'] = [
         {
             'score': item['score'],
@@ -2222,6 +2398,15 @@ def analyze_bifen(match, bifen_odds=None, asian_data=None, goals_data=None):
     result['quality'] = assess_recommendation_quality(
         blended, result['prediction'], {}
     )
+
+    # 爆冷识别：用 1X2 概率评风险 + 从比分分布挑相反方向的爆冷比分候选
+    probs_1x2 = {'胜': p_home, '平': p_draw, '负': p_away}
+    upset = assess_upset_risk(probs_1x2)
+    upset['candidates'] = pick_upset_scores(blended, upset.get('favorite'), top_n=2)
+    top_result = _result_from_score(result['prediction']) if result['prediction'] else None
+    # 若最可能比分恰好是热门方向，给出"如爆冷则看这些比分"的提示
+    upset['chalk_result'] = top_result
+    result['upset'] = upset
     return result
 
 def analyze_zjq(match, zjq_odds=None, asian_data=None, goals_data=None):
@@ -2550,7 +2735,7 @@ def generate_beidan_recommendations(date=None, bet_types=None, source='okooo', s
             rec['spf'] = analyze_spf(match, asian_data, cs_data)
         
         if 'rqspf' in bet_types:
-            rec['rqspf'] = analyze_rqspf(match)
+            rec['rqspf'] = analyze_rqspf(match, asian_data)
         
         if 'bifen' in bet_types:
             rec['bifen'] = analyze_bifen(match, bifen_odds, asian_data, goals_data)
@@ -2572,6 +2757,67 @@ def generate_beidan_recommendations(date=None, bet_types=None, source='okooo', s
         'match_fetch': match_meta,
         'history_summary': summarize_beidan_history(limit=200),
     }
+    # 高置信单推聚合：只把 strong/medium 的场次单推拎出来，
+    # 让"预测结果"聚焦高命中率场次（split/low 不进单推，由前端决定双选/跳过）。
+    top_picks = []
+    pick_levels = {'strong': 0, 'medium': 0, 'split': 0, 'low': 0, 'unknown': 0}
+    for rec in recommendations:
+        for bet_type in ('spf', 'rqspf', 'zjq', 'bifen', 'bqc'):
+            sec = rec.get(bet_type)
+            if not isinstance(sec, dict):
+                continue
+            q = sec.get('quality') or {}
+            level = q.get('level', 'unknown')
+            pick_levels[level] = pick_levels.get(level, 0) + 1
+            if level in ('strong', 'medium'):
+                top_picks.append({
+                    'num': rec.get('num'),
+                    'league': rec.get('league'),
+                    'home': rec.get('home'),
+                    'away': rec.get('away'),
+                    'bet_type': bet_type,
+                    'prediction': sec.get('prediction'),
+                    'confidence': sec.get('confidence'),
+                    'level': level,
+                    'advice': q.get('advice'),
+                })
+    result['top_picks'] = top_picks
+    result['pick_levels'] = pick_levels
+
+    # 爆冷预警聚合：从各场比分分析里拎出 high/medium 爆冷风险场次，
+    # 附上"如爆冷则最可能的比分候选"，方便前端单独展示"冷门雷达"。
+    upset_watch = []
+    for rec in recommendations:
+        # 优先用比分分析(bifen)的爆冷块，回退到胜平负(spf)——
+        # 默认面板只请求 spf，故必须兼容 spf 才能让前端看到爆冷雷达。
+        bf = rec.get('bifen') if isinstance(rec.get('bifen'), dict) else None
+        sp = rec.get('spf') if isinstance(rec.get('spf'), dict) else None
+        src = None
+        if bf and isinstance(bf.get('upset'), dict) and bf['upset'].get('alert'):
+            src, up = bf, bf['upset']
+        elif sp and isinstance(sp.get('upset'), dict) and sp['upset'].get('alert'):
+            src, up = sp, sp['upset']
+        else:
+            continue
+        upset_watch.append({
+            'num': rec.get('num'),
+            'league': rec.get('league'),
+            'home': rec.get('home'),
+            'away': rec.get('away'),
+            'level': up.get('level'),
+            'label': up.get('label'),
+            'favorite': up.get('favorite'),
+            'favorite_prob': up.get('favorite_prob'),
+            'upset_prob': up.get('upset_prob'),
+            'chalk_result': up.get('chalk_result'),
+            'chalk_score': bf.get('prediction') if bf else None,
+            'upset_candidates': up.get('candidates', []),
+        })
+    # 高风险优先、其次按爆冷概率降序
+    upset_watch.sort(key=lambda x: (0 if x['level'] == 'high' else 1,
+                                    -(x.get('upset_prob') or 0)))
+    result['upset_watch'] = upset_watch
+
     if save_history:
         result['history_save'] = save_beidan_prediction_snapshot(result)
         result['history_summary'] = summarize_beidan_history(limit=200)

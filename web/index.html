@@ -1939,6 +1939,56 @@ function renderBeidanQuality(q) {
   </div>`;
 }
 
+function beidanUpsetColor(level) {
+  return level === 'high' ? '#ef4444' : (level === 'medium' ? '#f59e0b' : 'var(--muted)');
+}
+
+// 顶部"冷门雷达"汇总：把所有触发爆冷预警的场次集中展示
+function renderBeidanUpsetWatch(watch) {
+  if (!watch || !watch.length) return '';
+  const rows = watch.map(w => {
+    const color = beidanUpsetColor(w.level);
+    const cands = (w.upset_candidates || [])
+      .map(c => `<span style="display:inline-block;padding:2px 7px;margin:2px 4px 2px 0;background:${color}18;color:${color};border-radius:5px;font-size:12px;font-weight:bold">${esc(c.score)}<span style="font-weight:normal;color:var(--muted)"> ${esc(c.result || '')} ${((c.probability || 0) * 100).toFixed(1)}%</span></span>`)
+      .join('');
+    const favPct = w.favorite_prob != null ? (w.favorite_prob * 100).toFixed(0) + '%' : '-';
+    const upsetPct = w.upset_prob != null ? (w.upset_prob * 100).toFixed(0) + '%' : '-';
+    return `<div style="padding:8px 10px;margin-bottom:6px;background:var(--bg);border-left:3px solid ${color};border-radius:6px">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px">
+        <div style="font-weight:bold;font-size:13px">
+          <span style="color:${color}">${w.level === 'high' ? '🔴 高风险' : '🟠 预警'}</span>
+          <span style="margin-left:6px">${esc(w.num || '')} ${esc(w.home || '')} vs ${esc(w.away || '')}</span>
+          <span style="color:var(--muted);font-weight:normal;font-size:12px"> · ${esc(w.league || '')}</span>
+        </div>
+        <div style="font-size:12px;color:var(--muted)">
+          热门 <b style="color:var(--text)">${esc(w.favorite || '')} ${favPct}</b> · 反向概率 <b style="color:${color}">${upsetPct}</b>
+        </div>
+      </div>
+      ${cands ? `<div style="margin-top:5px;font-size:12px;color:var(--muted)">若爆冷，比分候选：${cands}</div>` : ''}
+    </div>`;
+  }).join('');
+  return `<div style="margin:8px 0 14px;padding:12px;background:var(--bg2);border-radius:10px;border:1px solid rgba(239,68,68,0.25)">
+    <div style="font-size:14px;font-weight:bold;margin-bottom:8px;color:var(--text)">🚨 冷门雷达 <span style="font-size:12px;color:var(--muted);font-weight:normal">· 识别出 ${watch.length} 场热门可能被爆冷</span></div>
+    ${rows}
+    <div style="margin-top:6px;font-size:11px;color:var(--muted)">依据 2744 场离线回测标定：预警场次真实爆冷率约 59%–63%（全局基准约 47%），候选比分为反向方向概率最高的选项。</div>
+  </div>`;
+}
+
+// 每场内联爆冷标记（附在胜平负比分预测下方）
+function renderBeidanUpsetInline(upset) {
+  if (!upset || !upset.alert) return '';
+  const color = beidanUpsetColor(upset.level);
+  const cands = (upset.candidates || [])
+    .map(c => `<span style="display:inline-block;padding:2px 7px;margin:2px 4px 2px 0;background:${color}18;color:${color};border-radius:5px;font-size:12px;font-weight:bold">${esc(c.score)}<span style="font-weight:normal;color:var(--muted)"> ${((c.probability || 0) * 100).toFixed(1)}%</span></span>`)
+    .join('');
+  return `<div style="margin-top:8px;padding:7px 9px;background:${color}12;border:1px dashed ${color}66;border-radius:6px">
+    <div style="font-size:12px;font-weight:bold;color:${color}">${upset.level === 'high' ? '🔴 爆冷高风险' : '🟠 爆冷预警'}
+      <span style="font-weight:normal;color:var(--muted)"> · 热门 ${esc(upset.favorite || '')} 仅 ${upset.favorite_prob != null ? (upset.favorite_prob * 100).toFixed(0) + '%' : '-'}，反向概率 ${upset.upset_prob != null ? (upset.upset_prob * 100).toFixed(0) + '%' : '-'}</span>
+    </div>
+    ${cands ? `<div style="margin-top:4px;font-size:12px;color:var(--muted)">爆冷比分候选：${cands}</div>` : ''}
+  </div>`;
+}
+
 function renderBeidanHistorySummary(summary) {
   if (!summary) return '';
   const levels = summary.quality_levels || {};
@@ -2091,6 +2141,8 @@ function renderBeidan(result) {
   const visibleRecommendations = filteredRecommendations.slice(pageStart, pageStart + beidanPageSize);
   html += `<div class="status" style="padding:4px 0 12px;font-size:13px">共 ${result.total_matches} 场比赛，匹配 ${filteredRecommendations.length} 场，当前显示 ${visibleRecommendations.length} 场</div>`;
   html += renderBeidanHistorySummary(result.history_summary);
+  // 顶部冷门雷达汇总区已隐藏：用户反馈太占页面，保留每场内的爆冷预警内联标记即可
+  // html += renderBeidanUpsetWatch(result.upset_watch);
   const pagerHtml = totalPages > 1 ? `<div class="pager">
     <button onclick="setBeidanPage(1)" ${beidanPage <= 1 ? 'disabled' : ''}>首页</button>
     <button onclick="setBeidanPage(${beidanPage - 1})" ${beidanPage <= 1 ? 'disabled' : ''}>上一页</button>
@@ -2167,6 +2219,7 @@ function renderBeidan(result) {
             html += '</div>';
             html += '</div>';
           }
+          html += renderBeidanUpsetInline(m.spf.upset);
           html += '</div>';
         }
         

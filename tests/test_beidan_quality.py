@@ -3,15 +3,18 @@ from unittest.mock import patch
 
 from src.beidan import (
     apply_beidan_history_calibration,
+    analyze_bifen,
     analyze_rqspf,
     analyze_spf,
     analyze_zjq,
     assess_recommendation_quality,
     assess_score_consistency,
+    assess_upset_risk,
     build_zjq_group_recommendation,
     enhance_scores_with_cs,
     generate_beidan_recommendations,
     parse_beidan_handicap,
+    pick_upset_scores,
     rqspf_probs_from_score_probs,
     save_beidan_prediction_snapshot,
 )
@@ -128,6 +131,104 @@ class BeidanQualityTests(unittest.TestCase):
         self.assertTrue(meta['applied'])
         self.assertGreater(adjusted['胜'], 0.34)
         self.assertAlmostEqual(sum(adjusted.values()), 1.0, places=6)
+
+    def test_rqspf_history_calibration_fires_with_settled_records(self):
+        records = []
+        for _ in range(12):
+            records.append({
+                'settled': True,
+                'league': 'L',
+                'handicap': '(-1)',
+                'actual': {'score': '2-0'},
+                'rqspf': {'probabilities': {'让胜': 0.40, '让平': 0.30, '让负': 0.30}},
+            })
+
+        with patch('src.beidan._load_beidan_history', return_value=records):
+            adjusted, meta = apply_beidan_history_calibration(
+                {'让胜': 0.38, '让平': 0.31, '让负': 0.31},
+                'rqspf',
+                league='L'
+            )
+
+        self.assertTrue(meta['applied'])
+        self.assertGreater(adjusted['让胜'], 0.38)
+        self.assertAlmostEqual(sum(adjusted.values()), 1.0, places=6)
+
+    def test_upset_risk_flags_weak_favorite(self):
+        # 弱热门（三路接近）→ 应判定爆冷预警
+        risk = assess_upset_risk({'胜': 0.36, '平': 0.35, '负': 0.29})
+        self.assertTrue(risk['alert'])
+        self.assertIn(risk['level'], {'medium', 'high'})
+        self.assertEqual(risk['favorite'], '胜')
+        self.assertAlmostEqual(risk['upset_prob'], 0.64, places=2)
+
+    def test_upset_risk_ignores_strong_favorite(self):
+        # 强热门 → 不预警
+        risk = assess_upset_risk({'胜': 0.70, '平': 0.18, '负': 0.12})
+        self.assertFalse(risk['alert'])
+        self.assertEqual(risk['level'], 'low')
+
+    def test_pick_upset_scores_returns_contrarian_scores(self):
+        # 热门为主胜时，爆冷比分候选只能是平/负方向
+        matrix = {
+            (2, 0): 0.14, (1, 0): 0.12, (1, 1): 0.11,
+            (0, 0): 0.08, (1, 2): 0.06, (0, 1): 0.05,
+        }
+        cands = pick_upset_scores(matrix, '胜', top_n=2)
+        self.assertEqual(len(cands), 2)
+        for c in cands:
+            self.assertIn(c['result'], {'平', '负'})
+        # 概率应降序
+        self.assertGreaterEqual(cands[0]['probability'], cands[1]['probability'])
+
+    def test_analyze_bifen_attaches_upset_block(self):
+        match = {
+            'id': 'mU', 'num': '001', 'home': 'A', 'away': 'B',
+            'league': '英超', 'time': '20:00', 'handicap': 0,
+        }
+        # 弱热门赔率 → 触发预警且给出爆冷候选
+        with patch('src.beidan.fetch_ouzhi_odds', return_value={'home': 2.6, 'draw': 3.2, 'away': 2.7}):
+            result = analyze_bifen(match, goals_data={'history': [{'over_odds': 1.9, 'under_odds': 1.9}]})
+        self.assertIn('upset', result)
+        upset = result['upset']
+        self.assertTrue(upset['alert'])
+        self.assertIn(upset['level'], {'medium', 'high'})
+        self.assertTrue(upset['candidates'])
+
+    def test_analyze_spf_attaches_upset_block(self):
+        match = {
+            'id': 'mS', 'num': '007', 'home': 'A', 'away': 'B',
+            'league': '英超', 'time': '20:00', 'handicap': 0,
+        }
+        # 默认面板走 spf；弱热门赔率应触发爆冷预警并给出反向比分候选
+        with patch('src.beidan.fetch_ouzhi_odds', return_value={'home': 2.6, 'draw': 3.2, 'away': 2.7}):
+            result = analyze_spf(match)
+        self.assertIn('upset', result)
+        upset = result['upset']
+        self.assertTrue(upset['alert'])
+        self.assertIn(upset['level'], {'medium', 'high'})
+        self.assertTrue(upset['candidates'])
+        # 候选比分方向应与热门相反
+        fav = upset['favorite']
+        for c in upset['candidates']:
+            self.assertNotEqual(c['result'], fav)
+
+    def test_upset_watch_falls_back_to_spf(self):
+        match = {
+            'id': 'mW', 'num': '009', 'date': '2026-07-17', 'home': 'A', 'away': 'B',
+            'league': '英超', 'time': '20:00', 'handicap': 0, 'source': 'okooo',
+        }
+        meta = {'date': '2026-07-17', 'source': 'okooo', 'attempts': []}
+        with patch('src.beidan._fetch_beidan_matches_with_fallback', return_value=([match], meta)), \
+             patch('src.beidan.fetch_ouzhi_odds', return_value={'home': 2.6, 'draw': 3.2, 'away': 2.7}), \
+             patch('src.beidan.fetch_okooo_asian_history', return_value=None), \
+             patch('src.beidan.fetch_okooo_goals_history', return_value=None), \
+             patch('src.beidan.fetch_okooo_cs_history', return_value=None):
+            result = generate_beidan_recommendations(
+                date='2026-07-17', bet_types=['spf'], source='okooo', save_history=False
+            )
+        self.assertIn('upset_watch', result)
+        self.assertTrue(any(w['num'] == '009' for w in result['upset_watch']))
 
     def test_history_calibration_waits_for_enough_samples(self):
         records = [{
