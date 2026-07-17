@@ -5228,9 +5228,6 @@ function renderKL8(r) {
       if (sel.multi_slips && sel.multi_slips.length > 0) {
         html += renderKL8MultiSlips(sel, st);
       }
-      if (sel.variants) {
-        html += renderKL8VariantRows(sel.variants);
-      }
       if (isRef && sel.warning) {
         html += `<div style="font-size:11px;color:#9a6700;margin-top:6px">⚠ ${esc(sel.warning)}</div>`;
       }
@@ -5268,9 +5265,6 @@ function renderKL8(r) {
     }
     html += `</div>`;
     html += renderKL8ShapeProfile(fushi.shape_profile, coreNumbers);
-    if (fushi.variants) {
-      html += renderKL8VariantRows(fushi.variants);
-    }
     if (isRef && fushi.warning) {
       html += `<div style="font-size:11px;color:#9a6700;margin-top:6px">⚠ ${esc(fushi.warning)}</div>`;
     }
@@ -5349,30 +5343,6 @@ function renderKL8Balls(numbers, size = 36) {
   return (numbers || []).map(n =>
     `<span class="kl8-ball highlight-ball" style="width:${size}px;height:${size}px;font-size:${size >= 40 ? 16 : 13}px">${String(n).padStart(2,'0')}</span>`
   ).join('');
-}
-
-function renderKL8VariantRows(variants) {
-  if (!variants || typeof variants !== 'object') return '';
-  const labels = {
-    high_tier_chase: '高档冲击',
-    balanced: '均衡',
-    concentrated: '集中',
-    repeat_follow: '跟重号',
-    zone_spread: '区间分散',
-    prize_floor: '奖级冲击',
-  };
-  labels.shape_balanced = '形态均衡';
-  let html = `<div style="margin-top:8px;display:grid;gap:5px">`;
-  for (const key of ['high_tier_chase', 'balanced', 'concentrated', 'repeat_follow', 'zone_spread', 'shape_balanced', 'prize_floor']) {
-    const nums = variants[key] || [];
-    if (!nums.length) continue;
-    html += `<div style="font-size:11px;color:var(--muted);display:flex;align-items:center;gap:6px;flex-wrap:wrap">`;
-    html += `<span style="min-width:42px;color:#8b949e">${labels[key] || key}</span>`;
-    html += nums.map(n => `<span>${String(n).padStart(2,'0')}</span>`).join(' ');
-    html += `</div>`;
-  }
-  html += `</div>`;
-  return html;
 }
 
 function renderKL8AccuracyProfile(profile) {
