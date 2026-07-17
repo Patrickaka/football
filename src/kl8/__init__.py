@@ -117,9 +117,15 @@ FUSHI_PLAY_KEYS = tuple(FUSHI_CONFIG)
 # 通过生成多组、彼此差异化的选号集合（权重扰动+覆盖惩罚），让组合覆盖更多号码，
 # 从而提升“至少一组命中4+”的概率。这是覆盖率杠杆，不改变单注期望命中（仍为1.5），
 # 仅提升“组合层面”的命中率——即以更多注数换取更高的组合中奖概率。
+# 多注覆盖配置。
+# pick_size: 每组输出的号码个数(默认=玩法选号数)。对用户“选5复式”玩法，
+#   每组当 6 码打选5复式=C(6,5)=6注。多组覆盖提升“组合中5”概率。
+#   实测结论(见 backtest_kl8_coverage.py)：6码堆组数性价比(率/百元≈2.37)恒高于扩7码(≈1.50)；
+#   成本随组数线性、命中率线性、性价比在8~16组达满档。这是覆盖面杠杆，不改变单注期望命中，
+#   以更多注数换取更高组合中奖概率。用户选择保持 8×6 最便宜档(96元/期，组合中5约2.27%)。
 MULTI_SLIP_CONFIG = {
     'select_5': {'n_slips': 5},
-    'select_6': {'n_slips': 8},
+    'select_6': {'n_slips': 8, 'pick_size': 6},
     'select_7': {'n_slips': 6},
     'select_10': {'n_slips': 6},
 }
@@ -2071,7 +2077,8 @@ def _select_final_candidate_pool(
 
 
 # ─── 多注覆盖方案生成（v10）───
-def generate_multi_slips(analyzer: 'KL8Analyzer', select_n: int, n_slips: int = 8) -> List[List[int]]:
+def generate_multi_slips(analyzer: 'KL8Analyzer', select_n: int, n_slips: int = 8,
+                          pick_size: int = None) -> List[List[int]]:
     """生成 n_slips 组差异化选号集合（覆盖最大化）。
 
     背景：单注选N命中4+的概率极低且模型无预测edge（公平摇奖）。本函数通过
@@ -2079,12 +2086,20 @@ def generate_multi_slips(analyzer: 'KL8Analyzer', select_n: int, n_slips: int = 
     (2) 对已被前面注使用的号码施加覆盖惩罚，使各组尽量覆盖不同号码；
     从而让一组数字组合（组合层面）覆盖更多号码，提升“至少一组命中4+”的概率。
 
+    参数：
+      select_n : 玩法选号数（决定用哪套策略，如 6=选6）。
+      n_slips  : 生成的组数。
+      pick_size: 每组输出的号码个数，默认=select_n。设成 >select_n（如7）可让
+                 每组覆盖更多号码，适配“选5复式”等玩法（单组中5概率约翻数倍）。
+
     返回 list（长度<=n_slips），每个元素为排序后的号码列表。
     组0为基准权重下的最优选号；后续组逐步差异化。
     """
     import random as _rng
     from collections import Counter as _Counter
 
+    if pick_size is None:
+        pick_size = select_n
     s_key = f'select_{select_n}'
     strategy = resolve_play_strategy(s_key, allow_reference=True)
     if strategy is None:
@@ -2107,17 +2122,17 @@ def generate_multi_slips(analyzer: 'KL8Analyzer', select_n: int, n_slips: int = 
         if not any(v > 0 for v in w.values()):
             w = base_weights
         ranking = predictor.get_ensemble_ranking(
-            top_n=40, feature_weights=w,
+            top_n=max(40, pick_size), feature_weights=w,
             repeat_direction=repeat_direction, frequency_mode=frequency_mode,
         )
-        if len(ranking) < select_n:
+        if len(ranking) < pick_size:
             continue
         # 覆盖惩罚：已被前面注使用越多的号码，本组越不优先
         eff = sorted(
             ranking,
             key=lambda it: (-(it['ranking_score'] - 0.05 * used.get(it['num'], 0)), it['num']),
         )
-        chosen = sorted(it['num'] for it in eff[:select_n])
+        chosen = sorted(it['num'] for it in eff[:pick_size])
         slips.append(chosen)
         for n in chosen:
             used[n] += 1
@@ -4167,7 +4182,11 @@ class KL8Analyzer:
             ms_cfg = MULTI_SLIP_CONFIG.get(s_key)
             if ms_cfg:
                 try:
-                    slips = generate_multi_slips(self, select_type, ms_cfg.get('n_slips', 8))
+                    slips = generate_multi_slips(
+                        self, select_type,
+                        ms_cfg.get('n_slips', 8),
+                        ms_cfg.get('pick_size'),
+                    )
                 except Exception as _e:  # 多注生成失败不影响主推荐
                     log.warning(f'快乐8 多注生成失败 {s_key}: {_e}')
                     slips = []
