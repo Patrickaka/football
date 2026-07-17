@@ -29,7 +29,7 @@ from ..common.logger import setup_logger
 
 log = setup_logger('football')
 
-FOOTBALL_PREDICTION_LOGIC_VERSION = '2026-06-26-time-layer-market-v3'
+FOOTBALL_PREDICTION_LOGIC_VERSION = '2026-07-17-upset-radar'
 
 # ELO 评分系统（延迟导入）
 try:
@@ -6394,6 +6394,65 @@ def _is_prediction_cache_current(result: Dict) -> bool:
     return _cached_prediction_logic_version(result) == FOOTBALL_PREDICTION_LOGIC_VERSION
 
 
+def assess_football_upset(asian, euro, team, candidates):
+    """评估爆冷（热门被击败）风险，并挑出反向爆冷比分候选。
+
+    对齐北单模块的爆冷识别能力：把足球模块内部已有的 ``_evaluate_upset_risk``
+    （盘口走势 / 凯利 / 球队状态 / 欧赔变化）显式暴露为结构化的
+    ``{level, alert, favorite, candidates}``，供前端展示「爆冷预警」。
+
+    返回结构与北单 ``analyze_bifen`` 的 ``result['upset']`` 兼容。
+    """
+    risk_score = _evaluate_upset_risk(asian, euro, team)
+    p_home = float(euro.get('close', {}).get('home', 0.0) or 0.0)
+    p_draw = float(euro.get('close', {}).get('draw', 0.0) or 0.0)
+    p_away = float(euro.get('close', {}).get('away', 0.0) or 0.0)
+    probs = {'胜': p_home, '平': p_draw, '负': p_away}
+    favorite = max(probs, key=probs.get)
+    fav_p = probs[favorite]
+    upset_p = 1.0 - fav_p
+
+    # 两级阈值：以热门强度为主信号（参考北单回测：爆冷率随热门强度
+    # 单调可分，fav<0.45 时爆冷率约 53%~62%），盘口/欧赔异常 risk_score 为辅。
+    if fav_p < 0.45 or risk_score >= 0.55:
+        level, alert = 'high', True
+    elif fav_p < 0.52 or risk_score >= 0.3:
+        level, alert = 'medium', True
+    else:
+        level, alert = 'low', False
+
+    # 反向方向：允许非热门胜出的比分
+    if favorite == '胜':
+        allow = lambda h, a: h <= a          # 平 或 负
+    elif favorite == '负':
+        allow = lambda h, a: h >= a          # 胜 或 平
+    else:
+        allow = lambda h, a: h != a          # 胜 或 负
+
+    picked = []
+    for (h, a), prob in (candidates or []):
+        if allow(h, a):
+            picked.append({
+                'score': f"{h}-{a}",
+                'result': _result_label(h, a),
+                'probability': float(prob),
+            })
+    picked.sort(key=lambda x: -x['probability'])
+    picked = picked[:2]
+
+    label = {'high': '🔴高风险爆冷', 'medium': '🟠需警惕爆冷', 'low': '稳健'}.get(level, '稳健')
+    return {
+        'level': level,
+        'label': label,
+        'alert': alert,
+        'favorite': favorite,
+        'favorite_prob': fav_p,
+        'upset_prob': upset_p,
+        'risk_score': risk_score,
+        'candidates': picked,
+    }
+
+
 def analyze_match(match, force_refresh=False):
     """抓取赔率 + 球队攻防 + 泊松模型，返回完整结果 dict
     
@@ -6982,6 +7041,13 @@ def analyze_match(match, force_refresh=False):
         except Exception as e:
             log.warning(f"资金流检测失败: {e}")
 
+    # ========== 爆冷识别（对齐北单：显式暴露爆冷风险 + 反向比分候选）==========
+    try:
+        upset = assess_football_upset(asian, euro, team, candidates)
+    except Exception as e:
+        log.warning(f"爆冷识别失败: {e}")
+        upset = None
+
     # ========== 风险等级评估（提前到推荐之前）==========
     risk = _evaluate_risk_level(asian, euro, total, steam_result, confidence, similar_market_result)
     recommend_count = risk.get('recommend_count', 2)
@@ -7303,7 +7369,10 @@ def analyze_match(match, force_refresh=False):
             'recommend_count': risk['recommend_count'],
         },
         'settlement': settlement,
-        
+
+        # ========== 爆冷识别结果（对齐北单，前端「爆冷预警」展示）==========
+        'upset': upset,
+
         'model': {
             'lam_home': lam_home, 'lam_away': lam_away,
             'top_scores': top_scores, 'recommend': recommend,
