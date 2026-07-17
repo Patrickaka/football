@@ -112,6 +112,18 @@ FUSHI_CONFIG = {
 }
 FUSHI_PLAY_KEYS = tuple(FUSHI_CONFIG)
 
+# ─── 多注覆盖方案（v10：提升组合层面命中4+概率）───
+# 原理：单注选6命中4约2.7%/期、5约0.3%/期（纯随机，模型无预测edge）。
+# 通过生成多组、彼此差异化的选号集合（权重扰动+覆盖惩罚），让组合覆盖更多号码，
+# 从而提升“至少一组命中4+”的概率。这是覆盖率杠杆，不改变单注期望命中（仍为1.5），
+# 仅提升“组合层面”的命中率——即以更多注数换取更高的组合中奖概率。
+MULTI_SLIP_CONFIG = {
+    'select_5': {'n_slips': 5},
+    'select_6': {'n_slips': 8},
+    'select_7': {'n_slips': 6},
+    'select_10': {'n_slips': 6},
+}
+
 # ─── 特征开关配置（v5：所有特征默认停用，需回测验证才能启用）───
 # 按玩法分开评估: 每个特征可以有per-play-type的enabled状态
 FEATURE_CONFIG = {
@@ -2056,6 +2068,60 @@ def _select_final_candidate_pool(
     scored.sort(key=lambda item: (-item[0], item[1]))
     _, mode, pool = scored[0]
     return pool, mode
+
+
+# ─── 多注覆盖方案生成（v10）───
+def generate_multi_slips(analyzer: 'KL8Analyzer', select_n: int, n_slips: int = 8) -> List[List[int]]:
+    """生成 n_slips 组差异化选号集合（覆盖最大化）。
+
+    背景：单注选N命中4+的概率极低且模型无预测edge（公平摇奖）。本函数通过
+    (1) 对参考策略的特征权重做确定性扰动，得到不同“模型视角”的排名；
+    (2) 对已被前面注使用的号码施加覆盖惩罚，使各组尽量覆盖不同号码；
+    从而让一组数字组合（组合层面）覆盖更多号码，提升“至少一组命中4+”的概率。
+
+    返回 list（长度<=n_slips），每个元素为排序后的号码列表。
+    组0为基准权重下的最优选号；后续组逐步差异化。
+    """
+    import random as _rng
+    from collections import Counter as _Counter
+
+    s_key = f'select_{select_n}'
+    strategy = resolve_play_strategy(s_key, allow_reference=True)
+    if strategy is None:
+        return []
+    base_weights = {k: float(v) for k, v in (strategy.get('feature_weights') or {}).items() if v}
+    if not base_weights:
+        return []
+    window = strategy.get('window_size', KL8_DEFAULT_HISTORY)
+    predictor = analyzer._build_window_analyzer(window)
+    based_on = analyzer.history_data[0].get('issue', '') if analyzer.history_data else ''
+    repeat_direction = strategy.get('repeat_direction', 'neutral')
+    frequency_mode = strategy.get('frequency_mode', 'mean_reversion')
+
+    used = _Counter()
+    slips: List[List[int]] = []
+    for k in range(n_slips):
+        rng = _rng.Random(f'kl8_ms_{based_on}_{select_n}_{k}')
+        # 确定性扰动特征权重，得到不同排名视角
+        w = {feat: max(0.0, wt * rng.uniform(0.55, 1.45)) for feat, wt in base_weights.items()}
+        if not any(v > 0 for v in w.values()):
+            w = base_weights
+        ranking = predictor.get_ensemble_ranking(
+            top_n=40, feature_weights=w,
+            repeat_direction=repeat_direction, frequency_mode=frequency_mode,
+        )
+        if len(ranking) < select_n:
+            continue
+        # 覆盖惩罚：已被前面注使用越多的号码，本组越不优先
+        eff = sorted(
+            ranking,
+            key=lambda it: (-(it['ranking_score'] - 0.05 * used.get(it['num'], 0)), it['num']),
+        )
+        chosen = sorted(it['num'] for it in eff[:select_n])
+        slips.append(chosen)
+        for n in chosen:
+            used[n] += 1
+    return slips
 
 
 def normalize_record(record, keep_meta: bool = False) -> Optional[Dict]:
@@ -4096,6 +4162,18 @@ class KL8Analyzer:
                     else '参考预测：当前策略尚未通过严格回测验证，仅供数据观察。'
                 ),
             }
+
+            # v10: 多注覆盖方案（提升组合层面命中4+概率）
+            ms_cfg = MULTI_SLIP_CONFIG.get(s_key)
+            if ms_cfg:
+                try:
+                    slips = generate_multi_slips(self, select_type, ms_cfg.get('n_slips', 8))
+                except Exception as _e:  # 多注生成失败不影响主推荐
+                    log.warning(f'快乐8 多注生成失败 {s_key}: {_e}')
+                    slips = []
+                if slips:
+                    results[s_key]['multi_slips'] = slips
+                    results[s_key]['multi_slips_count'] = len(slips)
 
         # 复式玩法（v9.2: 也按自己的策略独立验证）
         for fushi_key, fushi_cfg in FUSHI_CONFIG.items():

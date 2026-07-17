@@ -5265,6 +5265,9 @@ function renderKL8(r) {
       html += `<div style="font-size:11px;color:#8b949e;margin:4px 0 2px">中奖门槛: 中${kl8WinTh[st]}个即中奖 · 单注中奖率 <b style="color:${kl8WR >= 15 ? '#2ea043' : '#d29922'}">${kl8WR}%</b> · 期望中${(st * 0.25).toFixed(2)}个</div>`;
       html += renderKL8ShapeProfile(sel.shape_profile, sel.numbers);
       html += renderKL8AccuracyProfile(sel.accuracy_profile);
+      if (sel.multi_slips && sel.multi_slips.length > 0) {
+        html += renderKL8MultiSlips(sel, st);
+      }
       if (sel.variants) {
         html += renderKL8VariantRows(sel.variants);
       }
@@ -5535,6 +5538,38 @@ function renderKL8AccuracyProfile(profile) {
   const mode = profile.selected_mode ? ` | mode ${esc(profile.selected_mode)}` : '';
   return `<div style="font-size:11px;color:#8b949e;margin-top:6px;line-height:1.5">
     random E=${expected} | P(0 hit)=${zero}${targetText}${keyText ? ` | ${keyText}` : ''}${mode}
+  </div>`;
+}
+
+// 多注覆盖方案（v10）：渲染 N 组差异化选号，并诚实展示组合命中4+概率
+function renderKL8MultiSlips(sel, st) {
+  const slips = sel.multi_slips;
+  if (!Array.isArray(slips) || slips.length === 0) return '';
+  const nSlips = slips.length;
+  const pick = sel.pick || st;
+  // 组合层面“至少1组命中≥4”的近似概率（组间近似独立）: 1-(1-p)^N
+  const p4 = kl8HypergeomPGe(pick, 4);
+  const p5 = kl8HypergeomPGe(pick, 5);
+  const comb4 = (1 - Math.pow(1 - p4, nSlips)) * 100;
+  const comb5 = (1 - Math.pow(1 - p5, nSlips)) * 100;
+  const cost = nSlips * 2;
+  let cards = '';
+  slips.forEach((s, i) => {
+    cards += `<div style="display:flex;align-items:center;gap:5px;margin-bottom:4px">`;
+    cards += `<span style="font-size:11px;color:#8b949e;min-width:34px">第${i + 1}组</span>`;
+    for (const n of s) {
+      cards += `<span class="kl8-ball highlight-ball" style="width:28px;height:28px;font-size:11px">${String(n).padStart(2,'0')}</span>`;
+    }
+    cards += `</div>`;
+  });
+  return `<div style="margin-top:10px;border-top:1px dashed var(--line);padding-top:8px">
+    <div style="font-size:12px;font-weight:700;color:#4493f8;margin-bottom:5px">🎯 多注覆盖方案（${nSlips}组选${pick}）</div>
+    <div style="font-size:11px;color:#8b949e;margin-bottom:7px;line-height:1.5">
+      单注选${pick}命中4约${(p4 * 100).toFixed(1)}%/期、5约${(p5 * 100).toFixed(2)}%/期（纯随机）。下面${nSlips}组通过权重扰动+覆盖惩罚彼此差异化、覆盖更多号码，
+      组合层面“至少1组命中4+”概率约 <b style="color:#2ea043">${comb4.toFixed(1)}%</b>、“命中5+”约 <b style="color:#d29922">${comb5.toFixed(1)}%</b>。每期成本约 ${cost} 元。
+    </div>
+    ${cards}
+    <div style="font-size:11px;color:#9a6700;margin-top:6px">⚠ 这是“多买几组”的覆盖率杠杆，不保证必中；单注期望命中仍为${(pick * 0.25).toFixed(2)}个。</div>
   </div>`;
 }
 
