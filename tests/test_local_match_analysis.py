@@ -2,6 +2,7 @@ import unittest
 
 from src.common.local_match_analysis import (
     build_decision, normalize_probabilities, pick_high_score_scenario,
+    build_score_strategy,
 )
 from src.basketball import assess_basketball_upset, build_basketball_analysis
 
@@ -24,6 +25,20 @@ class LocalMatchAnalysisTests(unittest.TestCase):
         self.assertIsNone(pick_high_score_scenario([
             ((1, 1), 0.30), ((3, 1), 0.08), ((3, 2), 0.04),
         ]))
+
+    def test_weak_exact_score_uses_range(self):
+        strategy = build_score_strategy([
+            ((1, 1), 0.12), ((1, 0), 0.10), ((2, 1), 0.09),
+        ], confidence='medium')
+        self.assertEqual(strategy['action'], '比分区间')
+        self.assertFalse(strategy['playable'])
+
+    def test_concentrated_exact_score_can_be_marked_cautious(self):
+        strategy = build_score_strategy([
+            ((2, 0), 0.15), ((2, 1), 0.11), ((1, 0), 0.09),
+        ], confidence='high')
+        self.assertEqual(strategy['action'], '谨慎单比分')
+        self.assertTrue(strategy['playable'])
 
     def test_close_match_uses_double_selection(self):
         decision = build_decision({'胜': 0.38, '平': 0.33, '负': 0.29}, confidence='high')

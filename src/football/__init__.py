@@ -6497,7 +6497,7 @@ def build_match_analysis(result):
 
         from src.common.local_match_analysis import (
             LOCAL_ANALYST_VERSION, build_decision, normalize_probabilities,
-            pick_high_score_scenario,
+            pick_high_score_scenario, build_score_strategy,
         )
         probs = normalize_probabilities({'home': w, 'draw': d, 'away': l})
         w, d, l = probs['home'], probs['draw'], probs['away']
@@ -6631,6 +6631,9 @@ def build_match_analysis(result):
             probs, confidence=conf_level, upset_alert=bool(upset.get('alert')),
             min_single=0.48, min_margin=0.08,
         )
+        score_strategy = build_score_strategy(
+            candidates, confidence=conf_level, upset_alert=bool(upset.get('alert')),
+        )
         return {
             'analysis_model': LOCAL_ANALYST_VERSION,
             'verdict': verdict,
@@ -6645,6 +6648,7 @@ def build_match_analysis(result):
             'risk_level': risk.get('level') if isinstance(risk, dict) else None,
             'upset_alert': bool(upset.get('alert')),
             'decision': decision,
+            'score_strategy': score_strategy,
         }
     except Exception as e:
         log.warning(f"build_match_analysis 失败: {e}")

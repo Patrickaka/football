@@ -84,3 +84,31 @@ def pick_high_score_scenario(candidates, min_goals=4, min_mass=0.20):
         return None
     score, probability = max(eligible, key=lambda item: item[1])
     return {'score': score, 'probability': probability, 'tail_probability': mass}
+
+
+def build_score_strategy(candidates, confidence=None, upset_alert=False):
+    """Decide whether an exact score is usable or only a score range is honest."""
+    ranked = sorted(candidates or [], key=lambda item: float(item[1]), reverse=True)
+    if not ranked:
+        return {'action': '观望', 'playable': False, 'reason': '缺少比分分布'}
+    top1_prob = float(ranked[0][1])
+    top3_mass = sum(float(item[1]) for item in ranked[:3])
+    confidence_low = confidence in (None, 'low', '低')
+    playable = (
+        not upset_alert and not confidence_low and
+        top1_prob >= 0.14 and top3_mass >= 0.34
+    )
+    if playable:
+        action = '谨慎单比分'
+        reason = '单比分集中度和前三覆盖率达到历史筛选门槛'
+    else:
+        action = '比分区间'
+        reason = '单比分概率不足，采用前三比分覆盖，避免强行单挑'
+    return {
+        'action': action,
+        'playable': playable,
+        'top1': f"{ranked[0][0][0]}-{ranked[0][0][1]}",
+        'top1_prob': top1_prob,
+        'top3_mass': top3_mass,
+        'reason': reason,
+    }

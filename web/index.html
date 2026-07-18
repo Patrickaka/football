@@ -2093,12 +2093,18 @@ function renderAnalysisCard(a, kind) {
     本地决策：<b>${esc(decision.action)}</b>${decision.primary ? ` · 首选 ${esc(decision.primary)}` : ''}${decision.secondary ? ` / ${esc(decision.secondary)}` : ''}
     <span style="color:var(--muted)"> · ${esc(decision.reason || '')}</span>
   </div>` : '';
+  const scoreStrategy = a.score_strategy || {};
+  const scoreStrategyBlock = scoreStrategy.action ? `<div style="margin-top:6px;font-size:12px">
+    比分策略：<b>${esc(scoreStrategy.action)}</b>
+    <span style="color:var(--muted)"> · ${esc(scoreStrategy.reason || '')}</span>
+  </div>` : '';
   return `<div style="margin-top:8px;padding:9px;background:var(--bg2);border-left:3px solid var(--accent);border-radius:8px">
     <div style="font-size:13px;font-weight:bold;margin-bottom:5px">🧠 赛果分析</div>
     <div style="font-size:13px">${esc(a.verdict || '')}</div>
     <div style="margin-top:6px">${scores}</div>
     ${dirBlock}
     ${decisionBlock}
+    ${scoreStrategyBlock}
     ${reasons ? `<div style="margin-top:6px">${reasons}</div>` : ''}
     <div style="margin-top:6px;font-size:11px;color:var(--muted)">置信度：${esc(conf)}</div>
   </div>`;

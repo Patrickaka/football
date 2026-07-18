@@ -2125,7 +2125,7 @@ def build_beidan_match_analysis(spf_result):
             w, d, l = w / s, d / s, l / s
         from src.common.local_match_analysis import (
             LOCAL_ANALYST_VERSION, build_decision, normalize_probabilities,
-            pick_high_score_scenario,
+            pick_high_score_scenario, build_score_strategy,
         )
         pprobs = normalize_probabilities({'home': w, 'draw': d, 'away': l})
         w, d, l = pprobs['home'], pprobs['draw'], pprobs['away']
@@ -2241,6 +2241,10 @@ def build_beidan_match_analysis(spf_result):
             pprobs, confidence=confidence_level,
             upset_alert=bool(upset.get('alert')), min_single=0.48, min_margin=0.08,
         )
+        score_strategy = build_score_strategy(
+            cands, confidence=confidence_level,
+            upset_alert=bool(upset.get('alert')),
+        )
         return {
             'analysis_model': LOCAL_ANALYST_VERSION,
             'verdict': verdict,
@@ -2255,6 +2259,7 @@ def build_beidan_match_analysis(spf_result):
             'risk_level': (spf_result.get('quality') or {}).get('level'),
             'upset_alert': bool(upset.get('alert')),
             'decision': decision,
+            'score_strategy': score_strategy,
         }
     except Exception as e:
         log.warning(f"build_beidan_match_analysis 失败: {e}")
