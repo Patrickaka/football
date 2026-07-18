@@ -4809,6 +4809,7 @@ async function loadLottery() {
 
 function renderLottery(r) {
   const appLottery = document.getElementById('app-lottery');
+  const p2 = n => String(n).padStart(2, '0');
   const stats = r.statistics || {};
   const recent = r.recent_results || [];
   const algo = r.algorithm_summary || {};
