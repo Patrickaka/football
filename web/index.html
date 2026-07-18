@@ -3444,8 +3444,9 @@ function renderSsq(r) {
 
   // 红球/蓝球冷热（默认折叠）
   const ssqRecords = r.prediction_records || [];
+  html += `<button type="button" style="width:100%;margin-top:12px;padding:11px;background:var(--card2);color:var(--text);border:1px solid var(--line);border-radius:8px;font-size:14px;cursor:pointer" onclick="document.getElementById('ssq-prediction-records').open=!document.getElementById('ssq-prediction-records').open">📋 查看预测记录（${ssqRecords.length}期）</button>`;
+  html += `<details class="adv" id="ssq-prediction-records"><summary>预测记录与开奖对比</summary><div class="card">`;
   if (ssqRecords.length) {
-    html += `<div class="section-title">预测记录与开奖对比</div><div class="card">`;
     ssqRecords.forEach((record, index) => {
       const actual = record.actual;
       html += `<div style="${index ? 'border-top:1px solid var(--line);margin-top:10px;padding-top:10px' : ''}">
@@ -3460,8 +3461,10 @@ function renderSsq(r) {
       });
       html += `</div>`;
     });
-    html += `</div>`;
+  } else {
+    html += `<div class="note">暂无预测记录。当前预测已保存，下一期开奖并刷新数据后将自动显示命中结果。</div>`;
   }
+  html += `</div></details>`;
 
   const hasHot = (analysis.hot_red && analysis.hot_red.length) || (analysis.hot_blue && analysis.hot_blue.length);
   if (hasHot) {
@@ -3524,25 +3527,6 @@ function renderLottery3d(r) {
   const z6 = r.zu6_four;
   const z6Variants = Array.isArray(r.zu6_four_variants) ? r.zu6_four_variants : [];
   const z6Coverage = Array.isArray(r.zu6_coverage) ? r.zu6_coverage : [];
-  const dltRecords = r.prediction_records || [];
-  if (dltRecords.length) {
-    html += `<div class="section-title">预测记录与开奖对比</div><div class="card">`;
-    dltRecords.forEach((record, index) => {
-      const actual = record.actual;
-      html += `<div style="${index ? 'border-top:1px solid var(--line);margin-top:10px;padding-top:10px' : ''}">
-        <div class="row"><span class="k">${esc(record.period)} 期</span><span class="v">${record.settled ? '已开奖' : '待开奖'}</span></div>`;
-      if (actual) html += `<div class="note">开奖号：${(actual.front || []).map(p2).join(' ')} + ${(actual.back || []).map(p2).join(' ')}</div>`;
-      Object.entries(record.recommendations || {}).forEach(([method, rec]) => {
-        const frontHit = record[method + '_front_hit'];
-        const backHit = record[method + '_back_hit'];
-        const hitText = record.settled ? ` · 前区中 ${frontHit || 0} 个 · 后区中 ${backHit || 0} 个` : '';
-        html += `<div class="note">${esc(method)}：${(rec.front || []).map(p2).join(' ')} + ${(rec.back || []).map(p2).join(' ')}${hitText}</div>`;
-      });
-      html += `</div>`;
-    });
-    html += `</div>`;
-  }
-
   const bt = r.backtest || {};
   const maxScore = r.zhixuan[0]?.score || 1;
   const n = r.zhixuan.length;
@@ -5072,6 +5056,27 @@ function renderLottery(r) {
     <button type="button" style="width:100%;padding:10px;background:var(--card2);color:var(--text);border:1px solid var(--line);border-radius:8px;font-size:14px;cursor:pointer;margin-bottom:8px" onclick="getLotteryEnsemble()">🗳️ 启动投票</button>
   </div>`;
   html += `</details>`;
+
+  // ── Prediction records (always visible, including the empty state) ──
+  const dltRecords = r.prediction_records || [];
+  html += `<button type="button" style="width:100%;margin-top:12px;padding:11px;background:var(--card2);color:var(--text);border:1px solid var(--line);border-radius:8px;font-size:14px;cursor:pointer" onclick="document.getElementById('dlt-prediction-records').open=!document.getElementById('dlt-prediction-records').open">📋 查看预测记录（${dltRecords.length}期）</button>`;
+  html += `<details class="adv" id="dlt-prediction-records"><summary>预测记录与开奖对比</summary><div class="card">`;
+  if (!dltRecords.length) {
+    html += `<div class="note">暂无预测记录。当前预测已保存，下一期开奖并刷新数据后将自动显示命中结果。</div>`;
+  } else {
+    dltRecords.forEach((record, index) => {
+      const actual = record.actual;
+      html += `<div style="${index ? 'border-top:1px solid var(--line);margin-top:10px;padding-top:10px' : ''}">
+        <div class="row"><span class="k">${esc(record.period)} 期</span><span class="v">${record.settled ? '已开奖' : '待开奖'}</span></div>`;
+      if (actual) html += `<div class="note">开奖号：${(actual.front || []).map(p2).join(' ')} + ${(actual.back || []).map(p2).join(' ')}</div>`;
+      Object.entries(record.recommendations || {}).forEach(([method, rec]) => {
+        const hitText = record.settled ? ` · 前区中 ${record[method + '_front_hit'] || 0} 个 · 后区中 ${record[method + '_back_hit'] || 0} 个` : '';
+        html += `<div class="note">${esc(method)}：${(rec.front || []).map(p2).join(' ')} + ${(rec.back || []).map(p2).join(' ')}${hitText}</div>`;
+      });
+      html += `</div>`;
+    });
+  }
+  html += `</div></details>`;
   
   // ── 🎯 快速推荐（默认可见：你关心的推荐号码）──
   html += `<div class="section-title">🎯 快速推荐（前区5 + 后区2）</div>`;
