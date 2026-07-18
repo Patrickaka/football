@@ -1591,7 +1591,7 @@ function renderFootballPredictions(results) {
     const top = r.model && r.model.top_scores ? r.model.top_scores : [];
     const cf = r.confidence;
     
-    let itemHtml = `<div class="match" style="padding:12px">
+    let itemHtml = `<div class="match" style="display:block;padding:12px">
       <div style="display:flex;justify-content:space-between;align-items:flex-start">
         <div style="flex:1">
           <div style="font-weight:bold;font-size:15px;margin-bottom:4px">
@@ -1678,9 +1678,12 @@ function renderFootballPredictions(results) {
         itemHtml += '</div>';
       }
       
-      const goalDist = r.model && r.model.goal_count && r.model.goal_count.distribution ? r.model.goal_count.distribution : [];
+      // 进球数从比分模型的完整分布中边际化，确保与比分预测一致
+      const goalDist = r.model && r.model.candidates && r.model.candidates.length
+        ? getGoalDistributionFromCandidates(r.model.candidates)
+        : [];
       if (goalDist.length) {
-        const goalsTop3 = [...goalDist].sort((a, b) => b.probability - a.probability).slice(0, 3);
+        const goalsTop3 = goalDist.slice(0, 3);
         itemHtml += '<div style="margin-top:8px;padding:8px;background:var(--bg2);border-radius:8px">';
         itemHtml += '<div style="font-size:12px;color:var(--muted);margin-bottom:6px">⚽ 进球数（Top3）</div>';
         itemHtml += '<div style="display:flex;gap:8px">';
@@ -1695,6 +1698,26 @@ function renderFootballPredictions(results) {
         itemHtml += '</div>';
       }
       
+      // 赛果分析（元宝式：胜负倾向→比分区间→进球数方向→理由，三者同源自洽）
+      const an = r.analysis;
+      if (an) {
+        const sp = an.score_picks || [];
+        const spColors = { '首推': '#3b82f6', '次选': '#94a3b8', '防冷': (an.upset_alert ? '#f59e0b' : '#94a3b8') };
+        const spChips = sp.map(p => {
+          const c = spColors[p.type] || '#94a3b8';
+          return `<span style="display:inline-block;padding:3px 8px;margin:3px 5px 0 0;background:${c}18;color:${c};border-radius:6px;font-size:12px;font-weight:bold">${esc(p.type)} ${esc(p.score)} <span style="font-weight:normal;color:var(--muted)">${Math.round((p.probability || 0) * 100)}%</span></span>`;
+        }).join('');
+        const g = an.goals || {};
+        const ou = g.direction ? `${g.direction} ${Math.round((g.direction_prob || 0) * 100)}%` : '';
+        const goalTxt = g.most_likely_interval ? `最可能 ${g.most_likely_interval}` : '';
+        itemHtml += `<div style="margin-top:8px;padding:8px 10px;background:var(--bg2);border-left:3px solid var(--accent);border-radius:8px">
+          <div style="font-size:12px;color:var(--muted);margin-bottom:4px">🧠 赛果分析 <span style="color:var(--muted)">· 置信 ${(an.confidence * 100).toFixed(0)}%</span></div>
+          <div style="font-size:13px;margin-bottom:5px">${esc(an.verdict)}</div>
+          <div style="margin-bottom:5px">${spChips}</div>
+          <div style="font-size:12px;color:var(--muted)">⚽ ${goalTxt}${ou ? ' · ' + ou : ''}${an.upset_alert ? ' · ⚠️ 防冷' : ''}</div>
+        </div>`;
+      }
+
       itemHtml += '</div>';
       return itemHtml;
     }
@@ -1876,6 +1899,34 @@ function getHTFPrediction(topScores) {
   return top3.length ? { top3 } : null;
 }
 
+function getGoalDistributionFromCandidates(candidates) {
+  if (!candidates || !candidates.length) return [];
+  const goalsMap = {};
+  candidates.forEach(item => {
+    let h, a, prob;
+    if (Array.isArray(item)) {
+      if (item.length === 2 && Array.isArray(item[0])) {
+        [h, a] = item[0];
+        prob = item[1];
+      } else if (item.length === 3) {
+        [h, a, prob] = item;
+      }
+    } else if (item && typeof item === 'object') {
+      h = item.home;
+      a = item.away;
+      prob = item.prob || item.probability || 0;
+    }
+    if (h != null && a != null && prob != null && !isNaN(h) && !isNaN(a) && !isNaN(prob)) {
+      const total = Number(h) + Number(a);
+      goalsMap[total] = (goalsMap[total] || 0) + prob;
+    }
+  });
+  const totalProb = Object.values(goalsMap).reduce((a, b) => a + b, 0);
+  return Object.entries(goalsMap)
+    .map(([goals, prob]) => ({ goals: Number(goals), probability: totalProb > 0 ? prob / totalProb : prob, label: goals + '球' }))
+    .sort((a, b) => b.probability - a.probability);
+}
+
 function getGoalsPrediction(topScores) {
   if (!topScores || !topScores.length) return null;
   const goalsMap = {};
@@ -1997,6 +2048,39 @@ function renderBeidanUpsetInline(upset) {
       <span style="font-weight:normal;color:var(--muted)"> · 热门 ${esc(upset.favorite || '')} 仅 ${upset.favorite_prob != null ? (upset.favorite_prob * 100).toFixed(0) + '%' : '-'}，反向概率 ${upset.upset_prob != null ? (upset.upset_prob * 100).toFixed(0) + '%' : '-'}</span>
     </div>
     ${cands ? `<div style="margin-top:4px;font-size:12px;color:var(--muted)">爆冷比分候选：${cands}</div>` : ''}
+  </div>`;
+}
+
+// 元宝式赛果分析卡（北单/篮球/足球共用，kind=football 读 goals，kind=basketball 读 total）
+function renderAnalysisCard(a, kind) {
+  if (!a) return '';
+  const scoreColor = { '首推': '#3b82f6', '次选': 'var(--muted)', '防冷': '#f59e0b' };
+  const scores = (a.score_picks || []).map(s => {
+    const c = scoreColor[s.type] || 'var(--muted)';
+    return `<span style="display:inline-block;padding:3px 9px;margin:3px 5px 3px 0;background:${c}18;color:${c};border-radius:6px;font-size:13px;font-weight:bold">${esc(s.type)} ${esc(s.score)}<span style="font-weight:normal;color:var(--muted)"> ${((s.probability || 0) * 100).toFixed(0)}%</span></span>`;
+  }).join('');
+  let dirBlock = '';
+  if (kind === 'football' && a.goals) {
+    const g = a.goals;
+    const dir = g.direction || (g.over_prob >= g.under_prob ? '大球' : '小球');
+    dirBlock = `<div style="margin-top:6px;font-size:12px">
+      预计总进球 <b>${g.expected != null ? g.expected.toFixed(1) : '-'}</b> · 最可能 <b>${esc(g.most_likely_interval || '')}</b> · ${esc(dir)} ${((g.direction_prob || 0) * 100).toFixed(0)}%
+    </div>`;
+  } else if (kind === 'basketball' && a.total) {
+    const t = a.total;
+    dirBlock = `<div style="margin-top:6px;font-size:12px">
+      预计总分 <b>${t.expected != null ? t.expected.toFixed(1) : '-'}</b> · 盘口线 <b>${esc(t.line || '-')}</b> · ${esc(t.direction || '')} ${((t.direction_prob || 0) * 100).toFixed(0)}%
+    </div>`;
+  }
+  const reasons = (a.reasons || []).map(r => `<div style="font-size:12px;color:var(--muted);margin-top:2px">• ${esc(r)}</div>`).join('');
+  const conf = a.confidence != null ? (typeof a.confidence === 'number' ? (a.confidence * 100).toFixed(0) + '%' : a.confidence) : '-';
+  return `<div style="margin-top:8px;padding:9px;background:var(--bg2);border-left:3px solid var(--accent);border-radius:8px">
+    <div style="font-size:13px;font-weight:bold;margin-bottom:5px">🧠 赛果分析</div>
+    <div style="font-size:13px">${esc(a.verdict || '')}</div>
+    <div style="margin-top:6px">${scores}</div>
+    ${dirBlock}
+    ${reasons ? `<div style="margin-top:6px">${reasons}</div>` : ''}
+    <div style="margin-top:6px;font-size:11px;color:var(--muted)">置信度：${esc(conf)}</div>
   </div>`;
 }
 
@@ -2182,7 +2266,7 @@ function renderBeidan(result) {
   for (const [league, matches] of Object.entries(groups)) {
     html += `<div class="league-group"><div class="league-title">${esc(league)}</div>`;
     matches.forEach(m => {
-      html += `<div class="match" style="padding:12px">
+      html += `<div class="match" style="display:block;padding:12px">
         <div style="display:flex;justify-content:space-between;align-items:flex-start">
           <div style="flex:1">
             <div style="font-weight:bold;font-size:15px;margin-bottom:4px">
@@ -2232,6 +2316,10 @@ function renderBeidan(result) {
           }
           html += renderBeidanUpsetInline(m.spf.upset);
           html += '</div>';
+        }
+        
+        if (m.spf && m.spf.analysis) {
+          html += renderAnalysisCard(m.spf.analysis, 'football');
         }
         
         if (m.zjq && !m.zjq.error) {
@@ -2888,13 +2976,16 @@ function renderResult(r) {
     html += `</div>`;
   }
 
-  // 进球数推荐
+  // 进球数推荐（从比分模型完整分布边际化，确保与比分预测一致）
+  const scoreGoalDist = md && md.candidates && md.candidates.length
+    ? getGoalDistributionFromCandidates(md.candidates)
+    : [];
   const goalCount = md && md.goal_count ? md.goal_count : null;
-  if (goalCount && goalCount.recommendations && goalCount.recommendations.length > 0) {
+  if (scoreGoalDist.length > 0) {
     html += `<h3 style="color:var(--accent2);font-size:15px;margin:18px 0 10px">⚽ 进球数推荐</h3>`;
     html += `<div class="card">`;
     html += `<div class="goal-grid">`;
-    goalCount.recommendations.forEach((item, index) => {
+    scoreGoalDist.slice(0, 3).forEach((item, index) => {
       const prob = (item.probability * 100).toFixed(1);
       const isTop = index === 0;
       html += `<div class="goal-item ${isTop ? 'top' : ''}">
@@ -2909,26 +3000,24 @@ function renderResult(r) {
     html += `</div>`;
     
     // 进球区间和大/小方向
-    if (goalCount.recommendations.length >= 2) {
-      const firstGoals = parseInt(goalCount.recommendations[0].label);
-      const secondGoals = parseInt(goalCount.recommendations[1].label);
+    if (scoreGoalDist.length >= 2) {
+      const firstGoals = scoreGoalDist[0].goals;
+      const secondGoals = scoreGoalDist[1].goals;
       const minGoals = Math.min(firstGoals, secondGoals);
       const maxGoals = Math.max(firstGoals, secondGoals);
-      const rangeProb = (goalCount.recommendations[0].probability + goalCount.recommendations[1].probability) * 100;
+      const rangeProb = (scoreGoalDist[0].probability + scoreGoalDist[1].probability) * 100;
       
       html += `<div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--line)">`;
       html += `<div class="row"><span class="k">进球区间</span><span class="v">${minGoals}-${maxGoals}球 约 ${rangeProb.toFixed(1)}%</span></div>`;
       
-      if (goalCount.over_under) {
-        const overProb = (goalCount.over_under.over * 100).toFixed(1);
-        const underProb = (goalCount.over_under.under * 100).toFixed(1);
-        html += `<div class="row"><span class="k">大/小方向</span><span class="v">≥3球 ${overProb}% / ≤2球 ${underProb}%</span></div>`;
-      }
+      const overProb = scoreGoalDist.filter(g => g.goals >= 3).reduce((s, g) => s + g.probability, 0);
+      const underProb = scoreGoalDist.filter(g => g.goals <= 2).reduce((s, g) => s + g.probability, 0);
+      html += `<div class="row"><span class="k">大/小方向</span><span class="v">≥3球 ${(overProb * 100).toFixed(1)}% / ≤2球 ${(underProb * 100).toFixed(1)}%</span></div>`;
       html += `</div>`;
     }
     
-    // 样本质量信息
-    if (goalCount.sample_info) {
+    // 样本质量信息（保留历史盘口参考）
+    if (goalCount && goalCount.sample_info) {
       const si = goalCount.sample_info;
       const qualityColors = { high: '#2ea043', medium: '#d29922', low: '#db6161', none: '#6e7681' };
       const qualityLabels = { high: '高', medium: '中', low: '低', none: '无' };
@@ -2955,20 +3044,19 @@ function renderResult(r) {
     }
     
     // 完整分布（只显示到7球+）
-    if (goalCount.distribution && goalCount.distribution.length > 0) {
+    if (scoreGoalDist.length > 0) {
       html += `<div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--line)">`;
       html += `<div style="font-size:13px;color:var(--muted);margin-bottom:8px">进球数分布</div>`;
       html += `<div class="goal-dist">`;
-      goalCount.distribution.forEach(item => {
+      scoreGoalDist.forEach(item => {
         // 只显示到7球+，跳过8球及以上
-        const goals = parseInt(item.label);
-        if (isNaN(goals) || goals <= 7 || item.label.includes('7球')) {
+        if (item.goals <= 7) {
           html += `<div class="goal-dist-item">
             <span class="goal-dist-label">${esc(item.label)}</span>
             <div class="goal-dist-bar-wrap">
               <div class="goal-dist-bar" style="width:${(item.probability * 100).toFixed(1)}%"></div>
             </div>
-            <span class="goal-dist-pct">${item.percentage}</span>
+            <span class="goal-dist-pct">${(item.probability * 100).toFixed(1)}%</span>
           </div>`;
         }
       });
@@ -6226,7 +6314,7 @@ function renderBasketball(result) {
   for (const [league, matches] of Object.entries(groups)) {
     html += `<div class="league-group"><div class="league-title">${esc(league)}</div>`;
     matches.forEach(m => {
-      html += `<div class="match" style="padding:12px">
+      html += `<div class="match" style="display:block;padding:12px">
         <div style="display:flex;justify-content:space-between;align-items:flex-start">
           <div style="flex:1">
             <div style="font-weight:bold;font-size:15px;margin-bottom:4px">
@@ -6311,6 +6399,10 @@ function renderBasketball(result) {
             html += '</div>';
           }
           html += '</div>';
+        }
+        
+        if (m.analysis) {
+          html += renderAnalysisCard(m.analysis, 'basketball');
         }
         
         html += '</div>';

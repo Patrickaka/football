@@ -2073,6 +2073,166 @@ def _clear_ouzhi_cache():
     global _ouzhi_cache
     _ouzhi_cache = {}
 
+def build_beidan_match_analysis(spf_result):
+    """元宝式赛果分析（对齐足球模块 build_match_analysis），用于北单胜平负推荐。
+
+    关键原则：比分 / 进球数 / 胜平负 **全部从同一个完整比分分布(score_probs) 边际化得出**，
+    三者天然自洽。采用「比分区间法」(首推/次选/防冷)，并复用 upset 的反向比分作为防冷候选，
+    附中文理由叙述。
+    """
+    try:
+        if not spf_result or spf_result.get('error'):
+            return None
+        score_probs = spf_result.get('score_probs') or {}
+        # 兼容两种格式：元组键字典 {(h,a):p} 或 JSON 安全列表 [[h,a,p], ...]
+        if isinstance(score_probs, list):
+            norm = {}
+            for item in score_probs:
+                if len(item) == 3:
+                    h, a, p = item
+                    norm[(int(h), int(a))] = float(p)
+            score_probs = norm
+        if not score_probs:
+            return None
+
+        lam_home = spf_result.get('lambda_home')
+        lam_away = spf_result.get('lambda_away')
+        upset = spf_result.get('upset') or {}
+        conf = spf_result.get('confidence') or 0.5
+        odds = spf_result.get('odds') or {}
+        asian_trend = spf_result.get('asian_trend')
+        match_info = {
+            'home': spf_result.get('home'),
+            'away': spf_result.get('away'),
+        }
+
+        # ---- 1. 胜平负边际化（与比分/进球数同源）----
+        w = d = l = 0.0
+        goals_map = {}
+        cands = [((h, a), p) for (h, a), p in score_probs.items()]
+        for (h, a), prob in cands:
+            if h > a:
+                w += prob
+            elif h == a:
+                d += prob
+            else:
+                l += prob
+            g = h + a
+            goals_map[g] = goals_map.get(g, 0.0) + prob
+        s = w + d + l
+        if s > 0:
+            w, d, l = w / s, d / s, l / s
+        pprobs = {'home': w, 'draw': d, 'away': l}
+        fav = max(pprobs, key=pprobs.get)
+        fav_p = pprobs[fav]
+        sec_p = sorted(pprobs.values(), reverse=True)[1]
+        margin = fav_p - sec_p
+        fav_cn = {'home': '胜', 'draw': '平', 'away': '负'}.get(fav, '胜')
+
+        # ---- 2. 比分区间法：首推 / 次选 / 防冷 ----
+        ranked = sorted(cands, key=lambda x: -x[1])
+        primary = ranked[0]
+        ph, pa = primary[0]
+        secondary = None
+        for (h, a), prob in ranked[1:]:
+            if (h > a) != (ph > pa) or (h == a) != (ph == pa) or (h + a) != (ph + pa):
+                secondary = ((h, a), prob)
+                break
+        if secondary is None and len(ranked) > 1:
+            secondary = ranked[1]
+
+        score_picks = [{
+            'type': '首推',
+            'score': f"{ph}-{pa}",
+            'home': ph, 'away': pa,
+            'result': _result_from_score((ph, pa)),
+            'probability': primary[1],
+        }]
+        if secondary:
+            sh, sa = secondary[0]
+            score_picks.append({
+                'type': '次选',
+                'score': f"{sh}-{sa}",
+                'home': sh, 'away': sa,
+                'result': _result_from_score((sh, sa)),
+                'probability': secondary[1],
+            })
+        upset_cands = upset.get('candidates') or []
+        if upset.get('alert') and upset_cands:
+            try:
+                uh, ua = (int(x) for x in upset_cands[0]['score'].split('-'))
+                uprob = score_probs.get((uh, ua), 0.0)
+                score_picks.append({
+                    'type': '防冷',
+                    'score': f"{uh}-{ua}",
+                    'home': uh, 'away': ua,
+                    'result': _result_from_score((uh, ua)),
+                    'probability': uprob,
+                })
+            except (ValueError, KeyError):
+                pass
+
+        # ---- 3. 进球数方向（从比分分布边际化）----
+        goals_sorted = sorted(goals_map.items(), key=lambda x: -x[1])
+        line = 2.5
+        over_p = sum(v for k, v in goals_map.items() if k > line)
+        under_p = sum(v for k, v in goals_map.items() if k < line)
+        expected = sum(k * v for k, v in goals_map.items())
+        top_goals = goals_sorted[:2]
+        interval = f"{top_goals[0][0]}-{top_goals[1][0]}球" if len(top_goals) > 1 else f"{top_goals[0][0]}球"
+        if over_p >= under_p:
+            ou_dir, ou_p = '大球', over_p
+        else:
+            ou_dir, ou_p = '小球', under_p
+        goals_read = {
+            'expected': expected,
+            'line': line,
+            'over_prob': over_p,
+            'under_prob': under_p,
+            'direction': ou_dir,
+            'direction_prob': ou_p,
+            'most_likely_interval': interval,
+            'top_goals': [{'goals': k, 'probability': v} for k, v in goals_sorted[:3]],
+        }
+
+        # ---- 4. 理由叙述 ----
+        reasons = []
+        if lam_home is not None and lam_away is not None:
+            bias = '主队进攻占优' if lam_home > lam_away else ('客队进攻占优' if lam_away > lam_home else '双方攻防均衡')
+            reasons.append(f"模型预期进球 主{lam_home:.1f}/客{lam_away:.1f}，{bias}")
+        if odds:
+            reasons.append(f"欧赔 胜{odds.get('胜')}/平{odds.get('平')}/负{odds.get('负')}")
+        if asian_trend and asian_trend.get('direction'):
+            reasons.append(f"亚盘走势：{asian_trend.get('direction')}")
+        if upset.get('alert'):
+            reasons.append(f"⚠️ 爆冷预警（{upset.get('label')}）：热门{upset.get('favorite')}仅{fav_p:.0%}，关注反向比分")
+
+        # ---- 5. 结论句 ----
+        if fav == 'home':
+            verdict = f"{match_info.get('home', '主队')}胜面最高 {fav_p:.0%}，优势{'明显' if margin >= 0.12 else '有限'}"
+        elif fav == 'away':
+            verdict = f"{match_info.get('away', '客队')}胜面最高 {fav_p:.0%}，优势{'明显' if margin >= 0.12 else '有限'}"
+        else:
+            verdict = f"平局概率 {d:.0%}，双方势均力敌"
+
+        return {
+            'verdict': verdict,
+            'favorite': fav_cn,
+            'favorite_prob': fav_p,
+            'margin': margin,
+            'wdl': {'胜': w, '平': d, '负': l},
+            'score_picks': score_picks,
+            'goals': goals_read,
+            'reasons': reasons,
+            'confidence': conf,
+            'risk_level': (spf_result.get('quality') or {}).get('level'),
+            'upset_alert': bool(upset.get('alert')),
+        }
+    except Exception as e:
+        log.warning(f"build_beidan_match_analysis 失败: {e}")
+        return None
+
+
 def analyze_spf(match, asian_data=None, cs_data=None):
     result = {
         'match_id': match['id'],
@@ -2155,6 +2315,10 @@ def analyze_spf(match, asian_data=None, cs_data=None):
                 result['cs_adjusted'] = True
             
             result['scores'] = score_prediction['top3']
+            result['score_probs'] = [
+                [h, a, round(prob, 6)]
+                for (h, a), prob in (score_prediction.get('score_probs') or {}).items()
+            ]
             result['lambda_home'] = score_prediction['lambda_home']
             result['lambda_away'] = score_prediction['lambda_away']
 
@@ -2733,6 +2897,9 @@ def generate_beidan_recommendations(date=None, bet_types=None, source='okooo', s
         
         if 'spf' in bet_types:
             rec['spf'] = analyze_spf(match, asian_data, cs_data)
+            spf_a = build_beidan_match_analysis(rec['spf'])
+            if spf_a:
+                rec['spf']['analysis'] = spf_a
         
         if 'rqspf' in bet_types:
             rec['rqspf'] = analyze_rqspf(match, asian_data)

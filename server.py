@@ -1153,6 +1153,10 @@ class Handler(BaseHTTPRequestHandler):
                 else:
                     match_item['daxiao'] = {'error': daxiao.get('reason') if daxiao else 'no_data'}
                 
+                # 元宝式赛果分析（build_basketball_analysis 已在模块内算好）
+                if r.get('analysis'):
+                    match_item['analysis'] = r.get('analysis')
+                
                 matches.append(match_item)
             
             return {'result': {

@@ -29,7 +29,7 @@ from ..common.logger import setup_logger
 
 log = setup_logger('football')
 
-FOOTBALL_PREDICTION_LOGIC_VERSION = '2026-07-17-upset-radar'
+FOOTBALL_PREDICTION_LOGIC_VERSION = '2026-07-17-match-analysis'
 
 # ELO 评分系统（延迟导入）
 try:
@@ -6453,6 +6453,175 @@ def assess_football_upset(asian, euro, team, candidates):
     }
 
 
+def build_match_analysis(result):
+    """元宝式赛果分析：胜负倾向 → 比分区间(首推/次选/防冷) → 进球数方向 → 理由 → 置信度。
+
+    关键原则（对齐元宝/主流 AI 范式）：
+    1. 胜负倾向、比分、进球数 **全部从同一个完整比分分布(model.candidates) 边际化得出**，
+       三者天然自洽（解决「比分推荐与进球数不一致」问题）。
+    2. 采用「比分区间法」而非单一比分：给出 首推 / 次选 / 防冷 三个覆盖不同场景的比分选项，
+       其中 防冷 直接复用 ``upset`` 的反向比分候选。
+    3. 带中文理由叙述（攻防强度 / 盘口 / 近期状态 / ELO / 赔率异动 / 爆冷提示），像分析师一样解释为何这么看。
+    """
+    try:
+        model = result.get('model', {}) or {}
+        candidates = model.get('candidates') or []
+        if not candidates:
+            return None
+        asian = result.get('asian') or {}
+        euro = result.get('euro') or {}
+        total = result.get('total') or {}
+        team = result.get('team') or {}
+        upset = result.get('upset') or {}
+        confidence = result.get('confidence') or {}
+        risk = result.get('risk_level') or {}
+        match_info = result.get('match', {}) or {}
+
+        conf_score = confidence.get('score', 0.5) if isinstance(confidence, dict) else (confidence or 0.5)
+
+        # ---- 1. 胜负倾向（从完整比分分布边际化，与比分/进球数同源）----
+        w = d = l = 0.0
+        goals_map = {}
+        for (h, a), prob in candidates:
+            if h > a:
+                w += prob
+            elif h == a:
+                d += prob
+            else:
+                l += prob
+            g = h + a
+            goals_map[g] = goals_map.get(g, 0.0) + prob
+        s = w + d + l
+        if s > 0:
+            w, d, l = w / s, d / s, l / s
+
+        probs = {'home': w, 'draw': d, 'away': l}
+        fav = max(probs, key=probs.get)
+        fav_p = probs[fav]
+        sec_p = sorted(probs.values(), reverse=True)[1]
+        margin = fav_p - sec_p
+
+        # ---- 2. 比分区间法：首推 / 次选 / 防冷 ----
+        ranked = sorted(candidates, key=lambda x: -x[1])
+        primary = ranked[0]
+        ph, pa = primary[0]
+        # 次选：优先取 结果方向不同 或 总进球不同 的最高概率比分
+        secondary = None
+        for (h, a), prob in ranked[1:]:
+            if (h > a) != (ph > pa) or (h == a) != (ph == pa) or (h + a) != (ph + pa):
+                secondary = ((h, a), prob)
+                break
+        if secondary is None and len(ranked) > 1:
+            secondary = ranked[1]
+
+        score_picks = [{
+            'type': '首推',
+            'score': f"{ph}-{pa}",
+            'home': ph, 'away': pa,
+            'result': _result_label(ph, pa),
+            'probability': primary[1],
+        }]
+        if secondary:
+            sh, sa = secondary[0]
+            score_picks.append({
+                'type': '次选',
+                'score': f"{sh}-{sa}",
+                'home': sh, 'away': sa,
+                'result': _result_label(sh, sa),
+                'probability': secondary[1],
+            })
+        # 防冷：取爆冷候选中概率最高者（来自 upset 的反向比分）
+        upset_cands = upset.get('candidates') or []
+        if upset.get('alert') and upset_cands:
+            try:
+                uh, ua = (int(x) for x in upset_cands[0]['score'].split('-'))
+                uprob = next((p for (h, a), p in candidates if h == uh and a == ua), 0.0)
+                score_picks.append({
+                    'type': '防冷',
+                    'score': f"{uh}-{ua}",
+                    'home': uh, 'away': ua,
+                    'result': _result_label(uh, ua),
+                    'probability': uprob,
+                })
+            except (ValueError, KeyError):
+                pass
+
+        # ---- 3. 进球数方向（从比分分布边际化）----
+        goals_sorted = sorted(goals_map.items(), key=lambda x: -x[1])
+        line = total.get('close_line') or total.get('line') or 2.5
+        over_p = sum(v for k, v in goals_map.items() if k > line)
+        under_p = sum(v for k, v in goals_map.items() if k < line)
+        expected = sum(k * v for k, v in goals_map.items())
+        top_goals = goals_sorted[:2]
+        interval = f"{top_goals[0][0]}-{top_goals[1][0]}球" if len(top_goals) > 1 else f"{top_goals[0][0]}球"
+        if over_p >= under_p:
+            ou_dir, ou_p = '大球', over_p
+        else:
+            ou_dir, ou_p = '小球', under_p
+
+        goals_read = {
+            'expected': expected,
+            'line': line,
+            'over_prob': over_p,
+            'under_prob': under_p,
+            'direction': ou_dir,
+            'direction_prob': ou_p,
+            'most_likely_interval': interval,
+            'top_goals': [{'goals': k, 'probability': v} for k, v in goals_sorted[:3]],
+        }
+
+        # ---- 4. 理由叙述（像分析师一样解释）----
+        lam_home = model.get('lam_home')
+        lam_away = model.get('lam_away')
+        reasons = []
+        if lam_home is not None and lam_away is not None:
+            bias = '主队进攻占优' if lam_home > lam_away else ('客队进攻占优' if lam_away > lam_home else '双方攻防均衡')
+            reasons.append(f"模型预期进球 主{lam_home:.1f}/客{lam_away:.1f}，{bias}")
+        hcap = asian.get('handicap')
+        if hcap is not None:
+            favor_text = {'home': '主队', 'away': '客队', 'even': '双方'}.get(asian.get('favor'), '双方')
+            reasons.append(f"亚盘开{hcap}球，机构倾向{favor_text}")
+        hf = team.get('home_recent', {}).get('form_pts')
+        af = team.get('away_recent', {}).get('form_pts')
+        if hf is not None and af is not None:
+            st = '主队状态更佳' if hf > af else ('客队状态更佳' if af > hf else '双方状态接近')
+            reasons.append(f"近期状态（近5场场均积分）主{hf}/客{af}，{st}")
+        eh = team.get('elo_home')
+        ea = team.get('elo_away')
+        if eh and ea:
+            reasons.append(f"ELO 实力差 {eh - ea:+.0f}（主{eh:.0f}/客{ea:.0f}）")
+        changes = euro.get('changes') or []
+        if changes:
+            reasons.append(f"赔率异动：{'；'.join(changes[:3])}")
+        if upset.get('alert'):
+            reasons.append(f"⚠️ 爆冷预警（{upset.get('label')}）：热门{upset.get('favorite')}仅{fav_p:.0%}，关注反向比分")
+
+        # ---- 5. 结论句 ----
+        if fav == 'home':
+            verdict = f"{match_info.get('home', '主队')}胜面最高 {fav_p:.0%}，优势{'明显' if margin >= 0.12 else '有限'}"
+        elif fav == 'away':
+            verdict = f"{match_info.get('away', '客队')}胜面最高 {fav_p:.0%}，优势{'明显' if margin >= 0.12 else '有限'}"
+        else:
+            verdict = f"平局概率 {d:.0%}，双方势均力敌"
+
+        return {
+            'verdict': verdict,
+            'favorite': fav,
+            'favorite_prob': fav_p,
+            'margin': margin,
+            'wdl': {'home': w, 'draw': d, 'away': l},
+            'score_picks': score_picks,
+            'goals': goals_read,
+            'reasons': reasons,
+            'confidence': conf_score,
+            'risk_level': risk.get('level') if isinstance(risk, dict) else None,
+            'upset_alert': bool(upset.get('alert')),
+        }
+    except Exception as e:
+        log.warning(f"build_match_analysis 失败: {e}")
+        return None
+
+
 def analyze_match(match, force_refresh=False):
     """抓取赔率 + 球队攻防 + 泊松模型，返回完整结果 dict
     
@@ -7397,6 +7566,13 @@ def analyze_match(match, force_refresh=False):
             **meta,
         },
     }
+
+    # ========== 元宝式赛果分析（胜负倾向→比分区间→进球数方向→理由，三者同源自洽）==========
+    try:
+        result['analysis'] = build_match_analysis(result)
+    except Exception as e:
+        log.warning(f"赛果分析注入失败: {e}")
+        result['analysis'] = None
     
     # 保存结果到缓存
     if CACHE_AVAILABLE:

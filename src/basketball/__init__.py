@@ -1002,6 +1002,141 @@ def fetch_basketball_schedule(date=None, source='okooo'):
 
 # ==================== 推荐生成 ====================
 
+def build_basketball_analysis(result):
+    """元宝式赛果分析（对齐足球/北单模块）。
+
+    篮球无平局，给出：胜负倾向 → 比分(首推/次选/防冷) → 总分方向(大分/小分) → 理由 → 置信度。
+    比分由 预期总分(来自大小分 ELO/盘口线) 与 预期分差(来自让分 ELO/胜负概率) 推导，
+    胜负、总分方向、比分三者尽量自洽。
+    """
+    try:
+        spf = result.get('spf') or {}
+        dx = result.get('dx') or {}
+        rq = result.get('rqspf') or {}
+        match = result.get('match') or {}
+        if not spf or (spf.get('home_prob') is None and spf.get('away_prob') is None):
+            return None
+
+        p_home = float(spf.get('home_prob', 0.5) or 0.5)
+        p_away = float(spf.get('away_prob', 0.5) or 0.5)
+        fav = '主胜' if p_home >= p_away else '客胜'
+        fav_p = max(p_home, p_away)
+        margin = abs(p_home - p_away)
+
+        # ---- 预期总分 ----
+        elo_total = dx.get('elo_total')
+        total_line = dx.get('total_line')
+        try:
+            line_val = float(total_line) if total_line else 200.0
+        except (TypeError, ValueError):
+            line_val = 200.0
+        expected_total = float(elo_total) if elo_total else line_val
+
+        # ---- 预期分差（主队视角）----
+        # 始终由 spf 胜率反推，保证与 fav 严格一致；elo_margin 仅作理由展示
+        elo_margin = rq.get('elo_margin')
+        p_winner = max(p_home, p_away)
+        p_loser = min(p_home, p_away)
+        exp_margin = math.log(max(p_winner, 1e-3) / max(p_loser, 1e-3)) / 0.15
+        if fav == '客胜':
+            exp_margin = -exp_margin
+
+        def _build_score(total, margin_val):
+            h = (total + margin_val) / 2.0
+            a = (total - margin_val) / 2.0
+            hh = max(0, int(round(h)))
+            aa = max(0, int(round(a)))
+            diff = int(round(total)) - (hh + aa)
+            if diff > 0:
+                if hh >= aa:
+                    hh += diff
+                else:
+                    aa += diff
+            elif diff < 0:
+                if hh > aa:
+                    hh = max(0, hh + diff)
+                else:
+                    aa = max(0, aa + diff)
+            return hh, aa
+
+        # 首推
+        ph, pa = _build_score(expected_total, exp_margin)
+        primary = {
+            'type': '首推', 'score': f"{ph}-{pa}",
+            'home': ph, 'away': pa, 'result': fav, 'probability': fav_p,
+        }
+
+        # 次选：同胜负方，总分随大小分方向偏移
+        dx_rec = dx.get('recommendation')
+        offset = 4 if dx_rec == '大分' else (-4 if dx_rec == '小分' else 0)
+        sh, sa = _build_score(expected_total + offset, exp_margin)
+        secondary = {
+            'type': '次选', 'score': f"{sh}-{sa}",
+            'home': sh, 'away': sa, 'result': fav, 'probability': fav_p * 0.6,
+        }
+
+        # 防冷：反向方小胜（约 3 分）
+        if fav == '主胜':
+            uh = max(0, int(round((expected_total - 3) / 2)))
+            ua = max(0, int(round(expected_total)) - uh)
+            upick = {'type': '防冷', 'score': f"{uh}-{ua}", 'home': uh, 'away': ua, 'result': '客胜', 'probability': p_away}
+        else:
+            ua = max(0, int(round((expected_total - 3) / 2)))
+            uh = max(0, int(round(expected_total)) - ua)
+            upick = {'type': '防冷', 'score': f"{uh}-{ua}", 'home': uh, 'away': ua, 'result': '主胜', 'probability': p_home}
+
+        score_picks = [primary, secondary, upick]
+
+        # ---- 总分方向 ----
+        over_p = dx.get('over_prob')
+        under_p = dx.get('under_prob')
+        ou_dir = '大分' if (over_p or 0) >= (under_p or 0) else '小分'
+        ou_p = max(over_p or 0, under_p or 0)
+        total_read = {
+            'expected': expected_total,
+            'line': line_val,
+            'over_prob': over_p,
+            'under_prob': under_p,
+            'direction': ou_dir,
+            'direction_prob': ou_p,
+        }
+
+        # ---- 理由 ----
+        reasons = []
+        reasons.append(f"模型隐含分差 {exp_margin:+.1f}（主队视角）")
+        bb = spf.get('bb_features') or {}
+        if bb.get('home_streak') is not None:
+            reasons.append(f"主队近况连胜倾向 {bb.get('home_streak'):+.2f}、客队背靠 {bb.get('road_streak'):+.2f}")
+        if dx.get('league_avg'):
+            reasons.append(f"联赛场均总分 {dx.get('league_avg')}，盘口线 {line_val}")
+        if spf.get('confidence'):
+            reasons.append(f"胜负置信度：{spf.get('confidence')}")
+        upset_alert = margin < 0.10
+        if upset_alert:
+            reasons.append(f"⚠️ 胜负接近（差距仅 {margin:.0%}），存在爆冷可能，关注反向比分")
+
+        if fav == '主胜':
+            verdict = f"{match.get('home', '主队')}胜面最高 {fav_p:.0%}，优势{'明显' if margin >= 0.12 else '有限'}"
+        else:
+            verdict = f"{match.get('away', '客队')}胜面最高 {fav_p:.0%}，优势{'明显' if margin >= 0.12 else '有限'}"
+
+        return {
+            'verdict': verdict,
+            'favorite': fav,
+            'favorite_prob': fav_p,
+            'margin': margin,
+            'win_prob': {'home': p_home, 'away': p_away},
+            'score_picks': score_picks,
+            'total': total_read,
+            'reasons': reasons,
+            'confidence': spf.get('confidence'),
+            'upset_alert': upset_alert,
+        }
+    except Exception as e:
+        log.warning(f"build_basketball_analysis 失败: {e}")
+        return None
+
+
 def generate_basketball_recommendations(date=None, bet_types=None, source='okooo'):
     """
     生成篮球预测推荐
@@ -1055,6 +1190,10 @@ def generate_basketball_recommendations(date=None, bet_types=None, source='okooo
 
         if 'dx' in bet_types:
             result['dx'] = analyze_daxiao(match, market_bundle)
+
+        analysis = build_basketball_analysis(result)
+        if analysis:
+            result['analysis'] = analysis
 
         results.append(result)
 
