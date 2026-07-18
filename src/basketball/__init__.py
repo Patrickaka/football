@@ -31,7 +31,7 @@ from ..common import kv_store
 log = setup_logger('basketball')
 
 # 版本号
-BASKETBALL_VERSION = '2026-07-16-v3.3-enhanced'
+BASKETBALL_VERSION = '2026-07-18-local-analyst-v1'
 BASKETBALL_HISTORY_KEY = 'basketball_prediction_history'
 BASKETBALL_HISTORY_LIMIT = 500
 
@@ -272,7 +272,7 @@ def fetch(url, encoding='utf-8', referer=None):
     headers = {**HEADERS, 'Referer': referer} if referer else HEADERS
     req = urllib.request.Request(url, headers=headers)
     try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
+        with urllib.request.urlopen(req, timeout=15) as resp:
             raw = resp.read()
     except urllib.error.HTTPError as e:
         log.warning(f"HTTP Error {e.code} for {url}")
@@ -1002,8 +1002,75 @@ def fetch_basketball_schedule(date=None, source='okooo'):
 
 # ==================== 推荐生成 ====================
 
+def assess_basketball_upset(spf, rqspf=None):
+    """用已有胜负、市场、让分和资金走势信号评估篮球爆冷风险。"""
+    rqspf = rqspf or {}
+    from src.common.local_match_analysis import normalize_probabilities
+
+    probs = normalize_probabilities({
+        '主胜': spf.get('home_prob', 0.5), '客胜': spf.get('away_prob', 0.5),
+    })
+    favorite = max(probs, key=probs.get)
+    favorite_prob = probs[favorite]
+    margin = abs(probs['主胜'] - probs['客胜'])
+    score = 0
+    signals = []
+
+    if margin < 0.10:
+        score += 2
+        signals.append('胜负概率非常接近')
+    elif margin < 0.16:
+        score += 1
+        signals.append('热门优势有限')
+
+    market_home = spf.get('market_home_prob')
+    if market_home is not None:
+        market_home = float(market_home)
+        market_favorite = '主胜' if market_home >= 0.5 else '客胜'
+        if market_favorite != favorite:
+            score += 2
+            signals.append('本地模型与市场胜负方向相反')
+        elif abs(probs['主胜'] - market_home) >= 0.08:
+            score += 1
+            signals.append('本地模型与市场概率分歧较大')
+
+    spread_pick = rqspf.get('recommendation')
+    if (favorite == '主胜' and spread_pick == '让负') or (
+            favorite == '客胜' and spread_pick == '让胜'):
+        score += 1
+        signals.append('让分盘不支持热门方向')
+
+    books = spf.get('books_ml') or {}
+    trend = books.get('trend')
+    if (favorite == '主胜' and trend == 'away_backing') or (
+            favorite == '客胜' and trend == 'home_backing'):
+        score += 2
+        signals.append('赔率资金走势与热门方向相反')
+
+    elo_trust = float(spf.get('elo_trust', 0) or 0)
+    if elo_trust < 0.25:
+        score += 1
+        signals.append('ELO历史样本不足')
+
+    if score >= 4:
+        level, label, alert = 'high', '爆冷高风险', True
+    elif score >= 2:
+        level, label, alert = 'medium', '爆冷预警', True
+    else:
+        level, label, alert = 'low', '热门相对稳健', False
+    return {
+        'level': level,
+        'label': label,
+        'alert': alert,
+        'favorite': favorite,
+        'favorite_prob': favorite_prob,
+        'upset_prob': 1.0 - favorite_prob,
+        'risk_score': score,
+        'signals': signals,
+    }
+
 def build_basketball_analysis(result):
-    """元宝式赛果分析（对齐足球/北单模块）。
+    """本地 AI 式赛果分析（对齐足球/北单模块）。
 
     篮球无平局，给出：胜负倾向 → 比分(首推/次选/防冷) → 总分方向(大分/小分) → 理由 → 置信度。
     比分由 预期总分(来自大小分 ELO/盘口线) 与 预期分差(来自让分 ELO/胜负概率) 推导，
@@ -1017,11 +1084,17 @@ def build_basketball_analysis(result):
         if not spf or (spf.get('home_prob') is None and spf.get('away_prob') is None):
             return None
 
-        p_home = float(spf.get('home_prob', 0.5) or 0.5)
-        p_away = float(spf.get('away_prob', 0.5) or 0.5)
+        from src.common.local_match_analysis import (
+            LOCAL_ANALYST_VERSION, build_decision, normalize_probabilities,
+        )
+        win_probs = normalize_probabilities({
+            '主胜': spf.get('home_prob', 0.5), '客胜': spf.get('away_prob', 0.5),
+        })
+        p_home, p_away = win_probs['主胜'], win_probs['客胜']
         fav = '主胜' if p_home >= p_away else '客胜'
         fav_p = max(p_home, p_away)
         margin = abs(p_home - p_away)
+        upset = assess_basketball_upset(spf, rq)
 
         # ---- 预期总分 ----
         elo_total = dx.get('elo_total')
@@ -1063,7 +1136,8 @@ def build_basketball_analysis(result):
         ph, pa = _build_score(expected_total, exp_margin)
         primary = {
             'type': '首推', 'score': f"{ph}-{pa}",
-            'home': ph, 'away': pa, 'result': fav, 'probability': fav_p,
+            'home': ph, 'away': pa, 'result': fav, 'probability': None,
+            'projected': True,
         }
 
         # 次选：同胜负方，总分随大小分方向偏移
@@ -1072,7 +1146,8 @@ def build_basketball_analysis(result):
         sh, sa = _build_score(expected_total + offset, exp_margin)
         secondary = {
             'type': '次选', 'score': f"{sh}-{sa}",
-            'home': sh, 'away': sa, 'result': fav, 'probability': fav_p * 0.6,
+            'home': sh, 'away': sa, 'result': fav, 'probability': None,
+            'projected': True,
         }
 
         # 防冷：反向方小胜（约 3 分）
@@ -1085,7 +1160,12 @@ def build_basketball_analysis(result):
             uh = max(0, int(round(expected_total)) - ua)
             upick = {'type': '防冷', 'score': f"{uh}-{ua}", 'home': uh, 'away': ua, 'result': '主胜', 'probability': p_home}
 
-        score_picks = [primary, secondary, upick]
+        # 只有胜负接近时才给防冷，避免强信号比赛也固定输出反向比分。
+        score_picks = [primary, secondary]
+        if upset['alert']:
+            upick['probability'] = None
+            upick['projected'] = True
+            score_picks.append(upick)
 
         # ---- 总分方向 ----
         over_p = dx.get('over_prob')
@@ -1111,16 +1191,21 @@ def build_basketball_analysis(result):
             reasons.append(f"联赛场均总分 {dx.get('league_avg')}，盘口线 {line_val}")
         if spf.get('confidence'):
             reasons.append(f"胜负置信度：{spf.get('confidence')}")
-        upset_alert = margin < 0.10
+        upset_alert = upset['alert']
         if upset_alert:
-            reasons.append(f"⚠️ 胜负接近（差距仅 {margin:.0%}），存在爆冷可能，关注反向比分")
+            reasons.append(f"⚠️ {upset['label']}：{'；'.join(upset['signals'])}，关注反向比分")
 
         if fav == '主胜':
             verdict = f"{match.get('home', '主队')}胜面最高 {fav_p:.0%}，优势{'明显' if margin >= 0.12 else '有限'}"
         else:
             verdict = f"{match.get('away', '客队')}胜面最高 {fav_p:.0%}，优势{'明显' if margin >= 0.12 else '有限'}"
 
+        decision = build_decision(
+            win_probs, confidence=spf.get('confidence'),
+            upset_alert=upset_alert, min_single=0.58, min_margin=0.12,
+        )
         return {
+            'analysis_model': LOCAL_ANALYST_VERSION,
             'verdict': verdict,
             'favorite': fav,
             'favorite_prob': fav_p,
@@ -1131,6 +1216,8 @@ def build_basketball_analysis(result):
             'reasons': reasons,
             'confidence': spf.get('confidence'),
             'upset_alert': upset_alert,
+            'upset': upset,
+            'decision': decision,
         }
     except Exception as e:
         log.warning(f"build_basketball_analysis 失败: {e}")

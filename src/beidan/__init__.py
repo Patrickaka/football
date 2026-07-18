@@ -18,7 +18,7 @@ from ..common import kv_store
 
 log = setup_logger('beidan')
 
-BEIDAN_VERSION = '2026-07-08-v5'
+BEIDAN_VERSION = '2026-07-18-local-analyst-v1'
 BEIDAN_HISTORY_KEY = 'beidan_prediction_history'
 BEIDAN_HISTORY_LIMIT = 500
 
@@ -454,7 +454,8 @@ def fetch_okooo(url, encoding='utf-8', referer=None, max_retries=2):
             if referer:
                 headers['Referer'] = referer
             
-            resp = _okooo_session.get(url, headers=headers, timeout=30)
+            # 快速失败后走现有备用数据源，避免单个站点拖住整批预测。
+            resp = _okooo_session.get(url, headers=headers, timeout=(5, 12))
             
             if resp.status_code == 403 or resp.status_code == 503:
                 log.warning(f"WAF拦截 {resp.status_code} for {url}, marking as blocked")
@@ -2074,7 +2075,7 @@ def _clear_ouzhi_cache():
     _ouzhi_cache = {}
 
 def build_beidan_match_analysis(spf_result):
-    """元宝式赛果分析（对齐足球模块 build_match_analysis），用于北单胜平负推荐。
+    """本地 AI 式赛果分析（对齐足球模块），用于北单胜平负推荐。
 
     关键原则：比分 / 进球数 / 胜平负 **全部从同一个完整比分分布(score_probs) 边际化得出**，
     三者天然自洽。采用「比分区间法」(首推/次选/防冷)，并复用 upset 的反向比分作为防冷候选，
@@ -2122,7 +2123,11 @@ def build_beidan_match_analysis(spf_result):
         s = w + d + l
         if s > 0:
             w, d, l = w / s, d / s, l / s
-        pprobs = {'home': w, 'draw': d, 'away': l}
+        from src.common.local_match_analysis import (
+            LOCAL_ANALYST_VERSION, build_decision, normalize_probabilities,
+        )
+        pprobs = normalize_probabilities({'home': w, 'draw': d, 'away': l})
+        w, d, l = pprobs['home'], pprobs['draw'], pprobs['away']
         fav = max(pprobs, key=pprobs.get)
         fav_p = pprobs[fav]
         sec_p = sorted(pprobs.values(), reverse=True)[1]
@@ -2215,7 +2220,14 @@ def build_beidan_match_analysis(spf_result):
         else:
             verdict = f"平局概率 {d:.0%}，双方势均力敌"
 
+        quality_level = (spf_result.get('quality') or {}).get('level')
+        confidence_level = 'low' if quality_level in ('low', 'split') else quality_level
+        decision = build_decision(
+            pprobs, confidence=confidence_level,
+            upset_alert=bool(upset.get('alert')), min_single=0.48, min_margin=0.08,
+        )
         return {
+            'analysis_model': LOCAL_ANALYST_VERSION,
             'verdict': verdict,
             'favorite': fav_cn,
             'favorite_prob': fav_p,
@@ -2227,6 +2239,7 @@ def build_beidan_match_analysis(spf_result):
             'confidence': conf,
             'risk_level': (spf_result.get('quality') or {}).get('level'),
             'upset_alert': bool(upset.get('alert')),
+            'decision': decision,
         }
     except Exception as e:
         log.warning(f"build_beidan_match_analysis 失败: {e}")
@@ -2835,8 +2848,6 @@ def generate_beidan_recommendations(date=None, bet_types=None, source='okooo', s
         ouzhi_futures = {executor.submit(fetch_ouzhi_odds, mid): mid for mid in match_ids}
         for future in as_completed(ouzhi_futures):
             pass
-    
-    match_odds_cache = {mid: fetch_ouzhi_odds(mid) for mid in match_ids}
     
     actual_source = matches[0].get('source', source) if matches else source
     if actual_source == 'okooo' and bet_types:

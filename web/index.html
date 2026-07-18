@@ -2051,13 +2051,16 @@ function renderBeidanUpsetInline(upset) {
   </div>`;
 }
 
-// 元宝式赛果分析卡（北单/篮球/足球共用，kind=football 读 goals，kind=basketball 读 total）
+// 本地 AI 式赛果分析卡（北单/篮球/足球共用）
 function renderAnalysisCard(a, kind) {
   if (!a) return '';
   const scoreColor = { '首推': '#3b82f6', '次选': 'var(--muted)', '防冷': '#f59e0b' };
   const scores = (a.score_picks || []).map(s => {
     const c = scoreColor[s.type] || 'var(--muted)';
-    return `<span style="display:inline-block;padding:3px 9px;margin:3px 5px 3px 0;background:${c}18;color:${c};border-radius:6px;font-size:13px;font-weight:bold">${esc(s.type)} ${esc(s.score)}<span style="font-weight:normal;color:var(--muted)"> ${((s.probability || 0) * 100).toFixed(0)}%</span></span>`;
+    const probability = s.probability != null
+      ? ` ${(s.probability * 100).toFixed(0)}%`
+      : (s.projected ? ' 预测区间' : '');
+    return `<span style="display:inline-block;padding:3px 9px;margin:3px 5px 3px 0;background:${c}18;color:${c};border-radius:6px;font-size:13px;font-weight:bold">${esc(s.type)} ${esc(s.score)}<span style="font-weight:normal;color:var(--muted)">${esc(probability)}</span></span>`;
   }).join('');
   let dirBlock = '';
   if (kind === 'football' && a.goals) {
@@ -2074,11 +2077,17 @@ function renderAnalysisCard(a, kind) {
   }
   const reasons = (a.reasons || []).map(r => `<div style="font-size:12px;color:var(--muted);margin-top:2px">• ${esc(r)}</div>`).join('');
   const conf = a.confidence != null ? (typeof a.confidence === 'number' ? (a.confidence * 100).toFixed(0) + '%' : a.confidence) : '-';
+  const decision = a.decision || {};
+  const decisionBlock = decision.action ? `<div style="margin-top:6px;padding:5px 7px;background:var(--card);border-radius:6px;font-size:12px">
+    本地决策：<b>${esc(decision.action)}</b>${decision.primary ? ` · 首选 ${esc(decision.primary)}` : ''}${decision.secondary ? ` / ${esc(decision.secondary)}` : ''}
+    <span style="color:var(--muted)"> · ${esc(decision.reason || '')}</span>
+  </div>` : '';
   return `<div style="margin-top:8px;padding:9px;background:var(--bg2);border-left:3px solid var(--accent);border-radius:8px">
     <div style="font-size:13px;font-weight:bold;margin-bottom:5px">🧠 赛果分析</div>
     <div style="font-size:13px">${esc(a.verdict || '')}</div>
     <div style="margin-top:6px">${scores}</div>
     ${dirBlock}
+    ${decisionBlock}
     ${reasons ? `<div style="margin-top:6px">${reasons}</div>` : ''}
     <div style="margin-top:6px;font-size:11px;color:var(--muted)">置信度：${esc(conf)}</div>
   </div>`;

@@ -109,7 +109,8 @@ def fetch_okooo(url: str, referer: Optional[str] = None, max_retries: int = 2) -
             headers = {}
             if referer:
                 headers['Referer'] = referer
-            resp = _okooo_session.get(url, headers=headers, timeout=30)
+            # 篮球按比赛批量抓取；单场快速失败比阻塞整批更安全。
+            resp = _okooo_session.get(url, headers=headers, timeout=(5, 12))
 
             if resp.status_code in (403, 503):
                 log.warning(f"WAF拦截 {resp.status_code} for {url}")

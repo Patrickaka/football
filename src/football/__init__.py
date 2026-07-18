@@ -29,7 +29,7 @@ from ..common.logger import setup_logger
 
 log = setup_logger('football')
 
-FOOTBALL_PREDICTION_LOGIC_VERSION = '2026-07-17-match-analysis'
+FOOTBALL_PREDICTION_LOGIC_VERSION = '2026-07-18-local-analyst-v1'
 
 # ELO 评分系统（延迟导入）
 try:
@@ -6454,7 +6454,7 @@ def assess_football_upset(asian, euro, team, candidates):
 
 
 def build_match_analysis(result):
-    """元宝式赛果分析：胜负倾向 → 比分区间(首推/次选/防冷) → 进球数方向 → 理由 → 置信度。
+    """本地 AI 式赛果分析：胜负倾向 → 比分区间 → 进球数 → 理由 → 决策。
 
     关键原则（对齐元宝/主流 AI 范式）：
     1. 胜负倾向、比分、进球数 **全部从同一个完整比分分布(model.candidates) 边际化得出**，
@@ -6495,7 +6495,11 @@ def build_match_analysis(result):
         if s > 0:
             w, d, l = w / s, d / s, l / s
 
-        probs = {'home': w, 'draw': d, 'away': l}
+        from src.common.local_match_analysis import (
+            LOCAL_ANALYST_VERSION, build_decision, normalize_probabilities,
+        )
+        probs = normalize_probabilities({'home': w, 'draw': d, 'away': l})
+        w, d, l = probs['home'], probs['draw'], probs['away']
         fav = max(probs, key=probs.get)
         fav_p = probs[fav]
         sec_p = sorted(probs.values(), reverse=True)[1]
@@ -6604,7 +6608,15 @@ def build_match_analysis(result):
         else:
             verdict = f"平局概率 {d:.0%}，双方势均力敌"
 
+        conf_level = confidence.get('level') if isinstance(confidence, dict) else None
+        if conf_level is None:
+            conf_level = 'high' if conf_score >= 0.68 else ('medium' if conf_score >= 0.55 else 'low')
+        decision = build_decision(
+            probs, confidence=conf_level, upset_alert=bool(upset.get('alert')),
+            min_single=0.48, min_margin=0.08,
+        )
         return {
+            'analysis_model': LOCAL_ANALYST_VERSION,
             'verdict': verdict,
             'favorite': fav,
             'favorite_prob': fav_p,
@@ -6616,6 +6628,7 @@ def build_match_analysis(result):
             'confidence': conf_score,
             'risk_level': risk.get('level') if isinstance(risk, dict) else None,
             'upset_alert': bool(upset.get('alert')),
+            'decision': decision,
         }
     except Exception as e:
         log.warning(f"build_match_analysis 失败: {e}")
