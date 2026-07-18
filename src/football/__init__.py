@@ -29,7 +29,7 @@ from ..common.logger import setup_logger
 
 log = setup_logger('football')
 
-FOOTBALL_PREDICTION_LOGIC_VERSION = '2026-07-18-adaptive-score-ensemble-v2'
+FOOTBALL_PREDICTION_LOGIC_VERSION = '2026-07-18-goal-mean-anchor-v3'
 
 # ELO 评分系统（延迟导入）
 try:
@@ -5686,6 +5686,75 @@ def _adjust_score_probs_with_total_movement(score_probs: Dict[str, float], total
     }
 
 
+def _anchor_score_candidates_to_goal_mean(candidates, total, max_shift=0.60):
+    """Anchor score expected goals to the O/U target while preserving 1X2 mass."""
+    rows = []
+    for score, prob in candidates or []:
+        try:
+            h, a = int(score[0]), int(score[1])
+            p = max(0.0, float(prob))
+        except (TypeError, ValueError, IndexError):
+            continue
+        outcome = 'H' if h > a else ('D' if h == a else 'A')
+        rows.append(((h, a), p, h + a, outcome))
+    total_prob = sum(row[1] for row in rows)
+    if total_prob <= 0:
+        return candidates, {'applied': False, 'reason': 'empty_distribution'}
+    rows = [(score, p / total_prob, goals, outcome) for score, p, goals, outcome in rows]
+    expected_before = sum(p * goals for _, p, goals, _ in rows)
+
+    try:
+        target = float((total or {}).get('implied_total'))
+    except (TypeError, ValueError):
+        target = None
+    if target is None:
+        try:
+            target = float(get_close_total_line(total or {}))
+        except (TypeError, ValueError):
+            target = expected_before
+    target = max(expected_before - max_shift, min(expected_before + max_shift, target))
+    if abs(target - expected_before) < 0.08:
+        return candidates, {
+            'applied': False, 'reason': 'already_aligned',
+            'target': target, 'expected_before': expected_before,
+            'expected_after': expected_before,
+        }
+
+    outcome_mass = {}
+    for _, p, _, outcome in rows:
+        outcome_mass[outcome] = outcome_mass.get(outcome, 0.0) + p
+
+    def tilt(theta):
+        raw = [(score, p * math.exp(theta * goals), goals, outcome)
+               for score, p, goals, outcome in rows]
+        raw_mass = {}
+        for _, p, _, outcome in raw:
+            raw_mass[outcome] = raw_mass.get(outcome, 0.0) + p
+        adjusted = []
+        for score, p, goals, outcome in raw:
+            scale = outcome_mass[outcome] / max(raw_mass[outcome], 1e-15)
+            adjusted.append((score, p * scale, goals))
+        mean = sum(p * goals for _, p, goals in adjusted)
+        return adjusted, mean
+
+    low, high = -1.5, 1.5
+    for _ in range(50):
+        mid = (low + high) / 2.0
+        _, mean = tilt(mid)
+        if mean < target:
+            low = mid
+        else:
+            high = mid
+    theta = (low + high) / 2.0
+    adjusted, expected_after = tilt(theta)
+    result = sorted(((score, p) for score, p, _ in adjusted), key=lambda item: -item[1])
+    return result, {
+        'applied': True, 'target': target, 'theta': theta,
+        'expected_before': expected_before, 'expected_after': expected_after,
+        'preserved_1x2': True,
+    }
+
+
 def _normalize_goal_dist(goal_dist: Dict) -> Dict[int, float]:
     normalized = {}
     if not isinstance(goal_dist, dict):
@@ -7052,6 +7121,24 @@ def analyze_match(match, force_refresh=False):
         meta['score_total_movement_adjusted'] = False
         meta['score_total_movement'] = {'applied': False, 'reason': str(e)}
         log.warning(f"score total movement adjustment failed: {e}")
+
+    # Exact-score calibration can change the marginal goal mean. Re-anchor the
+    # final score matrix to the market-implied total without changing 1X2 mass.
+    try:
+        candidates, score_goal_anchor = _anchor_score_candidates_to_goal_mean(
+            candidates, total
+        )
+        meta['score_goal_anchor'] = score_goal_anchor
+        if score_goal_anchor.get('applied'):
+            log.info(
+                "score goal mean anchored: %.3f -> %.3f (target %.3f)",
+                score_goal_anchor['expected_before'],
+                score_goal_anchor['expected_after'],
+                score_goal_anchor['target'],
+            )
+    except Exception as e:
+        meta['score_goal_anchor'] = {'applied': False, 'reason': str(e)}
+        log.warning(f"score goal mean anchor failed: {e}")
 
     dixon_coles_result = None
     try:

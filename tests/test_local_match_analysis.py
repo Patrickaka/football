@@ -5,6 +5,7 @@ from src.common.local_match_analysis import (
     build_score_strategy,
 )
 from src.basketball import assess_basketball_upset, build_basketball_analysis
+from src.football import _anchor_score_candidates_to_goal_mean
 
 
 class LocalMatchAnalysisTests(unittest.TestCase):
@@ -39,6 +40,25 @@ class LocalMatchAnalysisTests(unittest.TestCase):
         ], confidence='high')
         self.assertEqual(strategy['action'], '谨慎单比分')
         self.assertTrue(strategy['playable'])
+
+    def test_score_goal_anchor_preserves_1x2_mass(self):
+        candidates = [
+            ((0, 0), 0.25), ((1, 1), 0.20),
+            ((1, 0), 0.25), ((2, 0), 0.10),
+            ((0, 1), 0.15), ((0, 2), 0.05),
+        ]
+        anchored, meta = _anchor_score_candidates_to_goal_mean(
+            candidates, {'implied_total': 2.0}
+        )
+        before = {'H': 0.35, 'D': 0.45, 'A': 0.20}
+        after = {'H': 0.0, 'D': 0.0, 'A': 0.0}
+        for (home, away), probability in anchored:
+            key = 'H' if home > away else ('D' if home == away else 'A')
+            after[key] += probability
+        for key in before:
+            self.assertAlmostEqual(after[key], before[key], places=8)
+        self.assertTrue(meta['applied'])
+        self.assertAlmostEqual(meta['expected_after'], meta['target'], places=6)
 
     def test_close_match_uses_double_selection(self):
         decision = build_decision({'胜': 0.38, '平': 0.33, '负': 0.29}, confidence='high')
