@@ -1491,7 +1491,17 @@ async function loadAllPredictions() {
       loading(`正在分析 ${m.home} vs ${m.away} (${i + 1}/${allMatches.length})…`);
       const q = new URLSearchParams({
         match_id: m.match_id, home: m.home, away: m.away,
-        league: m.league || '', time: m.time || '', num: m.num || ''
+        league: m.league || '', time: m.time || '', num: m.num || '',
+        lottery_handicap: m.lottery_handicap ?? '',
+        lottery_primary_market: m.lottery_primary_market || '',
+        lottery_source: m.lottery_source || 'unavailable',
+        lottery_offer_matched: String(Boolean(m.lottery_offer_matched)),
+        lottery_available_markets: (m.lottery_available_markets || []).join(','),
+        lottery_spf_available: String(Boolean(m.lottery_spf_available)),
+        lottery_rqspf_available: String(Boolean(m.lottery_rqspf_available)),
+        lottery_spf_odds: m.lottery_spf_odds ? JSON.stringify(m.lottery_spf_odds) : '',
+        lottery_rqspf_odds: m.lottery_rqspf_odds ? JSON.stringify(m.lottery_rqspf_odds) : '',
+        okooo_id: m.okooo_id || ''
       });
       try {
         const data = await fetchJson('/api/predict?' + q);
@@ -1516,7 +1526,24 @@ function setFootballQualityFilter(filter) {
 
 function getFootballResultTier(item) {
   const r = item?.result || {};
-  let probs = r.analysis?.wdl;
+  const lotteryPrimary = r.lottery?.primary;
+  let probs = lotteryPrimary?.probabilities;
+  let entries;
+  if (probs && lotteryPrimary?.type === 'rqspf') {
+    entries = [
+      ['让胜', Number(probs['让胜'] || 0)],
+      ['让平', Number(probs['让平'] || 0)],
+      ['让负', Number(probs['让负'] || 0)],
+    ];
+  } else if (probs) {
+    entries = [
+      ['主胜', Number(probs['胜'] || 0)],
+      ['平局', Number(probs['平'] || 0)],
+      ['客胜', Number(probs['负'] || 0)],
+    ];
+  } else {
+    probs = r.analysis?.wdl;
+  }
   if (!probs) {
     const candidates = r.model?.candidates || [];
     probs = { home: 0, draw: 0, away: 0 };
@@ -1529,11 +1556,12 @@ function getFootballResultTier(item) {
       else probs.away += probability;
     });
   }
-  const entries = [
+  if (!entries) entries = [
     ['主胜', Number(probs?.home || probs?.['胜'] || 0)],
     ['平局', Number(probs?.draw || probs?.['平'] || 0)],
     ['客胜', Number(probs?.away || probs?.['负'] || 0)],
-  ].sort((a, b) => b[1] - a[1]);
+  ];
+  entries.sort((a, b) => b[1] - a[1]);
   const prediction = entries[0][0];
   const probability = entries[0][1];
   let tier = probability >= 0.75 ? 'ultra'
@@ -1691,21 +1719,43 @@ function renderFootballPredictions(results) {
         </div>`;
       }
 
-      const spfPrediction = getSPFPrediction(top);
+      const officialLotteryMatched = Boolean(r.lottery?.offer_matched);
+      const lotteryMarket = r.lottery?.primary_market === 'rqspf'
+        ? r.lottery?.handicap : r.lottery?.standard;
+      const spfPrediction = lotteryMarket
+        ? { pred: lotteryMarket.prediction, probs: lotteryMarket.probabilities }
+        : getSPFPrediction(top);
       if (spfPrediction) {
+        const isHandicapMarket = r.lottery?.primary_market === 'rqspf';
+        const lotteryHandicap = r.lottery?.handicap?.handicap;
+        const marketKeys = isHandicapMarket ? ['让胜', '让平', '让负'] : ['胜', '平', '负'];
+        const marketTitle = !officialLotteryMatched
+          ? '模型参考 · 胜平负（澳客体彩玩法暂不可用）'
+          : isHandicapMarket
+          ? `🇨🇳 中国体彩 · 让球胜平负（主队 ${lotteryHandicap > 0 ? '+' : ''}${lotteryHandicap}）`
+          : '🇨🇳 中国体彩 · 胜平负';
+        const officialOdds = isHandicapMarket ? r.lottery?.rqspf_odds : r.lottery?.spf_odds;
         itemHtml += '<div style="margin-top:8px;padding:8px;background:var(--bg2);border-radius:8px">';
-        itemHtml += '<div style="font-size:12px;color:var(--muted);margin-bottom:6px">🎯 胜平负</div>';
+        itemHtml += `<div style="font-size:12px;color:var(--muted);margin-bottom:6px">🎯 ${marketTitle}</div>`;
         itemHtml += '<div style="display:flex;gap:12px">';
-        ['胜', '平', '负'].forEach(key => {
+        marketKeys.forEach(key => {
           const prob = spfPrediction.probs[key] || 0;
+          const odd = officialOdds?.[key];
           const isPred = spfPrediction.pred === key;
-          const colors = { '胜': '#ef4444', '平': '#f59e0b', '负': '#22c55e' };
+          const colors = {
+            '胜': '#ef4444', '平': '#f59e0b', '负': '#22c55e',
+            '让胜': '#ef4444', '让平': '#f59e0b', '让负': '#22c55e'
+          };
           itemHtml += `<div style="flex:1;text-align:center;padding:6px;border-radius:6px${isPred ? `;background:${colors[key]}20;color:${colors[key]};font-weight:bold` : ''}">
             <div>${key}</div>
             <div style="font-size:11px;color:var(--muted)">${(prob * 100).toFixed(0)}%</div>
+            ${odd ? `<div style="font-size:10px;color:#3b82f6">澳客 ${Number(odd).toFixed(2)}</div>` : ''}
           </div>`;
         });
         itemHtml += '</div>';
+        if (officialLotteryMatched && isHandicapMarket) {
+          itemHtml += '<div style="font-size:11px;color:var(--muted);margin-top:6px">结算口径：主队进球 + 体彩让球数，再与客队进球比较；不是亚洲盘。</div>';
+        }
         itemHtml += '</div>';
       }
       
@@ -1769,7 +1819,7 @@ function renderFootballPredictions(results) {
         const goalTxt = g.most_likely_interval ? `最可能 ${g.most_likely_interval}` : '';
         itemHtml += `<div style="margin-top:8px;padding:8px 10px;background:var(--bg2);border-left:3px solid var(--accent);border-radius:8px">
           <div style="font-size:12px;color:var(--muted);margin-bottom:4px">🧠 赛果分析 <span style="color:var(--muted)">· 置信 ${(an.confidence * 100).toFixed(0)}%</span></div>
-          <div style="font-size:13px;margin-bottom:5px">${esc(an.verdict)}</div>
+          <div style="font-size:13px;margin-bottom:5px">${esc(an.lottery_verdict || an.verdict)}</div>
           <div style="margin-bottom:5px">${spChips}</div>
           <div style="font-size:12px;color:var(--muted)">⚽ ${goalTxt}${ou ? ' · ' + ou : ''}${an.upset_alert ? ' · ⚠️ 防冷' : ''}</div>
         </div>`;

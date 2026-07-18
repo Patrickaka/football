@@ -29,7 +29,7 @@ from ..common.logger import setup_logger
 
 log = setup_logger('football')
 
-FOOTBALL_PREDICTION_LOGIC_VERSION = '2026-07-18-goal-mean-anchor-v3'
+FOOTBALL_PREDICTION_LOGIC_VERSION = '2026-07-18-okooo-jczq-v5'
 
 # ELO 评分系统（延迟导入）
 try:
@@ -328,6 +328,76 @@ def parse_total_line(text):
         return 2.5
 
 
+def parse_lottery_handicap(value):
+    """Parse the integer home-team handicap used by China Sports Lottery.
+
+    This is deliberately separate from the Asian handicap.  For example, a
+    lottery handicap of ``-1`` means the settlement score is home goals - 1
+    versus away goals; quarter-ball Asian lines are never accepted here.
+    """
+    if value is None or value == '':
+        return None
+    match = re.search(r'[-+]?\d+(?:\.\d+)?', str(value).replace('（', '(').replace('）', ')'))
+    if not match:
+        return None
+    try:
+        number = float(match.group(0))
+    except ValueError:
+        return None
+    if not number.is_integer() or abs(number) > 5:
+        return None
+    return int(number)
+
+
+def lottery_market_probabilities(candidates, lottery_handicap=None):
+    """Marginalise one complete score distribution into JCZQ markets."""
+    spf = {'胜': 0.0, '平': 0.0, '负': 0.0}
+    handicap = parse_lottery_handicap(lottery_handicap)
+    rqspf = {'让胜': 0.0, '让平': 0.0, '让负': 0.0} if handicap is not None else None
+
+    for item in candidates or []:
+        try:
+            (home_goals, away_goals), probability = item
+            home_goals, away_goals = int(home_goals), int(away_goals)
+            probability = float(probability)
+        except (TypeError, ValueError):
+            continue
+        margin = home_goals - away_goals
+        spf['胜' if margin > 0 else '负' if margin < 0 else '平'] += probability
+        if rqspf is not None:
+            adjusted_margin = margin + handicap
+            label = '让胜' if adjusted_margin > 0 else '让负' if adjusted_margin < 0 else '让平'
+            rqspf[label] += probability
+
+    def normalize(values):
+        total = sum(values.values())
+        return {key: value / total for key, value in values.items()} if total > 0 else values
+
+    spf = normalize(spf)
+    if rqspf is not None:
+        rqspf = normalize(rqspf)
+    primary_type = 'rqspf' if handicap not in (None, 0) else 'spf'
+    primary_probs = rqspf if primary_type == 'rqspf' else spf
+    return {
+        'standard': {
+            'type': 'spf', 'name': '胜平负', 'probabilities': spf,
+            'prediction': max(spf, key=spf.get) if sum(spf.values()) > 0 else None,
+        },
+        'handicap': ({
+            'type': 'rqspf', 'name': '让球胜平负', 'handicap': handicap,
+            'probabilities': rqspf,
+            'prediction': max(rqspf, key=rqspf.get) if rqspf and sum(rqspf.values()) > 0 else None,
+        } if rqspf is not None else None),
+        'primary_market': primary_type,
+        'primary': {
+            'type': primary_type,
+            'probabilities': primary_probs,
+            'prediction': max(primary_probs, key=primary_probs.get) if primary_probs and sum(primary_probs.values()) > 0 else None,
+        },
+        'settlement_rule': '中国体彩：主队进球 + 让球数，与客队进球比较',
+    }
+
+
 # ===================== 抓取比赛列表 =====================
 
 def fetch_match_list():
@@ -451,6 +521,8 @@ def fetch_match_list():
             match['league'] = match_league_map[match_id].strip()
         if match_id in match_num_map:
             match['num'] = match_num_map[match_id]
+        match['lottery_handicap'] = None
+        match['lottery_primary_market'] = None
 
     # 如果通过行匹配没有找到时间，则回退到原来的方法
     if not match_time_map:
@@ -465,6 +537,14 @@ def fetch_match_list():
                 match['league'] = leagues[i].strip()
             if 'time' not in match and i < len(times):
                 match['time'] = times[i]
+
+    # 500.com only supplies analysis markets.  JCZQ offer/handicap comes from
+    # okooo and is matched onto the 500 schedule without blocking on failure.
+    try:
+        from .okooo_lottery import enrich_with_okooo_lottery
+        matches = enrich_with_okooo_lottery(matches)
+    except Exception as exc:
+        log.warning('澳客体彩玩法综合失败，返回纯500分析赛程: %s', exc)
 
     log.info('获取到 %d 场比赛', len(matches))
     return matches
@@ -6692,6 +6772,19 @@ def build_match_analysis(result):
         else:
             verdict = f"平局概率 {d:.0%}，双方势均力敌"
 
+        lottery_info = result.get('lottery') or {}
+        lottery_primary = lottery_info.get('primary') or {}
+        lottery_verdict = None
+        if lottery_info.get('primary_market') == 'rqspf':
+            rq_probs = lottery_primary.get('probabilities') or {}
+            if rq_probs:
+                rq_pick = max(rq_probs, key=rq_probs.get)
+                rq_value = rq_probs[rq_pick]
+                rq_handicap = (lottery_info.get('handicap') or {}).get('handicap')
+                lottery_verdict = (
+                    f"按中国体彩主队{rq_handicap:+d}球口径，{rq_pick}概率最高 {rq_value:.0%}"
+                )
+
         conf_level = confidence.get('level') if isinstance(confidence, dict) else None
         if conf_level is None:
             conf_level = 'high' if conf_score >= 0.68 else ('medium' if conf_score >= 0.55 else 'low')
@@ -6705,6 +6798,7 @@ def build_match_analysis(result):
         return {
             'analysis_model': LOCAL_ANALYST_VERSION,
             'verdict': verdict,
+            'lottery_verdict': lottery_verdict,
             'favorite': fav,
             'favorite_prob': fav_p,
             'margin': margin,
@@ -6772,6 +6866,9 @@ def analyze_match(match, force_refresh=False):
                     'A': sum(prob for (h, a), prob in candidates if h < a),
                 }
                 predicted_half_full = _half_full_probs_to_dict(model.get('half_full_time'))
+                cached_lottery = cached_result.get('lottery') or lottery_market_probabilities(
+                    candidates, match.get('lottery_handicap')
+                )
                 
                 save_prediction(
                     match_id=mid,
@@ -6788,7 +6885,10 @@ def analyze_match(match, force_refresh=False):
                         'asian': cached_result.get('asian'),
                         'euro': cached_result.get('euro'),
                         'total': cached_result.get('total'),
-                    }
+                        'lottery': cached_lottery,
+                    },
+                    lottery_handicap=(cached_lottery.get('handicap') or {}).get('handicap'),
+                    predicted_rqspf=(cached_lottery.get('handicap') or {}).get('probabilities'),
                 )
                 log.info(f"缓存结果的预测记录已保存: {home} vs {away}")
                 if 'model_status' in cached_result:
@@ -7624,8 +7724,33 @@ def analyze_match(match, force_refresh=False):
         }
     }
     
+    lottery = lottery_market_probabilities(candidates, match.get('lottery_handicap'))
+    lottery.update({
+        'source': match.get('lottery_source') or 'unavailable',
+        'offer_matched': bool(match.get('lottery_offer_matched')),
+        'available_markets': match.get('lottery_available_markets') or [],
+        'spf_available': bool(match.get('lottery_spf_available')),
+        'rqspf_available': bool(match.get('lottery_rqspf_available')),
+        'spf_odds': match.get('lottery_spf_odds'),
+        'rqspf_odds': match.get('lottery_rqspf_odds'),
+    })
+    official_primary = match.get('lottery_primary_market')
+    lottery['primary_market'] = official_primary
+    if official_primary == 'rqspf' and lottery.get('handicap'):
+        lottery['primary'] = lottery['handicap']
+    elif official_primary == 'spf':
+        lottery['primary'] = lottery['standard']
+    else:
+        lottery['primary'] = None
+
     result = {
-        'match': {k: match.get(k) for k in ('home', 'away', 'league', 'time', 'match_id', 'num')},
+        'match': {k: match.get(k) for k in (
+            'home', 'away', 'league', 'time', 'match_id', 'num',
+            'lottery_handicap', 'lottery_primary_market', 'lottery_source',
+            'lottery_offer_matched', 'lottery_available_markets',
+            'lottery_spf_available', 'lottery_rqspf_available', 'okooo_id'
+        )},
+        'lottery': lottery,
         'league_profile': league_profile,
         'asian': asian,
         'euro': euro,
@@ -7741,13 +7866,16 @@ def analyze_match(match, force_refresh=False):
                 'asian': asian,
                 'euro': euro,
                 'total': total,
+                'lottery': lottery,
             },
             # 影子预测相关字段
             base_1x2=base_1x2,
             ml_1x2=ml_1x2,
             ml_model_version=ml_model_version,
             ml_available=ml_available,
-            ml_feature_snapshot=ml_feature_snapshot
+            ml_feature_snapshot=ml_feature_snapshot,
+            lottery_handicap=(lottery.get('handicap') or {}).get('handicap'),
+            predicted_rqspf=(lottery.get('handicap') or {}).get('probabilities'),
         )
         prediction_saved = True
         log.info(f"预测记录已保存: {home} vs {away}")

@@ -423,7 +423,9 @@ class PredictionHistory:
                        ml_1x2: Dict[str, float] = None,
                        ml_model_version: str = None,
                        ml_available: bool = False,
-                       ml_feature_snapshot: Dict = None):
+                       ml_feature_snapshot: Dict = None,
+                       lottery_handicap: int = None,
+                       predicted_rqspf: Dict[str, float] = None):
         """
         添加预测记录
         
@@ -469,6 +471,8 @@ class PredictionHistory:
                 update_data['ml_available'] = ml_available
                 if ml_feature_snapshot:
                     update_data['ml_feature_snapshot'] = ml_feature_snapshot
+                update_data['lottery_handicap'] = lottery_handicap
+                update_data['predicted_rqspf'] = predicted_rqspf
                 record.update(update_data)
                 
                 # 更新对应时间层的预测
@@ -525,6 +529,8 @@ class PredictionHistory:
             'total_line': total_line,
             'predicted_scores': predicted_scores,
             'predicted_1x2': predicted_1x2,
+            'lottery_handicap': lottery_handicap,
+            'predicted_rqspf': predicted_rqspf,
             'predicted_half_full': predicted_half_full,  # 新增：半全场预测
             'time_layers': time_layers,  # 新增：时间分层预测记录
             'odds_layers': odds_layers,  # 新增：赔率分层记录
@@ -655,6 +661,20 @@ class PredictionHistory:
         hit_top20 = actual_score in top20
         hit_top30 = actual_score in top30
         hit_1x2 = pred_result == actual_result
+
+        actual_rqspf = None
+        hit_rqspf = None
+        predicted_rqspf = record.get('predicted_rqspf') or {}
+        lottery_handicap = record.get('lottery_handicap')
+        if predicted_rqspf and lottery_handicap is not None and actual_score:
+            try:
+                actual_home, actual_away = (int(value) for value in actual_score.split('-'))
+                adjusted_margin = actual_home + int(lottery_handicap) - actual_away
+                actual_rqspf = '让胜' if adjusted_margin > 0 else '让负' if adjusted_margin < 0 else '让平'
+                predicted_rqspf_result = max(predicted_rqspf, key=predicted_rqspf.get)
+                hit_rqspf = predicted_rqspf_result == actual_rqspf
+            except (TypeError, ValueError):
+                pass
         
         # 半全场命中计算
         hit_half_full_top1 = False
@@ -691,6 +711,8 @@ class PredictionHistory:
             'hit_top20': hit_top20,
             'hit_top30': hit_top30,
             'hit_1x2': hit_1x2,
+            'hit_rqspf': hit_rqspf,
+            'actual_rqspf': actual_rqspf,
             # 半全场命中指标
             'hit_half_full_top1': hit_half_full_top1,
             'hit_half_full_top3': hit_half_full_top3,
@@ -1977,7 +1999,9 @@ def save_prediction(match_id: str, league: str, home: str, away: str,
                    ml_1x2: Dict[str, float] = None,
                    ml_model_version: str = None,
                    ml_available: bool = False,
-                   ml_feature_snapshot: Dict = None):
+                   ml_feature_snapshot: Dict = None,
+                   lottery_handicap: int = None,
+                   predicted_rqspf: Dict[str, float] = None):
     """保存预测记录"""
     return _global_history.add_prediction(
         match_id, league, home, away, match_time,
@@ -1987,7 +2011,9 @@ def save_prediction(match_id: str, league: str, home: str, away: str,
         ml_1x2=ml_1x2,
         ml_model_version=ml_model_version,
         ml_available=ml_available,
-        ml_feature_snapshot=ml_feature_snapshot
+        ml_feature_snapshot=ml_feature_snapshot,
+        lottery_handicap=lottery_handicap,
+        predicted_rqspf=predicted_rqspf,
     )
 
 
@@ -2418,13 +2444,15 @@ def get_prediction_export() -> Dict:
         'match_id', 'league', 'home', 'away', 'match_time',
         'created_at', 'updated_at', 'settled_at', 'model_version',
         'prediction_logic_version', 'asian', 'total_line',
-        'predicted_scores', 'predicted_1x2', 'predicted_half_full',
+        'predicted_scores', 'predicted_1x2', 'predicted_rqspf',
+        'lottery_handicap', 'predicted_half_full',
         'time_layers', 'odds_layers', 'odds_snapshot',
         'base_1x2', 'ml_1x2', 'ml_model_version', 'ml_available',
         'ml_feature_snapshot', 'actual_score', 'actual_result',
         'actual_half_score', 'actual_half_result', 'actual_half_full',
         'settled', 'sync_status', 'evaluation', 'hit_top1', 'hit_top3',
-        'hit_top5', 'hit_1x2', 'actual_score_rank', 'actual_score_prob',
+        'hit_top5', 'hit_1x2', 'hit_rqspf', 'actual_rqspf',
+        'actual_score_rank', 'actual_score_prob',
     )
     records = [
         {key: record.get(key) for key in export_fields if key in record}

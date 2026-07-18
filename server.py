@@ -658,7 +658,24 @@ class Handler(BaseHTTPRequestHandler):
             'league': params.get('league', [''])[0],
             'time': params.get('time', [''])[0],
             'num': params.get('num', [''])[0],
+            'lottery_handicap': params.get('lottery_handicap', [''])[0],
+            'lottery_primary_market': params.get('lottery_primary_market', [''])[0],
+            'lottery_source': params.get('lottery_source', ['unavailable'])[0],
+            'lottery_offer_matched': params.get('lottery_offer_matched', ['false'])[0].lower() == 'true',
+            'lottery_available_markets': [
+                value for value in params.get('lottery_available_markets', [''])[0].split(',') if value
+            ],
+            'lottery_spf_available': params.get('lottery_spf_available', ['false'])[0].lower() == 'true',
+            'lottery_rqspf_available': params.get('lottery_rqspf_available', ['false'])[0].lower() == 'true',
+            'okooo_id': params.get('okooo_id', [''])[0],
         }
+        for field in ('lottery_spf_odds', 'lottery_rqspf_odds'):
+            raw_value = params.get(field, [''])[0]
+            if raw_value:
+                try:
+                    match[field] = json.loads(raw_value)
+                except (TypeError, ValueError):
+                    match[field] = None
         try:
             return {'result': analyze_match(match, force_refresh=force_refresh)}
         except ValueError as e:

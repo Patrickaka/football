@@ -2,9 +2,69 @@ import unittest
 from unittest.mock import patch
 
 import src.football as football
+from src.football.okooo_lottery import enrich_with_okooo_lottery, parse_okooo_jczq_schedule
 
 
 class PredictionPostprocessTests(unittest.TestCase):
+    def test_okooo_jczq_offer_enriches_500_analysis_match(self):
+        html = '''
+        <table><tr>
+          <td><span class="xh"><i>001</i></span> 周六001</td><td>18:00</td>
+          <td><a href="/soccer/match/9988"><span class="homenameobj" title="主队">主队</span></a>
+              <span class="handicapobj">(-1)</span>
+              <span class="awaynameobj" title="客队">客队</span>
+              <em>1.80</em><em>3.40</em><em>4.10</em>
+              <em>2.60</em><em>3.50</em><em>2.20</em> 让球胜平负 比分 总进球</td>
+        </tr></table>
+        '''
+        offers = parse_okooo_jczq_schedule(html)
+        matches = enrich_with_okooo_lottery([
+            {'num': '周六001', 'home': '主队', 'away': '客队', 'time': '07-18 18:00'}
+        ], lottery_matches=offers)
+
+        self.assertEqual(matches[0]['lottery_source'], 'okooo')
+        self.assertEqual(matches[0]['lottery_handicap'], -1)
+        self.assertEqual(matches[0]['lottery_primary_market'], 'rqspf')
+        self.assertEqual(matches[0]['lottery_rqspf_odds']['让平'], 3.5)
+
+    def test_okooo_unmatched_offer_does_not_invent_lottery_play(self):
+        matches = enrich_with_okooo_lottery([
+            {'num': '周六002', 'home': 'A', 'away': 'B', 'time': '18:00'}
+        ], lottery_matches=[])
+
+        self.assertFalse(matches[0]['lottery_offer_matched'])
+        self.assertIsNone(matches[0]['lottery_primary_market'])
+
+    def test_okooo_three_odds_with_handicap_means_rqspf_only(self):
+        html = '''<tr><td><span class="xh"><i>001</i></span></td><td>18:00</td><td>
+          <a href="/soccer/match/9988"><span class="homenameobj">主队</span></a>
+          <span class="handicapobj">(-1)</span><span class="awaynameobj">客队</span>
+          <em>2.60</em><em>3.50</em><em>2.20</em></td></tr>'''
+
+        offer = parse_okooo_jczq_schedule(html)[0]
+        self.assertFalse(offer['spf_available'])
+        self.assertTrue(offer['rqspf_available'])
+        self.assertIsNone(offer['spf_odds'])
+        self.assertEqual(offer['rqspf_odds']['让平'], 3.5)
+
+    def test_lottery_handicap_is_integer_and_separate_from_asian_line(self):
+        self.assertEqual(football.parse_lottery_handicap('(-1)'), -1)
+        self.assertEqual(football.parse_lottery_handicap('（+2）'), 2)
+        self.assertIsNone(football.parse_lottery_handicap('-0.75'))
+
+    def test_lottery_rqspf_uses_china_sports_lottery_settlement(self):
+        markets = football.lottery_market_probabilities([
+            ((1, 0), 0.40),
+            ((2, 0), 0.30),
+            ((0, 1), 0.30),
+        ], lottery_handicap=-1)
+
+        self.assertEqual(markets['primary_market'], 'rqspf')
+        self.assertAlmostEqual(markets['handicap']['probabilities']['让平'], 0.40)
+        self.assertAlmostEqual(markets['handicap']['probabilities']['让胜'], 0.30)
+        self.assertAlmostEqual(markets['handicap']['probabilities']['让负'], 0.30)
+        self.assertAlmostEqual(sum(markets['standard']['probabilities'].values()), 1.0)
+
     def test_goal_distribution_anchor_moves_mean_toward_total_line(self):
         dist = {1: 0.50, 2: 0.30, 5: 0.20}
         before = sum(goals * prob for goals, prob in dist.items())
