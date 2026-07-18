@@ -1453,9 +1453,20 @@ let footballSort = 'time';
 let footballPage = 1;
 let footballPageSize = 12;
 
+function scrollPageListToTop(elementId) {
+  // 等当前页完成 DOM 渲染后再滚动，避免浏览器恢复到旧按钮位置。
+  requestAnimationFrame(() => {
+    const target = document.getElementById(elementId);
+    if (!target) return;
+    const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    target.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'start' });
+  });
+}
+
 function setFootballPage(page) {
   footballPage = Math.max(1, Number(page) || 1);
   renderFootballPredictions(allPredictions);
+  scrollPageListToTop('panel-football');
 }
 
 function setFootballPageSize(size) {
@@ -2139,6 +2150,7 @@ function setBeidanQualityFilter(filter) {
 function setBeidanPage(page) {
   beidanPage = Math.max(1, Number(page) || 1);
   if (beidanLastResult) renderBeidan(beidanLastResult);
+  scrollPageListToTop('panel-beidan');
 }
 
 function setBeidanPageSize(size) {
@@ -6232,6 +6244,7 @@ function basketballMatchPassesSearch(m) {
 function setBasketballPage(page) {
   basketballPage = Math.max(1, Number(page) || 1);
   if (basketballLastResult) renderBasketball(basketballLastResult);
+  scrollPageListToTop('panel-basketball');
 }
 
 function setBasketballPageSize(size) {
