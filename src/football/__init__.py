@@ -29,7 +29,7 @@ from ..common.logger import setup_logger
 
 log = setup_logger('football')
 
-FOOTBALL_PREDICTION_LOGIC_VERSION = '2026-07-18-jczq-spf-anchor-v11'
+FOOTBALL_PREDICTION_LOGIC_VERSION = '2026-07-18-production-history-calibration-v12'
 LOTTERY_OFFICIAL_ODDS_WEIGHT = 0.40
 
 # ELO 评分系统（延迟导入）
@@ -7371,6 +7371,27 @@ def analyze_match(match, force_refresh=False):
     except Exception as e:
         meta['score_goal_anchor'] = {'applied': False, 'reason': str(e)}
         log.warning(f"score goal mean anchor failed: {e}")
+
+    # Production-history correction runs after the market anchor.  It is
+    # deliberately shrunk by effective sample size and capped, so a short hot
+    # streak cannot overwhelm the current match's odds and total-goal line.
+    try:
+        from .history_calibration import apply_history_calibration, get_runtime_history_profile
+
+        history_profile = get_runtime_history_profile()
+        candidates, history_adjustment = apply_history_calibration(candidates, history_profile)
+        meta['production_history_calibration'] = history_adjustment
+        if history_adjustment.get('applied'):
+            log.info(
+                "production history calibrated: n=%s beta=%.4f goals %.3f -> %.3f",
+                history_adjustment.get('sample_count'),
+                history_adjustment.get('goal_beta', 0.0),
+                history_adjustment.get('expected_goals_before', 0.0),
+                history_adjustment.get('expected_goals_after', 0.0),
+            )
+    except Exception as e:
+        meta['production_history_calibration'] = {'applied': False, 'reason': str(e)}
+        log.warning(f"production history calibration failed: {e}")
 
     dixon_coles_result = None
     try:

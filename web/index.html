@@ -1765,6 +1765,12 @@ function renderFootballPredictions(results) {
         itemHtml += '</div>';
         itemHtml += '</div>';
       }
+      const historyCalibration = r.model?.production_history_calibration;
+      if (historyCalibration?.applied) {
+        itemHtml += `<div style="margin-top:5px;font-size:10px;color:#93c5fd">
+          📈 生产历史校准 ${historyCalibration.sample_count || 0} 场 · 预期进球 ${Number(historyCalibration.expected_goals_before || 0).toFixed(2)} → ${Number(historyCalibration.expected_goals_after || 0).toFixed(2)}
+        </div>`;
+      }
       
       const upset = r.upset;
       if (upset && upset.alert && upset.candidates && upset.candidates.length) {
