@@ -6653,6 +6653,23 @@ function startSyncStampTimer() {
   syncStampTimer = setInterval(() => updateSyncStampAges(), 60000);
 }
 
+function getFootballAuditBreakdown(audit = {}) {
+  const labels = {
+    future_settlement: '提前回填',
+    implausible_actual_score: '比分不合理',
+    invalid_actual_score: '比分格式错误',
+    missing_result_quality: '缺少赛果质量标记',
+    result_quality_reject: '赛果来源不合格',
+    result_quality_low: '赛果可信度低',
+    invalid_half_time_data: '半场比分无效',
+    zero_calibration_weight: '校准权重为 0',
+  };
+  return Object.entries(audit.issue_counts || {})
+    .filter(([, count]) => Number(count) > 0)
+    .sort((a, b) => Number(b[1]) - Number(a[1]))
+    .map(([code, count]) => `${labels[code] || code} ${count} 项`);
+}
+
 function renderFootballDiagnostics(diagnostics) {
   if (!diagnostics || !diagnostics.windows) return '';
 
@@ -6667,6 +6684,10 @@ function renderFootballDiagnostics(diagnostics) {
   const suggestions = diagnostics.diagnostic_suggestions?.suggestions || [];
   const deltas = diagnostics.diagnostic_suggestions?.param_deltas || {};
   const audit = diagnostics.audit || {};
+  const auditBreakdown = getFootballAuditBreakdown(audit);
+  const auditBreakdownHtml = auditBreakdown.length
+    ? `<div class="diag-line" style="color:var(--warn)">${auditBreakdown.map(esc).join(' · ')}</div>`
+    : '';
   const sync = diagnostics.sync || {};
   const hasDeltas = Object.keys(deltas).length > 0;
 
@@ -6679,6 +6700,7 @@ function renderFootballDiagnostics(diagnostics) {
           <div class="diag-main empty">暂无可复盘样本</div>
           <div class="diag-line">已回填 ${sync.settled || 0} 场，待同步 ${sync.pending_sync || 0} 场</div>
           <div class="diag-line">审计问题 ${audit.issue_count || 0} 项</div>
+          ${auditBreakdownHtml}
         </div>
         <div class="diag-panel">
           <div class="diag-title">下一步</div>
@@ -6725,6 +6747,7 @@ function renderFootballDiagnostics(diagnostics) {
       <div class="status-item"><span class="status-dot">!</span><div><div class="status-name">审计问题</div><div class="status-desc">${audit.issue_count || 0} 项</div></div></div>
       <div class="status-item"><span class="status-dot">S</span><div><div class="status-name">待同步</div><div class="status-desc">${sync.pending_sync || 0} 场</div></div></div>
     </div>
+    ${auditBreakdownHtml ? `<div class="diag-panel" style="margin-bottom:12px"><div class="diag-title">审计问题明细</div>${auditBreakdownHtml}</div>` : ''}
     <div style="overflow:auto;border:1px solid var(--line);border-radius:8px;margin-bottom:12px">
       <table style="width:100%;border-collapse:collapse;font-size:12px;min-width:560px">
         <thead style="color:var(--muted);background:var(--card2)">
@@ -6990,10 +7013,12 @@ async function runFootballReview(repair = false) {
     const tuning = result.tuning || {};
     const plan = tuning.plan || {};
     const sync = result.sync || {};
+    const auditBreakdown = getFootballAuditBreakdown(audit);
     const message = [
       '复盘完成',
       `同步：${sync.message || '-'}`,
       `审计问题：${audit.issue_count || 0}`,
+      ...(auditBreakdown.length ? [`问题明细：${auditBreakdown.join('、')}`] : []),
       `已修复：${audit.repaired_count || 0}`,
       `可用样本：${rolling.available_samples || 0}`,
       `调参预案：${plan.reason || tuning.error || '暂无'}`
