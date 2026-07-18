@@ -1594,15 +1594,12 @@ function footballMatchPassesFilter(item) {
 
 function getLotteryHandicapExplanation(lottery) {
   const handicap = Number(lottery?.handicap?.handicap);
-  const standard = lottery?.standard?.probabilities || {};
-  const rq = lottery?.handicap?.probabilities || {};
-  const pct0 = value => `${Math.round(Number(value || 0) * 100)}%`;
   if (!Number.isInteger(handicap) || handicap === 0) return '';
   if (handicap === -1) {
-    return `换算关系：不让球“胜”${pct0(standard['胜'])} = 净胜1球“让平”${pct0(rq['让平'])} + 净胜2球以上“让胜”${pct0(rq['让胜'])}；原平/负归入“让负”${pct0(rq['让负'])}。`;
+    return '结算映射：净胜2球以上=让胜，净胜1球=让平，原平/负=让负。最终让球概率已独立融合澳客让球赔率，并非直接用本栏平+负作为预测值。';
   }
   if (handicap === 1) {
-    return `换算关系：不让球“负”${pct0(standard['负'])} = 仅负1球“让平”${pct0(rq['让平'])} + 负2球以上“让负”${pct0(rq['让负'])}；原胜/平归入“让胜”${pct0(rq['让胜'])}。`;
+    return '结算映射：原胜/平=让胜，仅负1球=让平，负2球以上=让负。最终让球概率已独立融合澳客让球赔率。';
   }
   if (handicap < 0) {
     const depth = Math.abs(handicap);
@@ -1791,7 +1788,10 @@ function renderFootballPredictions(results) {
         ? {
             pred: standardMarket.prediction,
             preds: linkedSelections?.standardPredictions,
-            probs: standardMarket.probabilities
+            probs: standardMarket.probabilities,
+            modelProbs: standardMarket.model_probabilities,
+            marketProbs: standardMarket.market_probabilities,
+            marketWeight: standardMarket.market_weight,
           }
         : getSPFPrediction(top);
       const marketCards = [];
@@ -1813,6 +1813,9 @@ function renderFootballPredictions(results) {
             pred: r.lottery.handicap.prediction,
             preds: linkedSelections?.handicapPredictions,
             probs: r.lottery.handicap.probabilities,
+            modelProbs: r.lottery.handicap.model_probabilities,
+            marketProbs: r.lottery.handicap.market_probabilities,
+            marketWeight: r.lottery.handicap.market_weight,
           },
           keys: ['让胜', '让平', '让负'],
           odds: r.lottery?.rqspf_odds,
@@ -1841,6 +1844,16 @@ function renderFootballPredictions(results) {
           </div>`;
         });
         itemHtml += '</div>';
+        if (card.prediction.marketProbs && card.prediction.pred) {
+          const sourceKey = card.prediction.pred;
+          const modelValue = Number(card.prediction.modelProbs?.[sourceKey] || 0);
+          const marketValue = Number(card.prediction.marketProbs?.[sourceKey] || 0);
+          const fusedValue = Number(card.prediction.probs?.[sourceKey] || 0);
+          const marketWeight = Math.round(Number(card.prediction.marketWeight || 0) * 100);
+          itemHtml += `<div style="font-size:10px;color:#93c5fd;margin-top:6px">
+            ${esc(sourceKey)}：比分模型 ${(modelValue * 100).toFixed(0)}% · 澳客赔率去水 ${(marketValue * 100).toFixed(0)}% · 综合 ${(fusedValue * 100).toFixed(0)}%（赔率权重 ${marketWeight}%）
+          </div>`;
+        }
         if (card.handicap) {
           itemHtml += '<div style="font-size:11px;color:var(--muted);margin-top:6px">结算口径：主队进球 + 体彩让球数，再与客队进球比较；不是亚洲盘。</div>';
           if (card.explanation) {

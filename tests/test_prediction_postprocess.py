@@ -103,6 +103,25 @@ class PredictionPostprocessTests(unittest.TestCase):
         self.assertEqual(markets['joint_recommendation']['handicap_prediction'], '让负')
         self.assertAlmostEqual(markets['joint_recommendation']['probability'], 0.31)
 
+    def test_lottery_rqspf_blends_score_model_with_overround_removed_official_odds(self):
+        markets = football.lottery_market_probabilities([
+            ((2, 0), 0.30),  # 让胜
+            ((1, 0), 0.40),  # 让平
+            ((0, 1), 0.30),  # 让负
+        ], lottery_handicap=-1, rqspf_odds={
+            '让胜': 2.0,
+            '让平': 4.0,
+            '让负': 4.0,
+        })
+
+        handicap = markets['handicap']
+        self.assertAlmostEqual(handicap['model_probabilities']['让胜'], 0.30)
+        self.assertAlmostEqual(handicap['market_probabilities']['让胜'], 0.50)
+        self.assertAlmostEqual(handicap['market_weight'], 0.40)
+        self.assertAlmostEqual(handicap['probabilities']['让胜'], 0.38)
+        self.assertAlmostEqual(handicap['probabilities']['让平'], 0.34)
+        self.assertAlmostEqual(handicap['probabilities']['让负'], 0.28)
+
     def test_goal_distribution_anchor_moves_mean_toward_total_line(self):
         dist = {1: 0.50, 2: 0.30, 5: 0.20}
         before = sum(goals * prob for goals, prob in dist.items())

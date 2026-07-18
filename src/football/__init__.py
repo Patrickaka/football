@@ -29,7 +29,8 @@ from ..common.logger import setup_logger
 
 log = setup_logger('football')
 
-FOOTBALL_PREDICTION_LOGIC_VERSION = '2026-07-18-jczq-market-alignment-v8'
+FOOTBALL_PREDICTION_LOGIC_VERSION = '2026-07-18-jczq-odds-fusion-v10'
+LOTTERY_OFFICIAL_ODDS_WEIGHT = 0.40
 
 # ELO 评分系统（延迟导入）
 try:
@@ -349,8 +350,36 @@ def parse_lottery_handicap(value):
     return int(number)
 
 
-def lottery_market_probabilities(candidates, lottery_handicap=None):
-    """Marginalise one complete score distribution into JCZQ markets."""
+def _lottery_odds_probabilities(odds, keys):
+    """Return normalized, overround-removed probabilities for one lottery market."""
+    implied = {}
+    for key in keys:
+        try:
+            value = float((odds or {}).get(key))
+        except (TypeError, ValueError):
+            return None
+        if value <= 1.0:
+            return None
+        implied[key] = 1.0 / value
+    total = sum(implied.values())
+    return {key: value / total for key, value in implied.items()} if total > 0 else None
+
+
+def _blend_lottery_probabilities(model_probs, market_probs, market_weight=LOTTERY_OFFICIAL_ODDS_WEIGHT):
+    if not market_probs:
+        return dict(model_probs)
+    weight = max(0.0, min(1.0, float(market_weight)))
+    blended = {
+        key: (1.0 - weight) * float(model_probs.get(key, 0.0))
+        + weight * float(market_probs.get(key, 0.0))
+        for key in model_probs
+    }
+    total = sum(blended.values())
+    return {key: value / total for key, value in blended.items()} if total > 0 else blended
+
+
+def lottery_market_probabilities(candidates, lottery_handicap=None, spf_odds=None, rqspf_odds=None):
+    """Build JCZQ probabilities from scores and independently priced official markets."""
     spf = {'胜': 0.0, '平': 0.0, '负': 0.0}
     handicap = parse_lottery_handicap(lottery_handicap)
     rqspf = {'让胜': 0.0, '让平': 0.0, '让负': 0.0} if handicap is not None else None
@@ -401,16 +430,29 @@ def lottery_market_probabilities(candidates, lottery_handicap=None):
                 for (standard_result, handicap_result), probability in joint_ranked
             ],
         }
+    model_spf = dict(spf)
+    model_rqspf = dict(rqspf) if rqspf is not None else None
+    market_spf = _lottery_odds_probabilities(spf_odds, ('胜', '平', '负'))
+    market_rqspf = _lottery_odds_probabilities(rqspf_odds, ('让胜', '让平', '让负')) if rqspf is not None else None
+    spf = _blend_lottery_probabilities(model_spf, market_spf)
+    if rqspf is not None:
+        rqspf = _blend_lottery_probabilities(model_rqspf, market_rqspf)
     primary_type = 'rqspf' if handicap not in (None, 0) else 'spf'
     primary_probs = rqspf if primary_type == 'rqspf' else spf
     return {
         'standard': {
             'type': 'spf', 'name': '胜平负', 'probabilities': spf,
+            'model_probabilities': model_spf,
+            'market_probabilities': market_spf,
+            'market_weight': LOTTERY_OFFICIAL_ODDS_WEIGHT if market_spf else 0.0,
             'prediction': max(spf, key=spf.get) if sum(spf.values()) > 0 else None,
         },
         'handicap': ({
             'type': 'rqspf', 'name': '让球胜平负', 'handicap': handicap,
             'probabilities': rqspf,
+            'model_probabilities': model_rqspf,
+            'market_probabilities': market_rqspf,
+            'market_weight': LOTTERY_OFFICIAL_ODDS_WEIGHT if market_rqspf else 0.0,
             'prediction': max(rqspf, key=rqspf.get) if rqspf and sum(rqspf.values()) > 0 else None,
         } if rqspf is not None else None),
         'primary_market': primary_type,
@@ -6829,23 +6871,18 @@ def build_match_analysis(result):
                 joint_distribution = (
                     (lottery_info.get('joint_recommendation') or {}).get('distribution') or []
                 )
-                aligned = next((
-                    item for item in joint_distribution
-                    if item.get('standard') == standard_pick
-                    and item.get('handicap') == rq_pick
+                compatible_standard = [
+                    item.get('standard') for item in joint_distribution
+                    if item.get('handicap') == rq_pick
                     and item.get('probability', 0) > 0
-                ), None)
+                ]
+                compatible_standard = list(dict.fromkeys(compatible_standard))
                 handicap_text = f"{rq_handicap:+d}" if isinstance(rq_handicap, int) else str(rq_handicap)
-                if aligned:
-                    lottery_verdict = (
-                        f"两盘方向一致：{standard_pick} + {rq_pick}；"
-                        f"中国体彩主队{handicap_text}球，{rq_pick}边际概率 {rq_value:.0%}"
-                    )
-                else:
-                    lottery_verdict = (
-                        f"两盘最高项分歧：{standard_pick} + {rq_pick}不能由同一比分同时命中；"
-                        f"中国体彩主队{handicap_text}球玩法单独看{rq_pick} {rq_value:.0%}，不强行合并"
-                    )
+                linked_standard = '/'.join(compatible_standard) or standard_pick
+                lottery_verdict = (
+                    f"体彩主玩法{rq_pick} {rq_value:.0%}；主队{handicap_text}球口径下，"
+                    f"联动不让球{linked_standard}，不采用不能同时命中的独立组合"
+                )
 
         conf_level = confidence.get('level') if isinstance(confidence, dict) else None
         if conf_level is None:
@@ -6935,7 +6972,10 @@ def analyze_match(match, force_refresh=False):
                 }
                 predicted_half_full = _half_full_probs_to_dict(model.get('half_full_time'))
                 cached_lottery = cached_result.get('lottery') or lottery_market_probabilities(
-                    candidates, match.get('lottery_handicap')
+                    candidates,
+                    match.get('lottery_handicap'),
+                    spf_odds=match.get('lottery_spf_odds'),
+                    rqspf_odds=match.get('lottery_rqspf_odds'),
                 )
                 
                 save_prediction(
@@ -7792,7 +7832,12 @@ def analyze_match(match, force_refresh=False):
         }
     }
     
-    lottery = lottery_market_probabilities(candidates, match.get('lottery_handicap'))
+    lottery = lottery_market_probabilities(
+        candidates,
+        match.get('lottery_handicap'),
+        spf_odds=match.get('lottery_spf_odds'),
+        rqspf_odds=match.get('lottery_rqspf_odds'),
+    )
     lottery.update({
         'source': match.get('lottery_source') or 'unavailable',
         'offer_matched': bool(match.get('lottery_offer_matched')),
