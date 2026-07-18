@@ -1587,6 +1587,25 @@ function footballMatchPassesFilter(item) {
   return getFootballResultTier(item).tier === footballQualityFilter;
 }
 
+function getLotteryHandicapExplanation(lottery) {
+  const handicap = Number(lottery?.handicap?.handicap);
+  const standard = lottery?.standard?.probabilities || {};
+  const rq = lottery?.handicap?.probabilities || {};
+  const pct0 = value => `${Math.round(Number(value || 0) * 100)}%`;
+  if (!Number.isInteger(handicap) || handicap === 0) return '';
+  if (handicap === -1) {
+    return `换算关系：不让球“胜”${pct0(standard['胜'])} = 净胜1球“让平”${pct0(rq['让平'])} + 净胜2球以上“让胜”${pct0(rq['让胜'])}；原平/负归入“让负”${pct0(rq['让负'])}。`;
+  }
+  if (handicap === 1) {
+    return `换算关系：不让球“负”${pct0(standard['负'])} = 仅负1球“让平”${pct0(rq['让平'])} + 负2球以上“让负”${pct0(rq['让负'])}；原胜/平归入“让胜”${pct0(rq['让胜'])}。`;
+  }
+  if (handicap < 0) {
+    const depth = Math.abs(handicap);
+    return `主队 ${handicap}：让胜需净胜${depth + 1}球以上；让平=净胜${depth}球；其余比分均为让负。`;
+  }
+  return `主队 +${handicap}：让胜=不败或最多负${handicap - 1}球；让平=负${handicap}球；让负=负${handicap + 1}球以上。`;
+}
+
 function renderFootballPredictions(results) {
   allPredictions = results;
   let html = '';
@@ -1723,7 +1742,7 @@ function renderFootballPredictions(results) {
       if (standardPrediction) {
         marketCards.push({
           title: officialLotteryMatched && r.lottery?.spf_available
-            ? '🇨🇳 中国体彩 · 胜平负' : '🎯 胜平负（模型分析）',
+            ? '🇨🇳 中国体彩 · 胜平负（不让球）' : '🎯 胜平负（不让球·模型分析）',
           prediction: standardPrediction,
           keys: ['胜', '平', '负'],
           odds: r.lottery?.spf_available ? r.lottery?.spf_odds : null,
@@ -1733,7 +1752,7 @@ function renderFootballPredictions(results) {
       if (officialLotteryMatched && r.lottery?.rqspf_available && r.lottery?.handicap) {
         const lotteryHandicap = r.lottery.handicap.handicap;
         marketCards.push({
-          title: `🇨🇳 中国体彩 · 让球胜平负（主队 ${lotteryHandicap > 0 ? '+' : ''}${lotteryHandicap}）`,
+          title: `🇨🇳 中国体彩 · 让球胜平负（主队 ${lotteryHandicap > 0 ? '+' : ''}${lotteryHandicap}，按让球后赛果）`,
           prediction: {
             pred: r.lottery.handicap.prediction,
             probs: r.lottery.handicap.probabilities,
@@ -1741,6 +1760,7 @@ function renderFootballPredictions(results) {
           keys: ['让胜', '让平', '让负'],
           odds: r.lottery?.rqspf_odds,
           handicap: true,
+          explanation: getLotteryHandicapExplanation(r.lottery),
         });
       }
       marketCards.forEach(card => {
@@ -1764,6 +1784,9 @@ function renderFootballPredictions(results) {
         itemHtml += '</div>';
         if (card.handicap) {
           itemHtml += '<div style="font-size:11px;color:var(--muted);margin-top:6px">结算口径：主队进球 + 体彩让球数，再与客队进球比较；不是亚洲盘。</div>';
+          if (card.explanation) {
+            itemHtml += `<div style="font-size:11px;color:#f59e0b;margin-top:5px">💡 ${esc(card.explanation)}</div>`;
+          }
         }
         itemHtml += '</div>';
       });
