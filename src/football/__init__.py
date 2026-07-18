@@ -6497,6 +6497,7 @@ def build_match_analysis(result):
 
         from src.common.local_match_analysis import (
             LOCAL_ANALYST_VERSION, build_decision, normalize_probabilities,
+            pick_high_score_scenario,
         )
         probs = normalize_probabilities({'home': w, 'draw': d, 'away': l})
         w, d, l = probs['home'], probs['draw'], probs['away']
@@ -6573,6 +6574,21 @@ def build_match_analysis(result):
             'most_likely_interval': interval,
             'top_goals': [{'goals': k, 'probability': v} for k, v in goals_sorted[:3]],
         }
+
+        high_scenario = pick_high_score_scenario(candidates)
+        high_signal = over_p >= 0.52 or float(line or 0) >= 2.75
+        if high_signal and high_scenario:
+            hh, ha = high_scenario['score']
+            if not any(pick['home'] == hh and pick['away'] == ha for pick in score_picks):
+                score_picks.append({
+                    'type': '大比分', 'score': f"{hh}-{ha}",
+                    'home': hh, 'away': ha, 'result': _result_label(hh, ha),
+                    'probability': high_scenario['probability'],
+                    'scenario_probability': high_scenario['tail_probability'],
+                })
+        goals_read['high_score_probability'] = (
+            high_scenario['tail_probability'] if high_scenario else 0.0
+        )
 
         # ---- 4. 理由叙述（像分析师一样解释）----
         lam_home = model.get('lam_home')

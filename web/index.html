@@ -2054,7 +2054,7 @@ function renderBeidanUpsetInline(upset) {
 // 本地 AI 式赛果分析卡（北单/篮球/足球共用）
 function renderAnalysisCard(a, kind) {
   if (!a) return '';
-  const scoreColor = { '首推': '#3b82f6', '次选': 'var(--muted)', '防冷': '#f59e0b' };
+  const scoreColor = { '首推': '#3b82f6', '次选': 'var(--muted)', '防冷': '#f59e0b', '大比分': '#ef4444' };
   const scores = (a.score_picks || []).map(s => {
     const c = scoreColor[s.type] || 'var(--muted)';
     const probability = s.probability != null

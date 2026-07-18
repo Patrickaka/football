@@ -1,6 +1,8 @@
 import unittest
 
-from src.common.local_match_analysis import build_decision, normalize_probabilities
+from src.common.local_match_analysis import (
+    build_decision, normalize_probabilities, pick_high_score_scenario,
+)
 from src.basketball import assess_basketball_upset, build_basketball_analysis
 
 
@@ -9,6 +11,19 @@ class LocalMatchAnalysisTests(unittest.TestCase):
         probs = normalize_probabilities({'a': 2, 'b': -1, 'c': None})
         self.assertAlmostEqual(sum(probs.values()), 1.0)
         self.assertEqual(probs['b'], 0.0)
+
+    def test_high_score_scenario_uses_aggregate_tail(self):
+        scenario = pick_high_score_scenario([
+            ((1, 1), 0.15), ((2, 1), 0.13), ((2, 2), 0.09),
+            ((3, 1), 0.08), ((3, 2), 0.06),
+        ])
+        self.assertEqual(scenario['score'], (2, 2))
+        self.assertAlmostEqual(scenario['tail_probability'], 0.23)
+
+    def test_weak_high_score_tail_is_not_forced(self):
+        self.assertIsNone(pick_high_score_scenario([
+            ((1, 1), 0.30), ((3, 1), 0.08), ((3, 2), 0.04),
+        ]))
 
     def test_close_match_uses_double_selection(self):
         decision = build_decision({'胜': 0.38, '平': 0.33, '负': 0.29}, confidence='high')

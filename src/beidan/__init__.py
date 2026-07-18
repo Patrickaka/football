@@ -2125,6 +2125,7 @@ def build_beidan_match_analysis(spf_result):
             w, d, l = w / s, d / s, l / s
         from src.common.local_match_analysis import (
             LOCAL_ANALYST_VERSION, build_decision, normalize_probabilities,
+            pick_high_score_scenario,
         )
         pprobs = normalize_probabilities({'home': w, 'draw': d, 'away': l})
         w, d, l = pprobs['home'], pprobs['draw'], pprobs['away']
@@ -2199,6 +2200,20 @@ def build_beidan_match_analysis(spf_result):
             'most_likely_interval': interval,
             'top_goals': [{'goals': k, 'probability': v} for k, v in goals_sorted[:3]],
         }
+        high_scenario = pick_high_score_scenario(cands)
+        if over_p >= 0.52 and high_scenario:
+            hh, ha = high_scenario['score']
+            if not any(pick['home'] == hh and pick['away'] == ha for pick in score_picks):
+                score_picks.append({
+                    'type': '大比分', 'score': f"{hh}-{ha}",
+                    'home': hh, 'away': ha,
+                    'result': _result_from_score((hh, ha)),
+                    'probability': high_scenario['probability'],
+                    'scenario_probability': high_scenario['tail_probability'],
+                })
+        goals_read['high_score_probability'] = (
+            high_scenario['tail_probability'] if high_scenario else 0.0
+        )
 
         # ---- 4. 理由叙述 ----
         reasons = []

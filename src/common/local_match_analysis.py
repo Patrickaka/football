@@ -61,3 +61,26 @@ def build_decision(probabilities, confidence=None, upset_alert=False, min_single
         "reason": reason,
         "playable": action in ("单选", "双选"),
     }
+
+
+def pick_high_score_scenario(candidates, min_goals=4, min_mass=0.20):
+    """Return the likeliest high-score cell when its aggregate tail is meaningful.
+
+    A 4+ goal event is spread across many exact scores, so none of those cells may
+    enter a raw Top3 even when the combined high-score probability is substantial.
+    """
+    eligible = []
+    mass = 0.0
+    for score, probability in candidates or []:
+        try:
+            home, away = int(score[0]), int(score[1])
+            probability = float(probability)
+        except (TypeError, ValueError, IndexError):
+            continue
+        if home + away >= min_goals:
+            mass += probability
+            eligible.append(((home, away), probability))
+    if mass < min_mass or not eligible:
+        return None
+    score, probability = max(eligible, key=lambda item: item[1])
+    return {'score': score, 'probability': probability, 'tail_probability': mass}
