@@ -1559,12 +1559,6 @@ function getFootballResultTier(item) {
   entries.sort((a, b) => b[1] - a[1]);
   let prediction = entries[0][0];
   let probability = entries[0][1];
-  const jointStandard = r.lottery?.joint_recommendation?.standard_prediction;
-  if (jointStandard && standardMarket?.probabilities) {
-    const labelMap = { '胜': '主胜', '平': '平局', '负': '客胜' };
-    prediction = labelMap[jointStandard] || jointStandard;
-    probability = Number(standardMarket.probabilities[jointStandard] || 0);
-  }
   let tier = probability >= 0.75 ? 'ultra'
     : probability >= 0.60 ? 'high'
     : probability >= 0.50 ? 'cautious'
@@ -1610,6 +1604,34 @@ function getLotteryHandicapExplanation(lottery) {
     return `主队 ${handicap}：让胜需净胜${depth + 1}球以上；让平=净胜${depth}球；其余比分均为让负。`;
   }
   return `主队 +${handicap}：让胜=不败或最多负${handicap - 1}球；让平=负${handicap}球；让负=负${handicap + 1}球以上。`;
+}
+
+function getFootballScoreSettlement(score, lotteryHandicap) {
+  const match = String(score || '').match(/^(\d+)\s*[-:]\s*(\d+)$/);
+  if (!match) return '';
+  const home = Number(match[1]);
+  const away = Number(match[2]);
+  const margin = home - away;
+  const standard = margin > 0 ? '胜' : margin < 0 ? '负' : '平';
+  const handicap = Number(lotteryHandicap);
+  if (!Number.isInteger(handicap) || handicap === 0) return standard;
+  const adjustedMargin = margin + handicap;
+  const rqspf = adjustedMargin > 0 ? '让胜' : adjustedMargin < 0 ? '让负' : '让平';
+  return `${standard} · ${rqspf}`;
+}
+
+function getLotteryMarketAlignment(lottery) {
+  const standard = lottery?.standard?.prediction;
+  const handicap = lottery?.handicap?.prediction;
+  if (!standard || !handicap) return null;
+  const distribution = lottery?.joint_recommendation?.distribution || [];
+  const joint = distribution.find(item => item.standard === standard && item.handicap === handicap);
+  return {
+    standard,
+    handicap,
+    compatible: Boolean(joint && Number(joint.probability) > 0),
+    probability: Number(joint?.probability || 0),
+  };
 }
 
 function renderFootballPredictions(results) {
@@ -1688,6 +1710,7 @@ function renderFootballPredictions(results) {
     const m = item.match;
     const r = item.result;
     const top = r.model && r.model.top_scores ? r.model.top_scores : [];
+    const lotteryHandicap = r.lottery?.handicap?.handicap;
     const cf = r.confidence;
     const resultTier = getFootballResultTier(item);
     const tierColor = { ultra: '#22c55e', high: '#3b82f6', cautious: '#f59e0b', cover: '#94a3b8' }[resultTier.tier];
@@ -1719,9 +1742,11 @@ function renderFootballPredictions(results) {
           const isTop1 = idx === 0;
           const score = s.score || (s.home != null && s.away != null ? `${s.home}-${s.away}` : '-');
           const prob = s.prob || s.probability || 0;
+          const settlement = getFootballScoreSettlement(score, lotteryHandicap);
           itemHtml += `<div style="flex:1;text-align:center;padding:6px;border-radius:6px${isTop1 ? ';background:#3b82f620;color:#3b82f6;font-weight:bold' : ';background:var(--bg)'}">
             <div style="font-size:14px">${esc(score)}</div>
             <div style="font-size:11px;color:var(--muted)">${(prob * 100).toFixed(1)}%</div>
+            ${settlement ? `<div style="font-size:10px;color:var(--muted);margin-top:2px">${esc(settlement)}</div>` : ''}
           </div>`;
         });
         itemHtml += '</div>';
@@ -1744,7 +1769,7 @@ function renderFootballPredictions(results) {
       const jointRecommendation = r.lottery?.joint_recommendation;
       const standardPrediction = standardMarket
         ? {
-            pred: jointRecommendation?.standard_prediction || standardMarket.prediction,
+            pred: standardMarket.prediction,
             probs: standardMarket.probabilities
           }
         : getSPFPrediction(top);
@@ -1764,7 +1789,7 @@ function renderFootballPredictions(results) {
         marketCards.push({
           title: `🇨🇳 中国体彩 · 让球胜平负（主队 ${lotteryHandicap > 0 ? '+' : ''}${lotteryHandicap}，按让球后赛果）`,
           prediction: {
-            pred: jointRecommendation?.handicap_prediction || r.lottery.handicap.prediction,
+            pred: r.lottery.handicap.prediction,
             probs: r.lottery.handicap.probabilities,
           },
           keys: ['让胜', '让平', '让负'],
@@ -1800,11 +1825,18 @@ function renderFootballPredictions(results) {
         }
         itemHtml += '</div>';
       });
-      if (jointRecommendation && marketCards.length > 1) {
-        itemHtml += `<div style="margin-top:6px;padding:7px 9px;border:1px solid rgba(59,130,246,.35);background:rgba(59,130,246,.08);border-radius:7px;font-size:12px;color:#93c5fd">
-          🔗 统一赛果组合：<b>${esc(jointRecommendation.standard_prediction)} + ${esc(jointRecommendation.handicap_prediction)}</b>
-          <span style="color:var(--muted)">（同一最终比分下联合概率 ${((jointRecommendation.probability || 0) * 100).toFixed(1)}%）</span>
-        </div>`;
+      const marketAlignment = getLotteryMarketAlignment(r.lottery);
+      if (marketAlignment && marketCards.length > 1) {
+        if (marketAlignment.compatible) {
+          itemHtml += `<div style="margin-top:6px;padding:7px 9px;border:1px solid rgba(59,130,246,.35);background:rgba(59,130,246,.08);border-radius:7px;font-size:12px;color:#93c5fd">
+            🔗 两盘方向一致：<b>${esc(marketAlignment.standard)} + ${esc(marketAlignment.handicap)}</b>
+            <span style="color:var(--muted)">（同一最终比分下联合概率 ${(marketAlignment.probability * 100).toFixed(1)}%）</span>
+          </div>`;
+        } else {
+          itemHtml += `<div style="margin-top:6px;padding:7px 9px;border:1px solid rgba(245,158,11,.45);background:rgba(245,158,11,.08);border-radius:7px;font-size:12px;color:#f59e0b">
+            ⚠️ 两盘最高项分歧：<b>${esc(marketAlignment.standard)} + ${esc(marketAlignment.handicap)}</b> 不能由同一比分同时命中；请按实际开售玩法单独参考，不强行合并。
+          </div>`;
+        }
       }
       
       const htfProbs = r.model && r.model.half_full_time && r.model.half_full_time.probs ? r.model.half_full_time.probs : [];

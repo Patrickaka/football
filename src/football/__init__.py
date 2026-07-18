@@ -29,7 +29,7 @@ from ..common.logger import setup_logger
 
 log = setup_logger('football')
 
-FOOTBALL_PREDICTION_LOGIC_VERSION = '2026-07-18-jczq-joint-result-v7'
+FOOTBALL_PREDICTION_LOGIC_VERSION = '2026-07-18-jczq-market-alignment-v8'
 
 # ELO 评分系统（延迟导入）
 try:
@@ -6819,24 +6819,33 @@ def build_match_analysis(result):
         lottery_verdict = None
         if lottery_info.get('primary_market') == 'rqspf':
             rq_probs = lottery_primary.get('probabilities') or {}
-            joint_pick = lottery_info.get('joint_recommendation') or {}
-            if rq_probs and joint_pick:
-                standard_pick = joint_pick.get('standard_prediction')
-                rq_pick = joint_pick.get('handicap_prediction')
+            standard_market = lottery_info.get('standard') or {}
+            handicap_market = lottery_info.get('handicap') or {}
+            standard_pick = standard_market.get('prediction')
+            rq_pick = handicap_market.get('prediction')
+            if rq_probs and standard_pick and rq_pick:
                 rq_value = rq_probs.get(rq_pick, 0.0)
-                rq_handicap = (lottery_info.get('handicap') or {}).get('handicap')
-                lottery_verdict = (
-                    f"统一赛果组合：{standard_pick} + {rq_pick}；"
-                    f"按中国体彩主队{rq_handicap:+d}球口径，{rq_pick}边际概率 {rq_value:.0%}"
+                rq_handicap = handicap_market.get('handicap')
+                joint_distribution = (
+                    (lottery_info.get('joint_recommendation') or {}).get('distribution') or []
                 )
-                standard_probs = (lottery_info.get('standard') or {}).get('probabilities') or {}
-                standard_value = standard_probs.get(standard_pick, 0.0)
-                if standard_pick == '胜':
-                    verdict = f"{match_info.get('home', '主队')}胜 {standard_value:.0%}（与让球结论联合选取）"
-                elif standard_pick == '负':
-                    verdict = f"{match_info.get('away', '客队')}胜 {standard_value:.0%}（与让球结论联合选取）"
-                elif standard_pick == '平':
-                    verdict = f"平局 {standard_value:.0%}（与让球结论联合选取）"
+                aligned = next((
+                    item for item in joint_distribution
+                    if item.get('standard') == standard_pick
+                    and item.get('handicap') == rq_pick
+                    and item.get('probability', 0) > 0
+                ), None)
+                handicap_text = f"{rq_handicap:+d}" if isinstance(rq_handicap, int) else str(rq_handicap)
+                if aligned:
+                    lottery_verdict = (
+                        f"两盘方向一致：{standard_pick} + {rq_pick}；"
+                        f"中国体彩主队{handicap_text}球，{rq_pick}边际概率 {rq_value:.0%}"
+                    )
+                else:
+                    lottery_verdict = (
+                        f"两盘最高项分歧：{standard_pick} + {rq_pick}不能由同一比分同时命中；"
+                        f"中国体彩主队{handicap_text}球玩法单独看{rq_pick} {rq_value:.0%}，不强行合并"
+                    )
 
         conf_level = confidence.get('level') if isinstance(confidence, dict) else None
         if conf_level is None:
