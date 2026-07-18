@@ -46,6 +46,7 @@ class PredictionRecordTests(unittest.TestCase):
         state, load_patch, save_patch = self._store_patches(lottery)
         state.append({
             'period': '2026079',
+            'based_on_issue': '2026078',
             'recommendations': {
                 'rank': {'front': [1, 2, 3, 4, 5], 'back': [6, 7]},
             },
@@ -62,6 +63,28 @@ class PredictionRecordTests(unittest.TestCase):
         self.assertEqual(records[0]['rank_front_hit'], 2)
         self.assertEqual(records[0]['rank_back_hit'], 1)
         self.assertTrue(records[0]['settled'])
+        self.assertEqual(records[0]['integrity_status'], 'verified_forward')
+
+    def test_dlt_legacy_record_is_not_reported_as_a_hit(self):
+        state, load_patch, save_patch = self._store_patches(lottery)
+        state.append({
+            'period': '2026077',
+            'recommendations': {
+                'fusion': {'front': [4, 14, 19, 24, 27], 'back': [6, 7]},
+            },
+            'actual': None,
+            'settled': False,
+        })
+        with load_patch, save_patch:
+            lottery.settle_predictions([
+                {'issue': '2026077', 'front': [4, 14, 19, 24, 27], 'back': [6, 7]}
+            ])
+            records = lottery.load_online_predictions()
+            stats = lottery.calculate_online_stats()
+
+        self.assertEqual(records[0]['integrity_status'], 'legacy_unverified')
+        self.assertNotIn('fusion_front_hit', records[0])
+        self.assertEqual(stats['settled_count'], 0)
 
 
 if __name__ == '__main__':

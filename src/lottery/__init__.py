@@ -2624,7 +2624,8 @@ def load_online_predictions() -> List[Dict]:
 
 
 def save_online_prediction(period: str, recommendations: Dict,
-                           fusion_result: Dict = None) -> None:
+                           fusion_result: Dict = None,
+                           based_on_issue: str = None) -> None:
     """保存线上预测记录
 
     Args:
@@ -2638,6 +2639,8 @@ def save_online_prediction(period: str, recommendations: Dict,
         record = {
             'version': LOTTERY_PREDICTOR_VERSION,
             'period': period,
+            'based_on_issue': str(based_on_issue or ''),
+            'integrity_status': 'pending',
             'recommendations': {
                 method: {
                     'front': rec.get('front', []),
@@ -2715,6 +2718,29 @@ def settle_predictions(history_data: List[Dict]) -> int:
         actual_front = set(actual_data['front'])
         actual_back = set(actual_data['back'])
 
+        # A real forward prediction must prove which already-drawn issue it was
+        # based on. Legacy rows without this field cannot be distinguished from
+        # hindsight-generated predictions and must not be reported as hits.
+        based_on = str(record.get('based_on_issue') or '')
+        try:
+            forward_valid = bool(based_on) and int(based_on) < int(period)
+        except (TypeError, ValueError):
+            forward_valid = False
+        if not forward_valid:
+            record['actual'] = {
+                'front': sorted(actual_front),
+                'back': sorted(actual_back),
+            }
+            record['settled'] = True
+            record['settled_at'] = time.strftime('%Y-%m-%d %H:%M:%S')
+            record['integrity_status'] = 'legacy_unverified'
+            record['integrity_note'] = '缺少开奖前生成凭证，不计入实盘命中'
+            changed = True
+            settled_count += 1
+            continue
+
+        record['integrity_status'] = 'verified_forward'
+
         record['actual'] = {
             'front': list(actual_front),
             'back': list(actual_back),
@@ -2759,7 +2785,10 @@ def calculate_online_stats() -> Dict:
         }
     """
     records = load_online_predictions()
-    settled = [r for r in records if r.get('settled')]
+    settled = [
+        r for r in records
+        if r.get('settled') and r.get('integrity_status') == 'verified_forward'
+    ]
     n = len(settled)
 
     if n == 0:
@@ -2975,7 +3004,12 @@ def run_prediction(force_refresh=False, enable_backtest=True,
         if latest_issue and not analyzer.using_simulated_data:
             try:
                 next_issue = str(int(latest_issue) + 1).zfill(len(latest_issue))
-                save_online_prediction(next_issue, recommendations, fusion_result)
+                save_online_prediction(
+                    next_issue,
+                    recommendations,
+                    fusion_result,
+                    based_on_issue=latest_issue,
+                )
             except Exception as e:
                 log.warning(f"保存预测记录失败: {e}")
 
