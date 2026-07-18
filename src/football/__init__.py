@@ -29,7 +29,7 @@ from ..common.logger import setup_logger
 
 log = setup_logger('football')
 
-FOOTBALL_PREDICTION_LOGIC_VERSION = '2026-07-18-local-analyst-v1'
+FOOTBALL_PREDICTION_LOGIC_VERSION = '2026-07-18-adaptive-score-ensemble-v2'
 
 # ELO 评分系统（延迟导入）
 try:
@@ -3974,7 +3974,7 @@ def perturb_parameters(base_params):
 
 
 def ensemble_predict_scores(asian, euro, total, team_strength=None, league_profile=None,
-                          num_models=5, method='average', current_time_layer=None):
+                           num_models=5, method='average', current_time_layer=None):
     """
     多模型集成预测。
     
@@ -3988,30 +3988,27 @@ def ensemble_predict_scores(asian, euro, total, team_strength=None, league_profi
     返回:
         (candidates, lam_home, lam_away, meta): 集成后的预测结果
     """
-    base_params = {
-        'max_goals': MAX_GOALS,
-        'rho_init': 0.0,
-        'league_params': league_profile or {}
-    }
-    
     all_matrices = []
     all_lams = []
-    
-    for i in range(num_models):
-        # 生成扰动参数
-        perturbed = perturb_parameters(base_params)
-        
-        # 使用扰动参数进行预测
-        # 这里简化处理，实际中应使用扰动参数调用 predict_scores
-        # 当前实现使用不同的模型类型作为扰动
-        model_types = ['poisson', 'negative_binomial', 'poisson', 'negative_binomial', 'poisson']
+    model_types = ['poisson', 'negative_binomial']
+
+    # 2744场离线回测中 Poisson/DC 的比分排序更稳。负二项只用于补充
+    # 高比分尾部，避免旧实现用 2/5 固定权重过度放大大比分。
+    try:
+        total_line = float(total.get('close_line') or total.get('line') or 2.5)
+    except (TypeError, ValueError):
+        total_line = 2.5
+    nb_weight = 0.30 if total_line >= 3.0 else (0.22 if total_line >= 2.75 else 0.15)
+    requested_weights = [1.0 - nb_weight, nb_weight]
+
+    for model_type in model_types:
         
         try:
             candidates, lam_home, lam_away, meta = predict_scores(
                 asian, euro, total, 
                 team_strength=team_strength, 
-                league_profile=perturbed['league_params'],
-                model_type=model_types[i % len(model_types)],
+                league_profile=league_profile,
+                model_type=model_type,
                 current_time_layer=current_time_layer,
             )
             
@@ -4021,7 +4018,7 @@ def ensemble_predict_scores(asian, euro, total, team_strength=None, league_profi
             all_lams.append((lam_home, lam_away))
             
         except Exception as e:
-            log.warning(f"集成模型 {i+1} 失败: {e}")
+            log.warning(f"集成模型 {model_type} 失败: {e}")
             continue
     
     if not all_matrices:
@@ -4029,12 +4026,10 @@ def ensemble_predict_scores(asian, euro, total, team_strength=None, league_profi
         return predict_scores(asian, euro, total, team_strength, league_profile, current_time_layer=current_time_layer)
     
     # 融合多个矩阵
-    if method == 'weighted':
-        # 加权平均：基于模型置信度（这里简化为均匀权重）
-        weights = [1.0 / len(all_matrices)] * len(all_matrices)
+    if len(all_matrices) == 2:
+        weights = requested_weights
     else:
-        # 简单平均
-        weights = [1.0 / len(all_matrices)] * len(all_matrices)
+        weights = [1.0]
     
     # 合并所有矩阵的键
     all_keys = set()
@@ -4070,7 +4065,11 @@ def ensemble_predict_scores(asian, euro, total, team_strength=None, league_profi
     
     meta = {
         'ensemble_size': len(all_matrices),
-        'ensemble_method': method,
+        'ensemble_method': 'adaptive_weighted',
+        'ensemble_weights': {
+            'poisson': round(weights[0], 4),
+            'negative_binomial': round(weights[1], 4) if len(weights) > 1 else 0.0,
+        },
         'model_type': 'ensemble',
         'supremacy_asian': meta.get('supremacy_asian'),
         'supremacy_euro': meta.get('supremacy_euro'),
@@ -6965,7 +6964,7 @@ def analyze_match(match, force_refresh=False):
         enable_calibration=True,
         calibration_method='platt',
         enable_ensemble=True,
-        ensemble_size=5,
+        ensemble_size=2,
         current_time_layer=current_time_layer,
     )
     meta['prediction_logic_version'] = FOOTBALL_PREDICTION_LOGIC_VERSION

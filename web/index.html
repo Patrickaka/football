@@ -1176,6 +1176,7 @@ const pageTitle = document.getElementById('page-title');
 const pageDesc = document.getElementById('page-desc');
 let allMatches = [];
 let allPredictions = [];
+let predictionExportData = null;
 let listFilter = '';
 let groupMode = 'league';
 let activeTab = 'football';
@@ -6624,6 +6625,16 @@ async function loadPredictions() {
     const sync = syncStatus.result || {};
     const records = recordsData.result?.records || [];
     const diagnostics = diagnosticsData.result || {};
+    predictionExportData = {
+      schema_version: 'football-prediction-export-v1',
+      exported_at: new Date().toISOString(),
+      record_count: records.length,
+      settled_count: records.filter(record => record.settled || record.actual_score).length,
+      model_versions: [...new Set(records.map(record => record.model_version).filter(Boolean))],
+      sync_status: sync,
+      diagnostics,
+      records,
+    };
     const settledAt = sync.last_settled_at || '';
     const syncStamp = formatSyncStamp(settledAt);
     
@@ -6667,7 +6678,10 @@ async function loadPredictions() {
     html += renderFootballDiagnostics(diagnostics);
 
     // ── 操作按钮 ──
-    html += `<div style="display:flex;gap:10px;margin-bottom:16px">
+    html += `<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px">
+      <button type="button" onclick="exportPredictionRecords()" style="flex:1;min-width:150px;padding:10px;background:var(--accent);color:#fff;border:1px solid var(--accent);border-radius:8px;font-size:14px;cursor:pointer">
+        ⬇️ 一键导出 JSON
+      </button>
       <button type="button" onclick="triggerSync()" style="flex:1;padding:10px;background:var(--card2);color:var(--text);border:1px solid var(--line);border-radius:8px;font-size:14px;cursor:pointer">
         🔁 立即同步一次
       </button>
@@ -6764,6 +6778,29 @@ async function loadPredictions() {
   } catch (e) {
     app.innerHTML = `<div class="status error">加载失败：${esc(e.message)}</div>`;
   }
+}
+
+async function exportPredictionRecords() {
+  let payload;
+  try {
+    const data = await fetchJson('/api/predictions/export');
+    if (!data.result) throw new Error(data.error || '导出接口未返回数据');
+    payload = data.result;
+  } catch (error) {
+    alert('导出失败：' + error.message);
+    return;
+  }
+  const json = JSON.stringify(payload, null, 2);
+  const blob = new Blob([json], { type: 'application/json;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  link.href = url;
+  link.download = `football-predictions-${stamp}.json`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 async function triggerSync() {

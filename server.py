@@ -550,6 +550,8 @@ class Handler(BaseHTTPRequestHandler):
             self._serve_json(self._backtest_stats_payload(params))
         elif path == '/api/predictions':
             self._serve_json(self._predictions_payload())
+        elif path == '/api/predictions/export':
+            self._serve_json(self._predictions_export_payload())
         elif path == '/api/sync/status':
             self._serve_json(self._sync_status_payload())
         elif path == '/api/sync/trigger':
@@ -2240,6 +2242,15 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:
             self._log.error('获取预测记录失败', exc_info=True)
             return {'error': f'获取失败: {str(e)}'}
+
+    def _predictions_export_payload(self):
+        """导出完整预测记录，供离线回测与模型校准。"""
+        try:
+            from src.football.result_sync import get_prediction_export
+            return {'result': get_prediction_export()}
+        except Exception as e:
+            self._log.error('导出预测记录失败', exc_info=True)
+            return {'error': f'导出失败: {str(e)}'}
 
     def _sync_status_payload(self):
         """获取自动同步状态"""

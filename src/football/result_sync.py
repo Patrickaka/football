@@ -2412,6 +2412,38 @@ def get_prediction_records(include_hidden: bool = False) -> List[Dict]:
     return records
 
 
+def get_prediction_export() -> Dict:
+    """返回可用于离线回测/校准的完整预测记录（不包含数据库配置）。"""
+    export_fields = (
+        'match_id', 'league', 'home', 'away', 'match_time',
+        'created_at', 'updated_at', 'settled_at', 'model_version',
+        'prediction_logic_version', 'asian', 'total_line',
+        'predicted_scores', 'predicted_1x2', 'predicted_half_full',
+        'time_layers', 'odds_layers', 'odds_snapshot',
+        'base_1x2', 'ml_1x2', 'ml_model_version', 'ml_available',
+        'ml_feature_snapshot', 'actual_score', 'actual_result',
+        'actual_half_score', 'actual_half_result', 'actual_half_full',
+        'settled', 'sync_status', 'evaluation', 'hit_top1', 'hit_top3',
+        'hit_top5', 'hit_1x2', 'actual_score_rank', 'actual_score_prob',
+    )
+    records = [
+        {key: record.get(key) for key in export_fields if key in record}
+        for record in _global_history.records
+    ]
+    records.sort(key=lambda item: item.get('match_time', ''))
+    return {
+        'schema_version': 'football-prediction-export-v1',
+        'exported_at': datetime.now().astimezone().isoformat(),
+        'record_count': len(records),
+        'settled_count': sum(
+            1 for record in records
+            if record.get('settled') or record.get('actual_score')
+        ),
+        'stats': _global_history.get_stats(),
+        'records': records,
+    }
+
+
 def hide_failed_records():
     """隐藏所有失败记录（标记为 ignored）"""
     for record in _global_history.records:
