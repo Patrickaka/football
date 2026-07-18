@@ -1528,6 +1528,7 @@ function setFootballQualityFilter(filter) {
 function getFootballResultTier(item) {
   const r = item?.result || {};
   const standardMarket = r.lottery?.standard;
+  const primaryMarket = r.lottery?.primary;
   let probs = standardMarket?.probabilities;
   let entries;
   if (probs) {
@@ -1559,6 +1560,10 @@ function getFootballResultTier(item) {
   entries.sort((a, b) => b[1] - a[1]);
   let prediction = entries[0][0];
   let probability = entries[0][1];
+  if (r.lottery?.offer_matched && primaryMarket?.prediction && primaryMarket?.probabilities) {
+    prediction = primaryMarket.prediction;
+    probability = Number(primaryMarket.probabilities[prediction] || 0);
+  }
   let tier = probability >= 0.75 ? 'ultra'
     : probability >= 0.60 ? 'high'
     : probability >= 0.50 ? 'cautious'
@@ -1620,17 +1625,32 @@ function getFootballScoreSettlement(score, lotteryHandicap) {
   return `${standard} · ${rqspf}`;
 }
 
-function getLotteryMarketAlignment(lottery) {
-  const standard = lottery?.standard?.prediction;
-  const handicap = lottery?.handicap?.prediction;
-  if (!standard || !handicap) return null;
+function getLotteryLinkedSelections(lottery) {
+  const primaryType = lottery?.primary_market;
+  const primary = primaryType === 'rqspf' ? lottery?.handicap : lottery?.standard;
+  const primaryPrediction = primary?.prediction;
+  if (!primaryType || !primaryPrediction) return null;
   const distribution = lottery?.joint_recommendation?.distribution || [];
-  const joint = distribution.find(item => item.standard === standard && item.handicap === handicap);
+  let standardPredictions = [];
+  let handicapPredictions = [];
+  if (primaryType === 'rqspf') {
+    handicapPredictions = [primaryPrediction];
+    standardPredictions = [...new Set(distribution
+      .filter(item => item.handicap === primaryPrediction && Number(item.probability) > 0)
+      .map(item => item.standard))];
+  } else {
+    standardPredictions = [primaryPrediction];
+    handicapPredictions = [...new Set(distribution
+      .filter(item => item.standard === primaryPrediction && Number(item.probability) > 0)
+      .map(item => item.handicap))];
+  }
   return {
-    standard,
-    handicap,
-    compatible: Boolean(joint && Number(joint.probability) > 0),
-    probability: Number(joint?.probability || 0),
+    primaryType,
+    primaryPrediction,
+    standardPredictions: standardPredictions.length
+      ? standardPredictions : [lottery?.standard?.prediction].filter(Boolean),
+    handicapPredictions: handicapPredictions.length
+      ? handicapPredictions : [lottery?.handicap?.prediction].filter(Boolean),
   };
 }
 
@@ -1766,10 +1786,11 @@ function renderFootballPredictions(results) {
 
       const officialLotteryMatched = Boolean(r.lottery?.offer_matched);
       const standardMarket = r.lottery?.standard;
-      const jointRecommendation = r.lottery?.joint_recommendation;
+      const linkedSelections = getLotteryLinkedSelections(r.lottery);
       const standardPrediction = standardMarket
         ? {
             pred: standardMarket.prediction,
+            preds: linkedSelections?.standardPredictions,
             probs: standardMarket.probabilities
           }
         : getSPFPrediction(top);
@@ -1790,6 +1811,7 @@ function renderFootballPredictions(results) {
           title: `🇨🇳 中国体彩 · 让球胜平负（主队 ${lotteryHandicap > 0 ? '+' : ''}${lotteryHandicap}，按让球后赛果）`,
           prediction: {
             pred: r.lottery.handicap.prediction,
+            preds: linkedSelections?.handicapPredictions,
             probs: r.lottery.handicap.probabilities,
           },
           keys: ['让胜', '让平', '让负'],
@@ -1805,7 +1827,9 @@ function renderFootballPredictions(results) {
         card.keys.forEach(key => {
           const prob = card.prediction.probs[key] || 0;
           const odd = card.odds?.[key];
-          const isPred = card.prediction.pred === key;
+          const selectedPredictions = card.prediction.preds?.length
+            ? card.prediction.preds : [card.prediction.pred];
+          const isPred = selectedPredictions.includes(key);
           const colors = {
             '胜': '#ef4444', '平': '#f59e0b', '负': '#22c55e',
             '让胜': '#ef4444', '让平': '#f59e0b', '让负': '#22c55e'
@@ -1825,18 +1849,14 @@ function renderFootballPredictions(results) {
         }
         itemHtml += '</div>';
       });
-      const marketAlignment = getLotteryMarketAlignment(r.lottery);
-      if (marketAlignment && marketCards.length > 1) {
-        if (marketAlignment.compatible) {
-          itemHtml += `<div style="margin-top:6px;padding:7px 9px;border:1px solid rgba(59,130,246,.35);background:rgba(59,130,246,.08);border-radius:7px;font-size:12px;color:#93c5fd">
-            🔗 两盘方向一致：<b>${esc(marketAlignment.standard)} + ${esc(marketAlignment.handicap)}</b>
-            <span style="color:var(--muted)">（同一最终比分下联合概率 ${(marketAlignment.probability * 100).toFixed(1)}%）</span>
-          </div>`;
-        } else {
-          itemHtml += `<div style="margin-top:6px;padding:7px 9px;border:1px solid rgba(245,158,11,.45);background:rgba(245,158,11,.08);border-radius:7px;font-size:12px;color:#f59e0b">
-            ⚠️ 两盘最高项分歧：<b>${esc(marketAlignment.standard)} + ${esc(marketAlignment.handicap)}</b> 不能由同一比分同时命中；请按实际开售玩法单独参考，不强行合并。
-          </div>`;
-        }
+      if (linkedSelections && marketCards.length > 1) {
+        const secondary = linkedSelections.primaryType === 'rqspf'
+          ? `不让球 ${linkedSelections.standardPredictions.join('/')}`
+          : `让球 ${linkedSelections.handicapPredictions.join('/')}`;
+        itemHtml += `<div style="margin-top:6px;padding:7px 9px;border:1px solid rgba(59,130,246,.35);background:rgba(59,130,246,.08);border-radius:7px;font-size:12px;color:#93c5fd">
+          🔗 体彩主玩法联动：<b>${esc(linkedSelections.primaryPrediction)} ⇒ ${esc(secondary)}</b>
+          <span style="color:var(--muted)">（仅高亮可由同一最终比分同时命中的结果）</span>
+        </div>`;
       }
       
       const htfProbs = r.model && r.model.half_full_time && r.model.half_full_time.probs ? r.model.half_full_time.probs : [];
