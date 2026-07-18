@@ -29,7 +29,7 @@ from ..common.logger import setup_logger
 
 log = setup_logger('football')
 
-FOOTBALL_PREDICTION_LOGIC_VERSION = '2026-07-18-okooo-jczq-cache-v6'
+FOOTBALL_PREDICTION_LOGIC_VERSION = '2026-07-18-jczq-joint-result-v7'
 
 # ELO 评分系统（延迟导入）
 try:
@@ -354,6 +354,7 @@ def lottery_market_probabilities(candidates, lottery_handicap=None):
     spf = {'胜': 0.0, '平': 0.0, '负': 0.0}
     handicap = parse_lottery_handicap(lottery_handicap)
     rqspf = {'让胜': 0.0, '让平': 0.0, '让负': 0.0} if handicap is not None else None
+    joint_probs = {}
 
     for item in candidates or []:
         try:
@@ -363,11 +364,14 @@ def lottery_market_probabilities(candidates, lottery_handicap=None):
         except (TypeError, ValueError):
             continue
         margin = home_goals - away_goals
-        spf['胜' if margin > 0 else '负' if margin < 0 else '平'] += probability
+        standard_label = '胜' if margin > 0 else '负' if margin < 0 else '平'
+        spf[standard_label] += probability
         if rqspf is not None:
             adjusted_margin = margin + handicap
             label = '让胜' if adjusted_margin > 0 else '让负' if adjusted_margin < 0 else '让平'
             rqspf[label] += probability
+            joint_key = (standard_label, label)
+            joint_probs[joint_key] = joint_probs.get(joint_key, 0.0) + probability
 
     def normalize(values):
         total = sum(values.values())
@@ -376,6 +380,27 @@ def lottery_market_probabilities(candidates, lottery_handicap=None):
     spf = normalize(spf)
     if rqspf is not None:
         rqspf = normalize(rqspf)
+        joint_total = sum(joint_probs.values())
+        if joint_total > 0:
+            joint_probs = {key: value / joint_total for key, value in joint_probs.items()}
+    joint_ranked = sorted(joint_probs.items(), key=lambda item: -item[1])
+    joint_recommendation = None
+    if joint_ranked:
+        (standard_pick, handicap_pick), joint_probability = joint_ranked[0]
+        joint_recommendation = {
+            'standard_prediction': standard_pick,
+            'handicap_prediction': handicap_pick,
+            'probability': joint_probability,
+            'label': f'{standard_pick} + {handicap_pick}',
+            'distribution': [
+                {
+                    'standard': standard_result,
+                    'handicap': handicap_result,
+                    'probability': probability,
+                }
+                for (standard_result, handicap_result), probability in joint_ranked
+            ],
+        }
     primary_type = 'rqspf' if handicap not in (None, 0) else 'spf'
     primary_probs = rqspf if primary_type == 'rqspf' else spf
     return {
@@ -394,6 +419,7 @@ def lottery_market_probabilities(candidates, lottery_handicap=None):
             'probabilities': primary_probs,
             'prediction': max(primary_probs, key=primary_probs.get) if primary_probs and sum(primary_probs.values()) > 0 else None,
         },
+        'joint_recommendation': joint_recommendation,
         'settlement_rule': '中国体彩：主队进球 + 让球数，与客队进球比较',
     }
 
@@ -6793,13 +6819,24 @@ def build_match_analysis(result):
         lottery_verdict = None
         if lottery_info.get('primary_market') == 'rqspf':
             rq_probs = lottery_primary.get('probabilities') or {}
-            if rq_probs:
-                rq_pick = max(rq_probs, key=rq_probs.get)
-                rq_value = rq_probs[rq_pick]
+            joint_pick = lottery_info.get('joint_recommendation') or {}
+            if rq_probs and joint_pick:
+                standard_pick = joint_pick.get('standard_prediction')
+                rq_pick = joint_pick.get('handicap_prediction')
+                rq_value = rq_probs.get(rq_pick, 0.0)
                 rq_handicap = (lottery_info.get('handicap') or {}).get('handicap')
                 lottery_verdict = (
-                    f"按中国体彩主队{rq_handicap:+d}球口径，{rq_pick}概率最高 {rq_value:.0%}"
+                    f"统一赛果组合：{standard_pick} + {rq_pick}；"
+                    f"按中国体彩主队{rq_handicap:+d}球口径，{rq_pick}边际概率 {rq_value:.0%}"
                 )
+                standard_probs = (lottery_info.get('standard') or {}).get('probabilities') or {}
+                standard_value = standard_probs.get(standard_pick, 0.0)
+                if standard_pick == '胜':
+                    verdict = f"{match_info.get('home', '主队')}胜 {standard_value:.0%}（与让球结论联合选取）"
+                elif standard_pick == '负':
+                    verdict = f"{match_info.get('away', '客队')}胜 {standard_value:.0%}（与让球结论联合选取）"
+                elif standard_pick == '平':
+                    verdict = f"平局 {standard_value:.0%}（与让球结论联合选取）"
 
         conf_level = confidence.get('level') if isinstance(confidence, dict) else None
         if conf_level is None:

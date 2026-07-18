@@ -85,6 +85,23 @@ class PredictionPostprocessTests(unittest.TestCase):
         self.assertAlmostEqual(markets['handicap']['probabilities']['让胜'], 0.30)
         self.assertAlmostEqual(markets['handicap']['probabilities']['让负'], 0.30)
         self.assertAlmostEqual(sum(markets['standard']['probabilities'].values()), 1.0)
+        self.assertEqual(markets['joint_recommendation']['standard_prediction'], '胜')
+        self.assertEqual(markets['joint_recommendation']['handicap_prediction'], '让平')
+
+    def test_joint_lottery_recommendation_avoids_impossible_independent_picks(self):
+        markets = football.lottery_market_probabilities([
+            ((2, 0), 0.21),  # 胜 + 让胜
+            ((1, 0), 0.19),  # 胜 + 让平
+            ((1, 1), 0.29),  # 平 + 让负
+            ((0, 1), 0.31),  # 负 + 让负
+        ], lottery_handicap=-1)
+
+        # Independent marginals would say 胜(40%) + 让负(60%), an impossible pair.
+        self.assertEqual(markets['standard']['prediction'], '胜')
+        self.assertEqual(markets['handicap']['prediction'], '让负')
+        self.assertEqual(markets['joint_recommendation']['standard_prediction'], '负')
+        self.assertEqual(markets['joint_recommendation']['handicap_prediction'], '让负')
+        self.assertAlmostEqual(markets['joint_recommendation']['probability'], 0.31)
 
     def test_goal_distribution_anchor_moves_mean_toward_total_line(self):
         dist = {1: 0.50, 2: 0.30, 5: 0.20}
