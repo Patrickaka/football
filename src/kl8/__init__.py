@@ -47,7 +47,7 @@ from src.common.logger import setup_logger
 
 log = setup_logger('kl8')
 
-KL8_PREDICTOR_VERSION = "kl8-v9.2.9-high-tier-chase"
+KL8_PREDICTOR_VERSION = "kl8-v9.2.10-honest-coverage"
 
 # ─── v9.2: 只显示已验证策略模式 ───
 VERIFY_ONLY_MODE = False  # True=未验证玩法不输出号码; False=回退参考策略(始终输出号码)
@@ -124,7 +124,9 @@ FUSHI_PLAY_KEYS = tuple(FUSHI_CONFIG)
 #   成本随组数线性、命中率线性、性价比在8~16组达满档。这是覆盖面杠杆，不改变单注期望命中，
 #   以更多注数换取更高组合中奖概率。用户选择保持 8×6 最便宜档(96元/期，组合中5约2.27%)。
 MULTI_SLIP_CONFIG = {
-    'select_5': {'n_slips': 5},
+    # 选5的单组5码只有1注，覆盖面过窄。改为8组6码复式，每组C(6,5)=6注；
+    # 这是预算换覆盖率，不改变任何单号的理论命中率。
+    'select_5': {'n_slips': 8, 'pick_size': 6},
     'select_6': {'n_slips': 8, 'pick_size': 6},
     'select_7': {'n_slips': 6},
     'select_10': {'n_slips': 6},
@@ -749,8 +751,8 @@ def resolve_play_strategy(play_type: str, allow_reference: bool = False) -> Opti
             'repeat_direction': 'neutral',
             'pool_max_last_numbers': 5,
             'final_max_last_numbers': 5,
-            'final_selection_mode': 'balanced',
-            'target_hits': 3,
+            'final_selection_mode': 'high_tier_chase',
+            'target_hits': 4,
             'prediction_mode': 'reference_unvalidated',
             'is_validated': False,
         },
@@ -762,8 +764,8 @@ def resolve_play_strategy(play_type: str, allow_reference: bool = False) -> Opti
             'repeat_direction': 'neutral',
             'pool_max_last_numbers': 6,
             'final_max_last_numbers': 6,
-            'final_selection_mode': 'balanced',
-            'target_hits': 3,
+            'final_selection_mode': 'high_tier_chase',
+            'target_hits': 5,
             'prediction_mode': 'reference_unvalidated',
             'is_validated': False,
         },
