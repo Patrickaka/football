@@ -370,6 +370,11 @@ class KL8PredictionGuardTests(unittest.TestCase):
 
         self.assertEqual(result['resolved_strategies']['select_5']['pool_max_last_numbers'], 5)
         self.assertEqual(result['resolved_strategies']['select_6']['pool_max_last_numbers'], 6)
+        self.assertEqual(result['resolved_strategies']['select_5']['final_min_last_numbers'], 1)
+        self.assertEqual(result['resolved_strategies']['select_6']['final_min_last_numbers'], 2)
+        last_numbers = set(analyzer.history_data[0]['numbers'])
+        self.assertGreaterEqual(len(set(result['select_5']['numbers']) & last_numbers), 1)
+        self.assertGreaterEqual(len(set(result['select_6']['numbers']) & last_numbers), 2)
         self.assertEqual(result['select_5']['prize_hit_thresholds'], ['>=4', '>=3'])
         self.assertEqual(result['select_6']['prize_hit_thresholds'], ['>=5', '>=4'])
         self.assertEqual(result['select_6']['hit_rate_priority_thresholds'], ['>=5', '>=4'])

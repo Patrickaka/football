@@ -47,7 +47,7 @@ from src.common.logger import setup_logger
 
 log = setup_logger('kl8')
 
-KL8_PREDICTOR_VERSION = "kl8-v9.2.10-honest-coverage"
+KL8_PREDICTOR_VERSION = "kl8-v9.2.11-repeat-band"
 
 # ─── v9.2: 只显示已验证策略模式 ───
 VERIFY_ONLY_MODE = False  # True=未验证玩法不输出号码; False=回退参考策略(始终输出号码)
@@ -751,6 +751,7 @@ def resolve_play_strategy(play_type: str, allow_reference: bool = False) -> Opti
             'repeat_direction': 'neutral',
             'pool_max_last_numbers': 5,
             'final_max_last_numbers': 5,
+            'final_min_last_numbers': 1,
             'final_selection_mode': 'high_tier_chase',
             'target_hits': 4,
             'prediction_mode': 'reference_unvalidated',
@@ -764,6 +765,7 @@ def resolve_play_strategy(play_type: str, allow_reference: bool = False) -> Opti
             'repeat_direction': 'neutral',
             'pool_max_last_numbers': 6,
             'final_max_last_numbers': 6,
+            'final_min_last_numbers': 2,
             'final_selection_mode': 'high_tier_chase',
             'target_hits': 5,
             'prediction_mode': 'reference_unvalidated',
@@ -1587,6 +1589,45 @@ def _adaptive_repeat_cap(history_data: List[Dict], target_size: int, lookback: i
 
     ratio = max(0.25, min(0.55, 0.40 + adjustment))
     return max(1, min(target_size, math.ceil(target_size * ratio)))
+
+
+def _enforce_minimum_repeats(
+    selected: List[Tuple[int, float]],
+    candidates: List[Tuple[int, float]],
+    last_numbers: Optional[set],
+    minimum: int,
+) -> List[Tuple[int, float]]:
+    """Ensure a final pick contains a small, explicit previous-draw overlap.
+
+    This is a shape constraint, not a predictive edge. Replacements preserve the
+    candidate ranking as much as possible: add the best missing repeat and remove
+    the lowest-ranked non-repeat until the requested floor is met.
+    """
+    if not selected or minimum <= 0:
+        return selected
+    last_numbers = set(last_numbers or ())
+    minimum = min(len(selected), int(minimum))
+    result = list(selected)
+    present = {num for num, _ in result}
+    repeat_count = sum(1 for num, _ in result if num in last_numbers)
+    if repeat_count >= minimum:
+        return result
+
+    replacements = [item for item in candidates if item[0] in last_numbers and item[0] not in present]
+    while repeat_count < minimum and replacements:
+        replacement = replacements.pop(0)
+        removable_idx = next(
+            (idx for idx in range(len(result) - 1, -1, -1) if result[idx][0] not in last_numbers),
+            None,
+        )
+        if removable_idx is None:
+            break
+        present.discard(result[removable_idx][0])
+        result[removable_idx] = replacement
+        present.add(replacement[0])
+        repeat_count += 1
+    score_order = {num: idx for idx, (num, _) in enumerate(candidates)}
+    return sorted(result, key=lambda item: score_order.get(item[0], len(score_order)))
 
 
 def _diversify_candidate_pool(
@@ -4116,6 +4157,7 @@ class KL8Analyzer:
                 'pool_diversify': strategy.get('pool_diversify', True),
                 'pool_max_last_numbers': strategy.get('pool_max_last_numbers'),
                 'final_max_last_numbers': strategy.get('final_max_last_numbers'),
+                'final_min_last_numbers': strategy.get('final_min_last_numbers', 0),
                 'frequency_mode': strategy.get('frequency_mode', 'mean_reversion'),
                 'final_selection_mode': strategy.get('final_selection_mode', 'balanced'),
                 'target_hits': strategy.get('target_hits'),
@@ -4124,9 +4166,13 @@ class KL8Analyzer:
             }
 
             # v9.1: 按策略独立生成候选池
-            pool_result = self.build_pool_by_strategy(strategy, pool_size=20)
+            # 选5/6的遗漏特征可能把上期号码全部压到Top20之外。内部保留完整排名，
+            # 让后续重号下限约束始终有候选可用；对外候选池仍只展示Top20。
+            internal_pool_size = KL8_NUM_RANGE if select_type in (5, 6) else 20
+            pool_result = self.build_pool_by_strategy(strategy, pool_size=internal_pool_size)
             pool_top = pool_result.get('selected', [])[:20]
-            pool_candidates = pool_result.get('candidates', [])[:20]
+            selection_candidates = pool_result.get('candidates', [])[:internal_pool_size]
+            pool_candidates = selection_candidates[:20]
             all_candidate_pools[s_key] = {
                 'top20': pool_top,
                 'candidates': pool_candidates,
@@ -4147,6 +4193,12 @@ class KL8Analyzer:
                 self.statistics.get('last_numbers', set()),
                 max_last_numbers=final_repeat_cap,
                 selection_mode=strategy.get('final_selection_mode', 'balanced'),
+            )
+            final_pool = _enforce_minimum_repeats(
+                final_pool,
+                selection_candidates,
+                self.statistics.get('last_numbers', set()),
+                strategy.get('final_min_last_numbers', 0),
             )
             numbers = sorted(num for num, _ in final_pool)
             variants = self._candidate_variants(pool_candidates, select_type, final_repeat_cap)
