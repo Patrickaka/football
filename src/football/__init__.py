@@ -29,7 +29,7 @@ from ..common.logger import setup_logger
 
 log = setup_logger('football')
 
-FOOTBALL_PREDICTION_LOGIC_VERSION = '2026-07-18-okooo-jczq-v5'
+FOOTBALL_PREDICTION_LOGIC_VERSION = '2026-07-18-okooo-jczq-cache-v6'
 
 # ELO 评分系统（延迟导入）
 try:
@@ -6542,6 +6542,22 @@ def _is_prediction_cache_current(result: Dict) -> bool:
     return _cached_prediction_logic_version(result) == FOOTBALL_PREDICTION_LOGIC_VERSION
 
 
+def _is_lottery_cache_current(result: Dict, match: Dict) -> bool:
+    """Invalidate an old analysis once a verified okooo offer becomes available."""
+    # A temporary okooo failure must not discard a previously verified offer.
+    if not match.get('lottery_offer_matched'):
+        return True
+    cached = result.get('lottery') or {}
+    if not cached.get('offer_matched'):
+        return False
+    expected_market = match.get('lottery_primary_market') or None
+    if cached.get('primary_market') != expected_market:
+        return False
+    expected_handicap = parse_lottery_handicap(match.get('lottery_handicap'))
+    cached_handicap = parse_lottery_handicap((cached.get('handicap') or {}).get('handicap'))
+    return expected_handicap == cached_handicap
+
+
 def assess_football_upset(asian, euro, team, candidates):
     """评估爆冷（热门被击败）风险，并挑出反向爆冷比分候选。
 
@@ -6843,6 +6859,12 @@ def analyze_match(match, force_refresh=False):
                 FOOTBALL_PREDICTION_LOGIC_VERSION,
                 home,
                 away,
+            )
+            cached_result = None
+        if cached_result is not None and not _is_lottery_cache_current(cached_result, match):
+            log.info(
+                "cached lottery offer stale, recomputing %s vs %s: market=%s handicap=%s",
+                home, away, match.get('lottery_primary_market'), match.get('lottery_handicap'),
             )
             cached_result = None
         if cached_result is not None:

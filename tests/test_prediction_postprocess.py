@@ -445,6 +445,32 @@ class PredictionPostprocessTests(unittest.TestCase):
 
         self.assertTrue(football._is_prediction_cache_current(cached))
 
+    def test_lottery_cache_invalidates_unmatched_offer_after_okooo_recovers(self):
+        cached = {'lottery': {'offer_matched': False, 'primary_market': None}}
+        match = {
+            'lottery_offer_matched': True,
+            'lottery_primary_market': 'rqspf',
+            'lottery_handicap': -1,
+        }
+
+        self.assertFalse(football._is_lottery_cache_current(cached, match))
+
+    def test_lottery_cache_keeps_verified_matching_handicap(self):
+        cached = {
+            'lottery': {
+                'offer_matched': True,
+                'primary_market': 'rqspf',
+                'handicap': {'handicap': -1},
+            }
+        }
+        match = {
+            'lottery_offer_matched': True,
+            'lottery_primary_market': 'rqspf',
+            'lottery_handicap': '-1',
+        }
+
+        self.assertTrue(football._is_lottery_cache_current(cached, match))
+
     def test_diversify_score_recommendations_replaces_third_same_pattern(self):
         picked = [
             (1, 0, 0.20, 'home_win_1', 'home_low', 'core'),
