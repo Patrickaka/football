@@ -47,7 +47,7 @@ from src.common.logger import setup_logger
 
 log = setup_logger('kl8')
 
-KL8_PREDICTOR_VERSION = "kl8-v9.2.11-repeat-band"
+KL8_PREDICTOR_VERSION = "kl8-v9.2.12-adaptive-repeat"
 
 # ─── v9.2: 只显示已验证策略模式 ───
 VERIFY_ONLY_MODE = False  # True=未验证玩法不输出号码; False=回退参考策略(始终输出号码)
@@ -1589,6 +1589,33 @@ def _adaptive_repeat_cap(history_data: List[Dict], target_size: int, lookback: i
 
     ratio = max(0.25, min(0.55, 0.40 + adjustment))
     return max(1, min(target_size, math.ceil(target_size * ratio)))
+
+
+def _adaptive_repeat_target(history_data: List[Dict], target_size: int, minimum: int = 0,
+                            lookback: int = 20) -> Dict:
+    """Map recent draw overlap to a suitable overlap inside a small pick.
+
+    If adjacent draws recently overlap by r out of 20 numbers, a shape-matched
+    pick of size n contains about n*r/20 previous-draw numbers. This only controls
+    structure; it is not treated as evidence of predictive advantage.
+    """
+    overlaps = []
+    recent = (history_data or [])[:lookback + 1]
+    for idx in range(len(recent) - 1):
+        newer = set(recent[idx].get('numbers', []))
+        older = set(recent[idx + 1].get('numbers', []))
+        if newer and older:
+            overlaps.append(len(newer & older))
+    mean_overlap = sum(overlaps) / len(overlaps) if overlaps else 5.0
+    target = round(target_size * mean_overlap / KL8_DRAW_COUNT)
+    cap = _adaptive_repeat_cap(history_data, target_size, lookback)
+    target = max(int(minimum or 0), min(cap, target_size, target))
+    return {
+        'target': target,
+        'cap': cap,
+        'mean_draw_overlap': round(mean_overlap, 2),
+        'sample_size': len(overlaps),
+    }
 
 
 def _enforce_minimum_repeats(
@@ -4194,11 +4221,16 @@ class KL8Analyzer:
                 max_last_numbers=final_repeat_cap,
                 selection_mode=strategy.get('final_selection_mode', 'balanced'),
             )
+            repeat_profile = _adaptive_repeat_target(
+                self.history_data,
+                select_type,
+                strategy.get('final_min_last_numbers', 0),
+            )
             final_pool = _enforce_minimum_repeats(
                 final_pool,
                 selection_candidates,
                 self.statistics.get('last_numbers', set()),
-                strategy.get('final_min_last_numbers', 0),
+                repeat_profile['target'],
             )
             numbers = sorted(num for num, _ in final_pool)
             variants = self._candidate_variants(pool_candidates, select_type, final_repeat_cap)
@@ -4216,6 +4248,7 @@ class KL8Analyzer:
                 'pick': config['pick'],
                 'numbers': numbers,
                 'shape_profile': shape_profile,
+                'repeat_profile': repeat_profile,
                 'accuracy_profile': accuracy_profile,
                 'variants': variants,
                 'candidates': pool_candidates[:10],
