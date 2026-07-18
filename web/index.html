@@ -1496,6 +1496,7 @@ async function loadAllPredictions() {
         lottery_primary_market: m.lottery_primary_market || '',
         lottery_source: m.lottery_source || 'unavailable',
         lottery_offer_matched: String(Boolean(m.lottery_offer_matched)),
+        lottery_unavailable_reason: m.lottery_unavailable_reason || '',
         lottery_available_markets: (m.lottery_available_markets || []).join(','),
         lottery_spf_available: String(Boolean(m.lottery_spf_available)),
         lottery_rqspf_available: String(Boolean(m.lottery_rqspf_available)),
@@ -1729,8 +1730,16 @@ function renderFootballPredictions(results) {
         const isHandicapMarket = r.lottery?.primary_market === 'rqspf';
         const lotteryHandicap = r.lottery?.handicap?.handicap;
         const marketKeys = isHandicapMarket ? ['让胜', '让平', '让负'] : ['胜', '平', '负'];
+        const unavailableReasonMap = {
+          maintenance_or_waf: '澳客维护或访问验证',
+          network_error: '澳客网络请求失败',
+          empty_schedule: '澳客未返回竞足场次',
+          cross_source_match_failed: '澳客与500比赛未匹配',
+          not_requested: '澳客体彩数据未加载'
+        };
+        const unavailableReason = unavailableReasonMap[r.lottery?.unavailable_reason] || '澳客体彩玩法暂不可用';
         const marketTitle = !officialLotteryMatched
-          ? '模型参考 · 胜平负（澳客体彩玩法暂不可用）'
+          ? `模型参考 · 胜平负（${unavailableReason}）`
           : isHandicapMarket
           ? `🇨🇳 中国体彩 · 让球胜平负（主队 ${lotteryHandicap > 0 ? '+' : ''}${lotteryHandicap}）`
           : '🇨🇳 中国体彩 · 胜平负';

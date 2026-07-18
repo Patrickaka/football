@@ -17,6 +17,13 @@ from typing import Dict, List, Optional
 
 from ..common.logger import setup_logger
 
+try:
+    import requests
+    import urllib3
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+except ImportError:  # Production installs requests; tests can use stdlib fallback.
+    requests = None
+
 
 log = setup_logger('football.okooo_lottery')
 OKOOO_BASE = 'https://www.okooo.com'
@@ -34,6 +41,52 @@ HEADERS = {
 _CACHE_TTL = 300
 _cache = {'at': 0.0, 'ttl': _CACHE_TTL, 'matches': []}
 _cache_lock = threading.Lock()
+_session = None
+_last_status = {'reason': 'not_requested', 'detail': None}
+
+
+def _set_status(reason: str, detail=None):
+    _last_status.update({'reason': reason, 'detail': str(detail)[:180] if detail else None})
+
+
+def get_okooo_lottery_status() -> Dict:
+    return dict(_last_status)
+
+
+def _get_session():
+    global _session
+    if requests is None:
+        return None
+    if _session is None:
+        _session = requests.Session()
+        _session.headers.update(HEADERS)
+        _session.verify = False
+    return _session
+
+
+def _fetch_page(url: str, timeout: float) -> str:
+    session = _get_session()
+    if session is not None:
+        response = session.get(url, timeout=(min(2.0, timeout), timeout))
+        response.raise_for_status()
+        raw = response.content
+    else:
+        request = urllib.request.Request(url, headers=HEADERS)
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            raw = response.read()
+    for encoding in ('gb18030', 'utf-8', 'gbk'):
+        try:
+            return raw.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+    return raw.decode('utf-8', errors='replace')
+
+
+def _is_block_page(page: str) -> bool:
+    lowered = (page or '').lower()
+    return any(marker in lowered for marker in (
+        '系统维护中', 'aliyun_waf', '访问验证', '安全验证', 'captcha',
+    ))
 
 
 def _text(fragment: str) -> str:
@@ -56,6 +109,81 @@ def _integer_handicap(value):
     if number is None or not number.is_integer() or abs(number) > 5:
         return None
     return int(number)
+
+
+def _attr(tag: str, name: str):
+    match = re.search(rf'\b{re.escape(name)}=["\']([^"\']*)["\']', tag or '', re.I)
+    return unescape(match.group(1)).strip() if match else None
+
+
+def _selection_odds(block: str) -> Dict[str, Dict[int, float]]:
+    result = {'0': {}, '1': {}}
+    pattern = re.compile(
+        r'<div\b[^>]*class=["\'][^"\']*(?:zhu|ping|fu)[^"\']*weiks[^"\']*["\'][^>]*>',
+        re.I,
+    )
+    selections = list(pattern.finditer(block))
+    for index, selection in enumerate(selections):
+        tag = selection.group(0)
+        workflow = _attr(tag, 'data-wf')
+        position = _attr(tag, 'data-wz')
+        if workflow not in result or position not in ('0', '1', '2'):
+            continue
+        segment = block[selection.end():(selections[index + 1].start() if index + 1 < len(selections) else len(block))]
+        odd = _number(_attr(tag, 'data-sp'))
+        if not odd:
+            visible = re.search(r'class=["\'][^"\']*peilv[^"\']*["\'][^>]*>\s*([\d.]+)', segment, re.I)
+            odd = _number(visible.group(1)) if visible else None
+        if odd:
+            result[workflow][int(position)] = odd
+    return result
+
+
+def _parse_okooo_div_schedule(html: str) -> List[Dict]:
+    """Parse the current ``touzhu_1`` div-based JCZQ page."""
+    opening_pattern = re.compile(
+        r'<div\b[^>]*class=["\'][^"\']*touzhu_1[^"\']*["\'][^>]*>', re.I
+    )
+    openings = list(opening_pattern.finditer(html or ''))
+    matches = []
+    for index, opening in enumerate(openings):
+        tag = opening.group(0)
+        block = (html or '')[opening.start():(openings[index + 1].start() if index + 1 < len(openings) else len(html or ''))]
+        match_id = _attr(tag, 'data-mid')
+        order = _attr(tag, 'data-ordercn') or ''
+        if not match_id or not order:
+            continue
+        handicap = _integer_handicap(_attr(tag, 'data-rq'))
+        names = re.findall(
+            r'class=["\'][^"\']*zhum[^"\']*["\'][^>]*title=["\']([^"\']+)["\']', block, re.I
+        )
+        home = names[0].strip() if names else (_attr(tag, 'data-hname') or '')
+        away = names[1].strip() if len(names) > 1 else (_attr(tag, 'data-aname') or '')
+        time_match = re.search(r'class=["\'][^"\']*shijian[^"\']*["\'][^>]*\bmTime=["\']([^"\']+)', block, re.I)
+        odds = _selection_odds(block)
+        spf_available = 'class="shenpf' in block or "class='shenpf" in block
+        rq_available = ('rangqiuspf' in block and handicap not in (None, 0))
+        spf_odds = ({'胜': odds['0'].get(0), '平': odds['0'].get(1), '负': odds['0'].get(2)}
+                    if len(odds['0']) == 3 else None)
+        rqspf_odds = ({'让胜': odds['1'].get(0), '让平': odds['1'].get(1), '让负': odds['1'].get(2)}
+                      if len(odds['1']) == 3 else None)
+        matches.append({
+            'okooo_id': match_id,
+            'num': order,
+            'home': home,
+            'away': away,
+            'time': time_match.group(1)[-5:] if time_match else '',
+            'lottery_handicap': handicap,
+            'spf_available': spf_available,
+            'rqspf_available': rq_available,
+            'available_markets': [market for market, available in (
+                ('spf', spf_available), ('rqspf', rq_available)
+            ) if available],
+            'spf_odds': spf_odds,
+            'rqspf_odds': rqspf_odds,
+            'source': 'okooo',
+        })
+    return matches
 
 
 def parse_okooo_jczq_schedule(html: str) -> List[Dict]:
@@ -127,6 +255,9 @@ def parse_okooo_jczq_schedule(html: str) -> List[Dict]:
             'rqspf_odds': rqspf_odds,
             'source': 'okooo',
         })
+    div_matches = _parse_okooo_div_schedule(html)
+    if div_matches:
+        return div_matches
     return matches
 
 
@@ -142,30 +273,28 @@ def fetch_okooo_jczq_schedule(force_refresh: bool = False) -> List[Dict]:
         if remaining <= 0.5:
             break
         try:
-            request = urllib.request.Request(url, headers=HEADERS)
-            with urllib.request.urlopen(request, timeout=min(3.5, remaining)) as response:
-                raw = response.read()
-            page = None
-            for encoding in ('gb18030', 'utf-8', 'gbk'):
-                try:
-                    page = raw.decode(encoding)
-                    break
-                except UnicodeDecodeError:
-                    continue
-            matches = parse_okooo_jczq_schedule(page or raw.decode('utf-8', errors='replace'))
+            page = _fetch_page(url, min(3.5, remaining))
+            if _is_block_page(page):
+                last_error = 'maintenance_or_waf'
+                continue
+            matches = parse_okooo_jczq_schedule(page)
             if matches:
                 with _cache_lock:
                     _cache.update({'at': now, 'ttl': _CACHE_TTL, 'matches': matches})
+                _set_status('ok', f'{len(matches)} matches')
                 return matches
-        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        except Exception as exc:
             last_error = exc
             continue
 
     with _cache_lock:
         _cache.update({'at': now, 'ttl': 60, 'matches': []})
     if last_error:
+        reason = 'maintenance_or_waf' if last_error == 'maintenance_or_waf' else 'network_error'
+        _set_status(reason, last_error)
         log.warning('澳客体彩赛程获取失败，保留500分析结果: %s', last_error)
     else:
+        _set_status('empty_schedule')
         log.warning('澳客体彩赛程未解析到比赛，保留500分析结果')
     return []
 
@@ -204,12 +333,16 @@ def _match_score(base: Dict, lottery: Dict) -> int:
 
 def enrich_with_okooo_lottery(matches: List[Dict], lottery_matches: Optional[List[Dict]] = None) -> List[Dict]:
     offers = fetch_okooo_jczq_schedule() if lottery_matches is None else lottery_matches
+    status = get_okooo_lottery_status()
     for match in matches:
         ranked = sorted(((_match_score(match, offer), offer) for offer in offers), key=lambda item: -item[0])
         if not ranked or ranked[0][0] < 8:
             match.update({
                 'lottery_source': 'unavailable', 'lottery_offer_matched': False,
                 'lottery_primary_market': None,
+                'lottery_unavailable_reason': (
+                    status.get('reason') if not offers else 'cross_source_match_failed'
+                ),
             })
             continue
         offer = ranked[0][1]
@@ -220,6 +353,7 @@ def enrich_with_okooo_lottery(matches: List[Dict], lottery_matches: Optional[Lis
         match.update({
             'lottery_source': 'okooo',
             'lottery_offer_matched': True,
+            'lottery_unavailable_reason': None,
             'okooo_id': offer.get('okooo_id'),
             'lottery_handicap': handicap,
             'lottery_primary_market': primary,

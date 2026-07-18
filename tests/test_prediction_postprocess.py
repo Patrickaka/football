@@ -47,6 +47,27 @@ class PredictionPostprocessTests(unittest.TestCase):
         self.assertIsNone(offer['spf_odds'])
         self.assertEqual(offer['rqspf_odds']['让平'], 3.5)
 
+    def test_okooo_current_div_page_parses_both_spf_markets(self):
+        html = '''<div class="touzhu_1" data-mid="88" data-ordercn="周六001"
+          data-rq="-1" data-hname="主队" data-aname="客队">
+          <div class="shijian" mTime="18:00"></div>
+          <div class="shenpf"><div class="zhu weiks" data-sp="1.80" data-wf="0" data-wz="0"></div>
+          <div class="ping weiks" data-sp="3.20" data-wf="0" data-wz="1"></div>
+          <div class="fu weiks" data-sp="4.10" data-wf="0" data-wz="2"></div></div>
+          <a href="/soccer/match/88/odds/"></a>
+          <div class="rangqiuspf"><div class="zhu weiks" data-sp="2.60" data-wf="1" data-wz="0"></div>
+          <div class="ping weiks" data-sp="3.50" data-wf="1" data-wz="1"></div>
+          <div class="fu weiks" data-sp="2.20" data-wf="1" data-wz="2"></div></div>
+        </div>'''
+
+        offer = parse_okooo_jczq_schedule(html)[0]
+        self.assertEqual(offer['num'], '周六001')
+        self.assertEqual(offer['lottery_handicap'], -1)
+        self.assertTrue(offer['spf_available'])
+        self.assertTrue(offer['rqspf_available'])
+        self.assertEqual(offer['spf_odds']['胜'], 1.8)
+        self.assertEqual(offer['rqspf_odds']['让负'], 2.2)
+
     def test_lottery_handicap_is_integer_and_separate_from_asian_line(self):
         self.assertEqual(football.parse_lottery_handicap('(-1)'), -1)
         self.assertEqual(football.parse_lottery_handicap('（+2）'), 2)

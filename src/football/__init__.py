@@ -7728,6 +7728,7 @@ def analyze_match(match, force_refresh=False):
     lottery.update({
         'source': match.get('lottery_source') or 'unavailable',
         'offer_matched': bool(match.get('lottery_offer_matched')),
+        'unavailable_reason': match.get('lottery_unavailable_reason'),
         'available_markets': match.get('lottery_available_markets') or [],
         'spf_available': bool(match.get('lottery_spf_available')),
         'rqspf_available': bool(match.get('lottery_rqspf_available')),
@@ -7748,7 +7749,8 @@ def analyze_match(match, force_refresh=False):
             'home', 'away', 'league', 'time', 'match_id', 'num',
             'lottery_handicap', 'lottery_primary_market', 'lottery_source',
             'lottery_offer_matched', 'lottery_available_markets',
-            'lottery_spf_available', 'lottery_rqspf_available', 'okooo_id'
+            'lottery_spf_available', 'lottery_rqspf_available',
+            'lottery_unavailable_reason', 'okooo_id'
         )},
         'lottery': lottery,
         'league_profile': league_profile,

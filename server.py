@@ -662,6 +662,7 @@ class Handler(BaseHTTPRequestHandler):
             'lottery_primary_market': params.get('lottery_primary_market', [''])[0],
             'lottery_source': params.get('lottery_source', ['unavailable'])[0],
             'lottery_offer_matched': params.get('lottery_offer_matched', ['false'])[0].lower() == 'true',
+            'lottery_unavailable_reason': params.get('lottery_unavailable_reason', [''])[0],
             'lottery_available_markets': [
                 value for value in params.get('lottery_available_markets', [''])[0].split(',') if value
             ],
