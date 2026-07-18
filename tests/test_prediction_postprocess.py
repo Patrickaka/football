@@ -122,6 +122,22 @@ class PredictionPostprocessTests(unittest.TestCase):
         self.assertAlmostEqual(handicap['probabilities']['让平'], 0.34)
         self.assertAlmostEqual(handicap['probabilities']['让负'], 0.28)
 
+    def test_lottery_linked_pick_anchors_on_highest_standard_result(self):
+        markets = football.lottery_market_probabilities([
+            ((1, 0), 0.25),  # 胜 + 让胜（主队 +1）
+            ((1, 1), 0.31),  # 平 + 让胜
+            ((0, 1), 0.20),  # 负 + 让平
+            ((0, 2), 0.24),  # 负 + 让负
+        ], lottery_handicap=1)
+
+        # 让胜的边际概率最高，但胜平负主方向是“负”，所以只能在让平/让负中选择。
+        self.assertEqual(markets['handicap']['prediction'], '让胜')
+        linked = markets['linked_recommendation']
+        self.assertEqual(linked['standard_prediction'], '负')
+        self.assertEqual(set(linked['compatible_handicap_predictions']), {'让平', '让负'})
+        self.assertEqual(linked['handicap_prediction'], '让负')
+        self.assertAlmostEqual(linked['conditional_probability'], 0.24 / 0.44)
+
     def test_goal_distribution_anchor_moves_mean_toward_total_line(self):
         dist = {1: 0.50, 2: 0.30, 5: 0.20}
         before = sum(goals * prob for goals, prob in dist.items())

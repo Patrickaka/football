@@ -29,7 +29,7 @@ from ..common.logger import setup_logger
 
 log = setup_logger('football')
 
-FOOTBALL_PREDICTION_LOGIC_VERSION = '2026-07-18-jczq-odds-fusion-v10'
+FOOTBALL_PREDICTION_LOGIC_VERSION = '2026-07-18-jczq-spf-anchor-v11'
 LOTTERY_OFFICIAL_ODDS_WEIGHT = 0.40
 
 # ELO 评分系统（延迟导入）
@@ -437,6 +437,34 @@ def lottery_market_probabilities(candidates, lottery_handicap=None, spf_odds=Non
     spf = _blend_lottery_probabilities(model_spf, market_spf)
     if rqspf is not None:
         rqspf = _blend_lottery_probabilities(model_rqspf, market_rqspf)
+    linked_recommendation = None
+    if rqspf is not None and joint_probs:
+        standard_pick = max(spf, key=spf.get)
+        compatible = {
+            rq_result: probability
+            for (standard_result, rq_result), probability in joint_probs.items()
+            if standard_result == standard_pick and probability > 0
+        }
+        adjusted = {}
+        for rq_result, probability in compatible.items():
+            model_value = float((model_rqspf or {}).get(rq_result, 0.0))
+            fused_value = float(rqspf.get(rq_result, 0.0))
+            market_factor = fused_value / model_value if model_value > 0 else 1.0
+            adjusted[rq_result] = probability * market_factor
+        adjusted_total = sum(adjusted.values())
+        conditional = ({key: value / adjusted_total for key, value in adjusted.items()}
+                       if adjusted_total > 0 else {})
+        if conditional:
+            handicap_pick = max(conditional, key=conditional.get)
+            linked_recommendation = {
+                'standard_prediction': standard_pick,
+                'handicap_prediction': handicap_pick,
+                'compatible_handicap_predictions': list(conditional),
+                'handicap_conditional_probabilities': conditional,
+                'conditional_probability': conditional[handicap_pick],
+                'label': f'{standard_pick} ⇒ {handicap_pick}',
+                'rule': '先取胜平负最高概率，再在同一赛果兼容的让球结果中分析',
+            }
     primary_type = 'rqspf' if handicap not in (None, 0) else 'spf'
     primary_probs = rqspf if primary_type == 'rqspf' else spf
     return {
@@ -462,6 +490,7 @@ def lottery_market_probabilities(candidates, lottery_handicap=None, spf_odds=Non
             'prediction': max(primary_probs, key=primary_probs.get) if primary_probs and sum(primary_probs.values()) > 0 else None,
         },
         'joint_recommendation': joint_recommendation,
+        'linked_recommendation': linked_recommendation,
         'settlement_rule': '中国体彩：主队进球 + 让球数，与客队进球比较',
     }
 
@@ -6863,25 +6892,17 @@ def build_match_analysis(result):
             rq_probs = lottery_primary.get('probabilities') or {}
             standard_market = lottery_info.get('standard') or {}
             handicap_market = lottery_info.get('handicap') or {}
-            standard_pick = standard_market.get('prediction')
-            rq_pick = handicap_market.get('prediction')
+            linked_pick = lottery_info.get('linked_recommendation') or {}
+            standard_pick = linked_pick.get('standard_prediction') or standard_market.get('prediction')
+            rq_pick = linked_pick.get('handicap_prediction') or handicap_market.get('prediction')
             if rq_probs and standard_pick and rq_pick:
-                rq_value = rq_probs.get(rq_pick, 0.0)
+                rq_value = linked_pick.get('conditional_probability', rq_probs.get(rq_pick, 0.0))
                 rq_handicap = handicap_market.get('handicap')
-                joint_distribution = (
-                    (lottery_info.get('joint_recommendation') or {}).get('distribution') or []
-                )
-                compatible_standard = [
-                    item.get('standard') for item in joint_distribution
-                    if item.get('handicap') == rq_pick
-                    and item.get('probability', 0) > 0
-                ]
-                compatible_standard = list(dict.fromkeys(compatible_standard))
                 handicap_text = f"{rq_handicap:+d}" if isinstance(rq_handicap, int) else str(rq_handicap)
-                linked_standard = '/'.join(compatible_standard) or standard_pick
                 lottery_verdict = (
-                    f"体彩主玩法{rq_pick} {rq_value:.0%}；主队{handicap_text}球口径下，"
-                    f"联动不让球{linked_standard}，不采用不能同时命中的独立组合"
+                    f"先按不让球最高概率选择{standard_pick}；主队{handicap_text}球口径下，"
+                    f"兼容结果为{'/'.join(linked_pick.get('compatible_handicap_predictions') or [rq_pick])}，"
+                    f"条件分析首选{rq_pick} {rq_value:.0%}"
                 )
 
         conf_level = confidence.get('level') if isinstance(confidence, dict) else None
@@ -6996,7 +7017,10 @@ def analyze_match(match, force_refresh=False):
                         'lottery': cached_lottery,
                     },
                     lottery_handicap=(cached_lottery.get('handicap') or {}).get('handicap'),
-                    predicted_rqspf=(cached_lottery.get('handicap') or {}).get('probabilities'),
+                    predicted_rqspf=(
+                        (cached_lottery.get('linked_recommendation') or {}).get('handicap_conditional_probabilities')
+                        or (cached_lottery.get('handicap') or {}).get('probabilities')
+                    ),
                 )
                 log.info(f"缓存结果的预测记录已保存: {home} vs {away}")
                 if 'model_status' in cached_result:
@@ -7990,7 +8014,10 @@ def analyze_match(match, force_refresh=False):
             ml_available=ml_available,
             ml_feature_snapshot=ml_feature_snapshot,
             lottery_handicap=(lottery.get('handicap') or {}).get('handicap'),
-            predicted_rqspf=(lottery.get('handicap') or {}).get('probabilities'),
+            predicted_rqspf=(
+                (lottery.get('linked_recommendation') or {}).get('handicap_conditional_probabilities')
+                or (lottery.get('handicap') or {}).get('probabilities')
+            ),
         )
         prediction_saved = True
         log.info(f"预测记录已保存: {home} vs {away}")

@@ -1528,7 +1528,6 @@ function setFootballQualityFilter(filter) {
 function getFootballResultTier(item) {
   const r = item?.result || {};
   const standardMarket = r.lottery?.standard;
-  const primaryMarket = r.lottery?.primary;
   let probs = standardMarket?.probabilities;
   let entries;
   if (probs) {
@@ -1560,10 +1559,6 @@ function getFootballResultTier(item) {
   entries.sort((a, b) => b[1] - a[1]);
   let prediction = entries[0][0];
   let probability = entries[0][1];
-  if (r.lottery?.offer_matched && primaryMarket?.prediction && primaryMarket?.probabilities) {
-    prediction = primaryMarket.prediction;
-    probability = Number(primaryMarket.probabilities[prediction] || 0);
-  }
   let tier = probability >= 0.75 ? 'ultra'
     : probability >= 0.60 ? 'high'
     : probability >= 0.50 ? 'cautious'
@@ -1623,31 +1618,32 @@ function getFootballScoreSettlement(score, lotteryHandicap) {
 }
 
 function getLotteryLinkedSelections(lottery) {
-  const primaryType = lottery?.primary_market;
-  const primary = primaryType === 'rqspf' ? lottery?.handicap : lottery?.standard;
-  const primaryPrediction = primary?.prediction;
-  if (!primaryType || !primaryPrediction) return null;
-  const distribution = lottery?.joint_recommendation?.distribution || [];
-  let standardPredictions = [];
-  let handicapPredictions = [];
-  if (primaryType === 'rqspf') {
-    handicapPredictions = [primaryPrediction];
-    standardPredictions = [...new Set(distribution
-      .filter(item => item.handicap === primaryPrediction && Number(item.probability) > 0)
-      .map(item => item.standard))];
-  } else {
-    standardPredictions = [primaryPrediction];
-    handicapPredictions = [...new Set(distribution
-      .filter(item => item.standard === primaryPrediction && Number(item.probability) > 0)
-      .map(item => item.handicap))];
+  const standardPrediction = lottery?.standard?.prediction;
+  if (!standardPrediction) return null;
+  const linked = lottery?.linked_recommendation;
+  if (linked?.handicap_prediction) {
+    return {
+      primaryType: 'spf',
+      primaryPrediction: linked.standard_prediction || standardPrediction,
+      standardPredictions: [linked.standard_prediction || standardPrediction],
+      handicapPredictions: [linked.handicap_prediction],
+      handicapConditionalProbabilities: linked.handicap_conditional_probabilities || {},
+      compatibleHandicapPredictions: linked.compatible_handicap_predictions || [linked.handicap_prediction],
+    };
   }
+  const distribution = lottery?.joint_recommendation?.distribution || [];
+  const handicapPredictions = [...new Set(distribution
+    .filter(item => item.standard === standardPrediction && Number(item.probability) > 0)
+    .map(item => item.handicap))];
+  const handicapPrediction = handicapPredictions.sort((a, b) =>
+    Number(lottery?.handicap?.probabilities?.[b] || 0)
+    - Number(lottery?.handicap?.probabilities?.[a] || 0))[0];
   return {
-    primaryType,
-    primaryPrediction,
-    standardPredictions: standardPredictions.length
-      ? standardPredictions : [lottery?.standard?.prediction].filter(Boolean),
-    handicapPredictions: handicapPredictions.length
-      ? handicapPredictions : [lottery?.handicap?.prediction].filter(Boolean),
+    primaryType: 'spf',
+    primaryPrediction: standardPrediction,
+    standardPredictions: [standardPrediction],
+    handicapPredictions: [handicapPrediction || lottery?.handicap?.prediction].filter(Boolean),
+    compatibleHandicapPredictions: handicapPredictions,
   };
 }
 
@@ -1808,11 +1804,17 @@ function renderFootballPredictions(results) {
       if (officialLotteryMatched && r.lottery?.rqspf_available && r.lottery?.handicap) {
         const lotteryHandicap = r.lottery.handicap.handicap;
         marketCards.push({
-          title: `🇨🇳 中国体彩 · 让球胜平负（主队 ${lotteryHandicap > 0 ? '+' : ''}${lotteryHandicap}，按让球后赛果）`,
+          title: `🇨🇳 中国体彩 · 让球胜平负（主队 ${lotteryHandicap > 0 ? '+' : ''}${lotteryHandicap}，按胜平负主方向条件分析）`,
           prediction: {
-            pred: r.lottery.handicap.prediction,
+            pred: linkedSelections?.handicapPredictions?.[0] || r.lottery.handicap.prediction,
             preds: linkedSelections?.handicapPredictions,
-            probs: r.lottery.handicap.probabilities,
+            probs: linkedSelections?.handicapConditionalProbabilities
+              && Object.keys(linkedSelections.handicapConditionalProbabilities).length
+              ? linkedSelections.handicapConditionalProbabilities
+              : r.lottery.handicap.probabilities,
+            conditional: Boolean(linkedSelections?.handicapConditionalProbabilities
+              && Object.keys(linkedSelections.handicapConditionalProbabilities).length),
+            marginalProbs: r.lottery.handicap.probabilities,
             modelProbs: r.lottery.handicap.model_probabilities,
             marketProbs: r.lottery.handicap.market_probabilities,
             marketWeight: r.lottery.handicap.market_weight,
@@ -1829,6 +1831,7 @@ function renderFootballPredictions(results) {
         itemHtml += '<div style="display:flex;gap:12px">';
         card.keys.forEach(key => {
           const prob = card.prediction.probs[key] || 0;
+          const probabilityAvailable = Object.prototype.hasOwnProperty.call(card.prediction.probs, key);
           const odd = card.odds?.[key];
           const selectedPredictions = card.prediction.preds?.length
             ? card.prediction.preds : [card.prediction.pred];
@@ -1839,7 +1842,7 @@ function renderFootballPredictions(results) {
           };
           itemHtml += `<div style="flex:1;text-align:center;padding:6px;border-radius:6px${isPred ? `;background:${colors[key]}20;color:${colors[key]};font-weight:bold` : ''}">
             <div>${key}</div>
-            <div style="font-size:11px;color:var(--muted)">${(prob * 100).toFixed(0)}%</div>
+            <div style="font-size:11px;color:var(--muted)">${probabilityAvailable ? `${(prob * 100).toFixed(0)}%` : '—'}</div>
             ${odd ? `<div style="font-size:10px;color:#3b82f6">澳客 ${Number(odd).toFixed(2)}</div>` : ''}
           </div>`;
         });
@@ -1849,10 +1852,15 @@ function renderFootballPredictions(results) {
           const modelValue = Number(card.prediction.modelProbs?.[sourceKey] || 0);
           const marketValue = Number(card.prediction.marketProbs?.[sourceKey] || 0);
           const fusedValue = Number(card.prediction.probs?.[sourceKey] || 0);
+          const marginalValue = Number(card.prediction.marginalProbs?.[sourceKey] || 0);
           const marketWeight = Math.round(Number(card.prediction.marketWeight || 0) * 100);
-          itemHtml += `<div style="font-size:10px;color:#93c5fd;margin-top:6px">
-            ${esc(sourceKey)}：比分模型 ${(modelValue * 100).toFixed(0)}% · 澳客赔率去水 ${(marketValue * 100).toFixed(0)}% · 综合 ${(fusedValue * 100).toFixed(0)}%（赔率权重 ${marketWeight}%）
-          </div>`;
+          itemHtml += card.prediction.conditional
+            ? `<div style="font-size:10px;color:#93c5fd;margin-top:6px">
+                ${esc(sourceKey)}：在“不让球${esc(linkedSelections?.primaryPrediction || '')}”条件下 ${(fusedValue * 100).toFixed(0)}% · 独立让球综合概率 ${(marginalValue * 100).toFixed(0)}%（比分模型 ${(modelValue * 100).toFixed(0)}% / 澳客去水 ${(marketValue * 100).toFixed(0)}%）
+              </div>`
+            : `<div style="font-size:10px;color:#93c5fd;margin-top:6px">
+                ${esc(sourceKey)}：比分模型 ${(modelValue * 100).toFixed(0)}% · 澳客赔率去水 ${(marketValue * 100).toFixed(0)}% · 综合 ${(fusedValue * 100).toFixed(0)}%（赔率权重 ${marketWeight}%）
+              </div>`;
         }
         if (card.handicap) {
           itemHtml += '<div style="font-size:11px;color:var(--muted);margin-top:6px">结算口径：主队进球 + 体彩让球数，再与客队进球比较；不是亚洲盘。</div>';
@@ -1863,12 +1871,11 @@ function renderFootballPredictions(results) {
         itemHtml += '</div>';
       });
       if (linkedSelections && marketCards.length > 1) {
-        const secondary = linkedSelections.primaryType === 'rqspf'
-          ? `不让球 ${linkedSelections.standardPredictions.join('/')}`
-          : `让球 ${linkedSelections.handicapPredictions.join('/')}`;
+        const compatibleText = linkedSelections.compatibleHandicapPredictions?.join('/')
+          || linkedSelections.handicapPredictions.join('/');
         itemHtml += `<div style="margin-top:6px;padding:7px 9px;border:1px solid rgba(59,130,246,.35);background:rgba(59,130,246,.08);border-radius:7px;font-size:12px;color:#93c5fd">
-          🔗 体彩主玩法联动：<b>${esc(linkedSelections.primaryPrediction)} ⇒ ${esc(secondary)}</b>
-          <span style="color:var(--muted)">（仅高亮可由同一最终比分同时命中的结果）</span>
+          🔗 先看胜平负：<b>${esc(linkedSelections.primaryPrediction)} ⇒ 让球兼容 ${esc(compatibleText)} ⇒ 首选 ${esc(linkedSelections.handicapPredictions[0])}</b>
+          <span style="color:var(--muted)">（让球百分比为该胜平负方向下的条件分析）</span>
         </div>`;
       }
       
