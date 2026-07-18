@@ -53,7 +53,7 @@ FEATURE_WEIGHTS = {
 # 时间衰减因子 (最近一期权重1.0，20期前≈0.19，50期前≈0.016)
 TIME_DECAY_FACTOR = 0.92
 MIN_REAL_HISTORY_FOR_RANKING = 80  # 降低阈值: 120期真实数据足够支撑统计模型
-LOTTERY_PREDICTOR_VERSION = "dlt-v3.6-anchor-fix"
+LOTTERY_PREDICTOR_VERSION = "dlt-v3.7-portfolio"
 FULL_HISTORY_FETCH_COUNT = 100
 MIN_FULL_HISTORY_ISSUES = 500
 ROLLING_BACKTEST_TRIALS = 30
@@ -1971,6 +1971,13 @@ class LotteryAnalyzer:
         used_front.update(primary['front'])
         used_back.update(primary['back'])
 
+        # A portfolio should diversify combinations, not blindly discard every
+        # high-ranked number after the first ticket.  Keep two front anchors and
+        # one back anchor in play; diversify the remaining positions.  The old
+        # full-exclusion policy made later tickets progressively lower quality.
+        front_anchors = set(primary['front'][:2])
+        back_anchors = set(primary['back'][:1])
+
         strategies = [
             ('balanced', '均衡策略'),
             ('rank', '排名策略'),
@@ -1984,8 +1991,8 @@ class LotteryAnalyzer:
         for key, name in strategies:
             # 后区盘口小：若已用超过 8 个，只排除「曾整组出现过的后区组合」不够，
             # 优先排除 used_back；不够 2 个可用时再放宽。
-            exclude_f = list(used_front)
-            exclude_b = list(used_back)
+            exclude_f = list(used_front - front_anchors)
+            exclude_b = list(used_back - back_anchors)
             if len(BACK_NUMBERS) - len(used_back) < 2:
                 exclude_b = []
 
@@ -2000,8 +2007,8 @@ class LotteryAnalyzer:
                 # 强制再避一次：前区排除已用，后区排除已用（必要时放宽前区保留后区差异）
                 rec = self.generate_recommendation(
                     key,
-                    exclude_front=list(used_front),
-                    exclude_back=list(used_back) if len(BACK_NUMBERS) - len(used_back) >= 2 else [],
+                    exclude_front=list(used_front - front_anchors),
+                    exclude_back=list(used_back - back_anchors) if len(BACK_NUMBERS) - len(used_back - back_anchors) >= 2 else [],
                     voting_result=voting if key == 'balanced' else None,
                 )
                 ticket = (tuple(rec['front']), tuple(rec['back']))
@@ -2029,6 +2036,12 @@ class LotteryAnalyzer:
 
         return {
             'recommendations': recommendations,
+            'portfolio_policy': {
+                'name': 'anchor_diversification',
+                'front_anchors': sorted(front_anchors),
+                'back_anchors': sorted(back_anchors),
+                'note': '核心高分号允许跨组复用，其余位置优先分散',
+            },
             'voting_front': [c['number'] for c in (voting.get('front_candidates') or [])[:12]],
             'voting_back': [c['number'] for c in (voting.get('back_candidates') or [])[:6]],
             'voting': voting,
@@ -2992,6 +3005,7 @@ def run_prediction(force_refresh=False, enable_backtest=True,
             ],
             'front_weights': FEATURE_WEIGHTS,
             'back_weights': BACK_FEATURE_WEIGHTS,
+            'portfolio_policy': multi.get('portfolio_policy'),
             'rolling_backtest': {
                 'trials': backtest.get('trials'),
                 'baseline_comparison': backtest.get('baseline_comparison'),
@@ -3010,6 +3024,7 @@ def run_prediction(force_refresh=False, enable_backtest=True,
             'backtest': backtest,
             'voting': voting,
             'recommendations': recommendations,
+            'portfolio_policy': multi.get('portfolio_policy'),
             'data_quality': data_quality,
             'algorithm_summary': algorithm_summary,
             'optimized_weights': optimized_weights,
