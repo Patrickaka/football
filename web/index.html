@@ -3443,6 +3443,26 @@ function renderSsq(r) {
   html += `</div>`;
 
   // 红球/蓝球冷热（默认折叠）
+  const ssqRecords = r.prediction_records || [];
+  if (ssqRecords.length) {
+    html += `<div class="section-title">预测记录与开奖对比</div><div class="card">`;
+    ssqRecords.forEach((record, index) => {
+      const actual = record.actual;
+      html += `<div style="${index ? 'border-top:1px solid var(--line);margin-top:10px;padding-top:10px' : ''}">
+        <div class="row"><span class="k">${esc(record.period)} 期</span><span class="v">${record.settled ? '已开奖' : '待开奖'}</span></div>`;
+      if (actual) {
+        html += `<div class="note">开奖号：${actual.red.map(p2).join(' ')} + ${p2(actual.blue)}</div>`;
+      }
+      (record.sets || []).forEach((set, setIndex) => {
+        const hit = (record.results || [])[setIndex];
+        const hitText = hit ? ` · 红球中 ${hit.red_hits} 个${hit.blue_hit ? ' · 蓝球命中' : ' · 蓝球未中'}` : '';
+        html += `<div class="note">第${setIndex + 1}注：${set.red.map(p2).join(' ')} + ${p2(set.blue)}${hitText}</div>`;
+      });
+      html += `</div>`;
+    });
+    html += `</div>`;
+  }
+
   const hasHot = (analysis.hot_red && analysis.hot_red.length) || (analysis.hot_blue && analysis.hot_blue.length);
   if (hasHot) {
     html += `<details class="adv"><summary>🔥 红球/蓝球冷热参考（点击展开）</summary>`;
@@ -3504,6 +3524,25 @@ function renderLottery3d(r) {
   const z6 = r.zu6_four;
   const z6Variants = Array.isArray(r.zu6_four_variants) ? r.zu6_four_variants : [];
   const z6Coverage = Array.isArray(r.zu6_coverage) ? r.zu6_coverage : [];
+  const dltRecords = r.prediction_records || [];
+  if (dltRecords.length) {
+    html += `<div class="section-title">预测记录与开奖对比</div><div class="card">`;
+    dltRecords.forEach((record, index) => {
+      const actual = record.actual;
+      html += `<div style="${index ? 'border-top:1px solid var(--line);margin-top:10px;padding-top:10px' : ''}">
+        <div class="row"><span class="k">${esc(record.period)} 期</span><span class="v">${record.settled ? '已开奖' : '待开奖'}</span></div>`;
+      if (actual) html += `<div class="note">开奖号：${(actual.front || []).map(p2).join(' ')} + ${(actual.back || []).map(p2).join(' ')}</div>`;
+      Object.entries(record.recommendations || {}).forEach(([method, rec]) => {
+        const frontHit = record[method + '_front_hit'];
+        const backHit = record[method + '_back_hit'];
+        const hitText = record.settled ? ` · 前区中 ${frontHit || 0} 个 · 后区中 ${backHit || 0} 个` : '';
+        html += `<div class="note">${esc(method)}：${(rec.front || []).map(p2).join(' ')} + ${(rec.back || []).map(p2).join(' ')}${hitText}</div>`;
+      });
+      html += `</div>`;
+    });
+    html += `</div>`;
+  }
+
   const bt = r.backtest || {};
   const maxScore = r.zhixuan[0]?.score || 1;
   const n = r.zhixuan.length;

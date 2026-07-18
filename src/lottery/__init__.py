@@ -3033,6 +3033,7 @@ def run_prediction(force_refresh=False, enable_backtest=True,
             'ml_backtest': ml_backtest_result,
             'fusion': fusion_result,
             'online_stats': online_stats,
+            'prediction_records': list(reversed(load_online_predictions()[-20:])),
             'version': LOTTERY_PREDICTOR_VERSION,
         }
 

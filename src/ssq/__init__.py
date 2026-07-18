@@ -16,6 +16,8 @@ import time
 import random
 from pathlib import Path
 
+from src.common import kv_store
+
 try:
     from src.common.paths import data_path
 except Exception:  # pragma: no cover
@@ -35,6 +37,90 @@ RED_COUNT = 6
 RECENT_WINDOW = 30                  # 近期趋势窗口
 DEFAULT_RECENT = 15                 # 页面默认展示近期期数
 NUM_SETS = 5                        # 推荐注数
+SSQ_PREDICTIONS_KEY = 'lottery_ssq_online_predictions'
+SSQ_PREDICTION_VERSION = 'ssq-v1.1-records'
+
+
+def load_prediction_records():
+    """Load persisted predictions, oldest first."""
+    try:
+        records = kv_store.load(SSQ_PREDICTIONS_KEY, [])
+        return records if isinstance(records, list) else []
+    except Exception:
+        return []
+
+
+def save_prediction_record(period, sets):
+    """Save one immutable prediction snapshot for a future draw."""
+    if not period or not sets:
+        return
+    records = load_prediction_records()
+    if any(str(item.get('period')) == str(period) for item in records):
+        return
+    records.append({
+        'version': SSQ_PREDICTION_VERSION,
+        'period': str(period),
+        'sets': [
+            {'red': sorted(set(item.get('red', []))), 'blue': item.get('blue')}
+            for item in sets
+        ],
+        'actual': None,
+        'settled': False,
+        'created_at': time.strftime('%Y-%m-%d %H:%M:%S'),
+    })
+    kv_store.save(SSQ_PREDICTIONS_KEY, records[-200:])
+
+
+def settle_prediction_records(history):
+    """Compare pending snapshots with newly available draw results."""
+    records = load_prediction_records()
+    draw_by_period = {str(item.get('period')): item for item in history}
+    changed = 0
+    for record in records:
+        if record.get('settled'):
+            continue
+        actual = draw_by_period.get(str(record.get('period')))
+        if not actual:
+            continue
+        actual_red = set(actual.get('red', []))
+        actual_blue = actual.get('blue')
+        record['actual'] = {'red': sorted(actual_red), 'blue': actual_blue}
+        record['results'] = []
+        for index, prediction in enumerate(record.get('sets', []), 1):
+            red_hits = sorted(set(prediction.get('red', [])) & actual_red)
+            blue_hit = prediction.get('blue') == actual_blue
+            record['results'].append({
+                'set_index': index,
+                'red_hits': len(red_hits),
+                'red_hit_numbers': red_hits,
+                'blue_hit': blue_hit,
+                'total_hits': len(red_hits) + int(blue_hit),
+            })
+        record['settled'] = True
+        record['settled_at'] = time.strftime('%Y-%m-%d %H:%M:%S')
+        changed += 1
+    if changed:
+        kv_store.save(SSQ_PREDICTIONS_KEY, records[-200:])
+    return changed
+
+
+def calculate_prediction_stats(records=None):
+    records = records if records is not None else load_prediction_records()
+    settled = [item for item in records if item.get('settled')]
+    results = [result for item in settled for result in item.get('results', [])]
+    return {
+        'total_records': len(records),
+        'settled_count': len(settled),
+        'unsettled_count': len(records) - len(settled),
+        'total_sets': len(results),
+        'red_hit_average': round(
+            sum(item.get('red_hits', 0) for item in results) / len(results), 3
+        ) if results else 0.0,
+        'blue_hit_count': sum(1 for item in results if item.get('blue_hit')),
+        'blue_hit_rate': round(
+            sum(1 for item in results if item.get('blue_hit')) / len(results), 4
+        ) if results else 0.0,
+    }
 
 
 def _load_seed():
@@ -233,6 +319,17 @@ def run_prediction(data=None, force_refresh=False, recent=DEFAULT_RECENT):
     # 只有出现新一期开奖（期号变化）时才会更新预测。
     sets = _predict_sets(history, analysis, n=NUM_SETS, seed=int(latest['period']))
 
+    # Only live predictions are persisted. Tests/callers supplying historical
+    # data can evaluate the pure prediction function without changing storage.
+    if data is None:
+        try:
+            settle_prediction_records(history)
+            save_prediction_record(_next_period(latest['period']), sets)
+        except Exception:
+            # Recording must never prevent the prediction page from loading.
+            pass
+    prediction_records = load_prediction_records()
+
     recent_list = history[-recent:][::-1]  # 最近在前
 
     return {
@@ -244,6 +341,9 @@ def run_prediction(data=None, force_refresh=False, recent=DEFAULT_RECENT):
             'primary': sets[0],
             'sets': sets,
         },
+        'prediction_records': list(reversed(prediction_records[-20:])),
+        'online_stats': calculate_prediction_stats(prediction_records),
+        'version': SSQ_PREDICTION_VERSION,
         'analysis': {
             'hot_red': analysis['hot_red'],
             'cold_red': analysis['cold_red'],
