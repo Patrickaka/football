@@ -52,6 +52,21 @@ class LocalMatchAnalysisTests(unittest.TestCase):
         }, {'recommendation': '让胜'})
         self.assertFalse(upset['alert'])
 
+    def test_basketball_score_total_follows_over_under_direction(self):
+        result = build_basketball_analysis({
+            'match': {'home': 'A', 'away': 'B'},
+            'spf': {'home_prob': 0.65, 'away_prob': 0.35, 'confidence': 'high',
+                    'elo_trust': 0.8},
+            'rqspf': {'recommendation': '让胜'},
+            # 原始 ELO 总分与校准后的大分结论冲突，分析层应最小校正。
+            'dx': {'total_line': 210, 'elo_total': 205,
+                   'over_prob': 0.58, 'under_prob': 0.42,
+                   'recommendation': '大分'},
+        })
+        primary = result['score_picks'][0]
+        self.assertGreater(primary['home'] + primary['away'], 210)
+        self.assertTrue(result['total']['score_consistent'])
+
 
 if __name__ == '__main__':
     unittest.main()

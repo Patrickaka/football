@@ -1105,6 +1105,14 @@ def build_basketball_analysis(result):
             line_val = 200.0
         expected_total = float(elo_total) if elo_total else line_val
 
+        # 大小分结论与预测比分必须同向。校准后的大小分概率可能与原始 ELO
+        # 总分分处盘口两侧，因此在这里只做最小幅度的边界校正。
+        dx_rec = dx.get('recommendation')
+        if dx_rec == '大分' and expected_total <= line_val:
+            expected_total = line_val + 1.0
+        elif dx_rec == '小分' and expected_total >= line_val:
+            expected_total = max(0.0, line_val - 1.0)
+
         # ---- 预期分差（主队视角）----
         # 始终由 spf 胜率反推，保证与 fav 严格一致；elo_margin 仅作理由展示
         elo_margin = rq.get('elo_margin')
@@ -1141,7 +1149,6 @@ def build_basketball_analysis(result):
         }
 
         # 次选：同胜负方，总分随大小分方向偏移
-        dx_rec = dx.get('recommendation')
         offset = 4 if dx_rec == '大分' else (-4 if dx_rec == '小分' else 0)
         sh, sa = _build_score(expected_total + offset, exp_margin)
         secondary = {
@@ -1179,6 +1186,11 @@ def build_basketball_analysis(result):
             'under_prob': under_p,
             'direction': ou_dir,
             'direction_prob': ou_p,
+            'score_consistent': (
+                (ou_dir == '大分' and ph + pa > line_val) or
+                (ou_dir == '小分' and ph + pa < line_val) or
+                ou_dir not in ('大分', '小分')
+            ),
         }
 
         # ---- 理由 ----
