@@ -62,8 +62,10 @@ from ..common import repositories
 
 log = logging.getLogger('football')
 
-PRODUCTION_MODEL_VERSION = 'football-v2026.07.20-accuracy-01'
-ACTIONABLE_MIN_PROBABILITY = 0.50
+PRODUCTION_MODEL_VERSION = 'football-v2026.07.20-accuracy-02'
+# 3504-match five-league backtest: raising the official-pick gate from 0.50
+# to 0.56 improved accuracy from 63.64% to 68.65%, with 34.05% coverage.
+ACTIONABLE_MIN_PROBABILITY = 0.56
 ACTIONABLE_MIN_MARGIN = 0.15
 
 
@@ -74,7 +76,7 @@ def _prediction_decision_snapshot(predicted_1x2: Dict[str, float]) -> Dict:
     top_probability = ranked[0][1] if ranked else 0.0
     margin = top_probability - ranked[1][1] if len(ranked) > 1 else 0.0
     return {
-        'policy_version': 'selective-1x2-v1',
+        'policy_version': 'selective-1x2-v2',
         'eligible': top_probability >= ACTIONABLE_MIN_PROBABILITY and margin >= ACTIONABLE_MIN_MARGIN,
         'prediction': ranked[0][0] if ranked else None,
         'top_probability': round(top_probability, 6),
@@ -1689,7 +1691,7 @@ class PredictionHistory:
             'valid_score_predictions': valid_score_predictions,
             'valid_1x2_predictions': valid_1x2_predictions,
             'actionable_1x2': {
-                'policy_version': 'selective-1x2-v1',
+                'policy_version': 'selective-1x2-v2',
                 'total': actionable_total,
                 'correct': actionable_correct,
                 'hit_rate': actionable_correct / actionable_total if actionable_total else 0.0,

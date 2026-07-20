@@ -38,8 +38,13 @@ def save_predictions(date_str: str, matches: List[Dict], version: str = ''):
     if not isinstance(existing, list):
         existing = []
 
-    # 移除同一日期的旧记录
-    existing = [r for r in existing if r.get('date') != date_str]
+    # Refreshing the recommendation endpoint must not erase settled games or
+    # other matches from the same date (sources can return partial schedules).
+    by_key = {
+        (r.get('date'), r.get('match_id')): i
+        for i, r in enumerate(existing)
+        if r.get('match_id')
+    }
 
     for m in matches:
         match_data = m.get('match', {})
@@ -108,7 +113,16 @@ def save_predictions(date_str: str, matches: List[Dict], version: str = ''):
             # 赛后结果（初始为 None）
             'result': None,
         }
-        existing.append(record)
+        key = (date_str, record['match_id'])
+        old_index = by_key.get(key)
+        if old_index is None:
+            by_key[key] = len(existing)
+            existing.append(record)
+        else:
+            old_result = existing[old_index].get('result')
+            if old_result:
+                record['result'] = old_result
+            existing[old_index] = record
 
     # 限制记录数
     if len(existing) > MAX_RECORDS:

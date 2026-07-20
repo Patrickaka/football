@@ -6,7 +6,6 @@ import json
 import urllib.request
 import urllib.error
 import random
-import requests
 from datetime import datetime, timedelta
 from typing import Dict, List, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -17,7 +16,7 @@ from ..common import kv_store
 
 log = setup_logger('basketball')
 
-BASKETBALL_VERSION = '2026-07-13-v1'
+BASKETBALL_VERSION = '2026-07-20-elo-calibrated-v2'
 BASKETBALL_HISTORY_KEY = 'basketball_prediction_history'
 BASKETBALL_HISTORY_LIMIT = 500
 
@@ -81,6 +80,57 @@ def calc_implied_prob(home_odds, away_odds):
     total = p_home + p_away + 1e-9
     return p_home / total, p_away / total
 
+
+def _confidence_from_probs(p1, p2):
+    gap = abs(float(p1) - float(p2))
+    return 'high' if gap > 0.15 else ('medium' if gap > 0.08 else 'low')
+
+
+def _official_pick_status(bet_type, pick_prob, confidence):
+    """Separate a model opinion from an accuracy-tracked official pick."""
+    thresholds = {'spf': 0.56, 'rqspf': 0.55, 'dx': 0.54}
+    if confidence == 'low':
+        return {'playable': False, 'official': False, 'skip_reason': 'low_confidence'}
+    if float(pick_prob or 0) < thresholds.get(bet_type, 0.56):
+        return {'playable': False, 'official': False, 'skip_reason': 'probability_below_threshold'}
+    return {'playable': True, 'official': True, 'skip_reason': None}
+
+
+def _elo_predictions(match):
+    """Return ELO estimates with a conservative trust score for known teams."""
+    try:
+        from .elo import get_elo_system
+        elo = get_elo_system()
+        home, away = match.get('home', ''), match.get('away', '')
+        league = match.get('league', '')
+        win = elo.predict_win_prob(home, away, league)
+        margin = elo.predict_margin(home, away, league)
+        total = elo.predict_total_score(home, away, league)
+        games = min(int(win.get('home_games', 0)), int(win.get('away_games', 0)))
+        # Do not let cold-start ratings dilute the much more informative market.
+        trust = min(1.0, games / 20.0)
+        return win, margin, total, trust
+    except Exception as exc:
+        log.warning(f"篮球 ELO 预测不可用: {exc}")
+        return {}, {}, {}, 0.0
+
+
+def _calibrate_pick(bet_type, p1, p2, league, confidence):
+    """Calibrate the selected outcome while preserving a normalized two-way market."""
+    pick_first = p1 >= p2
+    raw_pick = p1 if pick_first else p2
+    try:
+        from .calibration import get_calibrator
+        calibrated = get_calibrator().calibrate(bet_type, raw_pick, league, confidence)
+    except Exception as exc:
+        log.warning(f"篮球历史校准不可用: {exc}")
+        calibrated = raw_pick
+    # A weak calibrator may reduce conviction, but must not silently reverse the
+    # selected side; reversal requires fresh market/model evidence.
+    calibrated = max(0.5001, min(0.95, float(calibrated)))
+    return ((calibrated, 1.0 - calibrated) if pick_first
+            else (1.0 - calibrated, calibrated)), round(raw_pick, 4)
+
 def analyze_spf(match):
     home_odds = match.get('spf_home')
     away_odds = match.get('spf_away')
@@ -101,11 +151,21 @@ def analyze_spf(match):
     profile = LEAGUE_PROFILES.get(league, {'home_win_rate': 0.55})
     home_bias = profile['home_win_rate']
     
-    p_home = p_home * 0.7 + home_bias * 0.3
+    # The closing market is the strongest baseline. League prior is deliberately
+    # small and ELO only participates after both teams have enough history.
+    p_home = p_home * 0.9 + home_bias * 0.1
+    market_home_prob = p_home
+    elo_win, _, _, elo_trust = _elo_predictions(match)
+    elo_weight = 0.30 * elo_trust
+    if elo_win:
+        p_home = p_home * (1.0 - elo_weight) + elo_win['home_prob'] * elo_weight
     p_away = 1.0 - p_home
-    
+    confidence = _confidence_from_probs(p_home, p_away)
+    (p_home, p_away), raw_pick_prob = _calibrate_pick(
+        'spf', p_home, p_away, league, confidence)
     recommendation = '主胜' if p_home > p_away else '客胜'
-    confidence = 'high' if abs(p_home - p_away) > 0.15 else ('medium' if abs(p_home - p_away) > 0.08 else 'low')
+    pick_prob = max(p_home, p_away)
+    status = _official_pick_status('spf', pick_prob, confidence)
     
     return {
         'available': True,
@@ -115,6 +175,12 @@ def analyze_spf(match):
         'away_odds': away_odds,
         'recommendation': recommendation,
         'confidence': confidence,
+        'pick_prob': round(pick_prob, 4),
+        'raw_pick_prob': raw_pick_prob,
+        'market_home_prob': round(market_home_prob, 4),
+        'elo_home_prob': elo_win.get('home_prob') if elo_win else None,
+        'elo_trust': round(elo_trust, 3),
+        **status,
     }
 
 def analyze_rqspf(match):
@@ -135,8 +201,26 @@ def analyze_rqspf(match):
     
     p_home, p_away = calc_implied_prob(rq_home_odds, rq_away_odds)
     
+    market_home_prob = p_home
+    _, elo_margin, _, elo_trust = _elo_predictions(match)
+    try:
+        handicap_value = float(handicap)
+    except (TypeError, ValueError):
+        handicap_value = 0.0
+    if elo_margin:
+        adjusted_margin = float(elo_margin.get('expected_margin', 0)) + handicap_value
+        elo_home_prob = 1.0 / (1.0 + math.exp(-adjusted_margin / 8.5))
+        elo_weight = 0.25 * elo_trust
+        p_home = p_home * (1.0 - elo_weight) + elo_home_prob * elo_weight
+        p_away = 1.0 - p_home
+    else:
+        elo_home_prob = None
+    confidence = _confidence_from_probs(p_home, p_away)
+    (p_home, p_away), raw_pick_prob = _calibrate_pick(
+        'rqspf', p_home, p_away, match.get('league', ''), confidence)
     recommendation = '让胜' if p_home > p_away else '让负'
-    confidence = 'high' if abs(p_home - p_away) > 0.15 else ('medium' if abs(p_home - p_away) > 0.08 else 'low')
+    pick_prob = max(p_home, p_away)
+    status = _official_pick_status('rqspf', pick_prob, confidence)
     
     return {
         'available': True,
@@ -147,6 +231,13 @@ def analyze_rqspf(match):
         'away_odds': rq_away_odds,
         'recommendation': recommendation,
         'confidence': confidence,
+        'pick_prob': round(pick_prob, 4),
+        'raw_pick_prob': raw_pick_prob,
+        'market_home_prob': round(market_home_prob, 4),
+        'elo_margin': elo_margin.get('expected_margin') if elo_margin else None,
+        'elo_home_prob': round(elo_home_prob, 4) if elo_home_prob is not None else None,
+        'elo_trust': round(elo_trust, 3),
+        **status,
     }
 
 def analyze_daxiao(match):
@@ -171,7 +262,7 @@ def analyze_daxiao(match):
     profile = LEAGUE_PROFILES.get(league, {'avg_total': 200.0})
     avg_total = profile['avg_total']
     
-    if total_line and avg_total:
+    if total_line is not None and avg_total:
         line_diff = total_line - avg_total
         if line_diff > 5:
             p_under += 0.05
@@ -184,8 +275,22 @@ def analyze_daxiao(match):
     p_over /= total
     p_under /= total
     
+    market_over_prob = p_over
+    _, _, elo_total, elo_trust = _elo_predictions(match)
+    expected_total = elo_total.get('expected_total') if elo_total else None
+    if expected_total is not None and total_line is not None:
+        elo_over_prob = 1.0 / (1.0 + math.exp(-(float(expected_total) - float(total_line)) / 12.0))
+        elo_weight = 0.20 * elo_trust
+        p_over = p_over * (1.0 - elo_weight) + elo_over_prob * elo_weight
+        p_under = 1.0 - p_over
+    else:
+        elo_over_prob = None
+    confidence = _confidence_from_probs(p_over, p_under)
+    (p_over, p_under), raw_pick_prob = _calibrate_pick(
+        'dx', p_over, p_under, league, confidence)
     recommendation = '大分' if p_over > p_under else '小分'
-    confidence = 'high' if abs(p_over - p_under) > 0.15 else ('medium' if abs(p_over - p_under) > 0.08 else 'low')
+    pick_prob = max(p_over, p_under)
+    status = _official_pick_status('dx', pick_prob, confidence)
     
     return {
         'available': True,
@@ -196,6 +301,13 @@ def analyze_daxiao(match):
         'under_odds': under_odds,
         'recommendation': recommendation,
         'confidence': confidence,
+        'pick_prob': round(pick_prob, 4),
+        'raw_pick_prob': raw_pick_prob,
+        'market_over_prob': round(market_over_prob, 4),
+        'elo_total': expected_total,
+        'elo_over_prob': round(elo_over_prob, 4) if elo_over_prob is not None else None,
+        'elo_trust': round(elo_trust, 3),
+        **status,
     }
 
 def fetch_basketball_schedule(date=None):
@@ -410,7 +522,15 @@ def generate_basketball_recommendations(date=None, bet_types=None, source='500')
     if bet_types is None:
         bet_types = ['spf', 'rqspf', 'dx']
     
-    matches = fetch_basketball_schedule(date)
+    if source == 'okooo':
+        try:
+            from .okooo import fetch_okooo_basketball_schedule
+            matches = fetch_okooo_basketball_schedule(date)
+        except Exception as exc:
+            log.warning(f"澳客篮球赛程不可用，回退500: {exc}")
+            matches = fetch_basketball_schedule(date)
+    else:
+        matches = fetch_basketball_schedule(date)
     
     results = []
     for match in matches:
@@ -432,18 +552,27 @@ def generate_basketball_recommendations(date=None, bet_types=None, source='500')
         
         results.append(result)
     
-    return {
+    payload = {
         'date': date,
         'count': len(results),
         'results': results,
         'version': BASKETBALL_VERSION,
+        'source': source,
     }
+    try:
+        from .records import save_predictions, get_prediction_stats
+        if results:
+            save_predictions(date, results, BASKETBALL_VERSION)
+        payload['history_stats'] = get_prediction_stats()
+    except Exception as exc:
+        log.warning(f"篮球预测记录保存失败: {exc}")
+    return payload
 
 def find_value_bets(results, threshold=0.05):
     value_bets = []
     for r in results:
         match = r['match']
-        if r['spf'] and r['spf']['available']:
+        if r['spf'] and r['spf']['available'] and r['spf'].get('playable', True):
             edge = max(r['spf']['home_prob'], r['spf']['away_prob']) - 0.5
             if edge > threshold:
                 value_bets.append({
@@ -454,7 +583,7 @@ def find_value_bets(results, threshold=0.05):
                     'prob': max(r['spf']['home_prob'], r['spf']['away_prob']),
                 })
         
-        if r['rqspf'] and r['rqspf']['available']:
+        if r['rqspf'] and r['rqspf']['available'] and r['rqspf'].get('playable', True):
             edge = max(r['rqspf']['home_prob'], r['rqspf']['away_prob']) - 0.5
             if edge > threshold:
                 value_bets.append({
@@ -465,7 +594,7 @@ def find_value_bets(results, threshold=0.05):
                     'prob': max(r['rqspf']['home_prob'], r['rqspf']['away_prob']),
                 })
         
-        if r['dx'] and r['dx']['available']:
+        if r['dx'] and r['dx']['available'] and r['dx'].get('playable', True):
             edge = max(r['dx']['over_prob'], r['dx']['under_prob']) - 0.5
             if edge > threshold:
                 value_bets.append({

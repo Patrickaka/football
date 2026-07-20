@@ -18,7 +18,7 @@ from ..common import kv_store
 
 log = setup_logger('beidan')
 
-BEIDAN_VERSION = '2026-07-18-local-analyst-v1'
+BEIDAN_VERSION = '2026-07-20-backtest-calibrated-v2'
 BEIDAN_HISTORY_KEY = 'beidan_prediction_history'
 BEIDAN_HISTORY_LIMIT = 500
 
@@ -219,12 +219,12 @@ def predict_scores_by_poisson(home_prob, draw_prob, away_prob, league='', handic
         '1x2_prob': {'H': p_home, 'D': p_draw, 'A': p_away},
     }
 
-# Dixon-Coles 低比分相关修正系数（文献常用 -0.1~-0.2；回测取 -0.12：
-# 保留 0-0/1-1 平局聚拢效应的同时，避免 -0.15/-0.20 过度压低比分 Top1/Top3）
-DC_RHO = -0.12
-# 大小球隐含总进球与联赛先验的融合权重（0.5 经回测在"跟随盘口"与"抗噪声"间最优：
-# 总进球 Top2 与 LogLoss 均优于 0.4，又不像 0.6 那样过度依赖单一盘口）
-OU_TOTAL_BLEND = 0.5
+# 2744 场五大联赛离线回测：-0.08 相比 -0.12/-0.15 同时改善比分
+# Top3 与 LogLoss，并保留温和的低比分相关修正。
+DC_RHO = -0.08
+# 同一回测中 0.6 的总进球 Top1/Top2 和 LogLoss 均优于 0.4/0.5；
+# 仍保留 40% 联赛先验，且下方硬边界会阻止盘口异常值主导。
+OU_TOTAL_BLEND = 0.6
 # 目标总进球合理区间（公平赛事真实均值约 2.6，峰值 2-3；硬约束避免 4/5/7+ 主导）
 TARGET_TOTAL_MIN = 1.8
 TARGET_TOTAL_MAX = 3.6
@@ -232,7 +232,7 @@ TARGET_TOTAL_MAX = 3.6
 FACTOR_MIN = 0.85
 FACTOR_MAX = 1.15
 # 主客 λ 强度分配系数（与比分预测保持一致，原 zjq 的 0.05 过弱）
-STRENGTH_SPLIT = SCORE_SPLIT  # = 0.35
+STRENGTH_SPLIT = SCORE_SPLIT  # = 0.45
 
 
 def _to_euro_odds(x):

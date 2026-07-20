@@ -15,7 +15,8 @@ class FootballAccuracyPolicyTests(unittest.TestCase):
         self.assertTrue(strong['eligible'])
         self.assertEqual(strong['prediction'], 'H')
         self.assertFalse(weak['eligible'])
-        self.assertEqual(strong['policy_version'], 'selective-1x2-v1')
+        self.assertEqual(strong['policy_version'], 'selective-1x2-v2')
+        self.assertEqual(strong['min_probability'], 0.56)
 
     def test_stats_separate_all_predictions_from_actionable_coverage(self):
         history = PredictionHistory.__new__(PredictionHistory)
