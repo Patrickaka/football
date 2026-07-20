@@ -70,8 +70,6 @@ def _run_lottery_refresh_job(job_id):
     try:
         from src.lottery import clear_cache
         clear_cache()
-        _CACHE['lottery']['data'] = None
-        _CACHE['lottery']['timestamp'] = 0
         started = time.time()
         result = lottery_run_prediction(
             force_refresh=True,
@@ -79,6 +77,7 @@ def _run_lottery_refresh_job(job_id):
             enable_ml=False,
             enable_fusion=False,
             compute_weights=False,
+            network_fetch_timeout=8,
         )
         if result.get('error'):
             raise RuntimeError(result['error'])
@@ -106,7 +105,18 @@ def _start_lottery_refresh_job():
     with LOTTERY_BACKGROUND_LOCK:
         for existing_id, job in LOTTERY_BACKGROUND_JOBS.items():
             if job.get('kind') == 'lottery_refresh' and job.get('status') == 'processing':
-                return dict(job)
+                # A failed upstream request must not permanently block all later
+                # refreshes.  Keep the old thread isolated and allow a new job.
+                age = time.time() - float(job.get('started_at') or job.get('created_at') or time.time())
+                if age <= 180:
+                    return dict(job)
+                job.update({
+                    'status': 'error',
+                    'success': False,
+                    'finished_at': time.time(),
+                    'error': 'upstream refresh timed out',
+                    'message': '刷新超时，已保留上次结果',
+                })
         job_id = uuid.uuid4().hex
         LOTTERY_BACKGROUND_JOBS[job_id] = {
             'task_id': job_id,
@@ -1229,19 +1239,35 @@ class Handler(BaseHTTPRequestHandler):
     def _lottery_recommend_payload(self, params):
         """获取大乐透推荐号码 - 返回5组差异化策略组合"""
         try:
-            analyzer = get_lottery_analyzer()
-            # 快速推荐不触发ML冷启动训练；ML有独立按需接口。
-            voting = analyzer.multi_model_voting(front_n=20, back_n=10, skip_ml=True)
-            portfolio = analyzer.generate_multi_strategy_recommendations(voting_result=voting)
-            recommendations = portfolio.get('recommendations', [])
+            # 推荐展示、主预测缓存和预测记录必须来自同一次计算快照。
+            # 旧实现会在此处重新生成一遍组合，导致页面号码与记录不一致。
+            prediction = lottery_run_prediction(
+                force_refresh=False,
+                enable_backtest=False,
+                enable_ml=False,
+                enable_fusion=False,
+                compute_weights=False,
+            )
+            if prediction.get('error'):
+                raise RuntimeError(prediction['error'])
+            recommendation_map = prediction.get('recommendations') or {}
+            recommendations = []
+            for strategy, rec in recommendation_map.items():
+                recommendations.append({
+                    'strategy': strategy,
+                    'method': rec.get('label') or rec.get('method') or strategy,
+                    'front': rec.get('front', []),
+                    'back': rec.get('back', []),
+                })
 
             return {
                 'result': {
                     'method': 'multi_strategy',
                     'recommendations': recommendations,
                     'count': len(recommendations),
-                    'portfolio_policy': portfolio.get('portfolio_policy', {}),
-                    'back_coverage_profile': portfolio.get('back_coverage_profile', {}),
+                    'portfolio_policy': prediction.get('portfolio_policy') or {},
+                    'back_coverage_profile': prediction.get('back_coverage_profile') or {},
+                    'version': prediction.get('version'),
                 }
             }
         except Exception:

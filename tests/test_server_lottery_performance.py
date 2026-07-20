@@ -45,6 +45,33 @@ class ServerLotteryPerformanceTests(unittest.TestCase):
         self.assertTrue(payload['processing'])
         self.assertEqual(payload['task_id'], 'job-3')
 
+    def test_recommend_endpoint_reuses_prediction_snapshot(self):
+        snapshot = {
+            'recommendations': {
+                'balanced': {
+                    'front': [1, 2, 3, 4, 5],
+                    'back': [1, 2],
+                    'method': 'balanced',
+                    'label': '均衡',
+                },
+            },
+            'portfolio_policy': {'ticket_count': 1},
+            'back_coverage_profile': {'unique_number_count': 2},
+            'version': 'test-version',
+        }
+        with patch.object(server, 'lottery_run_prediction', return_value=snapshot) as run:
+            payload = self.handler._lottery_recommend_payload({})
+
+        self.assertEqual(payload['result']['recommendations'][0]['front'], [1, 2, 3, 4, 5])
+        self.assertEqual(payload['result']['version'], 'test-version')
+        run.assert_called_once_with(
+            force_refresh=False,
+            enable_backtest=False,
+            enable_ml=False,
+            enable_fusion=False,
+            compute_weights=False,
+        )
+
     def test_task_status_exposes_background_registry(self):
         with server.LOTTERY_BACKGROUND_LOCK:
             server.LOTTERY_BACKGROUND_JOBS.clear()

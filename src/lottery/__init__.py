@@ -21,6 +21,7 @@ import json
 import random
 import math
 import time
+import threading
 from collections import defaultdict
 from typing import Dict, List, Tuple, Any, Optional
 
@@ -2169,7 +2170,8 @@ class LotteryAnalyzer:
 
     # ==================== 动态抓取开奖号码 ====================
 
-    def fetch_latest_results(self, count: int = 10, force_refresh: bool = False) -> Dict:
+    def fetch_latest_results(self, count: int = 10, force_refresh: bool = False,
+                             network_timeout: Optional[float] = None) -> Dict:
         """动态抓取最新开奖号码（带缓存，每天只抓取一次）
 
         尝试从多个数据源抓取最新的大乐透开奖结果，如果网络不可用则返回模拟数据。
@@ -2193,7 +2195,36 @@ class LotteryAnalyzer:
                     'results': self.get_recent_results(count)
                 }
 
-            results = self._fetch_from_web(count)
+            if network_timeout is None:
+                results = self._fetch_from_web(count)
+            else:
+                # urlopen 的 timeout 是“每个数据源”的超时，主源和备源会累加。
+                # 生产刷新需要一个覆盖全部数据源的总预算；超时线程只负责读取
+                # 原始网页，不会修改分析器状态，因此可安全降级到本地历史。
+                fetch_state = {'results': [], 'error': None}
+                fetch_done = threading.Event()
+
+                def _bounded_fetch():
+                    try:
+                        fetch_state['results'] = self._fetch_from_web(count)
+                    except Exception as exc:
+                        fetch_state['error'] = exc
+                    finally:
+                        fetch_done.set()
+
+                threading.Thread(
+                    target=_bounded_fetch,
+                    daemon=True,
+                    name='DLTNetworkFetch',
+                ).start()
+                fetch_done.wait(max(0.1, float(network_timeout)))
+                if not fetch_done.is_set():
+                    log.warning('大乐透网络抓取超过 %.1f 秒，使用本地历史快速重算', network_timeout)
+                    results = []
+                elif fetch_state['error'] is not None:
+                    raise fetch_state['error']
+                else:
+                    results = fetch_state['results']
 
             if results:
                 self._update_with_fetched(results)
@@ -2675,6 +2706,7 @@ def save_online_prediction(period: str, recommendations: Dict,
             'actual': None,
             'settled': False,
             'created_at': time.strftime('%Y-%m-%d %H:%M:%S'),
+            'updated_at': time.strftime('%Y-%m-%d %H:%M:%S'),
         }
 
         if fusion_result:
@@ -2918,7 +2950,7 @@ def calculate_online_stats() -> Dict:
 
 def run_prediction(force_refresh=False, enable_backtest=True,
                    enable_ml=True, enable_fusion=True,
-                   compute_weights=False):
+                   compute_weights=False, network_fetch_timeout=None):
     """运行大乐透预测，返回 JSON 可序列化 dict。
 
     Args:
@@ -2949,6 +2981,7 @@ def run_prediction(force_refresh=False, enable_backtest=True,
         fetch_result = analyzer.fetch_latest_results(
             count=fetch_count,
             force_refresh=True if force_refresh else full_bootstrap,
+            network_timeout=network_fetch_timeout,
         )
         if full_bootstrap:
             log.info(
@@ -3011,7 +3044,13 @@ def run_prediction(force_refresh=False, enable_backtest=True,
                 log.warning(f"ML模型预测失败（不影响整体功能）: {e}")
 
         # 多模型投票一次；多策略推荐组间互斥，避免主推/均衡/排名三组重号
-        voting = analyzer.multi_model_voting(front_n=20, back_n=10)
+        # 快速页面/刷新路径必须真正跳过 ML。此前即使 enable_ml=False，
+        # multi_model_voting 仍会冷启动 CatBoost，生产机器可能额外耗时数十秒。
+        voting = analyzer.multi_model_voting(
+            front_n=20,
+            back_n=10,
+            skip_ml=not enable_ml,
+        )
         multi = analyzer.generate_multi_strategy_recommendations(voting_result=voting)
         recommendations = {}
         for item in multi.get('recommendations') or []:
@@ -3122,6 +3161,7 @@ def run_prediction(force_refresh=False, enable_backtest=True,
             'voting': voting,
             'recommendations': recommendations,
             'portfolio_policy': multi.get('portfolio_policy'),
+            'back_coverage_profile': multi.get('back_coverage_profile'),
             'data_quality': data_quality,
             'algorithm_summary': algorithm_summary,
             'optimized_weights': optimized_weights,

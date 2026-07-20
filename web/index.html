@@ -4785,16 +4785,8 @@ async function loadLottery() {
   const appLottery = document.getElementById('app-lottery');
   appLottery.innerHTML = `<div class="status"><span class="spinner"></span>正在加载大乐透数据…</div>`;
   try {
-    // 先检查是否有进行中的后台任务
-    const statusData = await fetchJson('/api/lottery/task-status?_=' + Date.now());
-    const processingTask = Object.entries(statusData).find(([_, info]) => info.status === 'processing');
-    if (processingTask) {
-      const [taskId, taskInfo] = processingTask;
-      appLottery.innerHTML = `<div class="status"><span class="spinner"></span>检测到后台任务仍在运行（${esc(taskInfo.message || '计算中')}），继续等待…</div>`;
-      await _pollLotteryTask(taskId, appLottery, null, 1200);
-      return;
-    }
-
+    // 页面展示不等待抓取任务：后端保留上一份成功结果，刷新在后台继续。
+    // task-status 由独立的轻量轮询负责，避免生产环境慢网络让整页空白。
     const data = await fetchJson('/api/lottery?_=' + Date.now());
     if (data.error) {
       appLottery.innerHTML = `<div class="status error">✗ ${esc(data.error)}</div>`;
@@ -4802,8 +4794,22 @@ async function loadLottery() {
     }
     lotteryLoaded = true;
     renderLottery(data.result);
+    _watchActiveLotteryRefresh();
   } catch (e) {
     appLottery.innerHTML = `<div class="status error">加载失败：${esc(e.message)}</div>`;
+  }
+}
+
+async function _watchActiveLotteryRefresh() {
+  try {
+    const statusData = await fetchJson('/api/lottery/task-status?_=' + Date.now());
+    const processingTask = Object.entries(statusData).find(([_, info]) => info.status === 'processing');
+    if (!processingTask) return;
+    const [taskId, taskInfo] = processingTask;
+    _showToast('⚠️', taskInfo.message || '正在后台刷新', '当前先展示上次结果');
+    _pollLotteryTask(taskId, document.getElementById('app-lottery'), null, 180, true);
+  } catch (e) {
+    console.warn('检查大乐透后台任务失败', e);
   }
 }
 
@@ -5130,7 +5136,7 @@ async function refreshLottery() {
   }
 }
 
-async function _pollLotteryTask(taskId, appLottery, btn, maxWaitSec = 1200) {
+async function _pollLotteryTask(taskId, appLottery, btn, maxWaitSec = 180, preserveContent = false) {
   const startTime = Date.now();
   const pollInterval = 750; // 后台快速任务通常1秒内完成，避免固定多等3秒
   const longWaitThreshold = 300; // 5分钟后给出额外提示
@@ -5152,7 +5158,9 @@ async function _pollLotteryTask(taskId, appLottery, btn, maxWaitSec = 1200) {
           msg += `<br><small style="color:var(--muted)">计算量较大，请继续等待，关闭页面不影响后台运行</small>`;
           longWaitShown = true;
         }
-        appLottery.innerHTML = `<div class="status"><span class="spinner"></span>${msg}</div>`;
+        if (!preserveContent) {
+          appLottery.innerHTML = `<div class="status"><span class="spinner"></span>${msg}</div>`;
+        }
         continue;
       }
       if (taskInfo.status === 'done') {
@@ -5163,7 +5171,11 @@ async function _pollLotteryTask(taskId, appLottery, btn, maxWaitSec = 1200) {
         return;
       }
       if (taskInfo.status === 'error') {
-        appLottery.innerHTML = `<div class="status error">✗ 后台任务失败: ${esc(taskInfo.error || '未知错误')}</div>`;
+        if (preserveContent) {
+          _showToast('⚠️', '后台刷新失败，已保留上次结果', taskInfo.error || '');
+        } else {
+          appLottery.innerHTML = `<div class="status error">✗ 后台任务失败: ${esc(taskInfo.error || '未知错误')}</div>`;
+        }
         return;
       }
     } catch (e) {
@@ -5172,6 +5184,10 @@ async function _pollLotteryTask(taskId, appLottery, btn, maxWaitSec = 1200) {
   }
   // 超时：任务仍在后台运行，允许用户继续等待或刷新页面
   const elapsedSec = Math.round((Date.now() - startTime) / 1000);
+  if (preserveContent) {
+    _showToast('⚠️', '后台刷新仍在继续', `已等待 ${elapsedSec} 秒，当前保留上次结果`);
+    return;
+  }
   appLottery.innerHTML = `
     <div class="status" style="flex-direction:column;gap:12px;">
       <div>后台任务仍在运行中，已等待 ${elapsedSec} 秒</div>
