@@ -1162,30 +1162,18 @@ class Handler(BaseHTTPRequestHandler):
         return {}
 
     def _lottery_recommend_payload(self, params):
-        """获取大乐透推荐号码 - 返回3组不同的推荐"""
+        """获取大乐透推荐号码 - 返回5组差异化策略组合"""
         try:
             analyzer = get_lottery_analyzer()
-            method = params.get('method', ['balanced'])[0]
-
-            # 生成3组推荐，后一组避开前面已选的号码
-            recommendations = []
-            used_front = set()
-            used_back = set()
-            for i in range(3):
-                rec = analyzer.generate_recommendation(
-                    method,
-                    exclude_front=list(used_front),
-                    exclude_back=list(used_back)
-                )
-                recommendations.append(rec)
-                used_front.update(rec['front'])
-                used_back.update(rec['back'])
+            portfolio = analyzer.generate_multi_strategy_recommendations()
+            recommendations = portfolio.get('recommendations', [])
 
             return {
                 'result': {
-                    'method': method,
+                    'method': 'multi_strategy',
                     'recommendations': recommendations,
-                    'count': len(recommendations)
+                    'count': len(recommendations),
+                    'portfolio_policy': portfolio.get('portfolio_policy', {}),
                 }
             }
         except Exception:
