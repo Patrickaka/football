@@ -62,6 +62,27 @@ from ..common import repositories
 
 log = logging.getLogger('football')
 
+PRODUCTION_MODEL_VERSION = 'football-v2026.07.20-accuracy-01'
+ACTIONABLE_MIN_PROBABILITY = 0.50
+ACTIONABLE_MIN_MARGIN = 0.15
+
+
+def _prediction_decision_snapshot(predicted_1x2: Dict[str, float]) -> Dict:
+    """Freeze the pre-match rule used to measure selective recommendations."""
+    probs = normalize_1x2_probs(predicted_1x2)
+    ranked = sorted(probs.items(), key=lambda item: item[1], reverse=True)
+    top_probability = ranked[0][1] if ranked else 0.0
+    margin = top_probability - ranked[1][1] if len(ranked) > 1 else 0.0
+    return {
+        'policy_version': 'selective-1x2-v1',
+        'eligible': top_probability >= ACTIONABLE_MIN_PROBABILITY and margin >= ACTIONABLE_MIN_MARGIN,
+        'prediction': ranked[0][0] if ranked else None,
+        'top_probability': round(top_probability, 6),
+        'margin': round(margin, 6),
+        'min_probability': ACTIONABLE_MIN_PROBABILITY,
+        'min_margin': ACTIONABLE_MIN_MARGIN,
+    }
+
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), 'data')
 HISTORY_FILE = os.path.join(DATA_DIR, 'prediction_history.json')
@@ -425,7 +446,8 @@ class PredictionHistory:
                        ml_available: bool = False,
                        ml_feature_snapshot: Dict = None,
                        lottery_handicap: int = None,
-                       predicted_rqspf: Dict[str, float] = None):
+                       predicted_rqspf: Dict[str, float] = None,
+                       model_version: str = PRODUCTION_MODEL_VERSION):
         """
         添加预测记录
         
@@ -458,6 +480,8 @@ class PredictionHistory:
                     'total_line': total_line,
                     'updated_at': datetime.now().isoformat(),
                     'odds_snapshot': odds_data,
+                    'model_version': model_version,
+                    'decision_snapshot': _prediction_decision_snapshot(predicted_1x2),
                 }
                 if predicted_half_full:
                     update_data['predicted_half_full'] = predicted_half_full
@@ -529,6 +553,8 @@ class PredictionHistory:
             'total_line': total_line,
             'predicted_scores': predicted_scores,
             'predicted_1x2': predicted_1x2,
+            'model_version': model_version,
+            'decision_snapshot': _prediction_decision_snapshot(predicted_1x2),
             'lottery_handicap': lottery_handicap,
             'predicted_rqspf': predicted_rqspf,
             'predicted_half_full': predicted_half_full,  # 新增：半全场预测
@@ -1520,6 +1546,11 @@ class PredictionHistory:
         correct_top3 = 0
         correct_top5 = 0
         correct_1x2 = 0
+        valid_score_predictions = 0
+        valid_1x2_predictions = 0
+        actionable_total = 0
+        actionable_correct = 0
+        version_1x2 = {}
         
         for record in self.records:
             if not record.get('settled', False):
@@ -1533,6 +1564,7 @@ class PredictionHistory:
             
             if not predicted_scores or not actual_score:
                 continue
+            valid_score_predictions += 1
             
             # 统计各时间层命中率
             for layer in time_layers:
@@ -1577,15 +1609,26 @@ class PredictionHistory:
             
             # 胜平负
             if actual_result and actual_result in predicted_1x2:
+                valid_1x2_predictions += 1
                 pred_result = max(predicted_1x2.items(), key=lambda x: x[1])[0]
                 if pred_result == actual_result:
                     correct_1x2 += 1
-        
-        hit_rate_top1 = correct_top1 / settled if settled > 0 else 0
-        hit_rate_top3 = correct_top3 / settled if settled > 0 else 0
-        hit_rate_top5 = correct_top5 / settled if settled > 0 else 0
-        hit_rate_1x2 = correct_1x2 / settled if settled > 0 else 0
-        
+                version = record.get('model_version') or 'legacy-unversioned'
+                version_stats = version_1x2.setdefault(version, {'total': 0, 'correct': 0})
+                version_stats['total'] += 1
+                if pred_result == actual_result:
+                    version_stats['correct'] += 1
+                decision = record.get('decision_snapshot') or _prediction_decision_snapshot(predicted_1x2)
+                if decision.get('eligible'):
+                    actionable_total += 1
+                    if pred_result == actual_result:
+                        actionable_correct += 1
+
+        hit_rate_top1 = correct_top1 / valid_score_predictions if valid_score_predictions > 0 else 0
+        hit_rate_top3 = correct_top3 / valid_score_predictions if valid_score_predictions > 0 else 0
+        hit_rate_top5 = correct_top5 / valid_score_predictions if valid_score_predictions > 0 else 0
+        hit_rate_1x2 = correct_1x2 / valid_1x2_predictions if valid_1x2_predictions > 0 else 0
+
         # 计算各时间层命中率
         layer_hit_rates = {}
         for layer in time_layers:
@@ -1643,6 +1686,24 @@ class PredictionHistory:
             'correct_top3': correct_top3,
             'correct_top5': correct_top5,
             'correct_1x2': correct_1x2,
+            'valid_score_predictions': valid_score_predictions,
+            'valid_1x2_predictions': valid_1x2_predictions,
+            'actionable_1x2': {
+                'policy_version': 'selective-1x2-v1',
+                'total': actionable_total,
+                'correct': actionable_correct,
+                'hit_rate': actionable_correct / actionable_total if actionable_total else 0.0,
+                'coverage': actionable_total / valid_1x2_predictions if valid_1x2_predictions else 0.0,
+                'min_probability': ACTIONABLE_MIN_PROBABILITY,
+                'min_margin': ACTIONABLE_MIN_MARGIN,
+            },
+            'by_model_version': {
+                version: {
+                    **values,
+                    'hit_rate_1x2': values['correct'] / values['total'] if values['total'] else 0.0,
+                }
+                for version, values in version_1x2.items()
+            },
         }
     
     def get_ml_evaluation_stats(self, min_samples: int = 45) -> Dict:
@@ -2001,7 +2062,8 @@ def save_prediction(match_id: str, league: str, home: str, away: str,
                    ml_available: bool = False,
                    ml_feature_snapshot: Dict = None,
                    lottery_handicap: int = None,
-                   predicted_rqspf: Dict[str, float] = None):
+                   predicted_rqspf: Dict[str, float] = None,
+                   model_version: str = PRODUCTION_MODEL_VERSION):
     """保存预测记录"""
     return _global_history.add_prediction(
         match_id, league, home, away, match_time,
@@ -2014,6 +2076,7 @@ def save_prediction(match_id: str, league: str, home: str, away: str,
         ml_feature_snapshot=ml_feature_snapshot,
         lottery_handicap=lottery_handicap,
         predicted_rqspf=predicted_rqspf,
+        model_version=model_version,
     )
 
 
