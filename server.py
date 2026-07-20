@@ -360,6 +360,8 @@ class Handler(BaseHTTPRequestHandler):
         elif path == '/api/lottery-refresh':
             params = parse_qs(route.query)
             self._serve_json(self._lottery_refresh_payload(params))
+        elif path == '/api/lottery/task-status':
+            self._serve_json(self._lottery_task_status_payload())
         elif path == '/api/3d-refresh':
             params = parse_qs(route.query)
             self._serve_json(self._lottery_3d_refresh_payload(params))
@@ -1147,6 +1149,17 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:
             self._log.error('大乐透强制刷新失败: %s', str(e), exc_info=True)
             return {'success': False, 'error': str(e)}
+
+    def _lottery_task_status_payload(self):
+        """Return the legacy lottery background-task registry.
+
+        Lottery refreshes currently run synchronously, so there are no active
+        jobs to report.  The web client still checks this endpoint before its
+        initial load and may poll it when talking to an older async backend.
+        Keeping the endpoint prevents a harmless compatibility check from
+        turning into a page-level 404 error.
+        """
+        return {}
 
     def _lottery_recommend_payload(self, params):
         """获取大乐透推荐号码 - 返回3组不同的推荐"""
