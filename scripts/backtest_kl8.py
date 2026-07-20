@@ -57,18 +57,20 @@ def random_pick(n, rng):
 
 
 def main():
-    start = 120  # 需要足够历史
-    end = len(raw)
-    n_iter = end - start
-    print(f"walk-forward 区间: issues[{start}:{end}] = {n_iter} 期\n")
+    min_history = 120  # 每个预测点只使用其之前的开奖
+    target_indices = range(len(raw) - min_history - 1, -1, -1)
+    n_iter = len(raw) - min_history
+    print(f"walk-forward 区间: {n_iter} 期（严格按时间前推，无未来数据）\n")
 
     # 统计容器
     stats = {n: {'hits': [], 'win': 0, 'n': 0} for n in SELECT_TYPES}
 
-    for i in range(start, end):
+    for i in target_indices:
         target = raw[i]
         target_set = set(target['numbers'])
-        history = raw[:i]  # 最新在前，作为预测 i 的"过去"
+        # raw 按期号降序排列，因此索引更大的记录才是目标期之前的历史。
+        # 旧实现使用 raw[:i]，会把目标期之后的数据泄漏进回测。
+        history = raw[i + 1:]
         analyzer = KL8Analyzer(history_file=None)
         analyzer.history_data = history
         analyzer.using_simulated_data = False

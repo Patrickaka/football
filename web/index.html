@@ -5580,11 +5580,6 @@ function renderKL8(r) {
   html += `<div class="section-title">【快乐8数据分析】</div>`;
   html += `<div class="note" style="color:var(--accent2);margin-bottom:12px">⚠ 快乐8开奖具有随机性，以下号码仅为历史统计参考，不构成投注建议，也无法保证提升命中率。</div>`;
 
-  html += `<div class="card" style="margin-bottom:16px;border:1px solid #d29922;background:linear-gradient(135deg,#241a0f,#1a2230);padding:14px 16px">`;
-  html += `<div style="font-size:14px;font-weight:700;color:#d29922;margin-bottom:7px">选5 / 选6 准确率说明</div>`;
-  html += `<div style="font-size:12px;color:var(--muted);line-height:1.7">80选20的公平开奖中，选5理论期望命中 <b>1.25</b> 个，选6为 <b>1.50</b> 个；选5中≥4的概率约 <b>${(kl8HypergeomPGe(5, 4) * 100).toFixed(2)}%</b>，选6中≥4约 <b>${(kl8HypergeomPGe(6, 4) * 100).toFixed(2)}%</b>、中≥5约 <b>${(kl8HypergeomPGe(6, 5) * 100).toFixed(2)}%</b>。稳定命中4–5个不具备可验证的数学依据，多组方案只是用更高成本扩大覆盖。</div>`;
-  html += `</div>`;
-
   // v9.2: 三种状态 — 补数中 / 验证中 / 已验证
   const signalStatus = r.statistics?.signal_status || 'unknown';
   const backfillProgress = r.statistics?.backfill_progress || {};
@@ -5644,14 +5639,6 @@ function renderKL8(r) {
   // ── 状态3：已验证（至少一个玩法有validated策略）───
   if (signalStatus === 'validated') {
     html += `<div class="note" style="color:#2ea043;margin-bottom:12px;font-weight:700">✅ 已验证策略：当前启用策略已通过严格回测验证。</div>`;
-  }
-
-  // ── 参考模式：展示的是未通过验证的参考号码，须明确标注与随机等价 ──
-  if (signalStatus === 'reference_unvalidated') {
-    html += `<div class="card" style="margin-bottom:16px;background:linear-gradient(135deg,#241a0f,#1a2230);border:1px solid #d29922;padding:14px 16px">`;
-    html += `<div style="font-size:14px;font-weight:700;color:#d29922;margin-bottom:8px">ℹ 参考号码（未通过回测验证）</div>`;
-    html += `<div style="font-size:12px;color:var(--muted);line-height:1.6">${esc(r.statistics?.fairness_disclaimer || r.statistics?.note || '快乐8为公平摇奖，参考号码与随机选号期望命中相同，仅供参考、不预示中奖。')}</div>`;
-    html += `</div>`;
   }
 
   // 最近开奖结果（始终显示）

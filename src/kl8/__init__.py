@@ -47,7 +47,7 @@ from src.common.logger import setup_logger
 
 log = setup_logger('kl8')
 
-KL8_PREDICTOR_VERSION = "kl8-v9.2.12-adaptive-repeat"
+KL8_PREDICTOR_VERSION = "kl8-v9.2.13-stable-shape"
 
 # ─── v9.2: 只显示已验证策略模式 ───
 VERIFY_ONLY_MODE = False  # True=未验证玩法不输出号码; False=回退参考策略(始终输出号码)
@@ -744,29 +744,25 @@ def resolve_play_strategy(play_type: str, allow_reference: bool = False) -> Opti
             'is_validated': False,
         },
         'select_5': {
-            'strategy_id': 'select_5_ref_high_tier_chase_v1',
-            'feature_weights': {'frequency': 0.30, 'gap': 0.10, 'trend': 0.20, 'pair_cooccurrence': 0.25, 'position_residual': 0.10, 'position_residual_cross': 0.05, 'road_residual': 0.0, 'repeat': 0.0, 'odd_even': 0.0, 'big_small': 0.0},
+            'strategy_id': 'select_5_ref_stable_shape_v2',
+            'feature_weights': {'frequency': 0.30, 'gap': 0.20, 'trend': 0.15, 'pair_cooccurrence': 0.05, 'position_residual': 0.15, 'position_residual_cross': 0.10, 'road_residual': 0.05, 'repeat': 0.0, 'odd_even': 0.0, 'big_small': 0.0},
             'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
             'window_size': 100,
             'repeat_direction': 'neutral',
-            'pool_max_last_numbers': 5,
-            'final_max_last_numbers': 5,
-            'final_min_last_numbers': 1,
-            'final_selection_mode': 'high_tier_chase',
+            'pool_max_last_numbers': 2,
+            'final_selection_mode': 'shape_balanced',
             'target_hits': 4,
             'prediction_mode': 'reference_unvalidated',
             'is_validated': False,
         },
         'select_6': {
-            'strategy_id': 'select_6_ref_high_tier_chase_v1',
-            'feature_weights': {'frequency': 0.30, 'gap': 0.10, 'trend': 0.20, 'pair_cooccurrence': 0.25, 'position_residual': 0.10, 'position_residual_cross': 0.05, 'road_residual': 0.0, 'repeat': 0.0, 'odd_even': 0.0, 'big_small': 0.0},
+            'strategy_id': 'select_6_ref_stable_shape_v2',
+            'feature_weights': {'frequency': 0.25, 'gap': 0.20, 'trend': 0.15, 'pair_cooccurrence': 0.05, 'position_residual': 0.15, 'position_residual_cross': 0.10, 'road_residual': 0.10, 'repeat': 0.0, 'odd_even': 0.0, 'big_small': 0.0},
             'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
             'window_size': 100,
             'repeat_direction': 'neutral',
-            'pool_max_last_numbers': 6,
-            'final_max_last_numbers': 6,
-            'final_min_last_numbers': 2,
-            'final_selection_mode': 'high_tier_chase',
+            'pool_max_last_numbers': 3,
+            'final_selection_mode': 'shape_balanced',
             'target_hits': 5,
             'prediction_mode': 'reference_unvalidated',
             'is_validated': False,
