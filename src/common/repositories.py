@@ -13,20 +13,35 @@ _J = lambda o: json.dumps(o, ensure_ascii=False)
 
 # ==================== football_prediction（result_sync） ====================
 
+_FOOTBALL_PREDICTION_COLS = [
+    'match_id', 'league', 'settled', 'sync_status', 'created_at', 'updated_at', 'doc',
+]
+
+
+def _football_prediction_row(r):
+    return (
+        r.get('match_id'), r.get('league'), 1 if r.get('settled') else 0,
+        r.get('sync_status'), r.get('created_at'), r.get('updated_at'), _J(r),
+    )
+
+
 def football_prediction_load():
     return doc_store.load_all('football_prediction', order_by='created_at, match_id')
 
 
 def football_prediction_save(records):
-    cols = ['match_id', 'league', 'settled', 'sync_status', 'created_at', 'updated_at', 'doc']
-    rows = [
-        (
-            r.get('match_id'), r.get('league'), 1 if r.get('settled') else 0,
-            r.get('sync_status'), r.get('created_at'), r.get('updated_at'), _J(r),
-        )
-        for r in records
-    ]
-    doc_store.replace_all('football_prediction', cols, rows)
+    rows = [_football_prediction_row(r) for r in records]
+    doc_store.replace_all('football_prediction', _FOOTBALL_PREDICTION_COLS, rows)
+
+
+def football_prediction_upsert(record):
+    """单行 UPSERT 一条预测记录，避免整表重写（每请求级热点写入）。"""
+    doc_store.upsert_one(
+        'football_prediction',
+        _FOOTBALL_PREDICTION_COLS,
+        _football_prediction_row(record),
+        key_cols=['match_id'],
+    )
 
 
 # ==================== football_prediction_record（prediction_records） ====================

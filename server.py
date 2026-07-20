@@ -2081,6 +2081,13 @@ def _start_background_sync():
     threading.Thread(target=_warm_3d_caches, daemon=True, name='Warm3DThread').start()
     log.info('3D 缓存预热线程已启动')
 
+    # 定时维护：兜底清理过期 binlog 与旧滚动日志，防止磁盘被写满（无需人工）
+    try:
+        from src.common.maintenance import start_maintenance_scheduler
+        start_maintenance_scheduler()
+    except Exception as e:
+        log.warning(f"启动定时维护线程失败: {e}")
+
 def main():
     server = ThreadingHTTPServer((HOST, PORT), Handler)
     local_url = f'http://localhost:{PORT}'

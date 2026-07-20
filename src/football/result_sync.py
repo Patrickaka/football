@@ -52,6 +52,7 @@ import re
 import json
 import time
 import math
+import hashlib
 import logging
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
@@ -413,6 +414,25 @@ def time_layer_weight(time_layer: str) -> float:
     return weights.get(time_layer, 0.50)
 
 
+def _prediction_content_sig(predicted_scores, predicted_1x2, asian, total_line,
+                            odds_data, predicted_half_full, model_version):
+    """预测的「有意义内容」签名，用于跳过无变化的重复写入。
+
+    只覆盖影响预测结果的字段，刻意排除 updated_at 等时间戳——否则缓存命中时
+    每次内容相同却因时间戳不同而反复写库（整表重写风暴的根源之一）。
+    """
+    try:
+        payload = json.dumps(
+            [predicted_scores, predicted_1x2, asian, total_line,
+             odds_data, predicted_half_full, model_version],
+            ensure_ascii=False, sort_keys=True, default=str,
+        )
+    except Exception:
+        # 任意不可序列化内容都视作「已变化」，从而照常写入，绝不吞掉真实更新。
+        return None
+    return hashlib.md5(payload.encode('utf-8')).hexdigest()
+
+
 class PredictionHistory:
     """预测历史记录管理器"""
     
@@ -430,11 +450,22 @@ class PredictionHistory:
             self.records = []
 
     def _save(self):
-        """保存记录到 MySQL"""
+        """保存记录到 MySQL（整表重写）。仅用于批量操作（audit/repair 等）。
+
+        每请求级的单条变更请用 _save_record，避免整表 DELETE+INSERT 把
+        binlog/磁盘写爆。
+        """
         try:
             repositories.football_prediction_save(self.records)
         except Exception as e:
             log.error(f"保存预测历史失败: {e}")
+
+    def _save_record(self, record):
+        """仅 UPSERT 单条记录，把每请求写入量从 O(表行数) 降到 O(1)。"""
+        try:
+            repositories.football_prediction_upsert(record)
+        except Exception as e:
+            log.error(f"保存预测记录失败: {e}")
     
     def add_prediction(self, match_id: str, league: str, home: str, away: str,
                        match_time: str, predicted_scores: Dict[str, float],
@@ -474,6 +505,23 @@ class PredictionHistory:
         # 检查是否已存在
         for record in self.records:
             if record.get('match_id') == match_id:
+                # 跳过无变化的重复写入：缓存命中时同一场比赛会被反复「预测」，
+                # 但内容与时间层其实一字未变。此时直接返回，不写库、不更新时间戳，
+                # 消灭每请求整表重写的写入风暴。
+                layer = infer_time_layer(match_time)
+                new_sig = _prediction_content_sig(
+                    predicted_scores, predicted_1x2, asian, total_line,
+                    odds_data, predicted_half_full, model_version,
+                )
+                existing_layers = record.get('time_layers') or {}
+                if (
+                    new_sig is not None
+                    and record.get('_pred_sig') == new_sig
+                    and existing_layers.get(layer) is not None
+                    and not record.get('settled')
+                ):
+                    return
+
                 # 更新现有记录
                 update_data = {
                     'predicted_scores': predicted_scores,
@@ -484,6 +532,7 @@ class PredictionHistory:
                     'odds_snapshot': odds_data,
                     'model_version': model_version,
                     'decision_snapshot': _prediction_decision_snapshot(predicted_1x2),
+                    '_pred_sig': new_sig,
                 }
                 if predicted_half_full:
                     update_data['predicted_half_full'] = predicted_half_full
@@ -500,23 +549,22 @@ class PredictionHistory:
                 update_data['lottery_handicap'] = lottery_handicap
                 update_data['predicted_rqspf'] = predicted_rqspf
                 record.update(update_data)
-                
+
                 # 更新对应时间层的预测
-                layer = infer_time_layer(match_time)
                 if 'time_layers' not in record:
                     record['time_layers'] = {}
                 record['time_layers']['final'] = predicted_scores  # 始终更新最终预测
                 # 只在该层为None时才更新（保留更早时间点的预测）
                 if record['time_layers'].get(layer) is None:
                     record['time_layers'][layer] = predicted_scores
-                
+
                 # 更新赔率分层记录
                 if 'odds_layers' not in record:
                     record['odds_layers'] = {}
                 record['odds_layers'][layer] = odds_data
                 record['odds_layers']['final'] = odds_data
-                
-                self._save()
+
+                self._save_record(record)
                 return
         
         # 新增记录
@@ -585,9 +633,13 @@ class PredictionHistory:
             'created_at': datetime.now().isoformat(),
             'updated_at': datetime.now().isoformat(),
             'odds_snapshot': odds_data,
+            '_pred_sig': _prediction_content_sig(
+                predicted_scores, predicted_1x2, asian, total_line,
+                odds_data, predicted_half_full, model_version,
+            ),
         }
         self.records.append(record_data)
-        self._save()
+        self._save_record(record_data)
         log.info(f"添加预测记录: {home} vs {away} (match_id={match_id})")
     
     def get_record(self, match_id: str) -> Optional[Dict]:
@@ -647,7 +699,7 @@ class PredictionHistory:
                     record['time_layers'] = {}
                 record['time_layers'][time_layer] = predicted_scores
                 record['updated_at'] = datetime.now().isoformat()
-                self._save()
+                self._save_record(record)
                 log.info(f"更新时间分层预测: {match_id} -> {time_layer}")
                 return True
         return False
@@ -901,7 +953,7 @@ class PredictionHistory:
                             f"拒绝提前回填: {record.get('home')} vs {record.get('away')} "
                             f"match_time={record.get('match_time')} score={actual_score}"
                         )
-                        self._save()
+                        self._save_record(record)
                         return False
 
                     result_quality = _assess_result_quality(
@@ -916,7 +968,7 @@ class PredictionHistory:
                         record['last_sync_error'] = f"赛果可信度过低，拒绝回填: {result_quality['reasons']}"
                         record['last_sync_at'] = datetime.now().isoformat()
                         record['next_sync_at'] = (datetime.now() + timedelta(hours=6)).isoformat()
-                        self._save()
+                        self._save_record(record)
                         return False
 
                     # 成功结算
@@ -973,8 +1025,8 @@ class PredictionHistory:
                 else:
                     # 同步失败
                     self._handle_sync_failure(record, error or '无法获取赛果')
-                
-                self._save()
+
+                self._save_record(record)
                 return True
         return False
     
