@@ -5591,6 +5591,7 @@ function renderKL8(r) {
   // 版本信息 + 补数进度
   html += `<div class="note" style="margin-bottom:8px">版本: ${esc(r.statistics?.version || 'unknown')} · 分析期数: ${currentPeriods} · 信号状态: ${esc(signalStatus)}</div>`;
   html += `<div class="note" style="margin-bottom:8px">基于期号: ${esc(r.based_on_issue || r.statistics?.based_on_issue || '-')} · 预测期号: ${esc(r.target_issue || r.statistics?.target_issue || '-')} · 生成时间: ${esc(r.prediction_generated_at || r.statistics?.prediction_generated_at || '-')}</div>`;
+  html += renderKL8PerformanceSummary(r.statistics?.recent_settlement_performance);
 
   // ── 状态1：历史补数中 ──
   if (isBackfilling) {
@@ -5930,18 +5931,37 @@ function renderKL8AccuracyProfile(profile) {
   </div>`;
 }
 
+function renderKL8PerformanceSummary(performance) {
+  const available = Number(performance?.available_count || 0);
+  if (!available) {
+    return `<div class="note" style="margin:8px 0 12px;color:#d29922">实际效果：等待下一期开奖自动结算；当前页面概率均为随机理论值，不代表模型准确率。</div>`;
+  }
+  const windows = Array.isArray(performance.windows) ? performance.windows : [];
+  const current = windows.find(w => Number(w.settled_count || 0) > 0) || {};
+  const rows = Object.values(current.play_stats || {}).filter(x => /^select_(5|6)$/.test(x.play_type || ''));
+  if (!rows.length) return '';
+  const cells = rows.map(stat => {
+    const delta = Number(stat.hit_delta_vs_random || 0);
+    const color = delta > 0 ? '#2ea043' : delta < 0 ? '#f85149' : '#8b949e';
+    return `<span style="margin-right:18px">${esc(stat.label)}：实际均中 <b>${Number(stat.avg_hits || 0).toFixed(2)}</b>，随机 ${Number(stat.random_expected_hits || 0).toFixed(2)}，<b style="color:${color}">${delta >= 0 ? '+' : ''}${delta.toFixed(2)}</b></span>`;
+  }).join('');
+  return `<div class="card" style="padding:10px 14px;margin:8px 0 12px;border-left:3px solid #4493f8">
+    <div style="font-size:12px;color:#8b949e;margin-bottom:5px">最近 ${esc(current.settled_count || available)} 期实际结算（与随机基线比较）</div>
+    <div style="font-size:12px;line-height:1.7">${cells}</div>
+  </div>`;
+}
+
 // 多注覆盖方案（v10）：渲染 N 组差异化选号，并诚实展示组合命中4+概率
 function renderKL8MultiSlips(sel, st) {
   const slips = sel.multi_slips;
   if (!Array.isArray(slips) || slips.length === 0) return '';
   const nSlips = slips.length;
   const pick = slips[0].length || sel.pick || st;
-  // 组合层面“至少1组命中≥5”的近似概率（组间近似独立）: 1-(1-p)^N
-  // 用户玩法：拿这 pick 个号打“选5复式”(C(pick,5)注)，中5=该组含>=5个开奖号
+  // 后端按这些具体号码的真实重叠结构做确定性蒙特卡洛；不再假设各组独立。
   const p5 = kl8HypergeomPGe(pick, 5);
-  const p4 = kl8HypergeomPGe(pick, 4);
-  const comb5 = (1 - Math.pow(1 - p5, nSlips)) * 100;
-  const comb4 = (1 - Math.pow(1 - p4, nSlips)) * 100;
+  const coverage = sel.multi_slip_coverage || {};
+  const comb5 = Number(coverage.at_least_one_ge5 || 0) * 100;
+  const comb4 = Number(coverage.at_least_one_ge4 || 0) * 100;
   const betsPerGroup = combCount(pick, 5);
   const cost = nSlips * betsPerGroup * 2;
   let cards = '';
@@ -5957,8 +5977,8 @@ function renderKL8MultiSlips(sel, st) {
     <div style="font-size:12px;font-weight:700;color:#4493f8;margin-bottom:5px">🎯 多注覆盖方案（${nSlips}组 × ${pick}码，打选5复式）</div>
     <div style="font-size:11px;color:#8b949e;margin-bottom:7px;line-height:1.6">
       每组 ${pick} 个号打选5复式 = C(${pick},5)=${betsPerGroup} 注。单组含≥5个开奖号的概率约 <b style="color:#d29922">${(p5 * 100).toFixed(2)}%</b>/期（纯随机）。
-      下面 ${nSlips} 组经权重扰动+覆盖惩罚彼此差异化、铺开更多号码，
-      组合层面“至少 1 组中5”概率约 <b style="color:#2ea043">${comb5.toFixed(1)}%</b>/期（中4 约 ${comb4.toFixed(1)}%）。每期成本约 <b>${cost}</b> 元。
+      下面 ${nSlips} 组经权重扰动+覆盖惩罚彼此差异化，共覆盖 <b>${esc(coverage.unique_number_count || '-')}</b> 个号码，组间最多重复 <b>${esc(coverage.max_pair_overlap ?? '-')}</b> 个。
+      按实际重叠结构模拟 ${esc(coverage.simulations || 0)} 次公平开奖：“至少 1 组中5”约 <b style="color:#2ea043">${comb5.toFixed(1)}%</b>/期（中4约 ${comb4.toFixed(1)}%）。每期成本约 <b>${cost}</b> 元。
     </div>
     ${cards}
     <div style="font-size:11px;color:#9a6700;margin-top:6px">⚠ 这是“多买几组”的覆盖率杠杆，不保证必中；单注期望命中仍为 ${(pick * 0.25).toFixed(2)} 个。</div>

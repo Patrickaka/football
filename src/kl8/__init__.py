@@ -47,7 +47,7 @@ from src.common.logger import setup_logger
 
 log = setup_logger('kl8')
 
-KL8_PREDICTOR_VERSION = "kl8-v9.2.13-stable-shape"
+KL8_PREDICTOR_VERSION = "kl8-v9.2.14-portfolio-coverage"
 
 # ─── v9.2: 只显示已验证策略模式 ───
 VERIFY_ONLY_MODE = False  # True=未验证玩法不输出号码; False=回退参考策略(始终输出号码)
@@ -2194,15 +2194,74 @@ def generate_multi_slips(analyzer: 'KL8Analyzer', select_n: int, n_slips: int = 
         if len(ranking) < pick_size:
             continue
         # 覆盖惩罚：已被前面注使用越多的号码，本组越不优先
+        score_values = [float(it['ranking_score']) for it in ranking]
+        score_span = max(score_values) - min(score_values) if score_values else 0.0
+        # Use a scale-relative reuse penalty.  The previous fixed 0.05 penalty
+        # was sometimes too small compared with ranking scores, so nominally
+        # different tickets still reused most of the same numbers.
+        reuse_penalty = max(score_span * 0.35, 0.03)
         eff = sorted(
             ranking,
-            key=lambda it: (-(it['ranking_score'] - 0.05 * used.get(it['num'], 0)), it['num']),
+            key=lambda it: (
+                -(it['ranking_score'] - reuse_penalty * used.get(it['num'], 0)),
+                it['num'],
+            ),
         )
         chosen = sorted(it['num'] for it in eff[:pick_size])
+        if chosen in slips:
+            # Deterministically replace the weakest reused number so every
+            # displayed ticket is a genuinely distinct combination.
+            chosen_set = set(chosen)
+            replacement = next((it['num'] for it in eff if it['num'] not in chosen_set), None)
+            if replacement is not None:
+                chosen[-1] = replacement
+                chosen = sorted(chosen)
         slips.append(chosen)
         for n in chosen:
             used[n] += 1
     return slips
+
+
+def _simulate_multi_slip_coverage(
+    slips: List[List[int]],
+    simulations: int = 12000,
+    seed_key: str = '',
+) -> Dict:
+    """Estimate portfolio hit rates using the tickets' actual overlap.
+
+    Unlike ``1-(1-p)^n``, this simulation does not assume tickets are
+    independent.  It samples fair 20-of-80 draws with a deterministic seed so
+    the same prediction always renders the same stable figures.
+    """
+    import random as _rng
+
+    clean = [set(int(n) for n in slip) for slip in (slips or []) if slip]
+    if not clean or simulations <= 0:
+        return {}
+    rng = _rng.Random(f'kl8_coverage_v1_{seed_key}')
+    ge4 = ge5 = total_best = 0
+    for _ in range(simulations):
+        draw = set(rng.sample(range(1, KL8_NUM_RANGE + 1), KL8_DRAW_COUNT))
+        best = max(len(ticket & draw) for ticket in clean)
+        total_best += best
+        ge4 += int(best >= 4)
+        ge5 += int(best >= 5)
+
+    overlaps = [
+        len(clean[i] & clean[j])
+        for i in range(len(clean))
+        for j in range(i + 1, len(clean))
+    ]
+    return {
+        'method': 'deterministic_monte_carlo_actual_overlap',
+        'simulations': simulations,
+        'at_least_one_ge4': round(ge4 / simulations, 6),
+        'at_least_one_ge5': round(ge5 / simulations, 6),
+        'average_best_hits': round(total_best / simulations, 4),
+        'unique_number_count': len(set().union(*clean)),
+        'max_pair_overlap': max(overlaps, default=0),
+        'average_pair_overlap': round(sum(overlaps) / len(overlaps), 3) if overlaps else 0.0,
+    }
 
 
 def normalize_record(record, keep_meta: bool = False) -> Optional[Dict]:
@@ -4276,6 +4335,10 @@ class KL8Analyzer:
                 if slips:
                     results[s_key]['multi_slips'] = slips
                     results[s_key]['multi_slips_count'] = len(slips)
+                    results[s_key]['multi_slip_coverage'] = _simulate_multi_slip_coverage(
+                        slips,
+                        seed_key=f'{self.history_data[0].get("issue", "") if self.history_data else ""}_{s_key}',
+                    )
 
         # 复式玩法（v9.2: 也按自己的策略独立验证）
         for fushi_key, fushi_cfg in FUSHI_CONFIG.items():

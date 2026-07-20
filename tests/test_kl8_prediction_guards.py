@@ -20,6 +20,7 @@ from src.kl8 import (
     _shape_balanced_candidate_pool,
     _shape_profile,
     resolve_play_strategy,
+    _simulate_multi_slip_coverage,
 )
 
 
@@ -30,6 +31,16 @@ def _record(issue: int):
 
 
 class KL8PredictionGuardTests(unittest.TestCase):
+    def test_multi_slip_coverage_accounts_for_identical_ticket_overlap(self):
+        slips = [[1, 2, 3, 4, 5, 6]] * 8
+        profile = _simulate_multi_slip_coverage(slips, simulations=20000, seed_key='test')
+
+        # Eight identical tickets must behave like one ticket, not eight
+        # independent tickets. The fair P(6-number ticket hits >=4) is ~3.18%.
+        self.assertAlmostEqual(profile['at_least_one_ge4'], 0.0318, delta=0.006)
+        self.assertEqual(profile['unique_number_count'], 6)
+        self.assertEqual(profile['max_pair_overlap'], 6)
+
     def test_reference_select_5_and_6_avoid_forced_repeat_chasing(self):
         for pick, repeat_cap in ((5, 2), (6, 3)):
             strategy = resolve_play_strategy(f'select_{pick}')
