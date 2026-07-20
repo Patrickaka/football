@@ -53,7 +53,7 @@ FEATURE_WEIGHTS = {
 # 时间衰减因子 (最近一期权重1.0，20期前≈0.19，50期前≈0.016)
 TIME_DECAY_FACTOR = 0.92
 MIN_REAL_HISTORY_FOR_RANKING = 80  # 降低阈值: 120期真实数据足够支撑统计模型
-LOTTERY_PREDICTOR_VERSION = "dlt-v3.8-evidence-portfolio"
+LOTTERY_PREDICTOR_VERSION = "dlt-v3.9-back-coverage"
 FULL_HISTORY_FETCH_COUNT = 100
 MIN_FULL_HISTORY_ISSUES = 500
 ROLLING_BACKTEST_TRIALS = 30
@@ -1976,7 +1976,9 @@ class LotteryAnalyzer:
         # one back anchor in play; diversify the remaining positions.  The old
         # full-exclusion policy made later tickets progressively lower quality.
         front_anchors = set(primary['front'][:2])
-        back_anchors = set(primary['back'][:1])
+        # 后区只有12个号码。五组共10个后区位置时，重复锚点会直接浪费
+        # 组合覆盖；保留前区锚点，但后区优先使用尚未覆盖的号码。
+        back_anchors = set()
 
         strategies = [
             ('balanced', '均衡策略'),
@@ -1992,7 +1994,7 @@ class LotteryAnalyzer:
             # 后区盘口小：若已用超过 8 个，只排除「曾整组出现过的后区组合」不够，
             # 优先排除 used_back；不够 2 个可用时再放宽。
             exclude_f = list(used_front - front_anchors)
-            exclude_b = list(used_back - back_anchors)
+            exclude_b = list(used_back)
             if len(BACK_NUMBERS) - len(used_back) < 2:
                 exclude_b = []
 
@@ -2008,7 +2010,7 @@ class LotteryAnalyzer:
                 rec = self.generate_recommendation(
                     key,
                     exclude_front=list(used_front - front_anchors),
-                    exclude_back=list(used_back - back_anchors) if len(BACK_NUMBERS) - len(used_back - back_anchors) >= 2 else [],
+                    exclude_back=list(used_back) if len(BACK_NUMBERS) - len(used_back) >= 2 else [],
                     voting_result=voting if key == 'balanced' else None,
                 )
                 ticket = (tuple(rec['front']), tuple(rec['back']))
@@ -2034,14 +2036,36 @@ class LotteryAnalyzer:
             used_front.update(rec['front'])
             used_back.update(rec['back'])
 
+        back_pairs = {
+            tuple(sorted(item.get('back', [])))
+            for item in recommendations
+            if len(item.get('back', [])) == 2
+        }
+        covered_back = set().union(*(set(pair) for pair in back_pairs)) if back_pairs else set()
+        total_back_outcomes = math.comb(len(BACK_NUMBERS), 2)
+        uncovered_count = len(BACK_NUMBERS) - len(covered_back)
+        miss_all = (
+            math.comb(uncovered_count, 2) / total_back_outcomes
+            if uncovered_count >= 2 else 0.0
+        )
+        back_coverage_profile = {
+            'unique_numbers': sorted(covered_back),
+            'unique_number_count': len(covered_back),
+            'unique_pair_count': len(back_pairs),
+            'at_least_one_group_ge1_probability': round(1.0 - miss_all, 6),
+            'at_least_one_group_ge2_probability': round(len(back_pairs) / total_back_outcomes, 6),
+            'method': 'exact_combinatorial_portfolio',
+        }
+
         return {
             'recommendations': recommendations,
             'portfolio_policy': {
-                'name': 'anchor_diversification',
+                'name': 'front_anchor_back_full_coverage',
                 'front_anchors': sorted(front_anchors),
                 'back_anchors': sorted(back_anchors),
-                'note': '核心高分号允许跨组复用，其余位置优先分散',
+                'note': '前区保留核心锚点；后区五组优先覆盖10个不同号码',
             },
+            'back_coverage_profile': back_coverage_profile,
             'voting_front': [c['number'] for c in (voting.get('front_candidates') or [])[:12]],
             'voting_back': [c['number'] for c in (voting.get('back_candidates') or [])[:6]],
             'voting': voting,

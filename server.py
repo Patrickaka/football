@@ -1239,6 +1239,7 @@ class Handler(BaseHTTPRequestHandler):
                     'recommendations': recommendations,
                     'count': len(recommendations),
                     'portfolio_policy': portfolio.get('portfolio_policy', {}),
+                    'back_coverage_profile': portfolio.get('back_coverage_profile', {}),
                 }
             }
         except Exception:

@@ -5217,9 +5217,13 @@ async function getLotteryRecommend() {
     }
     const result = data.result || {};
     const recommendations = result.recommendations || [];
+    const backCoverage = result.back_coverage_profile || {};
     
     let html = `<div class="card">`;
     html += `<div class="note" style="margin-bottom:8px">多策略推荐 · 共 ${recommendations.length} 组</div>`;
+    if (Number(backCoverage.unique_number_count || 0) > 0) {
+      html += `<div class="note" style="margin-bottom:10px;color:#4493f8">后区组合覆盖：${esc(backCoverage.unique_number_count)} / 12 个不同号码 · 至少一组后区中≥1理论概率 ${pct(Number(backCoverage.at_least_one_group_ge1_probability || 0))} · 至少一组后区全中理论概率 ${pct(Number(backCoverage.at_least_one_group_ge2_probability || 0))}</div>`;
+    }
     
     recommendations.forEach((rec, idx) => {
       const front = (rec.front || []).map(n => String(n).padStart(2, '0')).join(' ');
