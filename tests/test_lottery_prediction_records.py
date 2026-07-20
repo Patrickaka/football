@@ -86,6 +86,30 @@ class PredictionRecordTests(unittest.TestCase):
         self.assertNotIn('fusion_front_hit', records[0])
         self.assertEqual(stats['settled_count'], 0)
 
+    def test_dlt_stats_use_strategy_specific_denominator_and_portfolio_metrics(self):
+        state, load_patch, save_patch = self._store_patches(lottery)
+        state.extend([
+            {
+                'period': '2026079', 'version': 'v-new', 'settled': True,
+                'integrity_status': 'verified_forward',
+                'recommendations': {'rank': {'front': [], 'back': []}},
+                'rank_front_hit': 3, 'rank_back_hit': 1,
+            },
+            {
+                'period': '2026080', 'version': 'v-old', 'settled': True,
+                'integrity_status': 'verified_forward',
+                'recommendations': {'cold': {'front': [], 'back': []}},
+                'cold_front_hit': 0, 'cold_back_hit': 0,
+            },
+        ])
+        with load_patch, save_patch:
+            stats = lottery.calculate_online_stats()
+
+        self.assertEqual(stats['by_method']['rank']['count'], 1)
+        self.assertEqual(stats['by_method']['rank']['front_ge3_rate'], 1.0)
+        self.assertEqual(stats['portfolio']['same_ticket_front3_back1_rate'], 0.5)
+        self.assertEqual(stats['by_version']['v-new']['front_any_ge3_rate'], 1.0)
+
 
 if __name__ == '__main__':
     unittest.main()

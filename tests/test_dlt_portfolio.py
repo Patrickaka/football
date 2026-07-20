@@ -32,7 +32,7 @@ class DltPortfolioTests(unittest.TestCase):
         self.assertNotEqual(primary['front'], alternative['front'])
 
     def test_predictor_version_invalidates_old_cache(self):
-        self.assertEqual(LOTTERY_PREDICTOR_VERSION, 'dlt-v3.7-portfolio')
+        self.assertEqual(LOTTERY_PREDICTOR_VERSION, 'dlt-v3.8-evidence-portfolio')
 
 
 if __name__ == '__main__':

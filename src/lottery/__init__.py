@@ -53,7 +53,7 @@ FEATURE_WEIGHTS = {
 # 时间衰减因子 (最近一期权重1.0，20期前≈0.19，50期前≈0.016)
 TIME_DECAY_FACTOR = 0.92
 MIN_REAL_HISTORY_FOR_RANKING = 80  # 降低阈值: 120期真实数据足够支撑统计模型
-LOTTERY_PREDICTOR_VERSION = "dlt-v3.7-portfolio"
+LOTTERY_PREDICTOR_VERSION = "dlt-v3.8-evidence-portfolio"
 FULL_HISTORY_FETCH_COUNT = 100
 MIN_FULL_HISTORY_ISSUES = 500
 ROLLING_BACKTEST_TRIALS = 30
@@ -2805,18 +2805,56 @@ def calculate_online_stats() -> Dict:
 
     by_method = {}
     for method in sorted(methods):
-        front_hits = [r.get(f'{method}_front_hit', 0) for r in settled]
-        back_hits = [r.get(f'{method}_back_hit', 0) for r in settled]
+        # Strategies were added over time.  A method that did not exist in an
+        # older version is not a miss and must not dilute its hit rate.
+        method_records = [r for r in settled if method in (r.get('recommendations') or {})]
+        method_n = len(method_records)
+        front_hits = [r.get(f'{method}_front_hit', 0) for r in method_records]
+        back_hits = [r.get(f'{method}_back_hit', 0) for r in method_records]
         by_method[method] = {
-            'count': n,
-            'front_ge1_rate': round(sum(1 for h in front_hits if h >= 1) / n, 4),
-            'front_ge2_rate': round(sum(1 for h in front_hits if h >= 2) / n, 4),
-            'front_ge3_rate': round(sum(1 for h in front_hits if h >= 3) / n, 4),
-            'front_avg': round(sum(front_hits) / n, 2),
-            'back_ge1_rate': round(sum(1 for h in back_hits if h >= 1) / n, 4),
-            'back_ge2_rate': round(sum(1 for h in back_hits if h >= 2) / n, 4),
-            'back_avg': round(sum(back_hits) / n, 2),
+            'count': method_n,
+            'front_ge1_rate': round(sum(1 for h in front_hits if h >= 1) / method_n, 4),
+            'front_ge2_rate': round(sum(1 for h in front_hits if h >= 2) / method_n, 4),
+            'front_ge3_rate': round(sum(1 for h in front_hits if h >= 3) / method_n, 4),
+            'front_avg': round(sum(front_hits) / method_n, 2),
+            'back_ge1_rate': round(sum(1 for h in back_hits if h >= 1) / method_n, 4),
+            'back_ge2_rate': round(sum(1 for h in back_hits if h >= 2) / method_n, 4),
+            'back_avg': round(sum(back_hits) / method_n, 2),
         }
+
+    def _portfolio_stats(rows):
+        if not rows:
+            return {}
+        best_front = []
+        best_back = []
+        same_ticket_3p1 = []
+        for record in rows:
+            names = (record.get('recommendations') or {}).keys()
+            pairs = [
+                (record.get(f'{name}_front_hit', 0), record.get(f'{name}_back_hit', 0))
+                for name in names
+            ]
+            best_front.append(max((front for front, _ in pairs), default=0))
+            best_back.append(max((back for _, back in pairs), default=0))
+            same_ticket_3p1.append(any(front >= 3 and back >= 1 for front, back in pairs))
+        count = len(rows)
+        return {
+            'count': count,
+            'front_any_ge2_rate': round(sum(hit >= 2 for hit in best_front) / count, 4),
+            'front_any_ge3_rate': round(sum(hit >= 3 for hit in best_front) / count, 4),
+            'back_any_ge1_rate': round(sum(hit >= 1 for hit in best_back) / count, 4),
+            'back_any_ge2_rate': round(sum(hit >= 2 for hit in best_back) / count, 4),
+            'same_ticket_front3_back1_rate': round(sum(same_ticket_3p1) / count, 4),
+            'avg_ticket_count': round(sum(len(r.get('recommendations') or {}) for r in rows) / count, 2),
+        }
+
+    versions = sorted({r.get('version') or 'legacy-unversioned' for r in settled})
+    by_version = {
+        version: _portfolio_stats([
+            r for r in settled if (r.get('version') or 'legacy-unversioned') == version
+        ])
+        for version in versions
+    }
 
     # 融合统计
     fusion_records = [r for r in settled if r.get('fusion')]
@@ -2841,6 +2879,8 @@ def calculate_online_stats() -> Dict:
         'settled_count': n,
         'unsettled_count': len(records) - n,
         'by_method': by_method,
+        'portfolio': _portfolio_stats(settled),
+        'by_version': by_version,
         'fusion': fusion_stats,
         'baseline': {
             'front_ge1': round(1 - math.comb(30, 5) / math.comb(35, 5), 4),
