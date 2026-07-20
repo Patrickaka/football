@@ -2624,10 +2624,34 @@ def build_zu6_coverage_tiers(score, kill=None, sizes=(4, 5, 6, 7), numbers=None)
             "digits_str": "".join(map(str, digits)),
             "notes": notes,
             "cost": notes * TICKET_PRICE,
-            "hit_rate": round(notes * 6 / 1000.0, 4),  # 理论=实测命中率（无 edge）
+            "hit_rate": round(notes * 6 / 1000.0, 4),  # 无条件命中率（含"开奖须为组六"）
+            "conditional_hit_rate": round(notes / 120.0, 4),  # 给定开奖为组六时 = notes/C(10,3)
+            "is_primary": n == ZU6_POOL_SIZE,  # 默认主推档位（五码）
             "combos": combo_strs,
         })
     return tiers
+
+
+def build_zu6_primary(score, kill=None, numbers=None, size=ZU6_POOL_SIZE):
+    """组六主推池：默认 5 码 → C(5,3)=10 注组六。
+
+    与 build_zu6_coverage_tiers 中同尺寸档位取号一致（同一 pick_zu6_pool），
+    供前端 zu6_primary 直接渲染，避免退化回四码却仍标注五码。
+    """
+    digits = pick_zu6_pool(score, kill, pool_size=size, numbers=numbers)
+    combos, combo_strs = zu6_notes_from_digits(digits)
+    notes = len(combos)
+    return {
+        "size": size,
+        "digits": digits,
+        "digits_str": "".join(map(str, digits)),
+        "notes": notes,
+        "cost": notes * TICKET_PRICE,
+        "hit_rate": round(notes * 6 / 1000.0, 4),
+        "conditional_hit_rate": round(notes / 120.0, 4),
+        "is_primary": True,
+        "combos": combo_strs,
+    }
 
 
 def _zu6_four_payload(label, digits):
@@ -4213,11 +4237,14 @@ def run_prediction(data=None, force_refresh=False, enable_backtest=False, enable
         "zu6_four": {
             "digits_str": "".join(map(str, zu6_four)),
             "combos": z6_straight,
+            "notes": len(z6_straight),
+            "conditional_hit_rate": round(len(z6_straight) / 120.0, 4),
         },
         "zu6_digit_scores": [
             {"digit": d, "score": round(zu6_score[d], 2)}
             for d in sorted(range(10), key=lambda x: -zu6_score[x])
         ],
+        "zu6_primary": build_zu6_primary(zu6_score, kill=None, numbers=numbers),
         "zu6_four_variants": build_zu6_four_variants(zu6_score, kill=None, numbers=numbers),
         "zu6_coverage": build_zu6_coverage_tiers(zu6_score, kill=None, numbers=numbers),
         "zhixuan_top3": zhixuan_top3_detail,
