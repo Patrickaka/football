@@ -5768,12 +5768,13 @@ function renderKL8(r) {
       if (!sel || !sel.numbers || sel.numbers.length === 0) continue;
 
       const isRef = sel.prediction_mode === 'reference_unvalidated';
+      const isCoverage = sel.baseline_type === 'fair_deterministic_coverage';
       const borderColor = isRef ? '#ffcc02' : '#2ea043';
-      const badgeText = isRef ? '参考' : '已验证';
+      const badgeText = isCoverage ? '公平覆盖' : (isRef ? '参考' : '已验证');
       const badgeColor = isRef ? '#9a6700' : '#2ea043';
 
       html += `<div class="kl8-select-card" style="border-color:${borderColor}">`;
-      html += `<div class="kl8-select-title">🎱 ${esc(sel.desc)} — ${isRef ? '参考' : '模型'}${sel.pick}个号码 <span style="font-size:11px;color:${badgeColor};font-weight:700;margin-left:8px">[${badgeText}]</span></div>`;
+      html += `<div class="kl8-select-title">🎱 ${esc(sel.desc)} — ${isCoverage ? '覆盖' : (isRef ? '参考' : '模型')}${sel.pick}个号码 <span style="font-size:11px;color:${badgeColor};font-weight:700;margin-left:8px">[${badgeText}]</span></div>`;
       html += `<div style="font-size:11px;color:#8b949e;margin-bottom:4px">策略: ${esc(sel.strategy_id || '')}</div>`;
       html += `<div class="kl8-numbers-row">`;
       const playChangeInfo = (changeInfo.play_changes || {})[key];
@@ -5813,8 +5814,9 @@ function renderKL8(r) {
     if (!fushi || coreNumbers.length === 0) continue;
 
     const isRef = fushi.prediction_mode === 'reference_unvalidated';
+    const isCoverage = fushi.baseline_type === 'fair_deterministic_coverage';
     const border = isRef ? '#ffcc02' : '#2ea043';
-    const badge = isRef ? '参考' : '已验证';
+    const badge = isCoverage ? '公平覆盖' : (isRef ? '参考' : '已验证');
     const badgeColor = isRef ? '#9a6700' : '#2ea043';
     const comboPick = fushi.combo_pick || (f.key === 'fu_shi_10_11' ? 10 : 5);
     const poolSize = fushi.pool_size || coreNumbers.length;

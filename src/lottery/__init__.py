@@ -2970,20 +2970,19 @@ def run_prediction(force_refresh=False, enable_backtest=True,
         if enable_ml:
             try:
                 from .ml import (
-                    predict_with_ml, backtest_ml, clear_ml_cache, TRAINING_WINDOW as _ML_TW,
+                    predict_with_ml, backtest_ml, TRAINING_WINDOW as _ML_TW,
                 )
-                if force_refresh:
-                    clear_ml_cache()
                 ml_prediction = predict_with_ml(
-                    analyzer.history_data, force_retrain=bool(force_refresh)
+                    analyzer.history_data, force_retrain=False
                 )
-                ml_trials = min(
-                    ML_BACKTEST_TRIALS,
-                    max(3, len(analyzer.history_data) - _ML_TW),
-                )
-                ml_backtest_result = backtest_ml(
-                    analyzer.history_data, trials=ml_trials
-                )
+                if enable_backtest:
+                    ml_trials = min(
+                        ML_BACKTEST_TRIALS,
+                        max(3, len(analyzer.history_data) - _ML_TW),
+                    )
+                    ml_backtest_result = backtest_ml(
+                        analyzer.history_data, trials=ml_trials
+                    )
             except Exception as e:
                 log.warning(f"ML模型预测失败（不影响整体功能）: {e}")
 

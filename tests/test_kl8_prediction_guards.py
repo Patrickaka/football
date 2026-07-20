@@ -41,14 +41,16 @@ class KL8PredictionGuardTests(unittest.TestCase):
         self.assertEqual(profile['unique_number_count'], 6)
         self.assertEqual(profile['max_pair_overlap'], 6)
 
-    def test_reference_select_5_and_6_avoid_forced_repeat_chasing(self):
-        for pick, repeat_cap in ((5, 2), (6, 3)):
+    def test_reference_select_5_and_6_use_fair_coverage_baseline(self):
+        for pick in (5, 6):
             strategy = resolve_play_strategy(f'select_{pick}')
 
             self.assertEqual(strategy['final_selection_mode'], 'shape_balanced')
-            self.assertEqual(strategy['pool_max_last_numbers'], repeat_cap)
+            self.assertIsNone(strategy['pool_max_last_numbers'])
             self.assertNotIn('final_min_last_numbers', strategy)
-            self.assertLessEqual(strategy['feature_weights']['pair_cooccurrence'], 0.05)
+            self.assertEqual(strategy['feature_weights']['seeded_random'], 1.0)
+            self.assertEqual(strategy['feature_weights']['pair_cooccurrence'], 0.0)
+            self.assertEqual(strategy['baseline_type'], 'fair_deterministic_coverage')
 
     def test_normalize_record_strips_issue_and_rejects_bad_numbers(self):
         record = normalize_record({'issue': ' 2026001 ', 'numbers': list(range(1, 21))})
@@ -196,7 +198,7 @@ class KL8PredictionGuardTests(unittest.TestCase):
         self.assertFalse(set(result['numbers']) & set(range(1, 11)))
         self.assertEqual(result['excluded_numbers'], list(range(1, 11)))
         self.assertNotEqual(result['quality']['selection_mode'], 'low_repeat')
-        self.assertEqual(result['quality']['requested_selection_mode'], 'best_variant')
+        self.assertEqual(result['quality']['requested_selection_mode'], 'shape_balanced')
 
     def test_recalculate_play_excluding_respects_strategy_selection_mode(self):
         analyzer = KL8Analyzer.__new__(KL8Analyzer)
@@ -316,7 +318,7 @@ class KL8PredictionGuardTests(unittest.TestCase):
         )
         self.assertIn('pick count', result['error'])
 
-    def test_reference_select_5_6_use_stable_shape_selection(self):
+    def test_reference_plays_use_honest_coverage_selection(self):
         original_verify_only = kl8_module.VERIFY_ONLY_MODE
         try:
             kl8_module.VERIFY_ONLY_MODE = False
@@ -328,10 +330,10 @@ class KL8PredictionGuardTests(unittest.TestCase):
 
         self.assertEqual(select5['final_selection_mode'], 'shape_balanced')
         self.assertEqual(select6['final_selection_mode'], 'shape_balanced')
-        self.assertEqual(select10['final_selection_mode'], 'best_variant')
-        self.assertIn('stable_shape', select5['strategy_id'])
-        self.assertIn('stable_shape', select6['strategy_id'])
-        self.assertIn('best_variant', select10['strategy_id'])
+        self.assertEqual(select10['final_selection_mode'], 'shape_balanced')
+        self.assertIn('fair_coverage', select5['strategy_id'])
+        self.assertIn('fair_coverage', select6['strategy_id'])
+        self.assertIn('fair_coverage', select10['strategy_id'])
         self.assertEqual(select5['target_hits'], 4)
         self.assertEqual(select6['target_hits'], 5)
 
@@ -376,9 +378,7 @@ class KL8PredictionGuardTests(unittest.TestCase):
             self.assertEqual(result[key]['numbers'], sorted(result[key]['numbers']))
 
         for key in [f'select_{pick}' for pick in range(3, 11)]:
-            expected_mode = 'best_variant' if key in {'select_10'} else 'prize_floor'
-            if key in {'select_5', 'select_6'}:
-                expected_mode = 'shape_balanced'
+            expected_mode = 'shape_balanced'
             self.assertEqual(
                 result['resolved_strategies'][key]['final_selection_mode'],
                 expected_mode,
@@ -387,8 +387,8 @@ class KL8PredictionGuardTests(unittest.TestCase):
             self.assertIn('zone_spread', result[key]['variants'])
             self.assertIn('prize_floor', result[key]['variants'])
 
-        self.assertEqual(result['resolved_strategies']['select_5']['pool_max_last_numbers'], 2)
-        self.assertEqual(result['resolved_strategies']['select_6']['pool_max_last_numbers'], 3)
+        self.assertIsNone(result['resolved_strategies']['select_5']['pool_max_last_numbers'])
+        self.assertIsNone(result['resolved_strategies']['select_6']['pool_max_last_numbers'])
         last_numbers = set(analyzer.history_data[0]['numbers'])
         self.assertGreaterEqual(len(set(result['select_5']['numbers']) & last_numbers), 1)
         self.assertGreaterEqual(len(set(result['select_6']['numbers']) & last_numbers), 2)
@@ -407,24 +407,24 @@ class KL8PredictionGuardTests(unittest.TestCase):
         self.assertIn('high_tier_chase', result['select_6']['variants'])
         self.assertEqual(
             result['resolved_strategies']['select_10']['final_selection_mode'],
-            'best_variant',
+            'shape_balanced',
         )
-        self.assertEqual(result['resolved_strategies']['select_10']['pool_max_last_numbers'], 5)
+        self.assertIsNone(result['resolved_strategies']['select_10']['pool_max_last_numbers'])
 
         self.assertEqual(
             result['resolved_strategies']['fu_shi_7']['final_selection_mode'],
-            'prize_floor',
+            'shape_balanced',
         )
         self.assertIn('repeat_follow', result['fu_shi_7']['variants'])
         self.assertIn('zone_spread', result['fu_shi_7']['variants'])
         self.assertIn('prize_floor', result['fu_shi_7']['variants'])
         self.assertEqual(result['fu_shi_7']['prize_hit_thresholds'], ['>=3'])
-        self.assertEqual(result['resolved_strategies']['fu_shi_7']['pool_max_last_numbers'], 4)
+        self.assertIsNone(result['resolved_strategies']['fu_shi_7']['pool_max_last_numbers'])
 
         self.assertIn('fu_shi_10_11', result)
         self.assertEqual(
             result['resolved_strategies']['fu_shi_10_11']['final_selection_mode'],
-            'prize_floor',
+            'shape_balanced',
         )
         self.assertEqual(len(result['fu_shi_10_11']['top11_numbers']), 11)
         self.assertEqual(

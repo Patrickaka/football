@@ -50,6 +50,79 @@ KL8_PARAMETER_SEARCH_JOBS = {}
 KL8_PARAMETER_SEARCH_LOCK = threading.Lock()
 KL8_PARAMETER_SEARCH_REPORT_DIR = Path(data_path('kl8_parameter_search_reports'))
 
+LOTTERY_BACKGROUND_JOBS = {}
+LOTTERY_BACKGROUND_LOCK = threading.Lock()
+
+
+def _set_lottery_background_job(job_id, updates):
+    with LOTTERY_BACKGROUND_LOCK:
+        job = LOTTERY_BACKGROUND_JOBS.setdefault(job_id, {})
+        job.update(updates)
+        return dict(job)
+
+
+def _run_lottery_refresh_job(job_id):
+    _set_lottery_background_job(job_id, {
+        'status': 'processing',
+        'started_at': time.time(),
+        'message': '正在增量抓取并快速计算',
+    })
+    try:
+        from src.lottery import clear_cache
+        clear_cache()
+        _CACHE['lottery']['data'] = None
+        _CACHE['lottery']['timestamp'] = 0
+        started = time.time()
+        result = lottery_run_prediction(
+            force_refresh=True,
+            enable_backtest=False,
+            enable_ml=True,
+            enable_fusion=True,
+            compute_weights=False,
+        )
+        if result.get('error'):
+            raise RuntimeError(result['error'])
+        _CACHE['lottery']['data'] = result
+        _CACHE['lottery']['timestamp'] = time.time()
+        _set_lottery_background_job(job_id, {
+            'status': 'done',
+            'success': True,
+            'finished_at': time.time(),
+            'elapsed': round(time.time() - started, 2),
+            'message': '大乐透刷新完成',
+        })
+    except Exception as exc:
+        log.exception('大乐透后台刷新失败')
+        _set_lottery_background_job(job_id, {
+            'status': 'error',
+            'success': False,
+            'finished_at': time.time(),
+            'error': str(exc),
+            'message': '大乐透刷新失败',
+        })
+
+
+def _start_lottery_refresh_job():
+    with LOTTERY_BACKGROUND_LOCK:
+        for existing_id, job in LOTTERY_BACKGROUND_JOBS.items():
+            if job.get('kind') == 'lottery_refresh' and job.get('status') == 'processing':
+                return dict(job)
+        job_id = uuid.uuid4().hex
+        LOTTERY_BACKGROUND_JOBS[job_id] = {
+            'task_id': job_id,
+            'kind': 'lottery_refresh',
+            'status': 'processing',
+            'created_at': time.time(),
+            'message': '后台任务已启动',
+        }
+    threading.Thread(
+        target=_run_lottery_refresh_job,
+        args=(job_id,),
+        daemon=True,
+        name=f'LotteryRefresh-{job_id[:8]}',
+    ).start()
+    return dict(LOTTERY_BACKGROUND_JOBS[job_id])
+
 
 def _current_kl8_predictor_version():
     """Read the KL8 version from the module so cache checks follow code reloads."""
@@ -1098,9 +1171,18 @@ class Handler(BaseHTTPRequestHandler):
                 self._log.info('大乐透分析使用缓存（server 级）')
                 return {'result': cache['data']}
 
-            # server 缓存失效，调用模块级预测函数（含模块级内存缓存）
-            self._log.info('大乐透分析重新计算')
-            result = lottery_run_prediction(force_refresh=True)
+            # 普通页面加载走快速路径：允许模块缓存，禁止请求内回测。
+            # 回测和模型重训应由显式后台任务执行，避免反向代理504。
+            self._log.info('大乐透分析快速计算')
+            started = time.time()
+            result = lottery_run_prediction(
+                force_refresh=False,
+                enable_backtest=False,
+                enable_ml=True,
+                enable_fusion=True,
+                compute_weights=False,
+            )
+            self._log.info('大乐透快速计算完成，耗时 %.2f秒', time.time() - started)
 
             # 处理模块返回的错误
             if 'error' in result:
@@ -1116,39 +1198,13 @@ class Handler(BaseHTTPRequestHandler):
             return {'error': '大乐透分析失败'}
 
     def _lottery_refresh_payload(self, params=None):
-        """强制刷新大乐透数据缓存"""
-        try:
-            self._log.info('大乐透强制刷新请求到达')
-            
-            # 清除模块级缓存
-            from src.lottery import clear_cache
-            clear_cache()
-            
-            # 清除服务器级缓存
-            _CACHE['lottery']['data'] = None
-            _CACHE['lottery']['timestamp'] = 0
-            
-            # 立即重新抓取并计算
-            self._log.info('大乐透强制刷新：重新抓取数据...')
-            start = time.time()
-            result = lottery_run_prediction(force_refresh=True)
-            elapsed = time.time() - start
-            
-            # 更新缓存
-            _CACHE['lottery']['data'] = result
-            _CACHE['lottery']['timestamp'] = time.time()
-            
-            self._log.info('大乐透强制刷新完成，耗时 %.2f秒', elapsed)
-            
-            return {
-                'success': True,
-                'message': '缓存已刷新',
-                'elapsed': round(elapsed, 2),
-                'data_count': result.get('data_quality', {}).get('issues') if isinstance(result, dict) else 0
-            }
-        except Exception as e:
-            self._log.error('大乐透强制刷新失败: %s', str(e), exc_info=True)
-            return {'success': False, 'error': str(e)}
+        """在后台强制刷新大乐透，HTTP请求立即返回任务ID。"""
+        job = _start_lottery_refresh_job()
+        return {
+            'processing': job.get('status') == 'processing',
+            'task_id': job.get('task_id'),
+            'message': job.get('message', '后台刷新已启动'),
+        }
 
     def _lottery_task_status_payload(self):
         """Return the legacy lottery background-task registry.
@@ -1159,7 +1215,16 @@ class Handler(BaseHTTPRequestHandler):
         Keeping the endpoint prevents a harmless compatibility check from
         turning into a page-level 404 error.
         """
-        return {}
+        now = time.time()
+        with LOTTERY_BACKGROUND_LOCK:
+            # 只保留最近两小时任务，避免常驻服务无限增长。
+            expired = [
+                job_id for job_id, job in LOTTERY_BACKGROUND_JOBS.items()
+                if now - float(job.get('created_at', now)) > 7200
+            ]
+            for job_id in expired:
+                LOTTERY_BACKGROUND_JOBS.pop(job_id, None)
+            return {job_id: dict(job) for job_id, job in LOTTERY_BACKGROUND_JOBS.items()}
 
     def _lottery_recommend_payload(self, params):
         """获取大乐透推荐号码 - 返回5组差异化策略组合"""
@@ -1356,7 +1421,7 @@ class Handler(BaseHTTPRequestHandler):
                 return {'result': cache['data']}
 
             self._log.info('快乐8重新计算')
-            result = kl8_run_prediction(force_refresh=True)
+            result = kl8_run_prediction(force_refresh=False)
 
             if 'error' in result:
                 return {'error': result['error']}
@@ -1392,7 +1457,8 @@ class Handler(BaseHTTPRequestHandler):
             self._log.info('快乐8抓取最新数据请求到达')
             from src.kl8.fetch import fetch_kl8_data, save_kl8_data
 
-            data = fetch_kl8_data(pages=5, per_page=50)
+            # 日常只需最近两页；历史补数由独立调度器负责。
+            data = fetch_kl8_data(pages=2, per_page=50)
             if not data:
                 return {'success': False, 'message': '网络抓取失败'}
 

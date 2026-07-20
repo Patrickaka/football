@@ -47,7 +47,7 @@ from src.common.logger import setup_logger
 
 log = setup_logger('kl8')
 
-KL8_PREDICTOR_VERSION = "kl8-v9.2.14-portfolio-coverage"
+KL8_PREDICTOR_VERSION = "kl8-v9.2.15-honest-coverage"
 
 # ─── v9.2: 只显示已验证策略模式 ───
 VERIFY_ONLY_MODE = False  # True=未验证玩法不输出号码; False=回退参考策略(始终输出号码)
@@ -842,6 +842,39 @@ def resolve_play_strategy(play_type: str, allow_reference: bool = False) -> Opti
     else:
         result = deepcopy(REFERENCE_STRATEGY)
         result['strategy_id'] = f'{play_type}_reference_heuristic_v1'
+
+    # Unvalidated history heuristics have not beaten the fair random baseline
+    # in strict walk-forward tests.  Do not let hot/cold, gap, trend or pair
+    # co-occurrence silently drive the numbers shown on the public page.
+    # A deterministic per-issue uniform rank keeps the result reproducible;
+    # shape balancing and the portfolio layer only improve ticket coverage,
+    # not the claimed probability of an individual number.
+    result.update({
+        'strategy_id': f'{play_type}_fair_coverage_v1',
+        'feature_weights': {
+            'frequency': 0.0,
+            'gap': 0.0,
+            'trend': 0.0,
+            'pair_cooccurrence': 0.0,
+            'position_residual': 0.0,
+            'position_residual_cross': 0.0,
+            'road_residual': 0.0,
+            'repeat': 0.0,
+            'odd_even': 0.0,
+            'big_small': 0.0,
+            'seeded_random': 1.0,
+        },
+        'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
+        'window_size': 1,
+        'repeat_direction': 'neutral',
+        'pool_max_last_numbers': None,
+        'final_selection_mode': 'shape_balanced',
+        'prediction_mode': 'reference_unvalidated',
+        'is_validated': False,
+        'baseline_type': 'fair_deterministic_coverage',
+    })
+    result.pop('final_max_last_numbers', None)
+    result.pop('final_min_last_numbers', None)
     return result
 
 
@@ -2199,7 +2232,10 @@ def generate_multi_slips(analyzer: 'KL8Analyzer', select_n: int, n_slips: int = 
         # Use a scale-relative reuse penalty.  The previous fixed 0.05 penalty
         # was sometimes too small compared with ranking scores, so nominally
         # different tickets still reused most of the same numbers.
-        reuse_penalty = max(score_span * 0.35, 0.03)
+        # A used number must rank below every still-unused candidate whenever
+        # the 40-number candidate pool can support that. This maximizes unique
+        # portfolio coverage before numbers are reused.
+        reuse_penalty = max(score_span * 1.10, 0.08)
         eff = sorted(
             ranking,
             key=lambda it: (
@@ -4313,10 +4349,11 @@ class KL8Analyzer:
                 'strategy_id': strategy['strategy_id'],
                 'prediction_mode': strategy['prediction_mode'],
                 'is_validated': strategy['is_validated'],
+                'baseline_type': strategy.get('baseline_type', ''),
                 'final_selection_mode': selected_mode,
                 'warning': (
                     '' if strategy['is_validated']
-                    else '参考预测：当前策略尚未通过严格回测验证，仅供数据观察。'
+                    else '公平覆盖基线：不使用冷热、遗漏或趋势猜号；仅优化组间覆盖，不提高单号开出概率。'
                 ),
             }
 
@@ -4431,9 +4468,10 @@ class KL8Analyzer:
                 'strategy_id': strategy['strategy_id'],
                 'prediction_mode': strategy['prediction_mode'],
                 'is_validated': strategy['is_validated'],
+                'baseline_type': strategy.get('baseline_type', ''),
                 'final_selection_mode': selected_mode,
                 'warning': '' if strategy['is_validated']
-                    else '参考预测：当前策略尚未通过严格回测验证，仅供数据观察。',
+                    else '公平覆盖基线：不使用冷热、遗漏或趋势猜号；仅优化组间覆盖，不提高单号开出概率。',
             }
 
         # v9.1: 本期变化对比
