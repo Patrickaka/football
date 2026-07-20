@@ -251,6 +251,172 @@ _CACHE = {
     },
 }
 
+# 每个缓存键一把锁，用于「单飞」计算：并发的冷请求只允许一个真正计算，
+# 其余请求要么复用陈旧结果、要么排队等待，避免惊群（thundering herd）把 CPU 打满。
+_CACHE_LOCKS = {key: threading.Lock() for key in _CACHE}
+
+# 需要落盘的计算结果（重启/发版后无需冷计算即可命中当天缓存）
+_PERSIST_KEYS = {'3d', '3d_ml'}
+
+
+def _cache_file(key):
+    return Path(data_path(f'server_cache_{key}.json'))
+
+
+def _persist_cache(key):
+    """把计算结果落盘，供进程重启后当天复用。失败不影响主流程。"""
+    if key not in _PERSIST_KEYS:
+        return
+    try:
+        entry = _CACHE[key]
+        with open(_cache_file(key), 'w', encoding='utf-8') as f:
+            json.dump({'data': entry['data'], 'timestamp': entry['timestamp']},
+                      f, ensure_ascii=False, default=_json_default)
+    except Exception as e:
+        log.warning('持久化缓存 %s 失败: %s', key, e)
+
+
+def _load_persisted_caches():
+    """启动时从磁盘恢复当天有效的计算结果，避免重启后首个请求冷计算。"""
+    for key in _PERSIST_KEYS:
+        try:
+            fp = _cache_file(key)
+            if not fp.exists():
+                continue
+            with open(fp, 'r', encoding='utf-8') as f:
+                obj = json.load(f)
+            ts = obj.get('timestamp', 0)
+            if obj.get('data') is not None and _is_same_day(ts):
+                _CACHE[key]['data'] = obj['data']
+                _CACHE[key]['timestamp'] = ts
+                log.info('已从磁盘恢复缓存 %s (timestamp=%s)', key, ts)
+        except Exception as e:
+            log.warning('加载持久化缓存 %s 失败: %s', key, e)
+
+
+def _serve_cached(key, compute_fn, background_refresh=True):
+    """单飞 + stale-while-revalidate 缓存读取。
+
+    - 缓存有效：直接返回。
+    - 缓存陈旧（有旧值但已过期/跨天）：立即返回旧值，同时后台单飞刷新。
+    - 缓存为空（冷启动）：阻塞等待单飞计算，并发请求只算一次。
+
+    compute_fn() 返回原始结果或抛异常。返回 (data, error_or_None)。
+    """
+    now = time.time()
+    cache = _CACHE[key]
+    if cache['data'] is not None and _is_cache_valid(cache, now):
+        return cache['data'], None
+
+    lock = _CACHE_LOCKS[key]
+
+    # 有陈旧数据：先返回旧值，后台刷新（只允许一个后台刷新在跑）
+    if cache['data'] is not None and background_refresh:
+        if lock.acquire(blocking=False):
+            def _bg():
+                try:
+                    data = compute_fn()
+                    cache['data'] = data
+                    cache['timestamp'] = time.time()
+                    _persist_cache(key)
+                    log.info('后台刷新缓存 %s 完成', key)
+                except Exception:
+                    log.error('后台刷新缓存 %s 失败', key, exc_info=True)
+                finally:
+                    lock.release()
+            threading.Thread(target=_bg, name=f'refresh-{key}', daemon=True).start()
+        return cache['data'], None
+
+    # 无数据（冷启动）：阻塞单飞，其余并发请求等待后直接命中
+    with lock:
+        now = time.time()
+        if cache['data'] is not None and _is_cache_valid(cache, now):
+            return cache['data'], None
+        try:
+            data = compute_fn()
+        except Exception as e:
+            log.error('计算缓存 %s 失败', key, exc_info=True)
+            return None, str(e)
+        cache['data'] = data
+        cache['timestamp'] = time.time()
+        _persist_cache(key)
+        return data, None
+
+
+def _compute_3d():
+    """规则模型（快速模式：关闭回测与权重计算）。"""
+    result = run_prediction(enable_backtest=False, compute_weights=False)
+    if isinstance(result, dict) and 'error' in result:
+        raise RuntimeError(result['error'])
+    return result
+
+
+def _compute_3d_ml():
+    """ML 多模型集成预测，附带规则模型推荐用于对比。"""
+    now = time.time()
+    data_cache = _CACHE['3d_data']
+    if data_cache['data'] is not None and _is_cache_valid(data_cache, now):
+        data = data_cache['data']
+    else:
+        data = fetch_data()
+        data_cache['data'] = data
+        data_cache['timestamp'] = now
+
+    numbers = [x[2] for x in data] if data else []
+    result = predict_current(numbers, model_type="ensemble")
+    if 'error' in result:
+        raise RuntimeError(result['error'])
+
+    # 复用已缓存的规则模型结果，避免二次 run_prediction / 二次抓取
+    rule_data, _ = _serve_cached('3d', _compute_3d)
+    rule_recommendations = (rule_data or {}).get('zhixuan', [])
+
+    return {
+        'model_type': result.get('model_type', 'unknown'),
+        'model_info': result.get('model_info', '未知模型'),
+        'num_models': int(result.get('num_models', 1)),
+        'model_weights': result.get('model_weights', []),
+        'total_samples': int(result.get('total_samples', 0)),
+        'pos_samples': int(result.get('pos_samples', 0)),
+        'neg_samples': int(result.get('neg_samples', 0)),
+        'recommendations': [
+            {
+                'num': r['num'],
+                'model_score': float(r.get('model_score', r.get('probability', 0))),
+                'topk_score_share': float(r.get('topk_score_share', r.get('relative_prob', 0))),
+                'relative_prob': float(r.get('relative_prob', r.get('topk_score_share', 0))),
+            }
+            for r in result.get('recommendations', [])
+        ],
+        'top3': [
+            {
+                'num': r['num'],
+                'model_score': float(r.get('model_score', r.get('probability', 0))),
+                'topk_score_share': float(r.get('topk_score_share', r.get('relative_prob', 0))),
+                'relative_prob': float(r.get('relative_prob', r.get('topk_score_share', 0))),
+            }
+            for r in result.get('top3', [])
+        ],
+        'rule_recommendations': [
+            {'num': r['num'], 'score': float(r.get('score', 0))}
+            for r in rule_recommendations
+        ],
+        'feature_importance': result.get('feature_importance', []),
+    }
+
+
+def _warm_3d_caches():
+    """后台预热 3D 规则与 ML 缓存，让用户永不承担冷计算。"""
+    try:
+        log.info('开始预热 3D 缓存...')
+        start = time.time()
+        _serve_cached('3d', _compute_3d, background_refresh=False)
+        _serve_cached('3d_ml', _compute_3d_ml, background_refresh=False)
+        log.info('3D 缓存预热完成，耗时 %.2f秒', time.time() - start)
+    except Exception:
+        log.error('3D 缓存预热失败', exc_info=True)
+
+
 _ROOT = Path(__file__).parent
 INDEX_FILE = _ROOT / 'web' / 'index.html'
 
@@ -751,35 +917,12 @@ class Handler(BaseHTTPRequestHandler):
             return {'error': f'复盘失败: {str(e)}'}
 
     def _lottery_3d_payload(self):
-        try:
-            now = time.time()
-            cache = _CACHE['3d']
-            self._log.info('3D 请求到达，缓存状态: data=%s, timestamp=%s', 
-                          cache['data'] is not None, cache['timestamp'])
-            
-            # 检查缓存是否有效（TTL + 跨天双重校验）
-            if cache['data'] is not None and _is_cache_valid(cache, now):
-                self._log.info('3D 预测使用缓存')
-                return {'result': cache['data']}
-            
-            # 缓存失效，重新计算（使用快速模式：关闭回测和权重计算）
-            self._log.info('3D 预测重新计算...')
-            start = time.time()
-            result = run_prediction(enable_backtest=False, compute_weights=False)
-            elapsed = time.time() - start
-            self._log.info('3D 预测计算完成，耗时 %.2f秒，结果长度 %d', elapsed, len(result))
-
-            if 'error' in result:
-                return {'error': result['error']}
-            
-            # 更新缓存
-            cache['data'] = result
-            cache['timestamp'] = now
-            
-            return {'result': result}
-        except Exception as e:
-            self._log.error('3D 预测失败: %s', str(e), exc_info=True)
+        # 单飞 + stale-while-revalidate：命中直接返回；陈旧返回旧值并后台刷新；
+        # 冷启动阻塞单飞（并发只算一次），彻底避免惊群导致的生产超时。
+        data, err = _serve_cached('3d', _compute_3d)
+        if err is not None or data is None:
             return {'error': '3D 预测失败'}
+        return {'result': data}
 
     def _lottery_3d_refresh_payload(self, params=None):
         """强制刷新3D数据缓存"""
@@ -820,6 +963,10 @@ class Handler(BaseHTTPRequestHandler):
             _CACHE['3d']['timestamp'] = time.time()
             _CACHE['3d_data']['data'] = ml_data
             _CACHE['3d_data']['timestamp'] = time.time()
+            _persist_cache('3d')  # 强制刷新结果也落盘，重启后当天复用
+            # ML 结果失效，交给下次请求单飞重算（避免刷新时同步扛训练开销）
+            _CACHE['3d_ml']['data'] = None
+            _CACHE['3d_ml']['timestamp'] = 0
             
             self._log.info('3D 强制刷新完成，耗时 %.2f秒', elapsed)
             
@@ -838,87 +985,12 @@ class Handler(BaseHTTPRequestHandler):
             return {'success': False, 'error': str(e)}
 
     def _lottery_3d_ml_payload(self):
-        try:
-            now = time.time()
-            ml_cache = _CACHE['3d_ml']
-            data_cache = _CACHE['3d_data']
-            
-            self._log.info('3D ML 请求到达，ML缓存状态: data=%s, timestamp=%s', 
-                          ml_cache['data'] is not None, ml_cache['timestamp'])
-            
-            # 检查 ML 缓存是否有效（TTL + 跨天双重校验）
-            if ml_cache['data'] is not None and _is_cache_valid(ml_cache, now):
-                self._log.info('3D ML 预测使用缓存')
-                return {'result': ml_cache['data']}
-
-            # 检查数据缓存（TTL + 跨天双重校验）
-            if data_cache['data'] is not None and _is_cache_valid(data_cache, now):
-                self._log.info('3D ML 使用缓存数据')
-                data = data_cache['data']
-            else:
-                self._log.info('3D ML 获取新数据')
-                data = fetch_data()
-                data_cache['data'] = data
-                data_cache['timestamp'] = now
-            
-            # 缓存失效，重新计算
-            self._log.info('3D ML 预测重新计算，数据量: %d', len(data) if data else 0)
-            numbers = [x[2] for x in data] if data else []
-            self._log.info('numbers 长度: %d', len(numbers))
-            # 使用多模型集成
-            result = predict_current(numbers, model_type="ensemble")
-            self._log.info('predict_current 结果类型: %s', type(result))
-            if 'error' in result:
-                self._log.error('predict_current 返回错误: %s', result['error'])
-                return {'error': result['error']}
-            self._log.info('predict_current 结果: model_type=%s, recommendations=%d', 
-                          result.get('model_type'), len(result.get('recommendations', [])))
-
-            # 获取规则模型推荐用于对比
-            rule_result = run_prediction(data=data, force_refresh=False, enable_backtest=False, use_prediction_cache=False)
-            rule_recommendations = rule_result.get('zhixuan', [])
-            
-            formatted = {
-                'model_type': result.get('model_type', 'unknown'),
-                'model_info': result.get('model_info', '未知模型'),
-                'num_models': int(result.get('num_models', 1)),
-                'model_weights': result.get('model_weights', []),
-                'total_samples': int(result.get('total_samples', 0)),
-                'pos_samples': int(result.get('pos_samples', 0)),
-                'neg_samples': int(result.get('neg_samples', 0)),
-                'recommendations': [
-                    {
-                        'num': r['num'],
-                        'model_score': float(r.get('model_score', r.get('probability', 0))),
-                        'topk_score_share': float(r.get('topk_score_share', r.get('relative_prob', 0))),
-                        'relative_prob': float(r.get('relative_prob', r.get('topk_score_share', 0))),
-                    }
-                    for r in result.get('recommendations', [])
-                ],
-                'top3': [
-                    {
-                        'num': r['num'],
-                        'model_score': float(r.get('model_score', r.get('probability', 0))),
-                        'topk_score_share': float(r.get('topk_score_share', r.get('relative_prob', 0))),
-                        'relative_prob': float(r.get('relative_prob', r.get('topk_score_share', 0))),
-                    }
-                    for r in result.get('top3', [])
-                ],
-                'rule_recommendations': [
-                    {'num': r['num'], 'score': float(r.get('score', 0))}
-                    for r in rule_recommendations
-                ],
-                'feature_importance': result.get('feature_importance', []),
-            }
-            
-            # 更新缓存
-            ml_cache['data'] = formatted
-            ml_cache['timestamp'] = now
-            
-            return {'result': formatted}
-        except Exception:
-            self._log.error('ML 3D 预测失败', exc_info=True)
+        # 单飞 + stale-while-revalidate：ML 集成训练是唯一的重计算路径，
+        # 交给统一缓存层，冷计算全程只发生一次且不阻塞已有用户。
+        data, err = _serve_cached('3d_ml', _compute_3d_ml)
+        if err is not None or data is None:
             return {'error': 'ML 3D 预测失败'}
+        return {'result': data}
 
     def _beidan_payload(self, params):
         """获取北单推荐预测"""
@@ -2005,6 +2077,10 @@ def _start_background_sync():
     except Exception as e:
         log.warning(f"启动快乐8调度器失败: {e}")
 
+    # 3D 缓存预热：启动后台线程提前算好规则 + ML 结果，用户永不承担冷计算
+    threading.Thread(target=_warm_3d_caches, daemon=True, name='Warm3DThread').start()
+    log.info('3D 缓存预热线程已启动')
+
 def main():
     server = ThreadingHTTPServer((HOST, PORT), Handler)
     local_url = f'http://localhost:{PORT}'
@@ -2020,6 +2096,7 @@ def main():
         log.warning('鉴权: 未启用 — 公网暴露前请设置 FOOTBALL_USERS')
     
     # 启动后台自动同步
+    _load_persisted_caches()  # 恢复当天有效的落盘结果，重启后无需冷计算
     _start_background_sync()
     
     log.info('=' * 50)
