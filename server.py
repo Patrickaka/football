@@ -76,8 +76,8 @@ def _run_lottery_refresh_job(job_id):
         result = lottery_run_prediction(
             force_refresh=True,
             enable_backtest=False,
-            enable_ml=True,
-            enable_fusion=True,
+            enable_ml=False,
+            enable_fusion=False,
             compute_weights=False,
         )
         if result.get('error'):
@@ -1178,8 +1178,8 @@ class Handler(BaseHTTPRequestHandler):
             result = lottery_run_prediction(
                 force_refresh=False,
                 enable_backtest=False,
-                enable_ml=True,
-                enable_fusion=True,
+                enable_ml=False,
+                enable_fusion=False,
                 compute_weights=False,
             )
             self._log.info('大乐透快速计算完成，耗时 %.2f秒', time.time() - started)
@@ -1230,7 +1230,9 @@ class Handler(BaseHTTPRequestHandler):
         """获取大乐透推荐号码 - 返回5组差异化策略组合"""
         try:
             analyzer = get_lottery_analyzer()
-            portfolio = analyzer.generate_multi_strategy_recommendations()
+            # 快速推荐不触发ML冷启动训练；ML有独立按需接口。
+            voting = analyzer.multi_model_voting(front_n=20, back_n=10, skip_ml=True)
+            portfolio = analyzer.generate_multi_strategy_recommendations(voting_result=voting)
             recommendations = portfolio.get('recommendations', [])
 
             return {
@@ -1316,47 +1318,13 @@ class Handler(BaseHTTPRequestHandler):
             return {'error': '大乐透回测失败'}
 
     def _lottery_fetch_payload(self):
-        """动态抓取大乐透最新开奖号码（强制刷新并重新分析）"""
-        try:
-            self._log.info('大乐透抓取并重新分析请求到达')
-            
-            # 清除服务器级缓存
-            _CACHE['lottery']['data'] = None
-            _CACHE['lottery']['timestamp'] = 0
-            
-            # 清除模块级缓存
-            from src.lottery import FULL_HISTORY_FETCH_COUNT, clear_cache
-            clear_cache()
-            
-            # 强制抓取最新数据
-            analyzer = get_lottery_analyzer()
-            fetch_result = analyzer.fetch_latest_results(
-                count=FULL_HISTORY_FETCH_COUNT,
-                force_refresh=True,
-            )
-            
-            # 重新分析
-            self._log.info('大乐透抓取完成，开始重新分析...')
-            analysis_result = lottery_run_prediction(force_refresh=True)
-            
-            # 更新缓存
-            _CACHE['lottery']['data'] = analysis_result
-            _CACHE['lottery']['timestamp'] = time.time()
-            
-            # 合并结果
-            result = {
-                'success': fetch_result.get('success', False),
-                'source': fetch_result.get('source'),
-                'message': fetch_result.get('message'),
-                'latest_issue': fetch_result.get('latest_issue'),
-                'fetched_count': fetch_result.get('count', 0),
-                'analysis': analysis_result
-            }
-            
-            return {'result': result}
-        except Exception:
-            self._log.error('大乐透抓取失败', exc_info=True)
-            return {'error': '大乐透抓取失败'}
+        """后台增量抓取并重新分析，避免生产代理请求超时。"""
+        job = _start_lottery_refresh_job()
+        return {
+            'processing': job.get('status') == 'processing',
+            'task_id': job.get('task_id'),
+            'message': job.get('message', '后台抓取已启动'),
+        }
 
     def _lottery_ml_payload(self):
         """大乐透 ML 预测结果"""

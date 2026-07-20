@@ -5132,7 +5132,7 @@ async function refreshLottery() {
 
 async function _pollLotteryTask(taskId, appLottery, btn, maxWaitSec = 1200) {
   const startTime = Date.now();
-  const pollInterval = 3000; // 3秒轮询一次
+  const pollInterval = 750; // 后台快速任务通常1秒内完成，避免固定多等3秒
   const longWaitThreshold = 300; // 5分钟后给出额外提示
   let longWaitShown = false;
   while ((Date.now() - startTime) / 1000 < maxWaitSec) {

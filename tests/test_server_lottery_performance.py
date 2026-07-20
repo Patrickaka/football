@@ -20,8 +20,8 @@ class ServerLotteryPerformanceTests(unittest.TestCase):
         run.assert_called_once_with(
             force_refresh=False,
             enable_backtest=False,
-            enable_ml=True,
-            enable_fusion=True,
+            enable_ml=False,
+            enable_fusion=False,
             compute_weights=False,
         )
 
@@ -36,6 +36,14 @@ class ServerLotteryPerformanceTests(unittest.TestCase):
 
         self.assertTrue(payload['processing'])
         self.assertEqual(payload['task_id'], 'job-1')
+
+    def test_fetch_endpoint_uses_same_background_fast_path(self):
+        job = {'task_id': 'job-3', 'status': 'processing', 'message': 'started'}
+        with patch.object(server, '_start_lottery_refresh_job', return_value=job):
+            payload = self.handler._lottery_fetch_payload()
+
+        self.assertTrue(payload['processing'])
+        self.assertEqual(payload['task_id'], 'job-3')
 
     def test_task_status_exposes_background_registry(self):
         with server.LOTTERY_BACKGROUND_LOCK:
