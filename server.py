@@ -29,6 +29,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
 from src.football import fetch_match_list, analyze_match
 from src.lottery3d import run_prediction
 from src.lottery3d.ml import fetch_data, predict_current
+from src.ssq import run_prediction as ssq_run_prediction, clear_cache as ssq_clear_cache
 from src.lottery import get_lottery_analyzer, run_prediction as lottery_run_prediction
 from src.lottery.ml import predict_with_ml, clear_ml_cache
 from src.kl8 import (
@@ -225,6 +226,11 @@ _CACHE = {
         'expire_seconds': 600  # 10分钟缓存（数据抓取）
     },
     '3d': {
+        'data': None,
+        'timestamp': 0,
+        'expire_seconds': 86400  # 24小时缓存（当天有效）
+    },
+    'ssq': {
         'data': None,
         'timestamp': 0,
         'expire_seconds': 86400  # 24小时缓存（当天有效）
@@ -614,6 +620,15 @@ class Handler(BaseHTTPRequestHandler):
         elif path == '/api/3d-refresh':
             params = parse_qs(route.query)
             self._serve_json(self._lottery_3d_refresh_payload(params))
+        elif path == '/ssq':
+            prefix = '/football' if route.path.startswith('/football/') else ''
+            self.send_response(302)
+            self.send_header('Location', f'{prefix}/#ssq')
+            self.end_headers()
+        elif path == '/api/ssq':
+            self._serve_json(self._ssq_payload())
+        elif path == '/api/ssq-refresh':
+            self._serve_json(self._ssq_refresh_payload())
         elif path == '/api/lottery/recommend':
             params = parse_qs(route.query)
             self._serve_json(self._lottery_recommend_payload(params))
@@ -923,6 +938,34 @@ class Handler(BaseHTTPRequestHandler):
         if err is not None or data is None:
             return {'error': '3D 预测失败'}
         return {'result': data}
+
+    def _ssq_payload(self):
+        """双色球：返回近期开奖、预测和历史记录（带单飞缓存）。"""
+        try:
+            data, err = _serve_cached('ssq', ssq_run_prediction)
+            if err is not None or data is None:
+                self._log.error('双色球预测失败: %s', err)
+                return {'error': '双色球预测失败'}
+            if isinstance(data, dict) and data.get('error'):
+                return {'error': data['error']}
+            return {'result': data}
+        except Exception as exc:
+            self._log.error('双色球预测失败: %s', exc, exc_info=True)
+            return {'error': '双色球预测失败'}
+
+    def _ssq_refresh_payload(self):
+        """双色球：清除历史缓存并强制抓取最新开奖。"""
+        try:
+            ssq_clear_cache()
+            result = ssq_run_prediction(force_refresh=True)
+            if result.get('error'):
+                return {'error': result['error']}
+            _CACHE['ssq']['data'] = result
+            _CACHE['ssq']['timestamp'] = time.time()
+            return {'result': result}
+        except Exception as exc:
+            self._log.error('双色球刷新失败: %s', exc, exc_info=True)
+            return {'error': '双色球刷新失败'}
 
     def _lottery_3d_refresh_payload(self, params=None):
         """强制刷新3D数据缓存"""
