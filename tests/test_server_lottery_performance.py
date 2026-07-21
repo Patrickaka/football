@@ -37,6 +37,35 @@ class ServerLotteryPerformanceTests(unittest.TestCase):
         self.assertTrue(payload['processing'])
         self.assertEqual(payload['task_id'], 'job-1')
 
+    def test_3d_refresh_endpoint_returns_background_task_immediately(self):
+        job = {
+            'task_id': '3d-job-1',
+            'status': 'processing',
+            'message': 'started',
+        }
+        with patch.object(server, '_start_3d_refresh_job', return_value=job) as start:
+            payload = self.handler._lottery_3d_refresh_payload({'backtest': ['1']})
+
+        self.assertTrue(payload['processing'])
+        self.assertEqual(payload['task_id'], '3d-job-1')
+        self.assertTrue(payload['backtest_enabled'])
+        start.assert_called_once_with(enable_backtest=True)
+
+    def test_3d_refresh_reuses_active_job(self):
+        with server.LOTTERY_BACKGROUND_LOCK:
+            server.LOTTERY_BACKGROUND_JOBS.clear()
+            server.LOTTERY_BACKGROUND_JOBS['3d-existing'] = {
+                'task_id': '3d-existing',
+                'kind': '3d_refresh',
+                'status': 'processing',
+                'created_at': server.time.time(),
+            }
+        with patch.object(server.threading, 'Thread') as thread:
+            job = server._start_3d_refresh_job(enable_backtest=False)
+
+        self.assertEqual(job['task_id'], '3d-existing')
+        thread.assert_not_called()
+
     def test_fetch_endpoint_uses_same_background_fast_path(self):
         job = {'task_id': 'job-3', 'status': 'processing', 'message': 'started'}
         with patch.object(server, '_start_lottery_refresh_job', return_value=job):

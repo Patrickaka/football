@@ -135,6 +135,96 @@ def _start_lottery_refresh_job():
     return dict(LOTTERY_BACKGROUND_JOBS[job_id])
 
 
+def _run_3d_refresh_job(job_id, enable_backtest=False):
+    """Refresh 3D data outside the request thread so proxies never see a 504."""
+    _set_lottery_background_job(job_id, {
+        'status': 'processing',
+        'started_at': time.time(),
+        'message': '正在抓取福彩3D数据并计算',
+    })
+    try:
+        from src.lottery3d import clear_cache
+        from src.lottery3d.ml import clear_ml_cache, fetch_data as fetch_ml_data
+        from src.common.data_cache import clear_cache as clear_fetch_cache
+
+        clear_cache()
+        clear_ml_cache()
+        clear_fetch_cache('lottery3d')
+        clear_fetch_cache('lottery3d_ml')
+        for key in ('3d', '3d_ml', '3d_data'):
+            _CACHE[key]['data'] = None
+            _CACHE[key]['timestamp'] = 0
+
+        started = time.time()
+        result = run_prediction(
+            force_refresh=True,
+            enable_backtest=bool(enable_backtest),
+            compute_weights=True,
+        )
+        if result.get('error'):
+            raise RuntimeError(result['error'])
+        ml_data = fetch_ml_data(force_refresh=True)
+
+        _CACHE['3d']['data'] = result
+        _CACHE['3d']['timestamp'] = time.time()
+        _CACHE['3d_data']['data'] = ml_data
+        _CACHE['3d_data']['timestamp'] = time.time()
+        _persist_cache('3d')
+        # ML training remains lazy; the normal single-flight endpoint owns it.
+        _CACHE['3d_ml']['data'] = None
+        _CACHE['3d_ml']['timestamp'] = 0
+
+        _set_lottery_background_job(job_id, {
+            'status': 'done',
+            'success': True,
+            'finished_at': time.time(),
+            'elapsed': round(time.time() - started, 2),
+            'data_count': result.get('total_periods', 0),
+            'ml_data_count': len(ml_data) if ml_data else 0,
+            'message': '福彩3D刷新完成',
+        })
+    except Exception as exc:
+        log.exception('福彩3D后台刷新失败')
+        _set_lottery_background_job(job_id, {
+            'status': 'error',
+            'success': False,
+            'finished_at': time.time(),
+            'error': str(exc),
+            'message': '福彩3D刷新失败',
+        })
+
+
+def _start_3d_refresh_job(enable_backtest=False):
+    with LOTTERY_BACKGROUND_LOCK:
+        for job in LOTTERY_BACKGROUND_JOBS.values():
+            if job.get('kind') == '3d_refresh' and job.get('status') == 'processing':
+                age = time.time() - float(job.get('started_at') or job.get('created_at') or time.time())
+                if age <= 1800:
+                    return dict(job)
+                job.update({
+                    'status': 'error',
+                    'success': False,
+                    'finished_at': time.time(),
+                    'error': 'background refresh timed out',
+                })
+        job_id = uuid.uuid4().hex
+        LOTTERY_BACKGROUND_JOBS[job_id] = {
+            'task_id': job_id,
+            'kind': '3d_refresh',
+            'status': 'processing',
+            'created_at': time.time(),
+            'backtest_enabled': bool(enable_backtest),
+            'message': '福彩3D后台任务已启动',
+        }
+    threading.Thread(
+        target=_run_3d_refresh_job,
+        args=(job_id, bool(enable_backtest)),
+        daemon=True,
+        name=f'Lottery3DRefresh-{job_id[:8]}',
+    ).start()
+    return dict(LOTTERY_BACKGROUND_JOBS[job_id])
+
+
 def _current_kl8_predictor_version():
     """Read the KL8 version from the module so cache checks follow code reloads."""
     try:
@@ -968,64 +1058,16 @@ class Handler(BaseHTTPRequestHandler):
             return {'error': '双色球刷新失败'}
 
     def _lottery_3d_refresh_payload(self, params=None):
-        """强制刷新3D数据缓存"""
-        try:
-            params = params or {}
-            enable_backtest = str((params.get('backtest') or ['0'])[0]).lower() in ('1', 'true', 'yes', 'on')
-            self._log.info('3D 强制刷新请求到达')
-            
-            # 清除模块级缓存
-            from src.lottery3d import clear_cache
-            from src.lottery3d.ml import clear_ml_cache, fetch_data as fetch_ml_data
-            from src.common.data_cache import clear_cache as clear_fetch_cache
-            clear_cache()
-            clear_ml_cache()
-            clear_fetch_cache('lottery3d')
-            clear_fetch_cache('lottery3d_ml')
-            
-            # 清除服务器级缓存
-            _CACHE['3d']['data'] = None
-            _CACHE['3d']['timestamp'] = 0
-            _CACHE['3d_ml']['data'] = None
-            _CACHE['3d_ml']['timestamp'] = 0
-            _CACHE['3d_data']['data'] = None
-            _CACHE['3d_data']['timestamp'] = 0
-            
-            # 立即重新抓取并计算
-            self._log.info('3D 强制刷新：重新抓取数据...')
-            start = time.time()
-            result = run_prediction(force_refresh=True, enable_backtest=enable_backtest, compute_weights=True)
-            ml_data = fetch_ml_data(force_refresh=True)
-            elapsed = time.time() - start
-            
-            if 'error' in result:
-                return {'success': False, 'error': result['error']}
-            
-            # 更新缓存
-            _CACHE['3d']['data'] = result
-            _CACHE['3d']['timestamp'] = time.time()
-            _CACHE['3d_data']['data'] = ml_data
-            _CACHE['3d_data']['timestamp'] = time.time()
-            _persist_cache('3d')  # 强制刷新结果也落盘，重启后当天复用
-            # ML 结果失效，交给下次请求单飞重算（避免刷新时同步扛训练开销）
-            _CACHE['3d_ml']['data'] = None
-            _CACHE['3d_ml']['timestamp'] = 0
-            
-            self._log.info('3D 强制刷新完成，耗时 %.2f秒', elapsed)
-            
-            return {
-                'success': True,
-                'message': '缓存已刷新',
-                'elapsed': round(elapsed, 2),
-                'data_count': result.get('total_periods', 0),
-                'ml_data_count': len(ml_data) if ml_data else 0,
-                'backtest_enabled': enable_backtest,
-                'data_quality': result.get('data_quality'),
-                'ml_status': result.get('ml_status')
-            }
-        except Exception as e:
-            self._log.error('3D 强制刷新失败: %s', str(e), exc_info=True)
-            return {'success': False, 'error': str(e)}
+        """Start a 3D refresh and return immediately with a pollable task ID."""
+        params = params or {}
+        enable_backtest = str((params.get('backtest') or ['0'])[0]).lower() in ('1', 'true', 'yes', 'on')
+        job = _start_3d_refresh_job(enable_backtest=enable_backtest)
+        return {
+            'processing': job.get('status') == 'processing',
+            'task_id': job.get('task_id'),
+            'message': job.get('message', '福彩3D后台刷新已启动'),
+            'backtest_enabled': bool(enable_backtest),
+        }
 
     def _lottery_3d_ml_payload(self):
         # 单飞 + stale-while-revalidate：ML 集成训练是唯一的重计算路径，
@@ -1332,14 +1374,7 @@ class Handler(BaseHTTPRequestHandler):
         }
 
     def _lottery_task_status_payload(self):
-        """Return the legacy lottery background-task registry.
-
-        Lottery refreshes currently run synchronously, so there are no active
-        jobs to report.  The web client still checks this endpoint before its
-        initial load and may poll it when talking to an older async backend.
-        Keeping the endpoint prevents a harmless compatibility check from
-        turning into a page-level 404 error.
-        """
+        """Return background status for大乐透 and福彩3D refresh jobs."""
         now = time.time()
         with LOTTERY_BACKGROUND_LOCK:
             # 只保留最近两小时任务，避免常驻服务无限增长。
