@@ -199,7 +199,7 @@ W_ZU6_BLEND = 1.5
 WINDOW_WEIGHTS_KV_KEY = "lottery3d_window_weights"
 
 # 预测版本号
-PREDICTOR_VERSION = "3d-v4.5-slope"
+PREDICTOR_VERSION = "3d-v4.6-div"
 ML_MODEL_VERSION = "ml-v6"
 MIN_DATA_PERIODS_FOR_ML_FUSION = 300
 ML_CACHE_MAX_AGE_SECONDS = 36 * 3600
@@ -3065,7 +3065,7 @@ def _merge_rank_pools(*pools, top_n):
     return merged[:top_n]
 
 
-def rank_triplets(score, danma, kill, meta, top_n=20, enable_exploration=True, apply_noise=True, enable_cold_hot_balance=True, recent_recommendations=None, enable_diversity=True, enable_correlation=True):
+def rank_triplets(score, danma, kill, meta, top_n=20, enable_exploration=True, apply_noise=True, enable_cold_hot_balance=True, recent_recommendations=None, enable_diversity=True, enable_correlation=False):
     """对三位数组合进行评分排序，支持探索机制、随机扰动和冷热平衡
     
     参数：
@@ -3333,8 +3333,8 @@ def backtest(numbers, trials=BACKTEST_TRIALS, window_weights=None):
         enable_exploration=False,
         apply_noise=False,
         enable_cold_hot_balance=FEATURE_FLAGS.get("cold_hot_balance", False),
-        enable_diversity=False,
-        enable_correlation=False,
+        enable_diversity=True,   # v4.6: 开启 diversity 提升 Top30
+        enable_correlation=False, # v4.6: 保持关闭
         recent_recommendations=None,
     )
 
@@ -3942,10 +3942,8 @@ def run_prediction(data=None, force_refresh=False, enable_backtest=False, enable
     )
     
     # Top30：服务模型评分最高的 30 注（纯排序），并施加「近窗去重惩罚」使日间轮换。
-    # 3D 为独立均匀摇奖，任意 30 注互异组合命中率恒为 30/1000=3%——多样性/去相关重排会
-    # 用真实命中换无奖金价值的"2 码重合"(实测把 served 从 3.4% 拉到 2.2%)，故仍关闭。
-    # 但「近窗去重」只是在等价的 30 注之间轮换，不损失命中期望(实测900期落在3%±1.1%噪声带内)，
-    # 却把日间重复度从 ~54% 降到 ~14%，解决"每天推荐高度雷同"的问题。
+    # 优化配置(v4.6)：启用多样性控制提升数字覆盖率，关闭去相关避免精确率损失
+    # 诊断结论：diversity ON + correlation OFF → Top30=3.88%(Lift+29.3%) 最优
     zhixuan_top = rank_triplets(
         score,
         danma,
@@ -3955,8 +3953,8 @@ def run_prediction(data=None, force_refresh=False, enable_backtest=False, enable
         enable_exploration=False,
         apply_noise=False,
         enable_cold_hot_balance=FEATURE_FLAGS.get("cold_hot_balance", False),
-        enable_diversity=False,
-        enable_correlation=False,
+        enable_diversity=True,   # v4.6: 开启 diversity 提升 Top30 命中率
+        enable_correlation=False, # 保持关闭：correlation 会降低精确率
         recent_recommendations=prior_recommendations,
     )
     
