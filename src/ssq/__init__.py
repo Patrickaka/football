@@ -38,7 +38,7 @@ RECENT_WINDOW = 30                  # 近期趋势窗口
 DEFAULT_RECENT = 15                 # 页面默认展示近期期数
 NUM_SETS = 5                        # 推荐注数
 SSQ_PREDICTIONS_KEY = 'lottery_ssq_online_predictions'
-SSQ_PREDICTION_VERSION = 'ssq-v1.1-records'
+SSQ_PREDICTION_VERSION = 'ssq-v2.0-pool'
 
 
 def load_prediction_records():
@@ -214,6 +214,19 @@ def _analyze(history):
     red_sorted = sorted(red_freq.items(), key=lambda kv: kv[1], reverse=True)
     blue_sorted = sorted(blue_freq.items(), key=lambda kv: kv[1], reverse=True)
 
+    # 综合权重与完整排名（用于大底池输出；公式与 _predict_sets 保持一致）
+    # 诊断结论（scripts/diagnose_ssq_v3.py）：近期系数 1.5 已是最优，加遗漏/去重叠/大底池内采样均无效或有害。
+    red_w = [red_freq[x] + 1.5 * red_recent[x] + 0.5 for x in RED_RANGE]
+    blue_w = [blue_freq[x] + 1.5 * blue_recent[x] + 0.3 for x in BLUE_RANGE]
+    red_ranking = sorted(
+        [{'number': x, 'weight': round(red_w[i], 3)} for i, x in enumerate(RED_RANGE)],
+        key=lambda d: -d['weight'],
+    )
+    blue_ranking = sorted(
+        [{'number': x, 'weight': round(blue_w[i], 3)} for i, x in enumerate(BLUE_RANGE)],
+        key=lambda d: -d['weight'],
+    )
+
     return {
         'red_freq': red_freq,
         'blue_freq': blue_freq,
@@ -223,6 +236,8 @@ def _analyze(history):
         'cold_red': [n for n, _ in red_sorted[-10:]],
         'hot_blue': [n for n, _ in blue_sorted[:5]],
         'cold_blue': [n for n, _ in blue_sorted[-5:]],
+        'red_ranking': red_ranking,
+        'blue_ranking': blue_ranking,
     }
 
 
@@ -319,6 +334,13 @@ def run_prediction(data=None, force_refresh=False, recent=DEFAULT_RECENT):
     # 只有出现新一期开奖（期号变化）时才会更新预测。
     sets = _predict_sets(history, analysis, n=NUM_SETS, seed=int(latest['period']))
 
+    # v2.0: 大底池选号参考区（确定性覆盖提升，不改变已最优的5注采样逻辑）
+    # 红球 Top15 大底：开奖6红球中≥4个落入的概率约 22~25%（随机推15码仅24.2%，
+    # 模型微弱正向）；蓝球 Top8 大底：蓝球命中概率约 51%（随机推8码50%）。
+    # 诊断证明：双色球统计信号极弱，限制单式采样范围反而降低命中，故大底池仅作参考。
+    red_pool = [item['number'] for item in analysis['red_ranking'][:15]]
+    blue_pool = [item['number'] for item in analysis['blue_ranking'][:8]]
+
     # Only live predictions are persisted. Tests/callers supplying historical
     # data can evaluate the pure prediction function without changing storage.
     if data is None:
@@ -341,6 +363,11 @@ def run_prediction(data=None, force_refresh=False, recent=DEFAULT_RECENT):
             'primary': sets[0],
             'sets': sets,
         },
+        # v2.0: 大底池选号参考区 + 完整排名
+        'red_pool': red_pool,
+        'blue_pool': blue_pool,
+        'red_ranking': analysis['red_ranking'],
+        'blue_ranking': analysis['blue_ranking'],
         'prediction_records': list(reversed(prediction_records[-20:])),
         'online_stats': calculate_prediction_stats(prediction_records),
         'version': SSQ_PREDICTION_VERSION,

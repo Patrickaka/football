@@ -69,6 +69,22 @@
   </div>
 
   <div class="card">
+    <h2>大底池选号参考区 <small>红球Top15 / 蓝球Top8 · 复式·胆拖参考</small></h2>
+    <div class="meta" style="margin-bottom:8px;">
+      <span>红球大底覆盖开奖≥4码 ≈ <b>22~25%</b></span>
+      <span>蓝球大底命中 ≈ <b>51%</b></span>
+    </div>
+    <div style="margin-bottom:6px; font-size:12px; color:#6a7388;">红球大底（Top15，按热度排序）</div>
+    <div id="redPool" class="balls"></div>
+    <div style="margin:12px 0 6px; font-size:12px; color:#6a7388;">蓝球大底（Top8，按热度排序）</div>
+    <div id="bluePool" class="balls"></div>
+    <div class="disclaimer" style="margin-top:10px; text-align:left;">
+      说明：双色球为独立均匀摇奖，统计模型区分度极弱。大底池仅缩小选号范围（33→15红球），
+      作为复式/胆拖选号参考，不保证命中；精选单式仍见上方「预测结果」。
+    </div>
+  </div>
+
+  <div class="card">
     <h2>近期开奖结果 <small id="latestInfo"></small></h2>
     <div id="history" class="history"></div>
   </div>
@@ -108,6 +124,16 @@ function render(data) {
     '<span>热红 <b>' + (a.hot_red || []).join(' ') + '</b></span>' +
     '<span>冷红 <u>' + (a.cold_red || []).join(' ') + '</u></span>' +
     '<span>热蓝 <b>' + (a.hot_blue || []).join(' ') + '</b></span>';
+
+  // 大底池
+  const rp = document.getElementById('redPool');
+  if (rp && data.red_pool) {
+    rp.innerHTML = data.red_pool.map(n => '<div class="ball red">' + n + '</div>').join('');
+  }
+  const bp = document.getElementById('bluePool');
+  if (bp && data.blue_pool) {
+    bp.innerHTML = data.blue_pool.map(n => '<div class="ball blue">' + n + '</div>').join('');
+  }
 
   // 历史
   const hist = document.getElementById('history');
