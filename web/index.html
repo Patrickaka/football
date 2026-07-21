@@ -5245,6 +5245,11 @@ async function getLotteryRecommend() {
       const front = (rec.front || []).map(n => String(n).padStart(2, '0')).join(' ');
       const back = (rec.back || []).map(n => String(n).padStart(2, '0')).join(' ');
       const strategyName = rec.method || '推荐';
+      const coreFront = (rec.core_front || []).map(n => String(n).padStart(2, '0')).join(' ');
+      const coreBack = (rec.core_back || []).map(n => String(n).padStart(2, '0')).join(' ');
+      const coreNote = (coreFront || coreBack)
+        ? `<div style="text-align:center;font-size:10px;color:#93c5fd;margin-top:3px">核心 ${esc(coreFront)}${coreBack ? ` + ${esc(coreBack)}` : ''} · 基于 ${esc(rec.based_on_issue || '最新期')}</div>`
+        : '';
       html += `<div class="highlight" style="margin-bottom:8px">
         <div style="display:flex;justify-content:center;align-items:center;gap:12px">
           <span style="font-size:12px;color:var(--muted)">${idx + 1}.</span>
@@ -5253,6 +5258,7 @@ async function getLotteryRecommend() {
           <span class="big" style="letter-spacing:4px;color:#4493f8">${back}</span>
         </div>
         <div style="text-align:center;font-size:11px;color:var(--muted);margin-top:2px">${strategyName}</div>
+        ${coreNote}
       </div>`;
     });
     

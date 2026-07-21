@@ -54,7 +54,7 @@ FEATURE_WEIGHTS = {
 # 时间衰减因子 (最近一期权重1.0，20期前≈0.19，50期前≈0.016)
 TIME_DECAY_FACTOR = 0.92
 MIN_REAL_HISTORY_FOR_RANKING = 80  # 降低阈值: 120期真实数据足够支撑统计模型
-LOTTERY_PREDICTOR_VERSION = "dlt-v3.9-back-coverage"
+LOTTERY_PREDICTOR_VERSION = "dlt-v4.0-primary-rotation"
 FULL_HISTORY_FETCH_COUNT = 100
 MIN_FULL_HISTORY_ISSUES = 500
 ROLLING_BACKTEST_TRIALS = 30
@@ -1962,11 +1962,54 @@ class LotteryAnalyzer:
         recommendations = []
 
         front_ranked, back_ranked = self.rank_model(top_n=20)
+        ranked_front_numbers = [n for n, _, _ in front_ranked]
+        ranked_back_numbers = [n for n, _, _ in back_ranked]
+        latest_issue = str((self.history_data[0] if self.history_data else {}).get('issue') or '0')
+        try:
+            issue_seed = int(latest_issue)
+        except (TypeError, ValueError):
+            issue_seed = sum(ord(ch) for ch in latest_issue)
+
+        # Keep the two strongest front numbers and strongest back number, while
+        # rotating the remaining positions inside high-ranked pools.  This
+        # prevents a stable rank table from pinning the first ticket forever.
+        primary_front_core = ranked_front_numbers[:2]
+        front_rotation_pool = ranked_front_numbers[2:10]
+        front_support = []
+        if front_rotation_pool:
+            offset = issue_seed % len(front_rotation_pool)
+            step = 3 if len(front_rotation_pool) >= 8 else 1
+            cursor = offset
+            while len(front_support) < 3 and len(front_support) < len(front_rotation_pool):
+                number = front_rotation_pool[cursor % len(front_rotation_pool)]
+                if number not in front_support:
+                    front_support.append(number)
+                cursor += step
+        if len(primary_front_core) + len(front_support) < 5:
+            front_support.extend(
+                n for n in ranked_front_numbers
+                if n not in primary_front_core and n not in front_support
+            )
+
+        primary_back_core = ranked_back_numbers[:1]
+        back_rotation_pool = ranked_back_numbers[1:6]
+        back_support = []
+        if back_rotation_pool:
+            back_support = [back_rotation_pool[issue_seed % len(back_rotation_pool)]]
+        if len(primary_back_core) + len(back_support) < 2:
+            back_support.extend(
+                n for n in ranked_back_numbers
+                if n not in primary_back_core and n not in back_support
+            )
+
         primary = {
-            'front': sorted([n for n, _, _ in front_ranked[:5]]),
-            'back': sorted([n for n, _, _ in back_ranked[:2]]),
-            'method': '主推（排名）',
+            'front': sorted((primary_front_core + front_support)[:5]),
+            'back': sorted((primary_back_core + back_support)[:2]),
+            'method': '主推（核心+高分轮换）',
             'strategy': 'primary_rank',
+            'core_front': sorted(primary_front_core),
+            'core_back': sorted(primary_back_core),
+            'based_on_issue': latest_issue,
         }
         recommendations.append(primary)
         used_front.update(primary['front'])
@@ -1976,7 +2019,7 @@ class LotteryAnalyzer:
         # high-ranked number after the first ticket.  Keep two front anchors and
         # one back anchor in play; diversify the remaining positions.  The old
         # full-exclusion policy made later tickets progressively lower quality.
-        front_anchors = set(primary['front'][:2])
+        front_anchors = set(primary_front_core)
         # 后区只有12个号码。五组共10个后区位置时，重复锚点会直接浪费
         # 组合覆盖；保留前区锚点，但后区优先使用尚未覆盖的号码。
         back_anchors = set()
@@ -2061,10 +2104,13 @@ class LotteryAnalyzer:
         return {
             'recommendations': recommendations,
             'portfolio_policy': {
-                'name': 'front_anchor_back_full_coverage',
+                'name': 'rank_core_rotating_primary_back_coverage',
                 'front_anchors': sorted(front_anchors),
                 'back_anchors': sorted(back_anchors),
-                'note': '前区保留核心锚点；后区五组优先覆盖10个不同号码',
+                'primary_based_on_issue': latest_issue,
+                'primary_front_pool': ranked_front_numbers[:10],
+                'primary_back_pool': ranked_back_numbers[:6],
+                'note': '首注保留排名核心并按最新期号轮换高分候选；后区五组优先覆盖10个不同号码',
             },
             'back_coverage_profile': back_coverage_profile,
             'voting_front': [c['number'] for c in (voting.get('front_candidates') or [])[:12]],
@@ -3060,6 +3106,9 @@ def run_prediction(force_refresh=False, enable_backtest=True,
                 'back': item.get('back', []),
                 'method': key,
                 'label': item.get('method'),
+                'core_front': item.get('core_front', []),
+                'core_back': item.get('core_back', []),
+                'based_on_issue': item.get('based_on_issue'),
             }
 
         # ML推荐 (v2.2新增策略)

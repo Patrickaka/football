@@ -1408,6 +1408,9 @@ class Handler(BaseHTTPRequestHandler):
                     'method': rec.get('label') or rec.get('method') or strategy,
                     'front': rec.get('front', []),
                     'back': rec.get('back', []),
+                    'core_front': rec.get('core_front', []),
+                    'core_back': rec.get('core_back', []),
+                    'based_on_issue': rec.get('based_on_issue'),
                 })
 
             return {

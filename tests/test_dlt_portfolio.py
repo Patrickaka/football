@@ -12,7 +12,7 @@ class DltPortfolioTests(unittest.TestCase):
         policy = result['portfolio_policy']
         recommendations = result['recommendations']
 
-        self.assertEqual(policy['name'], 'front_anchor_back_full_coverage')
+        self.assertEqual(policy['name'], 'rank_core_rotating_primary_back_coverage')
         self.assertEqual(len(policy['front_anchors']), 2)
         self.assertEqual(len(policy['back_anchors']), 0)
         tickets = {
@@ -48,8 +48,27 @@ class DltPortfolioTests(unittest.TestCase):
         self.assertTrue(anchors.issubset(alternative['front']))
         self.assertNotEqual(primary['front'], alternative['front'])
 
+    def test_primary_keeps_true_rank_cores_and_rotates_with_issue(self):
+        front_ranked, back_ranked = self.analyzer.rank_model(top_n=20)
+        first = self.analyzer.generate_multi_strategy_recommendations()
+        first_primary = {x['strategy']: x for x in first['recommendations']}['primary_rank']
+
+        original_issue = self.analyzer.history_data[0]['issue']
+        self.analyzer.history_data[0]['issue'] = str(int(original_issue) + 1)
+        second = self.analyzer.generate_multi_strategy_recommendations()
+        second_primary = {x['strategy']: x for x in second['recommendations']}['primary_rank']
+        self.analyzer.history_data[0]['issue'] = original_issue
+
+        self.assertTrue(set(n for n, _, _ in front_ranked[:2]).issubset(first_primary['front']))
+        self.assertEqual(set(first_primary['core_front']), set(n for n, _, _ in front_ranked[:2]))
+        self.assertEqual(set(first_primary['core_back']), {back_ranked[0][0]})
+        self.assertNotEqual(
+            (first_primary['front'], first_primary['back']),
+            (second_primary['front'], second_primary['back']),
+        )
+
     def test_predictor_version_invalidates_old_cache(self):
-        self.assertEqual(LOTTERY_PREDICTOR_VERSION, 'dlt-v3.9-back-coverage')
+        self.assertEqual(LOTTERY_PREDICTOR_VERSION, 'dlt-v4.0-primary-rotation')
 
 
 if __name__ == '__main__':
