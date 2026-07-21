@@ -47,7 +47,7 @@ from src.common.logger import setup_logger
 
 log = setup_logger('kl8')
 
-KL8_PREDICTOR_VERSION = "kl8-v9.2.15-honest-coverage"
+KL8_PREDICTOR_VERSION = "kl8-v9.3-coverage-boost"
 
 # ─── v9.2: 只显示已验证策略模式 ───
 VERIFY_ONLY_MODE = False  # True=未验证玩法不输出号码; False=回退参考策略(始终输出号码)
@@ -92,12 +92,12 @@ FUSHI_CONFIG = {
         'prize_key': 'select_4',
     },
     'fu_shi_7': {
-        'desc': '选5复式7码',
+        'desc': '选5复式8码',
         'base_pick': 5,
-        'pool_size': 7,
-        'numbers_field': 'top7_numbers',
-        'scores_field': 'top7_scores',
-        'pool_label': '7个核心号码',
+        'pool_size': 8,
+        'numbers_field': 'top8_numbers',
+        'scores_field': 'top8_scores',
+        'pool_label': '8个核心号码',
         'prize_key': 'fu_shi_7',
     },
     'fu_shi_10_11': {
@@ -128,7 +128,7 @@ MULTI_SLIP_CONFIG = {
     # 这是预算换覆盖率，不改变任何单号的理论命中率。
     'select_5': {'n_slips': 8, 'pick_size': 6},
     'select_6': {'n_slips': 8, 'pick_size': 6},
-    'select_7': {'n_slips': 6},
+    'select_7': {'n_slips': 8},
     'select_10': {'n_slips': 6},
 }
 
@@ -750,7 +750,7 @@ def resolve_play_strategy(play_type: str, allow_reference: bool = False) -> Opti
             'window_size': 100,
             'repeat_direction': 'neutral',
             'pool_max_last_numbers': 2,
-            'final_selection_mode': 'shape_balanced',
+            'final_selection_mode': 'top_ranked',
             'target_hits': 4,
             'prediction_mode': 'reference_unvalidated',
             'is_validated': False,
@@ -762,7 +762,7 @@ def resolve_play_strategy(play_type: str, allow_reference: bool = False) -> Opti
             'window_size': 100,
             'repeat_direction': 'neutral',
             'pool_max_last_numbers': 3,
-            'final_selection_mode': 'shape_balanced',
+            'final_selection_mode': 'top_ranked',
             'target_hits': 5,
             'prediction_mode': 'reference_unvalidated',
             'is_validated': False,
@@ -775,7 +775,7 @@ def resolve_play_strategy(play_type: str, allow_reference: bool = False) -> Opti
             'repeat_direction': 'follow',
             'repeat_follow_score': 0.90,
             'repeat_non_follow_score': 0.50,
-            'final_selection_mode': 'prize_floor',
+            'final_selection_mode': 'top_ranked',
             'prediction_mode': 'reference_unvalidated',
             'is_validated': False,
         },
@@ -868,7 +868,9 @@ def resolve_play_strategy(play_type: str, allow_reference: bool = False) -> Opti
         'window_size': 1,
         'repeat_direction': 'neutral',
         'pool_max_last_numbers': None,
-        'final_selection_mode': 'shape_balanced',
+        # v9.3: 保留各玩法参考策略的 final_selection_mode（单注用 top_ranked 回到随机命中率，
+        #        复式保持 shape_balanced 让核心码更均衡），不再强制统一为 shape_balanced
+        'final_selection_mode': result.get('final_selection_mode', 'balanced'),
         'prediction_mode': 'reference_unvalidated',
         'is_validated': False,
         'baseline_type': 'fair_deterministic_coverage',
