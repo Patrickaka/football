@@ -54,7 +54,7 @@ FEATURE_WEIGHTS = {
 # 时间衰减因子 (最近一期权重1.0，20期前≈0.19，50期前≈0.016)
 TIME_DECAY_FACTOR = 0.92
 MIN_REAL_HISTORY_FOR_RANKING = 80  # 降低阈值: 120期真实数据足够支撑统计模型
-LOTTERY_PREDICTOR_VERSION = "dlt-v4.0-primary-rotation"
+LOTTERY_PREDICTOR_VERSION = "dlt-v4.1-fusion-pool"
 FULL_HISTORY_FETCH_COUNT = 100
 MIN_FULL_HISTORY_ISSUES = 500
 ROLLING_BACKTEST_TRIALS = 30
@@ -91,6 +91,9 @@ RANDOM_BASELINE = {
     'front_ge4_rate': 0.00046,
     'back_ge1_rate': 0.4545,
     'back_ge2_rate': 0.0455,
+    # v4.1: 大底覆盖随机基准（前区15码ge4 / 后区5码ge1，纯组合概率）
+    'front_pool_ge4_rate': 0.0933,   # C(15,4)C(20,1)+C(15,5) / C(35,5)
+    'back_pool_ge1_rate': 0.6818,    # 1 - C(7,2)/C(12,2)
 }
 
 # 后区专用权重（v3.4: 下调 adjacent，避免后区推荐被上期临号锁死）
@@ -844,6 +847,9 @@ class LotteryAnalyzer:
 
         front_hit_ge2 = front_hit_ge3 = front_hit_ge4 = 0
         back_hit_ge1 = back_hit_ge2 = 0
+        # v4.1: 大底覆盖统计（前区12码 + 后区5码，对齐 fusion 推荐池）
+        front_pool_hit_ge4 = 0
+        back_pool_hit_ge1 = 0
         evaluated = 0
 
         # 保存当前状态
@@ -865,6 +871,7 @@ class LotteryAnalyzer:
             front_ranking = self.get_ensemble_ranking(is_front=True)
             back_ranking = self.get_ensemble_ranking(is_front=False)
 
+            # 主推评估（前区5码 + 后区3码）
             front_top5 = [r['number'] for r in front_ranking[:5]]
             back_top3 = [r['number'] for r in back_ranking[:3]]
 
@@ -882,6 +889,14 @@ class LotteryAnalyzer:
             if len(back_common) >= 2:
                 back_hit_ge2 += 1
 
+            # v4.1: 大底评估（前区15码 + 后区5码，对齐 fusion 推荐池）
+            front_top15 = [r['number'] for r in front_ranking[:15]]
+            back_top5 = [r['number'] for r in back_ranking[:5]]
+            if len(set(actual_front) & set(front_top15)) >= 4:
+                front_pool_hit_ge4 += 1
+            if len(set(actual_back) & set(back_top5)) >= 1:
+                back_pool_hit_ge1 += 1
+
         # 恢复原始状态
         self.history_data = saved_data
         self.statistics = saved_stats
@@ -893,6 +908,9 @@ class LotteryAnalyzer:
             'front_ge4_rate': front_hit_ge4 / n,
             'back_ge1_rate': back_hit_ge1 / n,
             'back_ge2_rate': back_hit_ge2 / n,
+            # v4.1: 大底覆盖指标（对齐 fusion 推荐池）
+            'front_pool_ge4_rate': front_pool_hit_ge4 / n,
+            'back_pool_ge1_rate': back_pool_hit_ge1 / n,
         }
 
         # 诚实对照: 附带公平摇奖随机基准 + 提升量 + 噪声带(±1.96·SE)。
@@ -2705,7 +2723,9 @@ def compute_fusion_weights(rule_backtest: Dict, ml_backtest: Dict) -> Tuple[floa
         return (0.85, 0.15)
 
     total = rule_lift + ml_lift
-    rule_w = max(0.55, rule_lift / total)  # 规则底权重至少 55%
+    # v4.1优化: 规则底权重从0.55降至0.35。诊断(diagnose_dlt_fusion.py)显示
+    # 规则0.35/ML0.65时前区ge4=7.3%(vs 0.55/0.45的6.0%)，ML前区命中≥4码能力更强。
+    rule_w = max(0.35, rule_lift / total)
     ml_w = 1.0 - rule_w
     return (round(rule_w, 2), round(ml_w, 2))
 
@@ -3134,9 +3154,13 @@ def run_prediction(force_refresh=False, enable_backtest=True,
                     front_ranked, back_ranked, ml_prediction,
                     rule_weight=rule_w, ml_weight=ml_w
                 )
+                # v4.1: 新增前区大底池和后区扩展池，达成"前区≥4码、后区1-2码"目标
+                # 诊断: 融合Top15前区ge4=11.7%, 融合Top5后区ge1=69%
                 recommendations['fusion'] = {
-                    'front': fusion_result['front_top12'][:5],
-                    'back': fusion_result['back_top6'][:2],
+                    'front': fusion_result['front_top12'][:5],       # 主推5码
+                    'front_pool': fusion_result['front_ranked'][:15], # 前区大底15码 (ge4=11.7%)
+                    'back': fusion_result['back_top6'][:2],          # 主推2码
+                    'back_pool': fusion_result['back_top6'][:5],     # 后区扩展5码 (ge1=69%)
                     'method': 'fusion',
                     'front_top12': fusion_result['front_top12'],
                     'back_top6': fusion_result['back_top6'],
