@@ -122,7 +122,7 @@ def main():
         a_n += 1
         if pred == actual(m):
             a_hit += 1
-        # 用模块真实分级（新阈值：strong>=0.50, medium>=0.43）
+        # 用模块真实分级（新阈值：strong>=0.52, medium>=0.43）
         q = beidan.assess_recommendation_quality(probs, pred, {})
         if q['level'] == 'strong':
             a_strong_n += 1

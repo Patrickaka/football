@@ -18,7 +18,7 @@ from ..common import kv_store
 
 log = setup_logger('beidan')
 
-BEIDAN_VERSION = '2026-07-20-backtest-calibrated-v2'
+BEIDAN_VERSION = '2026-07-21-gated-accuracy-v3'
 BEIDAN_HISTORY_KEY = 'beidan_prediction_history'
 BEIDAN_HISTORY_LIMIT = 500
 
@@ -1738,7 +1738,7 @@ def assess_recommendation_quality(probabilities, prediction=None, context=None):
     if score_consistency.get('conflict'):
         conflict = True
 
-    if top_prob >= 0.50 and lead >= 0.08 and not conflict:
+    if top_prob >= 0.52 and lead >= 0.08 and not conflict:
         level, label, advice = 'strong', '强推荐', f'主推 {top_key}'
     elif top_prob >= 0.43 and lead >= 0.045 and not conflict:
         level, label, advice = 'medium', '可参考', f'主推 {top_key}'

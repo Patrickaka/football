@@ -29,7 +29,7 @@ from ..common.logger import setup_logger
 
 log = setup_logger('football')
 
-FOOTBALL_PREDICTION_LOGIC_VERSION = '2026-07-18-production-history-calibration-v12'
+FOOTBALL_PREDICTION_LOGIC_VERSION = '2026-07-21-gated-accuracy-v13'
 LOTTERY_OFFICIAL_ODDS_WEIGHT = 0.40
 
 # ELO 评分系统（延迟导入）
@@ -6910,7 +6910,7 @@ def build_match_analysis(result):
             conf_level = 'high' if conf_score >= 0.68 else ('medium' if conf_score >= 0.55 else 'low')
         decision = build_decision(
             probs, confidence=conf_level, upset_alert=bool(upset.get('alert')),
-            min_single=0.48, min_margin=0.08,
+            min_single=0.54, min_margin=0.10,
         )
         score_strategy = build_score_strategy(
             candidates, confidence=conf_level, upset_alert=bool(upset.get('alert')),
