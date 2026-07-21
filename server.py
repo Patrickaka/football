@@ -700,6 +700,12 @@ class Handler(BaseHTTPRequestHandler):
         elif path == '/api/basketball/value':
             params = parse_qs(route.query)
             self._serve_json(self._basketball_value_payload(params))
+        elif path == '/api/basketball/track':
+            params = parse_qs(route.query)
+            self._serve_json(self._basketball_track_payload(params))
+        elif path == '/api/basketball/movement':
+            params = parse_qs(route.query)
+            self._serve_json(self._basketball_movement_payload(params))
         elif path == '/api/lottery':
             self._serve_json(self._lottery_payload())
         elif path == '/api/lottery-refresh':
@@ -1180,10 +1186,12 @@ class Handler(BaseHTTPRequestHandler):
                             '主胜': spf.get('home_odds'),
                             '客胜': spf.get('away_odds'),
                         },
+                        'line_movement': spf.get('line_movement'),
+                        'sharp_confirmed': spf.get('sharp_confirmed'),
                     }
                 else:
                     match_item['spf'] = {'error': spf.get('reason') if spf else 'no_data'}
-                
+
                 rqspf = r.get('rqspf')
                 if rqspf and rqspf.get('available'):
                     match_item['rqspf'] = {
@@ -1197,10 +1205,12 @@ class Handler(BaseHTTPRequestHandler):
                             '主胜': rqspf.get('home_odds'),
                             '客胜': rqspf.get('away_odds'),
                         },
+                        'line_movement': rqspf.get('line_movement'),
+                        'sharp_confirmed': rqspf.get('sharp_confirmed'),
                     }
                 else:
                     match_item['rqspf'] = {'error': rqspf.get('reason') if rqspf else 'no_data'}
-                
+
                 daxiao = r.get('dx')
                 if daxiao and daxiao.get('available'):
                     match_item['daxiao'] = {
@@ -1214,6 +1224,8 @@ class Handler(BaseHTTPRequestHandler):
                             '大分': daxiao.get('over_odds'),
                             '小分': daxiao.get('under_odds'),
                         },
+                        'line_movement': daxiao.get('line_movement'),
+                        'sharp_confirmed': daxiao.get('sharp_confirmed'),
                     }
                 else:
                     match_item['daxiao'] = {'error': daxiao.get('reason') if daxiao else 'no_data'}
@@ -1247,16 +1259,53 @@ class Handler(BaseHTTPRequestHandler):
         try:
             date = params.get('date', [None])[0]
             threshold = float(params.get('threshold', [0.05])[0])
-            
+
             _, find_value_bets, _ = _load_basketball_helpers()
             generate_basketball_recommendations, _, _ = _load_basketball_helpers()
             recommendations = generate_basketball_recommendations(date=date)
             value_bets = find_value_bets(recommendations.get('results', []), threshold=threshold)
-            
+
             return {'result': value_bets}
         except Exception as e:
             self._log.error('篮球价值投注失败', exc_info=True)
             return {'error': f'价值投注分析失败: {str(e)}'}
+
+    def _basketball_track_payload(self, params):
+        """触发一次实时赔率轮询，累积盘路快照。"""
+        try:
+            from src.basketball.odds_movement import track_basketball_odds
+            date = params.get('date', [None])[0]
+            count = track_basketball_odds(date)
+            return {'result': {'tracked': count, 'date': date}}
+        except Exception as e:
+            self._log.error('篮球赔率追踪失败', exc_info=True)
+            return {'error': f'赔率追踪失败: {str(e)}'}
+
+    def _basketball_movement_payload(self, params):
+        """汇总当前累积的赔率走势信号。"""
+        try:
+            from src.basketball.odds_movement import get_odds_history
+            match_id = params.get('match_id', [None])[0]
+            history = get_odds_history(match_id)
+            if match_id:
+                return {'result': {'match_id': match_id, 'snapshots': history}}
+            # 汇总每场的走势统计
+            summary = []
+            for mid, snaps in history.items():
+                if not snaps:
+                    continue
+                valid = [s for s in snaps if s.get('spf_home') and s.get('spf_away')]
+                first = valid[0] if valid else None
+                last = valid[-1] if valid else None
+                entry = {'match_id': mid, 'samples': len(snaps)}
+                if first and last:
+                    entry['spf_home_move'] = round((last['spf_home'] - first['spf_home']), 4)
+                    entry['spf_away_move'] = round((last['spf_away'] - first['spf_away']), 4)
+                summary.append(entry)
+            return {'result': {'matches': len(summary), 'detail': summary}}
+        except Exception as e:
+            self._log.error('篮球走势汇总失败', exc_info=True)
+            return {'error': f'走势汇总失败: {str(e)}'}
 
     def _calibrate_payload(self, params):
         """手动触发联赛重新校准"""

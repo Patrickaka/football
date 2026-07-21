@@ -16,7 +16,7 @@ from ..common import kv_store
 
 log = setup_logger('basketball')
 
-BASKETBALL_VERSION = '2026-07-20-elo-calibrated-v2'
+BASKETBALL_VERSION = '2026-07-21-line-movement-v1'
 BASKETBALL_HISTORY_KEY = 'basketball_prediction_history'
 BASKETBALL_HISTORY_LIMIT = 500
 
@@ -131,7 +131,7 @@ def _calibrate_pick(bet_type, p1, p2, league, confidence):
     return ((calibrated, 1.0 - calibrated) if pick_first
             else (1.0 - calibrated, calibrated)), round(raw_pick, 4)
 
-def analyze_spf(match):
+def analyze_spf(match, movement=None):
     home_odds = match.get('spf_home')
     away_odds = match.get('spf_away')
     
@@ -160,12 +160,30 @@ def analyze_spf(match):
     if elo_win:
         p_home = p_home * (1.0 - elo_weight) + elo_win['home_prob'] * elo_weight
     p_away = 1.0 - p_home
+    # 赔率实时走势微调：聪明钱追捧的一侧小幅提升概率（仅增强，不反转）
+    if movement and movement.get('available') and movement.get('side') != 'flat':
+        from .odds_movement import apply_movement
+        p_home, p_away = apply_movement(p_home, p_away, movement)
     confidence = _confidence_from_probs(p_home, p_away)
     (p_home, p_away), raw_pick_prob = _calibrate_pick(
         'spf', p_home, p_away, league, confidence)
     recommendation = '主胜' if p_home > p_away else '客胜'
     pick_prob = max(p_home, p_away)
     status = _official_pick_status('spf', pick_prob, confidence)
+    # 聪明钱是否确认本方推荐
+    line_movement = None
+    sharp_confirmed = False
+    if movement and movement.get('available'):
+        from .odds_movement import sharp_confirmation
+        sc = sharp_confirmation(movement, recommendation)
+        line_movement = {**movement, 'recommendation': recommendation,
+                         'confirmed': sc['confirmed'], 'reason': sc['reason']}
+        if sc['confirmed'] and sc['boost'] > 0:
+            sharp_confirmed = True
+            if confidence == 'low':
+                confidence = 'medium'
+            elif confidence == 'medium' and sc['boost'] >= 1.0:
+                confidence = 'high'
     
     return {
         'available': True,
@@ -180,10 +198,12 @@ def analyze_spf(match):
         'market_home_prob': round(market_home_prob, 4),
         'elo_home_prob': elo_win.get('home_prob') if elo_win else None,
         'elo_trust': round(elo_trust, 3),
+        'line_movement': line_movement,
+        'sharp_confirmed': sharp_confirmed,
         **status,
     }
 
-def analyze_rqspf(match):
+def analyze_rqspf(match, movement=None):
     handicap = match.get('handicap')
     rq_home_odds = match.get('rqspf_home')
     rq_away_odds = match.get('rqspf_away')
@@ -215,12 +235,29 @@ def analyze_rqspf(match):
         p_away = 1.0 - p_home
     else:
         elo_home_prob = None
+    # 赔率实时走势微调（让分侧：home=让胜, away=让负）
+    if movement and movement.get('available') and movement.get('side') != 'flat':
+        from .odds_movement import apply_movement
+        p_home, p_away = apply_movement(p_home, p_away, movement)
     confidence = _confidence_from_probs(p_home, p_away)
     (p_home, p_away), raw_pick_prob = _calibrate_pick(
         'rqspf', p_home, p_away, match.get('league', ''), confidence)
     recommendation = '让胜' if p_home > p_away else '让负'
     pick_prob = max(p_home, p_away)
     status = _official_pick_status('rqspf', pick_prob, confidence)
+    line_movement = None
+    sharp_confirmed = False
+    if movement and movement.get('available'):
+        from .odds_movement import sharp_confirmation
+        sc = sharp_confirmation(movement, recommendation)
+        line_movement = {**movement, 'recommendation': recommendation,
+                         'confirmed': sc['confirmed'], 'reason': sc['reason']}
+        if sc['confirmed'] and sc['boost'] > 0:
+            sharp_confirmed = True
+            if confidence == 'low':
+                confidence = 'medium'
+            elif confidence == 'medium' and sc['boost'] >= 1.0:
+                confidence = 'high'
     
     return {
         'available': True,
@@ -237,10 +274,12 @@ def analyze_rqspf(match):
         'elo_margin': elo_margin.get('expected_margin') if elo_margin else None,
         'elo_home_prob': round(elo_home_prob, 4) if elo_home_prob is not None else None,
         'elo_trust': round(elo_trust, 3),
+        'line_movement': line_movement,
+        'sharp_confirmed': sharp_confirmed,
         **status,
     }
 
-def analyze_daxiao(match):
+def analyze_daxiao(match, movement=None):
     total_line = match.get('total_line')
     over_odds = match.get('dx_over')
     under_odds = match.get('dx_under')
@@ -285,12 +324,29 @@ def analyze_daxiao(match):
         p_under = 1.0 - p_over
     else:
         elo_over_prob = None
+    # 赔率实时走势微调（大小分：over=主侧, under=客侧）
+    if movement and movement.get('available') and movement.get('side') != 'flat':
+        from .odds_movement import apply_movement
+        p_over, p_under = apply_movement(p_over, p_under, movement)
     confidence = _confidence_from_probs(p_over, p_under)
     (p_over, p_under), raw_pick_prob = _calibrate_pick(
         'dx', p_over, p_under, league, confidence)
     recommendation = '大分' if p_over > p_under else '小分'
     pick_prob = max(p_over, p_under)
     status = _official_pick_status('dx', pick_prob, confidence)
+    line_movement = None
+    sharp_confirmed = False
+    if movement and movement.get('available'):
+        from .odds_movement import sharp_confirmation
+        sc = sharp_confirmation(movement, recommendation)
+        line_movement = {**movement, 'recommendation': recommendation,
+                         'confirmed': sc['confirmed'], 'reason': sc['reason']}
+        if sc['confirmed'] and sc['boost'] > 0:
+            sharp_confirmed = True
+            if confidence == 'low':
+                confidence = 'medium'
+            elif confidence == 'medium' and sc['boost'] >= 1.0:
+                confidence = 'high'
     
     return {
         'available': True,
@@ -307,6 +363,8 @@ def analyze_daxiao(match):
         'elo_total': expected_total,
         'elo_over_prob': round(elo_over_prob, 4) if elo_over_prob is not None else None,
         'elo_trust': round(elo_trust, 3),
+        'line_movement': line_movement,
+        'sharp_confirmed': sharp_confirmed,
         **status,
     }
 
@@ -515,7 +573,98 @@ def fetch_basketball_schedule(date=None):
         log.error(f"抓取篮球赛程失败: {e}")
         return []
 
-def generate_basketball_recommendations(date=None, bet_types=None, source='500'):
+def _try_okooo_movement_for_500(matches, date):
+    """为 500 源的比赛尽力从澳客获取更丰富的盘路走势（按队名匹配）。
+
+    返回 {500_match_id: movement_dict}。任何失败都回退空 dict（调用方再用
+    kv_store 历史兜底）。
+    """
+    try:
+        from .okooo import fetch_okooo_basketball_schedule, prefetch_market_bundles
+        from .odds_movement import build_movement_for_match
+
+        def norm(t):
+            return re.sub(r'\[.*?\]', '', str(t or '')).strip()
+
+        ok_matches = fetch_okooo_basketball_schedule(date)
+        if not ok_matches:
+            return {}
+        ok_map = {}
+        for om in ok_matches:
+            ok_map[(norm(om.get('home', '')), norm(om.get('away', '')))] = om
+
+        ids = [str(om['id']) for om in ok_matches if om.get('id')]
+        bundles = prefetch_market_bundles(ids) if ids else {}
+
+        result = {}
+        for m in matches:
+            key = (norm(m.get('home', '')), norm(m.get('away', '')))
+            om = ok_map.get(key)
+            if not om:
+                continue
+            bid = str(om.get('id'))
+            bundle = bundles.get(bid, {})
+            mv = build_movement_for_match(om, okooo_bundle=bundle)
+            result[m.get('id')] = mv
+        return result
+    except Exception as exc:
+        log.warning(f"澳客走势增强失败(回退kv历史): {exc}")
+        return {}
+
+
+def _build_movement_map(matches, source, date):
+    """为每场构建 {spf, rqspf, dx} 的 movement 字典。
+
+    - 500 源：先轮询累积快照，再用 kv_store 历史计算；并尽力从澳客补充更
+      丰富的盘路（按队名匹配）。
+    - okooo 源：比赛自带 rf_trend / dx_trend，再补充 ml bundle（胜负走势）。
+    """
+    from .odds_movement import build_movement_for_match, get_odds_history, track_basketball_odds
+
+    kv_history = None
+    if source != 'okooo':
+        try:
+            track_basketball_odds(date)
+        except Exception:
+            pass
+        kv_history = get_odds_history()
+
+    okooo_bundles = {}
+    if source == 'okooo':
+        ids = [str(m['id']) for m in matches if m.get('id')]
+        try:
+            from .okooo import prefetch_market_bundles
+            okooo_bundles = prefetch_market_bundles(ids)
+        except Exception as exc:
+            log.warning(f"澳客 bundle 抓取失败: {exc}")
+            okooo_bundles = {}
+    else:
+        okooo_bundles = _try_okooo_movement_for_500(matches, date)
+
+    out = {}
+    for m in matches:
+        mid = m.get('id')
+        # okooo 源：matches 已含 rf_trend/dx_trend，直接用 build
+        if source == 'okooo':
+            mv = build_movement_for_match(m, okooo_bundle=okooo_bundles.get(str(mid)))
+        else:
+            # 优先用澳客增强结果；缺失的玩法用 kv 历史补齐
+            ok_mv = okooo_bundles.get(mid)
+            if ok_mv:
+                mv = ok_mv
+                if kv_history:
+                    fallback = build_movement_for_match(m, kv_history=kv_history)
+                    for k in ('spf', 'rqspf', 'dx'):
+                        if not mv.get(k) and fallback.get(k):
+                            mv[k] = fallback[k]
+            else:
+                mv = build_movement_for_match(m, kv_history=kv_history)
+        out[mid] = mv
+    return out
+
+
+def generate_basketball_recommendations(date=None, bet_types=None, source='500',
+                                        use_movement=True):
     if date is None:
         date = time.strftime('%Y-%m-%d')
     
@@ -532,8 +681,17 @@ def generate_basketball_recommendations(date=None, bet_types=None, source='500')
     else:
         matches = fetch_basketball_schedule(date)
     
+    movement_map = {}
+    if use_movement and matches:
+        try:
+            movement_map = _build_movement_map(matches, source, date)
+        except Exception as exc:
+            log.warning(f"篮球赔率走势构建失败(回退无走势): {exc}")
+            movement_map = {}
+    
     results = []
     for match in matches:
+        mv = movement_map.get(match.get('id'), {}) or {}
         result = {
             'match': match,
             'spf': None,
@@ -542,22 +700,36 @@ def generate_basketball_recommendations(date=None, bet_types=None, source='500')
         }
         
         if 'spf' in bet_types:
-            result['spf'] = analyze_spf(match)
+            result['spf'] = analyze_spf(match, mv.get('spf'))
         
         if 'rqspf' in bet_types:
-            result['rqspf'] = analyze_rqspf(match)
+            result['rqspf'] = analyze_rqspf(match, mv.get('rqspf'))
         
         if 'dx' in bet_types:
-            result['dx'] = analyze_daxiao(match)
+            result['dx'] = analyze_daxiao(match, mv.get('dx'))
         
         results.append(result)
     
+    # 统计走势命中情况，便于后续评估优化效果
+    movement_stats = {'sharp_confirmed': 0, 'with_movement': 0, 'steam': 0}
+    for r in results:
+        for bt in ('spf', 'rqspf', 'dx'):
+            b = r.get(bt) or {}
+            if b.get('line_movement'):
+                movement_stats['with_movement'] += 1
+                if b.get('sharp_confirmed'):
+                    movement_stats['sharp_confirmed'] += 1
+                if (b.get('line_movement') or {}).get('steam'):
+                    movement_stats['steam'] += 1
+
     payload = {
         'date': date,
         'count': len(results),
         'results': results,
         'version': BASKETBALL_VERSION,
         'source': source,
+        'use_movement': use_movement,
+        'movement_stats': movement_stats,
     }
     try:
         from .records import save_predictions, get_prediction_stats
@@ -569,44 +741,50 @@ def generate_basketball_recommendations(date=None, bet_types=None, source='500')
     return payload
 
 def find_value_bets(results, threshold=0.05):
+    """价值投注筛选，并融入赔率实时走势信号。
+
+    在模型 edge（概率 - 0.5）基础上叠加「聪明钱确认」增益 movement_edge，
+    优先推荐资金流向与模型方向一致的场次（steam/强确认优先）。
+    """
     value_bets = []
     for r in results:
         match = r['match']
         if r['spf'] and r['spf']['available'] and r['spf'].get('playable', True):
-            edge = max(r['spf']['home_prob'], r['spf']['away_prob']) - 0.5
-            if edge > threshold:
-                value_bets.append({
-                    'type': '胜负',
-                    'match': f"{match['home']} vs {match['away']}",
-                    'recommendation': r['spf']['recommendation'],
-                    'edge': round(edge, 4),
-                    'prob': max(r['spf']['home_prob'], r['spf']['away_prob']),
-                })
+            _append_value_bet(value_bets, r['spf'], '胜负',
+                              f"{match['home']} vs {match['away']}", threshold,
+                              max(r['spf']['home_prob'], r['spf']['away_prob']))
         
         if r['rqspf'] and r['rqspf']['available'] and r['rqspf'].get('playable', True):
-            edge = max(r['rqspf']['home_prob'], r['rqspf']['away_prob']) - 0.5
-            if edge > threshold:
-                value_bets.append({
-                    'type': '让分胜负',
-                    'match': f"{match['home']} vs {match['away']} ({match['handicap']})",
-                    'recommendation': r['rqspf']['recommendation'],
-                    'edge': round(edge, 4),
-                    'prob': max(r['rqspf']['home_prob'], r['rqspf']['away_prob']),
-                })
+            _append_value_bet(value_bets, r['rqspf'], '让分胜负',
+                              f"{match['home']} vs {match['away']} ({match['handicap']})", threshold,
+                              max(r['rqspf']['home_prob'], r['rqspf']['away_prob']))
         
         if r['dx'] and r['dx']['available'] and r['dx'].get('playable', True):
-            edge = max(r['dx']['over_prob'], r['dx']['under_prob']) - 0.5
-            if edge > threshold:
-                value_bets.append({
-                    'type': '大小分',
-                    'match': f"{match['home']} vs {match['away']} (总分{match['total_line']})",
-                    'recommendation': r['dx']['recommendation'],
-                    'edge': round(edge, 4),
-                    'prob': max(r['dx']['over_prob'], r['dx']['under_prob']),
-                })
-    
-    value_bets.sort(key=lambda x: -x['edge'])
+            _append_value_bet(value_bets, r['dx'], '大小分',
+                              f"{match['home']} vs {match['away']} (总分{match['total_line']})", threshold,
+                              max(r['dx']['over_prob'], r['dx']['under_prob']))
+
+    value_bets.sort(key=lambda x: (-x['movement_edge'], -x['edge']))
     return value_bets[:20]
+
+
+def _append_value_bet(value_bets, bet, label, match_label, threshold, prob):
+    """向价值投注列表追加一项，并叠加聪明钱确认增益。"""
+    edge = prob - 0.5
+    if edge <= threshold:
+        return
+    sharp = bool(bet.get('sharp_confirmed', False))
+    movement_edge = edge + (0.04 if sharp else 0.0)
+    value_bets.append({
+        'type': label,
+        'match': match_label,
+        'recommendation': bet.get('recommendation'),
+        'edge': round(edge, 4),
+        'movement_edge': round(movement_edge, 4),
+        'prob': round(prob, 4),
+        'sharp_confirmed': sharp,
+        'movement': bet.get('line_movement'),
+    })
 
 def summarize_basketball_history(limit=50):
     history = kv_store.get(BASKETBALL_HISTORY_KEY, [])
