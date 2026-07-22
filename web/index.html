@@ -2574,7 +2574,8 @@ function renderBeidan(result) {
   
   for (const [league, matches] of Object.entries(groups)) {
     html += `<div class="league-group"><div class="league-title">${esc(league)}</div>`;
-    matches.forEach(m => {
+      matches.forEach(m => {
+      const bReportUrl = m.bayes_report_url ? apiPrefix() + m.bayes_report_url : '';
       html += `<div class="match" style="display:block;padding:12px">
         <div style="display:flex;justify-content:space-between;align-items:flex-start">
           <div style="flex:1">
@@ -2585,6 +2586,7 @@ function renderBeidan(result) {
               ${esc(m.num || '')} · ${esc(m.time || '')}
             </div>
           </div>
+          ${bReportUrl ? `<div style="margin-left:10px;flex-shrink:0"><button class="bayes-report-btn" onclick="openBayesModal('${esc(bReportUrl)}', '${esc(m.home)} vs ${esc(m.away)}')">📊 深度报告</button></div>` : ''}
         </div>`;
         
         if (m.spf && !m.spf.error) {

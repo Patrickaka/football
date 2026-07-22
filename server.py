@@ -46,6 +46,17 @@ from src.kl8 import (
 from src.common.logger import setup_logger
 from src.common.paths import data_path
 
+# 深度报告按需生成（失败不影响主流程）
+try:
+    from src.football.bayes_report import (
+        ensure_football_report, ensure_beidan_report,
+        football_reportable_ids, persist_beidan_recs,
+    )
+    _BAYES_REPORT_AVAILABLE = True
+except Exception as _e:  # pragma: no cover
+    _BAYES_REPORT_AVAILABLE = False
+    print(f"[WARN] 深度报告模块不可用: {_e}")
+
 
 REPORTS_DIR = Path(os.path.join(os.path.dirname(__file__), 'reports'))
 BAYES_MANIFEST_PATH = REPORTS_DIR / 'football_bayes_manifest.json'
@@ -63,15 +74,34 @@ def _load_bayes_manifest():
         return {}
 
 
-def _attach_bayes_report_url(matches):
-    """为比赛列表附加贝叶斯深度报告 URL（若清单中存在）。"""
+def _attach_bayes_report_url(matches, kind='football'):
+    """为比赛列表附加贝叶斯深度报告 URL。
+
+    两类来源都会触发按钮显示：
+    1) 清单（football_bayes_manifest.json）中已登记（说明报告文件已存在）；
+    2) 可生成：足球有对应缓存 pkl、北单有已持久化 rec（即便 HTML 尚未生成，
+       点击时由 server 按需生成）。
+
+    兼容两种结构：足球比赛 match_id 在顶层；北单 rec 的 match_id 嵌套在 spf 内。
+    """
     if not matches:
         return matches
     manifest = _load_bayes_manifest()
+    reportable = set()
+    if _BAYES_REPORT_AVAILABLE and kind == 'football':
+        try:
+            reportable = football_reportable_ids()
+        except Exception:
+            reportable = set()
+    prefix = 'football' if kind == 'football' else 'beidan'
     for m in matches:
-        mid = str(m.get('match_id') or '')
-        if mid and mid in manifest:
+        mid = str(m.get('match_id') or (m.get('spf') or {}).get('match_id') or '')
+        if not mid:
+            continue
+        if mid in manifest:
             m['bayes_report_url'] = manifest[mid].get('url')
+        elif mid in reportable:
+            m['bayes_report_url'] = f"/reports/{prefix}_bayes_{mid}.html"
     return matches
 
 
@@ -928,7 +958,12 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:
             return self._send_json_error(404, 'Not Found')
         if not file_path.exists() or not file_path.is_file():
-            return self._send_json_error(404, 'Not Found')
+            # 报告文件不存在 → 若可生成则按需现生成（生产环境无需手动跑脚本）
+            generated = self._try_generate_report(rel)
+            if generated and os.path.exists(generated):
+                file_path = Path(generated)
+            else:
+                return self._send_json_error(404, 'Not Found')
         content_type = 'text/html; charset=utf-8'
         if file_path.suffix.lower() == '.json':
             content_type = 'application/json; charset=utf-8'
@@ -944,6 +979,21 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:
             self._log.error('读取报告文件失败: %s', file_path, exc_info=True)
             self._send_json_error(500, f'读取报告失败: {e}')
+
+    def _try_generate_report(self, rel: str):
+        """按文件名尝试按需生成深度报告，返回生成的文件绝对路径或 None。"""
+        if not _BAYES_REPORT_AVAILABLE:
+            return None
+        try:
+            if rel.startswith('football_bayes_') and rel.endswith('.html'):
+                mid = rel[len('football_bayes_'):-len('.html')]
+                return ensure_football_report(mid)
+            if rel.startswith('beidan_bayes_') and rel.endswith('.html'):
+                mid = rel[len('beidan_bayes_'):-len('.html')]
+                return ensure_beidan_report(mid)
+        except Exception as e:
+            self._log.error('报告按需生成失败: %s', rel, exc_info=True)
+        return None
 
     def _matches_payload(self):
         try:
@@ -1160,7 +1210,19 @@ class Handler(BaseHTTPRequestHandler):
             
             if 'error' in result:
                 return result
-            
+
+            # 为北单推荐持久化 rec（供按需生成报告）并附加深度报告 URL
+            recs = result.get('recommendations')
+            if isinstance(recs, list):
+                if _BAYES_REPORT_AVAILABLE:
+                    persisted = set(persist_beidan_recs(recs))
+                    for rec in recs:
+                        mid = str(rec.get('match_id') or '')
+                        if mid and mid in persisted:
+                            rec['bayes_report_url'] = f"/reports/beidan_bayes_{mid}.html"
+                else:
+                    _attach_bayes_report_url(recs, kind='beidan')
+
             return {'result': result}
         except Exception as e:
             self._log.error('北单推荐失败', exc_info=True)
