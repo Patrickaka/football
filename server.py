@@ -1786,6 +1786,10 @@ class Handler(BaseHTTPRequestHandler):
                             rec['settlement'] = None
                 records.append(rec)
 
+            # 结算回填：对已开奖但缺少结算文件的快照当场结算（幂等），
+            # 修复"某一期因服务停机/漏检未被调度器结算 → 预测记录永久卡在待开奖"的问题。
+            self._kl8_backfill_settlements(records)
+
             # 去重：同一目标期只保留最新一条（调度器每轮可能对同期生成多次快照）
             seen_issues = {}
             for rec in records:
@@ -1806,6 +1810,42 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:
             self._log.error('快乐8预测记录失败', exc_info=True)
             return {'error': f'获取预测记录失败: {str(e)}'}
+
+    def _kl8_backfill_settlements(self, records):
+        """对已开奖但缺少结算文件的快照当场结算（幂等回填）。
+
+        原因：调度器仅在「发现新期号」时结算上一期（settle_previous_period）。
+        若某一期因服务停机/漏检未被结算，其预测记录会永久卡在「待开奖」。
+        读记录时回填，保证历史已开奖记录正确展示命中/奖金。
+
+        仅对 target_issue 已在历史开奖数据中出现的快照结算；未开奖的（最新一期）
+        保持待开奖。settle_prediction 内部按 snapshot_id 落盘且幂等（已存在则跳过）。
+        """
+        try:
+            analyzer = get_kl8_analyzer()
+            history = getattr(analyzer, 'history_data', None) or []
+            if not history:
+                return
+            drawn = {str(r.get('issue')): r.get('numbers') for r in history}
+            for rec in records:
+                if rec.get('has_settlement') or rec.get('settlement'):
+                    continue
+                ti = rec.get('target_issue')
+                if not ti:
+                    continue
+                ti = str(ti)
+                if ti not in drawn:
+                    continue  # 目标期尚未开奖，保持待开奖
+                numbers = drawn[ti]
+                try:
+                    result = analyzer.settle_prediction(rec.get('file'), ti, numbers)
+                except Exception:
+                    continue
+                if isinstance(result, dict) and result.get('success'):
+                    rec['has_settlement'] = True
+                    rec['settlement'] = result.get('settlement')
+        except Exception as e:
+            self._log.warning('快乐8结算回填异常(已忽略): %s', e)
 
     def _kl8_settle_payload(self, params):
         """快乐8赛后结算 -- v4: 给结算单独保存(不复写原始快照), 增加期号校验"""
