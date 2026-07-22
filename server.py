@@ -47,6 +47,34 @@ from src.common.logger import setup_logger
 from src.common.paths import data_path
 
 
+REPORTS_DIR = Path(os.path.join(os.path.dirname(__file__), 'reports'))
+BAYES_MANIFEST_PATH = REPORTS_DIR / 'football_bayes_manifest.json'
+
+
+def _load_bayes_manifest():
+    """加载足球单场深度报告清单，返回 match_id -> report 的映射。"""
+    if not BAYES_MANIFEST_PATH.exists():
+        return {}
+    try:
+        with open(BAYES_MANIFEST_PATH, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        return {str(k): v for k, v in (data.get('reports') or {}).items()}
+    except Exception:
+        return {}
+
+
+def _attach_bayes_report_url(matches):
+    """为比赛列表附加贝叶斯深度报告 URL（若清单中存在）。"""
+    if not matches:
+        return matches
+    manifest = _load_bayes_manifest()
+    for m in matches:
+        mid = str(m.get('match_id') or '')
+        if mid and mid in manifest:
+            m['bayes_report_url'] = manifest[mid].get('url')
+    return matches
+
+
 KL8_PARAMETER_SEARCH_JOBS = {}
 KL8_PARAMETER_SEARCH_LOCK = threading.Lock()
 KL8_PARAMETER_SEARCH_REPORT_DIR = Path(data_path('kl8_parameter_search_reports'))
@@ -660,6 +688,8 @@ class Handler(BaseHTTPRequestHandler):
         path = self._normalize_path(route.path)
         if path == '/':
             self._serve_index()
+        elif path.startswith('/reports/'):
+            self._serve_report_file(path)
         elif path == '/api/matches':
             self._serve_json(self._matches_payload())
         elif path == '/api/predict':
@@ -884,9 +914,40 @@ class Handler(BaseHTTPRequestHandler):
         body = json.dumps({'error': message}, ensure_ascii=False).encode('utf-8')
         self._send(status, 'application/json; charset=utf-8', body)
 
+    def _serve_report_file(self, path):
+        """提供 reports/ 目录下的静态报告文件（HTML/JSON）。"""
+        rel = path[len('/reports/'):].lstrip('/')
+        if not rel or '..' in rel or rel.startswith('.'):
+            return self._send_json_error(403, 'Forbidden')
+        file_path = REPORTS_DIR / rel
+        try:
+            file_path = file_path.resolve()
+            reports_root = REPORTS_DIR.resolve()
+            if not str(file_path).startswith(str(reports_root)):
+                return self._send_json_error(403, 'Forbidden')
+        except Exception:
+            return self._send_json_error(404, 'Not Found')
+        if not file_path.exists() or not file_path.is_file():
+            return self._send_json_error(404, 'Not Found')
+        content_type = 'text/html; charset=utf-8'
+        if file_path.suffix.lower() == '.json':
+            content_type = 'application/json; charset=utf-8'
+        try:
+            with open(file_path, 'rb') as f:
+                body = f.read()
+            self.send_response(200)
+            self.send_header('Content-Type', content_type)
+            self.send_header('Content-Length', str(len(body)))
+            self.send_header('Cache-Control', 'no-cache, no-store, must-revalidate')
+            self.end_headers()
+            self.wfile.write(body)
+        except Exception as e:
+            self._log.error('读取报告文件失败: %s', file_path, exc_info=True)
+            self._send_json_error(500, f'读取报告失败: {e}')
+
     def _matches_payload(self):
         try:
-            return {'matches': fetch_match_list()}
+            return {'matches': _attach_bayes_report_url(fetch_match_list())}
         except Exception:
             self._log.error('获取比赛列表失败', exc_info=True)
             return {'error': '获取比赛列表失败'}
@@ -1790,6 +1851,10 @@ class Handler(BaseHTTPRequestHandler):
             # 修复"某一期因服务停机/漏检未被调度器结算 → 预测记录永久卡在待开奖"的问题。
             self._kl8_backfill_settlements(records)
 
+            # 奖金表更新重算：旧版默认奖金表错误（如选5中2=5元、选6中3=10元），
+            # 已生成的结算文件不会自动更新。读记录时校验并删除重算，确保金额正确。
+            self._kl8_rebuild_stale_settlements(records)
+
             # 去重：同一目标期只保留最新一条（调度器每轮可能对同期生成多次快照）
             seen_issues = {}
             for rec in records:
@@ -1846,6 +1911,62 @@ class Handler(BaseHTTPRequestHandler):
                     rec['settlement'] = result.get('settlement')
         except Exception as e:
             self._log.warning('快乐8结算回填异常(已忽略): %s', e)
+
+    def _kl8_rebuild_stale_settlements(self, records):
+        """奖金表更新后，强制覆盖重算奖金不一致的历史结算。
+
+        背景：2026-07-22 前默认奖金表有误（选5中2=5、选6中3=10 等），导致已结算
+        历史记录的金额错误。此函数在读 /api/kl8/records 时触发，用当前官方奖金表
+        重新校验每条 settlement；只要任一玩法的单注奖金与当前表不符，就以 force=True
+        重新结算并覆盖旧结算文件。
+        """
+        try:
+            from src.kl8 import load_prize_table, SELECT_TYPES
+
+            analyzer = get_kl8_analyzer()
+            history = getattr(analyzer, 'history_data', None) or []
+            if not history:
+                return
+            drawn = {str(r.get('issue')): r.get('numbers') for r in history}
+            prize_table = load_prize_table()
+
+            for rec in records:
+                st = rec.get('settlement')
+                if not st:
+                    continue
+                ti = rec.get('target_issue')
+                if not ti:
+                    continue
+                ti = str(ti)
+                if ti not in drawn:
+                    continue
+
+                # 校验各单式玩法的奖金是否与当前奖金表一致
+                ps = st.get('prize_settlement', {})
+                needs_rebuild = False
+                for select_type in SELECT_TYPES:
+                    key = f'select_{select_type}'
+                    p = ps.get(key, {})
+                    if not p.get('placed'):
+                        continue
+                    expected = prize_table.get(key, {}).get(str(p.get('hits')), 0)
+                    if p.get('prize') != expected:
+                        needs_rebuild = True
+                        break
+
+                if not needs_rebuild:
+                    continue
+
+                # 强制覆盖重新结算（不删除文件，避免 safe-delete 拦截）
+                try:
+                    result = analyzer.settle_prediction(rec.get('file'), ti, drawn[ti], force=True)
+                except Exception:
+                    continue
+                if isinstance(result, dict) and result.get('success'):
+                    rec['has_settlement'] = True
+                    rec['settlement'] = result.get('settlement')
+        except Exception as e:
+            self._log.warning('快乐8历史结算重算异常(已忽略): %s', e)
 
     def _kl8_settle_payload(self, params):
         """快乐8赛后结算 -- v4: 给结算单独保存(不复写原始快照), 增加期号校验"""

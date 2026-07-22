@@ -360,6 +360,60 @@
   .match .teams .vs { color: var(--muted); margin: 0 8px; font-size: 13px; }
   .match .arrow { color: var(--muted); }
 
+  .bayes-report-btn {
+    background: linear-gradient(145deg, rgba(139, 92, 246, 0.18), rgba(124, 58, 237, 0.12));
+    border: 1px solid rgba(139, 92, 246, 0.45);
+    border-radius: 8px;
+    color: #a78bfa;
+    font-size: 12px;
+    font-weight: 600;
+    padding: 6px 12px;
+    cursor: pointer;
+    transition: all .2s ease;
+    white-space: nowrap;
+    box-shadow: 0 2px 6px rgba(139, 92, 246, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  }
+  .bayes-report-btn:hover {
+    background: linear-gradient(145deg, rgba(139, 92, 246, 0.28), rgba(124, 58, 237, 0.2));
+    border-color: rgba(139, 92, 246, 0.7);
+    color: #c4b5fd;
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(139, 92, 246, 0.22);
+  }
+  .bayes-report-btn:active { transform: translateY(0); }
+
+  /* 深度报告弹窗 */
+  .bayes-modal-backdrop {
+    position: fixed; inset: 0; background: rgba(15, 23, 42, 0.62);
+    display: none; align-items: center; justify-content: center;
+    z-index: 9999; padding: 24px; backdrop-filter: blur(2px);
+  }
+  .bayes-modal-backdrop.open { display: flex; }
+  .bayes-modal {
+    background: #fff; width: 94vw; max-width: 1120px; height: 90vh;
+    border-radius: 14px; box-shadow: 0 24px 60px rgba(0,0,0,0.4);
+    display: flex; flex-direction: column; overflow: hidden;
+    animation: bayesPop .18s ease;
+  }
+  @keyframes bayesPop { from { transform: scale(.96); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+  .bayes-modal-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 12px 18px; border-bottom: 1px solid #e6e8ee; flex-shrink: 0;
+    background: linear-gradient(145deg, #f5f3ff, #ede9fe);
+  }
+  .bayes-modal-title { font-size: 15px; font-weight: 700; color: #4c1d95; }
+  .bayes-modal-title small { font-weight: 500; color: #7c3aed; margin-left: 6px; font-size: 12px; }
+  .bayes-modal-close {
+    border: none; background: rgba(124, 58, 237, 0.12); color: #6d28d9;
+    width: 32px; height: 32px; border-radius: 8px; font-size: 18px;
+    cursor: pointer; line-height: 1; transition: all .15s ease;
+  }
+  .bayes-modal-close:hover { background: rgba(124, 58, 237, 0.25); }
+  .bayes-modal-iframe { flex: 1; width: 100%; border: none; background: #fff; }
+  .bayes-modal-loading {
+    padding: 40px; text-align: center; color: #94a3b8; font-size: 14px;
+  }
+
   .status { text-align: center; color: var(--muted); padding: 40px 0; font-size: 15px; }
   .status.error { color: var(--away); }
   .spinner { display: inline-block; width: 22px; height: 22px; border: 3px solid var(--line);
@@ -1730,7 +1784,8 @@ function renderFootballPredictions(results) {
     const cf = r.confidence;
     const resultTier = getFootballResultTier(item);
     const tierColor = { ultra: '#22c55e', high: '#3b82f6', cautious: '#f59e0b', cover: '#94a3b8' }[resultTier.tier];
-    
+    const reportUrl = m.bayes_report_url ? apiPrefix() + m.bayes_report_url : '';
+
     let itemHtml = `<div class="match" style="display:block;padding:12px">
       <div style="display:flex;justify-content:space-between;align-items:flex-start">
         <div style="flex:1">
@@ -1748,6 +1803,7 @@ function renderFootballPredictions(results) {
             ${resultTier.downgradeReasons.length ? `<span style="font-weight:normal;color:var(--muted)">（已降级：${esc(resultTier.downgradeReasons.join('、'))}）</span>` : ''}
           </div>
         </div>
+        ${reportUrl ? `<div style="margin-left:10px;flex-shrink:0"><button class="bayes-report-btn" onclick="openBayesModal('${esc(reportUrl)}', '${esc(m.home)} vs ${esc(m.away)}')">📊 深度报告</button></div>` : ''}
       </div>`;
       
       if (top.length) {
@@ -7472,6 +7528,44 @@ async function hideFailedRecords() {
 }
 
 initPage();
+
+/* ===== 深度报告弹窗 ===== */
+function openBayesModal(url, title) {
+  let backdrop = document.getElementById('bayes-modal-backdrop');
+  if (!backdrop) {
+    backdrop = document.createElement('div');
+    backdrop.id = 'bayes-modal-backdrop';
+    backdrop.className = 'bayes-modal-backdrop';
+    backdrop.innerHTML =
+      '<div class="bayes-modal">' +
+        '<div class="bayes-modal-header">' +
+          '<div class="bayes-modal-title" id="bayes-modal-title">📊 深度报告</div>' +
+          '<button class="bayes-modal-close" onclick="closeBayesModal()" title="关闭">×</button>' +
+        '</div>' +
+        '<iframe class="bayes-modal-iframe" id="bayes-modal-iframe" ' +
+          'sandbox="allow-same-origin allow-scripts" referrerpolicy="no-referrer"></iframe>' +
+      '</div>';
+    document.body.appendChild(backdrop);
+    backdrop.addEventListener('click', (e) => { if (e.target === backdrop) closeBayesModal(); });
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeBayesModal(); });
+  }
+  document.getElementById('bayes-modal-title').innerHTML =
+    '📊 深度报告 <small>' + esc(title || '') + '</small>';
+  const iframe = document.getElementById('bayes-modal-iframe');
+  iframe.src = url;
+  backdrop.classList.add('open');
+  document.body.style.overflow = 'hidden';
+}
+
+function closeBayesModal() {
+  const backdrop = document.getElementById('bayes-modal-backdrop');
+  if (!backdrop) return;
+  backdrop.classList.remove('open');
+  const iframe = document.getElementById('bayes-modal-iframe');
+  if (iframe) iframe.src = 'about:blank';
+  document.body.style.overflow = '';
+}
+
 </script>
 </body>
 </html>

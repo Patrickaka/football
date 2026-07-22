@@ -3575,8 +3575,12 @@ class KL8Analyzer:
             log.error(f'快乐8: 保存快照失败: {e}')
             return None
 
-    def settle_prediction(self, snapshot_file: str, actual_issue: str, actual_numbers: List[int]) -> Dict:
+    def settle_prediction(self, snapshot_file: str, actual_issue: str, actual_numbers: List[int], force: bool = False) -> Dict:
         """赛后结算（v6: 无号码不扣投注+ROI统一+期号校验）
+
+        Args:
+            force: 为 True 时强制覆盖已存在的结算文件（用于奖金表更新后重算历史结算）。
+
 
         v6改动:
         1. 只有len(numbers)==select_type时才视为placed（已投注）
@@ -3661,7 +3665,7 @@ class KL8Analyzer:
         settlements_dir.mkdir(parents=True, exist_ok=True)
 
         existing_settlement = settlements_dir / f'settlement_{snapshot.get("snapshot_id", "")}.json'
-        if existing_settlement.exists():
+        if existing_settlement.exists() and not force:
             try:
                 old = json.loads(existing_settlement.read_text(encoding='utf-8'))
                 return {'error': '快照已结算，不可重复结算', 'settlement': old}
@@ -3784,7 +3788,8 @@ class KL8Analyzer:
         }
 
         try:
-            with existing_settlement.open('x', encoding='utf-8') as f:
+            mode = 'w' if force else 'x'
+            with existing_settlement.open(mode, encoding='utf-8') as f:
                 json.dump(settlement, f, ensure_ascii=False, indent=2)
             log.info(f'快乐8: 结算完成 -> {existing_settlement.name}')
             return {'success': True, 'settlement': settlement}
