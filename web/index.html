@@ -1229,6 +1229,9 @@ const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c =>
 
 const fmtNum = (x, digits = 2) => x != null && !Number.isNaN(Number(x)) ? Number(x).toFixed(digits) : '-';
 
+// 全局两位补零工具（双色球/大乐透预测记录弹窗与详情渲染共用，避免局部作用域不可见）
+function p2(n) { return String(n == null ? '' : n).padStart(2, '0'); }
+
 function renderModelStatus(status) {
   if (!status) return '';
 
