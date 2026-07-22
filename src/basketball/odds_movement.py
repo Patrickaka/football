@@ -59,8 +59,8 @@ def track_basketball_odds(date: str = None) -> int:
     以累积出真实的盘路变化序列。
     """
     try:
-        from . import __init__ as bb
-        matches = bb.fetch_basketball_schedule(date)
+        from . import fetch_basketball_schedule
+        matches = fetch_basketball_schedule(date)
     except Exception as exc:
         log.warning(f"篮球赔率追踪抓取失败: {exc}")
         return 0

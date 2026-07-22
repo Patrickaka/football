@@ -47,7 +47,7 @@ from src.common.logger import setup_logger
 
 log = setup_logger('kl8')
 
-KL8_PREDICTOR_VERSION = "kl8-v9.3-coverage-boost"
+KL8_PREDICTOR_VERSION = "kl8-v9.4-mainpool"
 
 # ─── v9.2: 只显示已验证策略模式 ───
 VERIFY_ONLY_MODE = False  # True=未验证玩法不输出号码; False=回退参考策略(始终输出号码)
@@ -122,15 +122,26 @@ FUSHI_PLAY_KEYS = tuple(FUSHI_CONFIG)
 #   每组当 6 码打选5复式=C(6,5)=6注。多组覆盖提升“组合中5”概率。
 #   实测结论(见 backtest_kl8_coverage.py)：6码堆组数性价比(率/百元≈2.37)恒高于扩7码(≈1.50)；
 #   成本随组数线性、命中率线性、性价比在8~16组达满档。这是覆盖面杠杆，不改变单注期望命中，
-#   以更多注数换取更高组合中奖概率。用户选择保持 8×6 最便宜档(96元/期，组合中5约2.27%)。
+#   以更多注数换取更高组合中奖概率。v9.4 起由 8×6 最便宜档上调为 12×6 均衡档
+#   (144元/期，组合中5约3.0%、中4+约23.5%)，进一步压低"全军覆没"频率。
 MULTI_SLIP_CONFIG = {
-    # 选5的单组5码只有1注，覆盖面过窄。改为8组6码复式，每组C(6,5)=6注；
+    # 选5的单组5码只有1注，覆盖面过窄。改为多组6码复式，每组C(6,5)=6注；
     # 这是预算换覆盖率，不改变任何单号的理论命中率。
-    'select_5': {'n_slips': 8, 'pick_size': 6},
-    'select_6': {'n_slips': 8, 'pick_size': 6},
+    # v9.4: 组数 8->12（walk-forward 200期实测：选五中4+ 17.5%->23.5%、中3+ 81%->87.5%；
+    #   选六中4+ 17.5%->23.5%；成本 96->144元/期）。在 8~16 组性价比区间内取均衡档。
+    'select_5': {'n_slips': 12, 'pick_size': 6},
+    'select_6': {'n_slips': 12, 'pick_size': 6},
     'select_7': {'n_slips': 8},
     'select_10': {'n_slips': 6},
 }
+
+# ─── 主推大底（v9.4：提升“主推”命中率的可视化方案）───
+# 快乐8 为独立均匀摇奖，单注 5/6 码无预测 edge（中3+/中4+ 仅约 9.7%/3.2% 每期）。
+# 唯一可确定提升“主推命中”的杠杆是扩大覆盖：把主推从单薄单组变成“排名前 N 的大底”，
+# 用户用这 N 码打选N复式，与开奖号重叠概率按组合数理确定性提高（与号码怎么选无关）。
+# MAIN_POOL_SIZE 即大底码数；N 越大中N率越高、成本 C(N,选号数) 也越高。
+# 选五大底8码=C(8,5)=56注(112元)，中3+约32%/期（单注5码仅9.7%）；选六大底8码=C(8,6)=28注(56元)，中4+约11%/期。
+MAIN_POOL_SIZE = 8
 
 # ─── 特征开关配置（v5：所有特征默认停用，需回测验证才能启用）───
 # 按玩法分开评估: 每个特征可以有per-play-type的enabled状态
@@ -4326,6 +4337,9 @@ class KL8Analyzer:
                 repeat_profile['target'],
             )
             numbers = sorted(num for num, _ in final_pool)
+            # v9.4: 主推大底——取排名前 MAIN_POOL_SIZE 个号码作为“主推”，
+            # 用户以这 N 码打选N复式，按组合数理中N率确定性高于单薄单组。
+            main_pool = sorted(num for num, _ in pool_candidates[:MAIN_POOL_SIZE])
             variants = self._candidate_variants(pool_candidates, select_type, final_repeat_cap)
             shape_profile = _shape_profile(numbers, self.statistics.get('last_numbers', set()))
             accuracy_profile = _play_accuracy_profile(
@@ -4340,6 +4354,8 @@ class KL8Analyzer:
                 'desc': config['desc'],
                 'pick': config['pick'],
                 'numbers': numbers,
+                'main_pool': main_pool,
+                'main_pool_size': len(main_pool),
                 'shape_profile': shape_profile,
                 'repeat_profile': repeat_profile,
                 'accuracy_profile': accuracy_profile,

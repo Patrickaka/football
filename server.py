@@ -757,6 +757,8 @@ class Handler(BaseHTTPRequestHandler):
             self._serve_json(self._kl8_exclude_recalculate_payload(params))
         elif path == '/api/kl8/snapshots':
             self._serve_json(self._kl8_snapshots_payload())
+        elif path == '/api/kl8/records':
+            self._serve_json(self._kl8_records_payload())
         elif path == '/api/kl8/settle':
             params = parse_qs(route.query)
             self._serve_json(self._kl8_settle_payload(params))
@@ -1714,6 +1716,88 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:
             self._log.error('快乐8快照列表失败', exc_info=True)
             return {'error': '快乐8快照列表失败'}
+
+    def _kl8_records_payload(self):
+        """快乐8预测记录 + 中奖情况（快照元数据 + 结算详情合并）
+
+        参考足球 /api/predictions：一次返回全部记录（含中奖结算），
+        前端用模态弹窗 + 分页展示，避免在当页面内联无限输出。
+        """
+        try:
+            from src.kl8 import KL8_SETTLEMENT_DIR, KL8_SNAPSHOT_DIR
+            from pathlib import Path
+            import json as _json
+
+            snapshots = kl8_list_snapshots()
+            # 按目标期号降序（最新一期在前）
+            snapshots.sort(
+                key=lambda s: str(s.get('target_issue') or ''),
+                reverse=True,
+            )
+
+            settlement_dir = Path(KL8_SETTLEMENT_DIR)
+            snapshot_dir = Path(KL8_SNAPSHOT_DIR)
+            records = []
+            for snap in snapshots:
+                # 读取完整快照以提取预测号码（用于"历史记录"展示）
+                predicted = {}
+                main_pool = {}
+                try:
+                    raw = _json.loads((snapshot_dir / snap['file']).read_text(encoding='utf-8'))
+                    for k in raw:
+                        if k.startswith('select_') or k.startswith('fu_shi'):
+                            blk = raw.get(k)
+                            if isinstance(blk, dict):
+                                if blk.get('main_pool'):
+                                    main_pool[k] = blk['main_pool']
+                                elif blk.get('numbers'):
+                                    predicted[k] = blk['numbers']
+                            elif isinstance(blk, list):
+                                predicted[k] = blk
+                    # 复式核心号码（旧字段名兼容）
+                    for k in ('fu_shi_7',):
+                        if not predicted.get(k):
+                            core = raw.get(k)
+                            if isinstance(core, dict):
+                                predicted[k] = core.get('core_numbers') or core.get('top7_numbers') or []
+                except Exception:
+                    predicted = {}
+                    main_pool = {}
+
+                rec = {
+                    'snapshot_id': snap.get('snapshot_id'),
+                    'file': snap.get('file'),
+                    'target_issue': snap.get('target_issue'),
+                    'based_on_issue': snap.get('based_on_issue'),
+                    'predicted_at': snap.get('predicted_at'),
+                    'version': snap.get('version'),
+                    'is_experiment': snap.get('is_experiment', False),
+                    'has_settlement': snap.get('has_settlement', False),
+                    'predicted': predicted,
+                    'main_pool': main_pool,
+                    'settlement': None,
+                }
+                if snap.get('has_settlement') and snap.get('snapshot_id'):
+                    sp = settlement_dir / f'settlement_{snap["snapshot_id"]}.json'
+                    if sp.exists():
+                        try:
+                            rec['settlement'] = _json.loads(sp.read_text(encoding='utf-8'))
+                        except Exception:
+                            rec['settlement'] = None
+                records.append(rec)
+
+            settled = sum(1 for r in records if r['has_settlement'])
+            return {
+                'result': {
+                    'records': records,
+                    'count': len(records),
+                    'settled_count': settled,
+                    'pending_count': len(records) - settled,
+                }
+            }
+        except Exception as e:
+            self._log.error('快乐8预测记录失败', exc_info=True)
+            return {'error': f'获取预测记录失败: {str(e)}'}
 
     def _kl8_settle_payload(self, params):
         """快乐8赛后结算 -- v4: 给结算单独保存(不复写原始快照), 增加期号校验"""

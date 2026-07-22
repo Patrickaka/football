@@ -5799,13 +5799,18 @@ function renderKL8(r) {
       const badgeText = isCoverage ? '公平覆盖' : (isRef ? '参考' : '已验证');
       const badgeColor = isRef ? '#9a6700' : '#2ea043';
 
+      // v9.4: 主推改为“主推大底”（排名前 N 的号码），打选N复式覆盖更全、中N率更高
+      const mainPool = (sel.main_pool && sel.main_pool.length) ? sel.main_pool : sel.numbers;
+      const mpSize = mainPool.length;
+      const kl8MinWin = { 3: 3, 4: 4, 5: 3, 6: 4, 7: 4, 8: 4, 9: 4, 10: 5 };
+      const winTh = kl8MinWin[st] || st;
       html += `<div class="kl8-select-card" style="border-color:${borderColor}">`;
-      html += `<div class="kl8-select-title">🎱 ${esc(sel.desc)} — ${isCoverage ? '覆盖' : (isRef ? '参考' : '模型')}${sel.pick}个号码 <span style="font-size:11px;color:${badgeColor};font-weight:700;margin-left:8px">[${badgeText}]</span></div>`;
-      html += `<div style="font-size:11px;color:#8b949e;margin-bottom:4px">策略: ${esc(sel.strategy_id || '')}</div>`;
+      html += `<div class="kl8-select-title">🎯 ${esc(sel.desc)} — 主推大底 ${mpSize}码（打选${st}复式） <span style="font-size:11px;color:${badgeColor};font-weight:700;margin-left:8px">[${badgeText}]</span></div>`;
+      html += `<div style="font-size:11px;color:#8b949e;margin-bottom:4px">策略: ${esc(sel.strategy_id || '')} · 用这${mpSize}码打选${st}复式，覆盖更全</div>`;
       html += `<div class="kl8-numbers-row">`;
       const playChangeInfo = (changeInfo.play_changes || {})[key];
       const addedSet = new Set(playChangeInfo ? playChangeInfo.added : []);
-      for (const n of sel.numbers) {
+      for (const n of mainPool) {
         if (addedSet.has(n)) {
           html += `<span class="kl8-ball highlight-ball" style="border:2px solid #2ea043;box-shadow:0 0 3px #2ea043">${String(n).padStart(2,'0')}</span>`;
         } else {
@@ -5813,18 +5818,19 @@ function renderKL8(r) {
         }
       }
       html += `</div>`;
-      const kl8WinTh = { 3: 2, 4: 2, 5: 3, 6: 3, 7: 4, 8: 4, 9: 4, 10: 5 };
-      const kl8WR = (kl8HypergeomPGe(st, kl8WinTh[st]) * 100).toFixed(1);
-      html += `<div style="font-size:11px;color:#8b949e;margin:4px 0 2px">中奖门槛: 中${kl8WinTh[st]}个即中奖 · 单注中奖率 <b style="color:${kl8WR >= 15 ? '#2ea043' : '#d29922'}">${kl8WR}%</b> · 期望中${(st * 0.25).toFixed(2)}个</div>`;
+      const kl8WR = (kl8HypergeomPGe(st, winTh) * 100).toFixed(1);          // 单注参考率
+      const mpWR = (kl8HypergeomPGe(mpSize, winTh) * 100).toFixed(1);        // 大底复式率（主推）
+      html += `<div style="font-size:11px;color:#8b949e;margin:4px 0 2px">主推大底复式：中${winTh}+约 <b style="color:#2ea043">${mpWR}%</b>/期（单注仅 ${kl8WR}%）· 期望中${(mpSize * 0.25).toFixed(2)}个</div>`;
       html += renderKL8ShapeProfile(sel.shape_profile, sel.numbers);
       if (sel.repeat_profile) {
         const actualRepeats = sel.numbers.filter(n => (r.statistics?.last_numbers || []).includes(n)).length;
         html += `<div style="font-size:11px;color:#8b949e;margin-top:4px">重号结构：本组 ${actualRepeats} 个 · 近${esc(sel.repeat_profile.sample_size || 0)}期相邻开奖平均 ${esc(sel.repeat_profile.mean_draw_overlap || 0)} 个 · 动态目标 ${esc(sel.repeat_profile.target || 0)} 个</div>`;
       }
       html += renderKL8AccuracyProfile(sel.accuracy_profile);
-      if (sel.multi_slips && sel.multi_slips.length > 0) {
-        html += renderKL8MultiSlips(sel, st);
-      }
+      // v9.4: 隐藏多注覆盖方案展示（用户只看主推单组参考号）
+      // if (sel.multi_slips && sel.multi_slips.length > 0) {
+      //   html += renderKL8MultiSlips(sel, st);
+      // }
       if (isRef && sel.warning) {
         html += `<div style="font-size:11px;color:#9a6700;margin-top:6px">⚠ ${esc(sel.warning)}</div>`;
       }
@@ -5892,9 +5898,10 @@ function renderKL8(r) {
   html += `<button class="kl8-refresh-btn" style="background:#d29922" onclick="openKL8ExcludeModal()">剔除号码重新计算</button>`;
   html += `<button class="kl8-refresh-btn" style="background:#f85149" onclick="openKL8KillModal()">杀号计算</button>`;
   html += `<button class="kl8-refresh-btn" style="background:#4493f8" onclick="fetchKL8Data()">🔄 抓取最新开奖数据</button>`;
-  html += `<button class="kl8-refresh-btn" style="background:#8957e5" onclick="runKL8ParameterSearch()">快速参数搜索</button>`;
+  html += `<button class="kl8-refresh-btn" style="background:#2ea043" onclick="openKL8RecordsModal()">📋 预测记录</button>`;
   html += `</div>`;
   html += `<div id="kl8-exclude-modal"></div>`;
+  html += `<div id="kl8-records-modal"></div>`;
 
   appKL8.innerHTML = html;
 }
@@ -6192,6 +6199,160 @@ function openKL8KillModal() {
 function closeKL8KillModal() {
   const target = document.getElementById('kl8-exclude-modal');
   if (target) target.innerHTML = '';
+}
+
+// ── 快乐8 预测记录模态弹窗（参考足球 /api/predictions，弹窗+分页，不在当页内联输出）──
+let kl8RecordsPage = 1;
+let kl8RecordsCache = [];
+const KL8_RECORDS_PAGE_SIZE = 8;
+
+async function openKL8RecordsModal() {
+  const target = document.getElementById('kl8-records-modal');
+  if (!target) return;
+  target.innerHTML = `<div style="position:fixed;inset:0;background:rgba(1,4,9,.72);z-index:9999;display:flex;align-items:center;justify-content:center;padding:18px">
+    <div class="card" style="width:min(820px,96vw);max-height:88vh;display:flex;flex-direction:column;border:1px solid #2ea043">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 16px;border-bottom:1px solid var(--line)">
+        <div class="section-title" style="font-size:16px;margin:0">📋 快乐8预测记录</div>
+        <button class="kl8-refresh-btn" style="padding:6px 10px;background:#30363d" onclick="closeKL8RecordsModal()">关闭</button>
+      </div>
+      <div id="kl8-records-body" style="flex:1;overflow:auto;padding:16px"><div class="status"><span class="spinner"></span>加载中…</div></div>
+    </div></div>`;
+
+  // 点击遮罩空白处关闭
+  target.firstElementChild?.addEventListener('click', (e) => {
+    if (e.target === e.currentTarget) closeKL8RecordsModal();
+  });
+
+  try {
+    const data = await fetchJson('/api/kl8/records');
+    const result = data.result || {};
+    kl8RecordsCache = result.records || [];
+    const body = document.getElementById('kl8-records-body');
+    if (!body) return;
+    if (!kl8RecordsCache.length) {
+      body.innerHTML = `<div class="note">暂无预测记录。每期开奖后系统会自动生成预测快照并结算，记录会自动累积在这里。</div>`;
+      return;
+    }
+    const summary = `共 ${result.count || 0} 条 · 已结算 ${result.settled_count || 0} · 待开奖 ${result.pending_count || 0}`;
+    body.innerHTML = `<div style="font-size:12px;color:var(--muted);margin-bottom:12px">${esc(summary)}</div>
+      <div id="kl8-records-list"></div>
+      <div id="kl8-records-pager"></div>`;
+    renderKL8RecordsPage();
+  } catch (e) {
+    const body = document.getElementById('kl8-records-body');
+    if (body) body.innerHTML = `<div class="status error">加载失败: ${esc(e.message || e)}</div>`;
+  }
+}
+
+function closeKL8RecordsModal() {
+  const target = document.getElementById('kl8-records-modal');
+  if (target) target.innerHTML = '';
+}
+
+function setKL8RecordsPage(p) {
+  kl8RecordsPage = Math.max(1, Number(p) || 1);
+  renderKL8RecordsPage();
+  const body = document.getElementById('kl8-records-body');
+  if (body) body.scrollTop = 0;
+}
+
+function renderKL8RecordsPage() {
+  const list = document.getElementById('kl8-records-list');
+  const pager = document.getElementById('kl8-records-pager');
+  if (!list) return;
+  const records = kl8RecordsCache;
+  const totalPages = Math.max(1, Math.ceil(records.length / KL8_RECORDS_PAGE_SIZE));
+  kl8RecordsPage = Math.max(1, Math.min(kl8RecordsPage, totalPages));
+  const start = (kl8RecordsPage - 1) * KL8_RECORDS_PAGE_SIZE;
+  const pageRecords = records.slice(start, start + KL8_RECORDS_PAGE_SIZE);
+
+  list.innerHTML = pageRecords.map(renderKL8RecordCard).join('');
+
+  if (records.length > KL8_RECORDS_PAGE_SIZE) {
+    const prevDisabled = kl8RecordsPage <= 1;
+    const nextDisabled = kl8RecordsPage >= totalPages;
+    let btns = '';
+    const from = Math.max(1, kl8RecordsPage - 2);
+    const to = Math.min(totalPages, kl8RecordsPage + 2);
+    for (let p = from; p <= to; p++) {
+      const active = p === kl8RecordsPage;
+      btns += `<button type="button" onclick="setKL8RecordsPage(${p})" style="padding:5px 9px;border:1px solid ${active ? '#2ea043' : 'var(--line)'};background:${active ? '#2ea043' : 'var(--card2)'};color:${active ? '#fff' : 'var(--text)'};border-radius:6px;cursor:pointer">${p}</button>`;
+    }
+    pager.innerHTML = `<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-top:14px">
+      <div style="font-size:12px;color:var(--muted)">显示 ${start + 1}-${start + pageRecords.length} / ${records.length} 条 · 第 ${kl8RecordsPage}/${totalPages} 页</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
+        <button type="button" onclick="setKL8RecordsPage(${kl8RecordsPage - 1})" ${prevDisabled ? 'disabled' : ''} style="padding:5px 9px;border:1px solid var(--line);background:var(--card2);color:var(--text);border-radius:6px;cursor:${prevDisabled ? 'not-allowed' : 'pointer'};opacity:${prevDisabled ? '.5' : '1'}">上一页</button>
+        ${btns}
+        <button type="button" onclick="setKL8RecordsPage(${kl8RecordsPage + 1})" ${nextDisabled ? 'disabled' : ''} style="padding:5px 9px;border:1px solid var(--line);background:var(--card2);color:var(--text);border-radius:6px;cursor:${nextDisabled ? 'not-allowed' : 'pointer'};opacity:${nextDisabled ? '.5' : '1'}">下一页</button>
+      </div>
+    </div>`;
+  } else {
+    pager.innerHTML = '';
+  }
+}
+
+function renderKL8RecordCard(rec) {
+  const st = rec.settlement;
+  const settled = rec.has_settlement && st;
+  const statusBadge = settled
+    ? `<span style="padding:2px 8px;border-radius:10px;font-size:11px;background:rgba(46,160,67,.15);color:#2ea043;border:1px solid #2ea043">已结算</span>`
+    : `<span style="padding:2px 8px;border-radius:10px;font-size:11px;background:rgba(139,148,158,.15);color:var(--muted);border:1px solid var(--line)">待开奖</span>`;
+
+  let html = `<div class="card" style="margin-bottom:12px;border-left:3px solid #2ea043">`;
+  html += `<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
+    <div style="font-weight:600;font-size:15px">第 ${esc(rec.target_issue || '?')} 期预测</div>
+    <div style="display:flex;gap:8px;align-items:center">
+      ${statusBadge}
+      <span style="font-size:11px;color:var(--muted)">${esc(rec.predicted_at || '')}</span>
+    </div>
+  </div>`;
+  html += `<div style="font-size:11px;color:var(--muted);margin:2px 0 8px">基于第 ${esc(rec.based_on_issue || '?')} 期 · 模型 ${esc(rec.version || '?')}</div>`;
+
+  // 预测主推号码
+  const plays = [['select_5', '选5'], ['select_6', '选6'], ['select_10', '选10'], ['fu_shi_7', '选5复式7码']];
+  let predHtml = '';
+  for (const [key, label] of plays) {
+    const pool = rec.main_pool && rec.main_pool[key];
+    const nums = (rec.predicted && rec.predicted[key]) || pool || [];
+    if (nums && nums.length) {
+      predHtml += `<div style="margin-top:6px"><span style="font-size:12px;color:var(--muted);display:inline-block;min-width:78px">${label}</span>${renderKL8Balls(nums, 26)}</div>`;
+    }
+  }
+  if (predHtml) {
+    html += `<div style="font-size:12px;color:#8b949e;margin:6px 0 2px">预测主推</div>${predHtml}`;
+  }
+
+  if (settled) {
+    html += `<div style="font-size:12px;color:#8b949e;margin:10px 0 4px">开奖号码（第 ${esc(st.actual_issue || rec.target_issue)} 期）</div>`;
+    html += `<div class="kl8-numbers-row">${renderKL8Balls(st.actual_numbers || [], 28)}</div>`;
+
+    const ps = st.prize_settlement || {};
+    const fs = st.fushi_settlement || {};
+    const rows = [];
+    for (const [key, label] of [['select_5', '选5'], ['select_6', '选6'], ['select_10', '选10']]) {
+      const p = ps[key];
+      if (p) rows.push(`${label}：中 <b>${p.hits}</b> 个${p.placed ? ` · 投 ${p.bet} 元 / 奖 ${p.prize} 元` : ' · 未投注'}`);
+    }
+    const f7 = fs['fu_shi_7'];
+    if (f7 && f7.placed) {
+      rows.push(`选5复式7码：池命中 <b>${f7.pool_hits}</b> 个 → 最高单组 ${f7.max_combo_hits} 个 · 投 ${f7.total_bet} 元 / 奖 ${f7.total_prize} 元`);
+    }
+    if (rows.length) {
+      html += `<div style="margin-top:8px;font-size:13px;line-height:1.7">${rows.map(r => `<div>${r}</div>`).join('')}</div>`;
+    }
+
+    const roi = st.cumulative_profit_roi || 0;
+    const roiColor = roi >= 0 ? '#2ea043' : '#f85149';
+    html += `<div style="margin-top:8px;font-size:13px;border-top:1px dashed var(--line);padding-top:8px">
+      累计投注 <b>${st.cumulative_bet || 0}</b> 元 · 奖金 <b>${st.cumulative_prize || 0}</b> 元 ·
+      ROI <b style="color:${roiColor}">${(roi * 100).toFixed(1)}%</b>
+    </div>`;
+  } else {
+    html += `<div class="note" style="margin-top:10px">该期尚未开奖，开奖后系统会自动结算并在此显示中奖情况。</div>`;
+  }
+
+  html += `</div>`;
+  return html;
 }
 
 async function runKL8KillRecalculate() {
