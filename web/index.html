@@ -5799,18 +5799,16 @@ function renderKL8(r) {
       const badgeText = isCoverage ? '公平覆盖' : (isRef ? '参考' : '已验证');
       const badgeColor = isRef ? '#9a6700' : '#2ea043';
 
-      // v9.4: 主推改为“主推大底”（排名前 N 的号码），打选N复式覆盖更全、中N率更高
-      const mainPool = (sel.main_pool && sel.main_pool.length) ? sel.main_pool : sel.numbers;
-      const mpSize = mainPool.length;
+      // 主推号码：选几个就是几个（直接显示预测的主推单组，不放大底）
       const kl8MinWin = { 3: 3, 4: 4, 5: 3, 6: 4, 7: 4, 8: 4, 9: 4, 10: 5 };
       const winTh = kl8MinWin[st] || st;
       html += `<div class="kl8-select-card" style="border-color:${borderColor}">`;
-      html += `<div class="kl8-select-title">🎯 ${esc(sel.desc)} — 主推大底 ${mpSize}码（打选${st}复式） <span style="font-size:11px;color:${badgeColor};font-weight:700;margin-left:8px">[${badgeText}]</span></div>`;
-      html += `<div style="font-size:11px;color:#8b949e;margin-bottom:4px">策略: ${esc(sel.strategy_id || '')} · 用这${mpSize}码打选${st}复式，覆盖更全</div>`;
+      html += `<div class="kl8-select-title">🎯 ${esc(sel.desc)} — 主推 ${sel.numbers.length}码 <span style="font-size:11px;color:${badgeColor};font-weight:700;margin-left:8px">[${badgeText}]</span></div>`;
+      html += `<div style="font-size:11px;color:#8b949e;margin-bottom:4px">策略: ${esc(sel.strategy_id || '')}</div>`;
       html += `<div class="kl8-numbers-row">`;
       const playChangeInfo = (changeInfo.play_changes || {})[key];
       const addedSet = new Set(playChangeInfo ? playChangeInfo.added : []);
-      for (const n of mainPool) {
+      for (const n of sel.numbers) {
         if (addedSet.has(n)) {
           html += `<span class="kl8-ball highlight-ball" style="border:2px solid #2ea043;box-shadow:0 0 3px #2ea043">${String(n).padStart(2,'0')}</span>`;
         } else {
@@ -5819,8 +5817,7 @@ function renderKL8(r) {
       }
       html += `</div>`;
       const kl8WR = (kl8HypergeomPGe(st, winTh) * 100).toFixed(1);          // 单注参考率
-      const mpWR = (kl8HypergeomPGe(mpSize, winTh) * 100).toFixed(1);        // 大底复式率（主推）
-      html += `<div style="font-size:11px;color:#8b949e;margin:4px 0 2px">主推大底复式：中${winTh}+约 <b style="color:#2ea043">${mpWR}%</b>/期（单注仅 ${kl8WR}%）· 期望中${(mpSize * 0.25).toFixed(2)}个</div>`;
+      html += `<div style="font-size:11px;color:#8b949e;margin:4px 0 2px">中${winTh}+约 <b style="color:${kl8WR >= 15 ? '#2ea043' : '#d29922'}">${kl8WR}%</b>/期 · 期望中${(sel.numbers.length * 0.25).toFixed(2)}个</div>`;
       html += renderKL8ShapeProfile(sel.shape_profile, sel.numbers);
       if (sel.repeat_profile) {
         const actualRepeats = sel.numbers.filter(n => (r.statistics?.last_numbers || []).includes(n)).length;
