@@ -3444,27 +3444,9 @@ function renderSsq(r) {
 
   // 红球/蓝球冷热（默认折叠）
   const ssqRecords = r.prediction_records || [];
-  html += `<button type="button" style="width:100%;margin-top:12px;padding:11px;background:var(--card2);color:var(--text);border:1px solid var(--line);border-radius:8px;font-size:14px;cursor:pointer" onclick="document.getElementById('ssq-prediction-records').open=!document.getElementById('ssq-prediction-records').open">📋 查看预测记录（${ssqRecords.length}期）</button>`;
-  html += `<details class="adv" id="ssq-prediction-records"><summary>预测记录与开奖对比</summary><div class="card">`;
-  if (ssqRecords.length) {
-    ssqRecords.forEach((record, index) => {
-      const actual = record.actual;
-      html += `<div style="${index ? 'border-top:1px solid var(--line);margin-top:10px;padding-top:10px' : ''}">
-        <div class="row"><span class="k">${esc(record.period)} 期</span><span class="v">${record.settled ? '已开奖' : '待开奖'}</span></div>`;
-      if (actual) {
-        html += `<div class="note">开奖号：${actual.red.map(p2).join(' ')} + ${p2(actual.blue)}</div>`;
-      }
-      (record.sets || []).forEach((set, setIndex) => {
-        const hit = (record.results || [])[setIndex];
-        const hitText = hit ? ` · 红球中 ${hit.red_hits} 个${hit.blue_hit ? ' · 蓝球命中' : ' · 蓝球未中'}` : '';
-        html += `<div class="note">第${setIndex + 1}注：${set.red.map(p2).join(' ')} + ${p2(set.blue)}${hitText}</div>`;
-      });
-      html += `</div>`;
-    });
-  } else {
-    html += `<div class="note">暂无预测记录。当前预测已保存，下一期开奖并刷新数据后将自动显示命中结果。</div>`;
-  }
-  html += `</div></details>`;
+  window.__ssqRecords = ssqRecords;
+  html += `<button type="button" style="width:100%;margin-top:12px;padding:11px;background:var(--card2);color:var(--text);border:1px solid var(--line);border-radius:8px;font-size:14px;cursor:pointer" onclick="openSSQRecordsModal()">📋 查看预测记录（${ssqRecords.length}期）</button>`;
+  html += `<div id="ssq-records-modal"></div>`;
 
   const hasHot = (analysis.hot_red && analysis.hot_red.length) || (analysis.hot_blue && analysis.hot_blue.length);
   if (hasHot) {
@@ -5066,26 +5048,9 @@ function renderLottery(r) {
 
   // ── Prediction records (always visible, including the empty state) ──
   const dltRecords = r.prediction_records || [];
-  html += `<button type="button" style="width:100%;margin-top:12px;padding:11px;background:var(--card2);color:var(--text);border:1px solid var(--line);border-radius:8px;font-size:14px;cursor:pointer" onclick="document.getElementById('dlt-prediction-records').open=!document.getElementById('dlt-prediction-records').open">📋 查看预测记录（${dltRecords.length}期）</button>`;
-  html += `<details class="adv" id="dlt-prediction-records"><summary>预测记录与开奖对比</summary><div class="card">`;
-  if (!dltRecords.length) {
-    html += `<div class="note">暂无预测记录。当前预测已保存，下一期开奖并刷新数据后将自动显示命中结果。</div>`;
-  } else {
-    dltRecords.forEach((record, index) => {
-      const actual = record.actual;
-      const unverified = record.integrity_status === 'legacy_unverified' || (!record.based_on_issue && record.settled);
-      html += `<div style="${index ? 'border-top:1px solid var(--line);margin-top:10px;padding-top:10px' : ''}">
-        <div class="row"><span class="k">${esc(record.period)} 期</span><span class="v" style="color:${unverified ? 'var(--warn)' : 'inherit'}">${unverified ? '历史记录未验证' : (record.settled ? '已开奖' : '待开奖')}</span></div>`;
-      if (actual) html += `<div class="note">开奖号：${(actual.front || []).map(p2).join(' ')} + ${(actual.back || []).map(p2).join(' ')}</div>`;
-      if (unverified) html += `<div class="note" style="color:var(--warn)">缺少开奖前生成凭证，可能存在数据穿越，不计入实盘命中。</div>`;
-      Object.entries(record.recommendations || {}).forEach(([method, rec]) => {
-        const hitText = record.settled && !unverified ? ` · 前区中 ${record[method + '_front_hit'] || 0} 个 · 后区中 ${record[method + '_back_hit'] || 0} 个` : '';
-        html += `<div class="note">${esc(method)}：${(rec.front || []).map(p2).join(' ')} + ${(rec.back || []).map(p2).join(' ')}${hitText}</div>`;
-      });
-      html += `</div>`;
-    });
-  }
-  html += `</div></details>`;
+  window.__dltRecords = dltRecords;
+  html += `<button type="button" style="width:100%;margin-top:12px;padding:11px;background:var(--card2);color:var(--text);border:1px solid var(--line);border-radius:8px;font-size:14px;cursor:pointer" onclick="openDLTRecordsModal()">📋 查看预测记录（${dltRecords.length}期）</button>`;
+  html += `<div id="dlt-records-modal"></div>`;
   
   // ── 🎯 快速推荐（默认可见：你关心的推荐号码）──
   html += `<div class="section-title">🎯 快速推荐（前区5 + 后区2）</div>`;
@@ -6244,6 +6209,141 @@ async function openKL8RecordsModal() {
 function closeKL8RecordsModal() {
   const target = document.getElementById('kl8-records-modal');
   if (target) target.innerHTML = '';
+}
+
+// ── 双色球 预测记录模态弹窗（不在当页内联输出，参考快乐8）──
+let ssqRecordsPage = 1;
+const SSQ_RECORDS_PAGE_SIZE = 10;
+
+function openSSQRecordsModal() {
+  const records = window.__ssqRecords || [];
+  const target = document.getElementById('ssq-records-modal');
+  if (!target) return;
+  target.innerHTML = `<div style="position:fixed;inset:0;background:rgba(1,4,9,.72);z-index:9999;display:flex;align-items:center;justify-content:center;padding:18px">
+    <div class="card" style="width:min(760px,96vw);max-height:88vh;display:flex;flex-direction:column;border:1px solid #e34c26">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 16px;border-bottom:1px solid var(--line)">
+        <div class="section-title" style="font-size:16px;margin:0">📋 双色球预测记录（共 ${records.length} 期）</div>
+        <button class="kl8-refresh-btn" style="padding:6px 10px;background:#30363d" onclick="closeSSQRecordsModal()">关闭</button>
+      </div>
+      <div id="ssq-records-body" style="flex:1;overflow:auto;padding:16px">${records.length ? '' : '<div class="note">暂无预测记录。下一期开奖并刷新数据后将自动显示命中结果。</div>'}</div>
+    </div></div>`;
+  target.firstElementChild?.addEventListener('click', (e) => {
+    if (e.target === e.currentTarget) closeSSQRecordsModal();
+  });
+  if (records.length) renderSSQRecordsPage();
+}
+
+function closeSSQRecordsModal() {
+  const target = document.getElementById('ssq-records-modal');
+  if (target) target.innerHTML = '';
+}
+
+function setSSQRecordsPage(p) {
+  ssqRecordsPage = Math.max(1, Number(p) || 1);
+  renderSSQRecordsPage();
+  const body = document.getElementById('ssq-records-body');
+  if (body) body.scrollTop = 0;
+}
+
+function renderSSQRecordsPage() {
+  const body = document.getElementById('ssq-records-body');
+  if (!body) return;
+  const records = window.__ssqRecords || [];
+  const total = records.length;
+  const pages = Math.max(1, Math.ceil(total / SSQ_RECORDS_PAGE_SIZE));
+  ssqRecordsPage = Math.min(ssqRecordsPage, pages);
+  const start = (ssqRecordsPage - 1) * SSQ_RECORDS_PAGE_SIZE;
+  const slice = records.slice(start, start + SSQ_RECORDS_PAGE_SIZE);
+  let html = '';
+  slice.forEach((record, idx) => {
+    const actual = record.actual;
+    html += `<div style="${idx || start ? 'border-top:1px solid var(--line);margin-top:10px;padding-top:10px' : ''}">
+      <div class="row"><span class="k">${esc(record.period)} 期</span><span class="v">${record.settled ? '已开奖' : '待开奖'}</span></div>`;
+    if (actual) {
+      html += `<div class="note">开奖号：${actual.red.map(p2).join(' ')} + ${p2(actual.blue)}</div>`;
+    }
+    (record.sets || []).forEach((set, setIndex) => {
+      const hit = (record.results || [])[setIndex];
+      const hitText = hit ? ` · 红球中 ${hit.red_hits} 个${hit.blue_hit ? ' · 蓝球命中' : ' · 蓝球未中'}` : '';
+      html += `<div class="note">第${setIndex + 1}注：${set.red.map(p2).join(' ')} + ${p2(set.blue)}${hitText}</div>`;
+    });
+    html += `</div>`;
+  });
+  if (pages > 1) {
+    html += `<div style="display:flex;gap:8px;align-items:center;justify-content:center;margin-top:14px">`;
+    if (ssqRecordsPage > 1) html += `<button class="kl8-refresh-btn" style="padding:5px 10px;background:#30363d" onclick="setSSQRecordsPage(${ssqRecordsPage - 1})">上一页</button>`;
+    html += `<span style="font-size:13px;color:var(--muted)">第 ${ssqRecordsPage} / ${pages} 页</span>`;
+    if (ssqRecordsPage < pages) html += `<button class="kl8-refresh-btn" style="padding:5px 10px;background:#30363d" onclick="setSSQRecordsPage(${ssqRecordsPage + 1})">下一页</button>`;
+    html += `</div>`;
+  }
+  body.innerHTML = html;
+}
+
+// ── 大乐透 预测记录模态弹窗（不在当页内联输出，参考快乐8）──
+let dltRecordsPage = 1;
+const DLT_RECORDS_PAGE_SIZE = 10;
+
+function openDLTRecordsModal() {
+  const records = window.__dltRecords || [];
+  const target = document.getElementById('dlt-records-modal');
+  if (!target) return;
+  target.innerHTML = `<div style="position:fixed;inset:0;background:rgba(1,4,9,.72);z-index:9999;display:flex;align-items:center;justify-content:center;padding:18px">
+    <div class="card" style="width:min(760px,96vw);max-height:88vh;display:flex;flex-direction:column;border:1px solid #e34c26">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 16px;border-bottom:1px solid var(--line)">
+        <div class="section-title" style="font-size:16px;margin:0">📋 大乐透预测记录（共 ${records.length} 期）</div>
+        <button class="kl8-refresh-btn" style="padding:6px 10px;background:#30363d" onclick="closeDLTRecordsModal()">关闭</button>
+      </div>
+      <div id="dlt-records-body" style="flex:1;overflow:auto;padding:16px">${records.length ? '' : '<div class="note">暂无预测记录。下一期开奖并刷新数据后将自动显示命中结果。</div>'}</div>
+    </div></div>`;
+  target.firstElementChild?.addEventListener('click', (e) => {
+    if (e.target === e.currentTarget) closeDLTRecordsModal();
+  });
+  if (records.length) renderDLTRecordsPage();
+}
+
+function closeDLTRecordsModal() {
+  const target = document.getElementById('dlt-records-modal');
+  if (target) target.innerHTML = '';
+}
+
+function setDLTRecordsPage(p) {
+  dltRecordsPage = Math.max(1, Number(p) || 1);
+  renderDLTRecordsPage();
+  const body = document.getElementById('dlt-records-body');
+  if (body) body.scrollTop = 0;
+}
+
+function renderDLTRecordsPage() {
+  const body = document.getElementById('dlt-records-body');
+  if (!body) return;
+  const records = window.__dltRecords || [];
+  const total = records.length;
+  const pages = Math.max(1, Math.ceil(total / DLT_RECORDS_PAGE_SIZE));
+  dltRecordsPage = Math.min(dltRecordsPage, pages);
+  const start = (dltRecordsPage - 1) * DLT_RECORDS_PAGE_SIZE;
+  const slice = records.slice(start, start + DLT_RECORDS_PAGE_SIZE);
+  let html = '';
+  slice.forEach((record, idx) => {
+    const actual = record.actual;
+    const unverified = record.integrity_status === 'legacy_unverified' || (!record.based_on_issue && record.settled);
+    html += `<div style="${idx || start ? 'border-top:1px solid var(--line);margin-top:10px;padding-top:10px' : ''}">
+      <div class="row"><span class="k">${esc(record.period)} 期</span><span class="v" style="color:${unverified ? 'var(--warn)' : 'inherit'}">${unverified ? '历史记录未验证' : (record.settled ? '已开奖' : '待开奖')}</span></div>`;
+    if (actual) html += `<div class="note">开奖号：${(actual.front || []).map(p2).join(' ')} + ${(actual.back || []).map(p2).join(' ')}</div>`;
+    if (unverified) html += `<div class="note" style="color:var(--warn)">缺少开奖前生成凭证，可能存在数据穿越，不计入实盘命中。</div>`;
+    Object.entries(record.recommendations || {}).forEach(([method, rec]) => {
+      const hitText = record.settled && !unverified ? ` · 前区中 ${record[method + '_front_hit'] || 0} 个 · 后区中 ${record[method + '_back_hit'] || 0} 个` : '';
+      html += `<div class="note">${esc(method)}：${(rec.front || []).map(p2).join(' ')} + ${(rec.back || []).map(p2).join(' ')}${hitText}</div>`;
+    });
+    html += `</div>`;
+  });
+  if (pages > 1) {
+    html += `<div style="display:flex;gap:8px;align-items:center;justify-content:center;margin-top:14px">`;
+    if (dltRecordsPage > 1) html += `<button class="kl8-refresh-btn" style="padding:5px 10px;background:#30363d" onclick="setDLTRecordsPage(${dltRecordsPage - 1})">上一页</button>`;
+    html += `<span style="font-size:13px;color:var(--muted)">第 ${dltRecordsPage} / ${pages} 页</span>`;
+    if (dltRecordsPage < pages) html += `<button class="kl8-refresh-btn" style="padding:5px 10px;background:#30363d" onclick="setDLTRecordsPage(${dltRecordsPage + 1})">下一页</button>`;
+    html += `</div>`;
+  }
+  body.innerHTML = html;
 }
 
 function setKL8RecordsPage(p) {
