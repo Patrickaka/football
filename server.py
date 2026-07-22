@@ -1786,6 +1786,14 @@ class Handler(BaseHTTPRequestHandler):
                             rec['settlement'] = None
                 records.append(rec)
 
+            # 去重：同一目标期只保留最新一条（调度器每轮可能对同期生成多次快照）
+            seen_issues = {}
+            for rec in records:
+                issue = rec.get('target_issue')
+                if issue and issue not in seen_issues:
+                    seen_issues[issue] = rec
+            records = list(seen_issues.values())
+
             settled = sum(1 for r in records if r['has_settlement'])
             return {
                 'result': {
