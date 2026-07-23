@@ -644,9 +644,12 @@ def build_report(cache_path: str, live: dict, out_path: str) -> dict:
             anomaly=d.get("anomaly") or {},
         )
     professional_evidence = d.get("professional_evidence")
-    if not professional_evidence:
-        from .professional_readiness import build_match_evidence_profile
-        professional_evidence = build_match_evidence_profile(d)
+    from .professional_readiness import build_match_evidence_profile
+    evidence_input = dict(d)
+    evidence_input["live_context"] = live
+    # Always rebuild here: report-only live_context may be newer than the
+    # prediction cache and must participate in the evidence audit.
+    professional_evidence = build_match_evidence_profile(evidence_input)
 
     report = {
         "match": match,

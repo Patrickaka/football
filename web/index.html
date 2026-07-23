@@ -1671,6 +1671,11 @@ function renderFootballProfessionalStatus(status) {
   const assessment = status.professional_assessment || {};
   const capabilities = assessment.capabilities || [];
   const gaps = assessment.gaps || [];
+  const monitoring = status.monitoring || {};
+  const spfMonitoring = monitoring.spf || {};
+  const rqspfMonitoring = monitoring.rqspf || {};
+  const drift = monitoring.drift || {};
+  const marketTiming = monitoring.market_timing || {};
   const ready = status.production_ready === true;
   const checkLabels = {
     model_beats_market_logloss: 'LogLoss跑赢市场',
@@ -1696,6 +1701,26 @@ function renderFootballProfessionalStatus(status) {
       `<span class="pro-check ${checks[key] ? 'ok' : ''}">${checks[key] ? '✓' : '✗'} ${esc(label)}</span>`).join('')}
     </div>
     <div class="note" style="margin-top:10px">当前结论：${esc(status.status_label || '-')}。高命中率不等于盈利，正式推荐必须同时通过概率、ROI 与 CLV 门槛。</div>
+    ${monitoring.schema_version ? `<details open style="margin-top:12px"><summary style="cursor:pointer;color:var(--accent2);font-weight:600">生产预测闭环监控</summary>
+      <div class="pro-metrics" style="margin-top:8px">
+        ${metric('胜平负独立样本', `${spfMonitoring.n || 0} 场`, '#93c5fd')}
+        ${metric('让球独立样本', `${rqspfMonitoring.n || 0} 场`, Number(rqspfMonitoring.n) >= 100 ? '#4ade80' : '#fbbf24')}
+        ${metric('收盘赔率覆盖', `${(Number(marketTiming.closing_odds_coverage || 0) * 100).toFixed(1)}%`, marketTiming.clv_ready ? '#4ade80' : '#fca5a5')}
+        ${metric('赔率时点覆盖', `${(Number(marketTiming.timed_snapshot_coverage || 0) * 100).toFixed(1)}%`, Number(marketTiming.timed_snapshot_coverage) >= .8 ? '#4ade80' : '#fbbf24')}
+      </div>
+      <div class="pro-checks">
+        <span class="pro-check ${!drift.detected ? 'ok' : ''}">${drift.detected ? '✗' : '✓'} ${drift.detected ? '检测到模型漂移' : '暂未检测到显著漂移'}</span>
+        <span class="pro-check ${marketTiming.clv_ready ? 'ok' : ''}">${marketTiming.clv_ready ? '✓' : '✗'} CLV样本门槛</span>
+      </div>
+      ${drift.reasons?.length ? `<div class="note" style="color:var(--away);margin-top:8px">${drift.reasons.map(esc).join('；')}</div>` : ''}
+      ${spfMonitoring.buckets?.length ? `<div style="overflow:auto;margin-top:10px"><table style="width:100%;font-size:12px;border-collapse:collapse">
+        <thead><tr><th>概率桶</th><th>样本</th><th>平均预测</th><th>实际命中</th><th>95%区间</th></tr></thead>
+        <tbody>${spfMonitoring.buckets.map(bucket => `<tr>
+          <td>${esc(bucket.bucket)}</td><td>${bucket.n}</td><td>${(Number(bucket.mean_predicted) * 100).toFixed(1)}%</td>
+          <td>${(Number(bucket.observed_accuracy) * 100).toFixed(1)}%</td>
+          <td>${(Number(bucket.ci95_low) * 100).toFixed(1)}%–${(Number(bucket.ci95_high) * 100).toFixed(1)}%</td>
+        </tr>`).join('')}</tbody></table></div>` : '<div class="note">尚无足够结算样本生成概率桶。</div>'}
+    </details>` : ''}
     ${capabilities.length ? `<details style="margin-top:12px"><summary style="cursor:pointer;color:var(--accent2);font-weight:600">已具备的专业能力（${capabilities.length}项）</summary>
       <div class="note">${capabilities.map(item => `✓ ${esc(item)}`).join('<br>')}</div></details>` : ''}
     ${gaps.length ? `<details open style="margin-top:12px"><summary style="cursor:pointer;color:#fbbf24;font-weight:600">距离专业生产系统的差距（${gaps.length}项）</summary>

@@ -18,8 +18,25 @@ class ProfessionalReadinessTests(unittest.TestCase):
         })
         self.assertGreater(profile["coverage_score"], 0)
         self.assertLess(profile["coverage_score"], .70)
+        self.assertIn("未取得可核验伤停", profile["blockers"])
         self.assertIn("未取得确认首发", profile["blockers"])
         self.assertEqual(profile["model_market_agreement"], "unavailable")
+
+    def test_report_live_context_counts_injuries_and_lineup_separately(self):
+        profile = build_match_evidence_profile({
+            "euro": {"close": {}},
+            "asian": {"handicap": 0},
+            "total": {"close_line": 2.5},
+            "live_context": {
+                "injuries": [{"team": "A", "player": "P"}],
+                "lineup": {},
+            },
+        })
+        checks = {item["key"]: item["available"] for item in profile["checks"]}
+        self.assertTrue(checks["injuries"])
+        self.assertFalse(checks["confirmed_lineup"])
+        self.assertNotIn("未取得可核验伤停", profile["blockers"])
+        self.assertIn("未取得确认首发", profile["blockers"])
 
     def test_match_evidence_quantifies_model_market_conflict(self):
         profile = build_match_evidence_profile({

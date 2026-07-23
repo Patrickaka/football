@@ -79,12 +79,8 @@ def build_match_evidence_profile(result: Mapping[str, Any]) -> Dict[str, Any]:
             4,
             bool(lottery.get("spf_odds") or lottery.get("rqspf_odds")),
         ),
-        (
-            "lineup_injuries",
-            "确认首发与伤停",
-            4,
-            bool(live.get("lineup")) and bool(live.get("injuries")),
-        ),
+        ("injuries", "伤停与停赛", 2, bool(live.get("injuries"))),
+        ("confirmed_lineup", "确认首发", 2, bool(live.get("lineup"))),
     ]
     earned = sum(weight for _, _, weight, available in checks if available)
     total = sum(weight for _, _, weight, _ in checks)
@@ -121,6 +117,8 @@ def build_match_evidence_profile(result: Mapping[str, Any]) -> Dict[str, Any]:
         blockers.append("缺少官方赔率去水概率")
     if agreement == "conflict":
         blockers.append("模型与市场概率分歧较大")
+    if not bool(live.get("injuries")):
+        blockers.append("未取得可核验伤停")
     if not bool(live.get("lineup")):
         blockers.append("未取得确认首发")
     if score < 0.70:

@@ -1399,7 +1399,12 @@ class Handler(BaseHTTPRequestHandler):
 
             from src.common.maintenance import disk_status
             from src.football.professional_readiness import build_system_gap_assessment
+            from src.football.professional_monitoring import build_professional_monitoring
+            from src.football.result_sync import get_prediction_export
             disk = disk_status()
+            monitoring = build_professional_monitoring(
+                get_prediction_export().get('records') or []
+            )
             model = validation.get('model_metrics') or {}
             market = validation.get('market_baseline_metrics') or {}
             strategy = validation.get('strategy') or {}
@@ -1437,6 +1442,7 @@ class Handler(BaseHTTPRequestHandler):
                     'audit': validation.get('audit') or {},
                     'disk': disk,
                     'professional_assessment': build_system_gap_assessment(validation),
+                    'monitoring': monitoring,
                 }
             }
         except Exception as e:

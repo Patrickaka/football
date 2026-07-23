@@ -49,6 +49,8 @@ class WebProfessionalModalTests(unittest.TestCase):
         self.assertIn("bundledProfessionalBacktest", html)
         self.assertIn("bundled_audited_baseline", html)
         self.assertIn("距离专业生产系统的差距", html)
+        self.assertIn("生产预测闭环监控", html)
+        self.assertIn("95%区间", html)
         self.assertIn("数据读取失败，不代表样本为0场", html)
 
 

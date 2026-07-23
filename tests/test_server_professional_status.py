@@ -18,6 +18,13 @@ class ServerProfessionalStatusTests(unittest.TestCase):
         self.assertFalse(result['production_ready'])
         self.assertFalse(result['official_betting_allowed'])
         self.assertGreaterEqual(result['out_of_sample_n'], 1000)
+        self.assertEqual(
+            result['monitoring']['schema_version'],
+            'football-professional-monitoring-v1',
+        )
+        self.assertIn('spf', result['monitoring'])
+        self.assertIn('rqspf', result['monitoring'])
+        self.assertIn('market_timing', result['monitoring'])
 
     def test_status_uses_bundled_baseline_without_report_file(self):
         handler = server.Handler.__new__(server.Handler)
