@@ -1789,6 +1789,13 @@ function setFootballQualityFilter(filter) {
   renderFootballPredictions(allPredictions);
 }
 
+function calculateFootballPredictionReliability(probability, informationCompleteness) {
+  const p = Math.max(0, Math.min(1, Number(probability) || 0));
+  const info = Math.max(0, Math.min(1, Number(informationCompleteness) || 0));
+  const threeWayBaseline = 1 / 3;
+  return Math.max(0, Math.min(1, threeWayBaseline + (p - threeWayBaseline) * info));
+}
+
 function getFootballResultTier(item) {
   const r = item?.result || {};
   const standardMarket = r.lottery?.standard;
@@ -1823,9 +1830,15 @@ function getFootballResultTier(item) {
   entries.sort((a, b) => b[1] - a[1]);
   let prediction = entries[0][0];
   let probability = entries[0][1];
-  let tier = probability >= 0.75 ? 'ultra'
-    : probability >= 0.60 ? 'high'
-    : probability >= 0.50 ? 'cautious'
+  const informationCompleteness = Math.max(
+    0, Math.min(1, Number(r.confidence?.score) || 0)
+  );
+  const predictionReliability = calculateFootballPredictionReliability(
+    probability, informationCompleteness
+  );
+  let tier = predictionReliability >= 0.80 ? 'ultra'
+    : predictionReliability >= 0.60 ? 'high'
+    : predictionReliability >= 0.50 ? 'cautious'
     : 'cover';
 
   const downgradeReasons = [];
@@ -1843,21 +1856,19 @@ function getFootballResultTier(item) {
     ultra: '超强单选', high: '高置信单选',
     cautious: '谨慎/双选', cover: '双选/观望',
   };
-  return { tier, label: labels[tier], prediction, probability, downgradeReasons };
+  return {
+    tier, label: labels[tier], prediction, probability,
+    informationCompleteness, predictionReliability, downgradeReasons,
+  };
 }
 
 function footballMatchPassesFilter(item) {
   if (footballQualityFilter === 'all') return true;
-  const confidence = Number(item?.result?.confidence?.score);
-  if (Number.isFinite(confidence)) {
-    if (footballQualityFilter === 'ultra') return confidence >= 0.75;
-    if (footballQualityFilter === 'high') return confidence >= 0.60 && confidence < 0.75;
-    if (footballQualityFilter === 'cautious') return confidence >= 0.50 && confidence < 0.60;
-    if (footballQualityFilter === 'cover') {
-      return confidence < 0.50 || getFootballResultTier(item).tier === 'cover';
-    }
-  }
-  return getFootballResultTier(item).tier === footballQualityFilter;
+  const reliability = getFootballResultTier(item).predictionReliability;
+  if (footballQualityFilter === 'ultra') return reliability >= 0.80;
+  if (footballQualityFilter === 'high') return reliability >= 0.60 && reliability < 0.80;
+  if (footballQualityFilter === 'cautious') return reliability >= 0.50 && reliability < 0.60;
+  return reliability < 0.50;
 }
 
 function getLotteryHandicapExplanation(lottery) {
@@ -1943,8 +1954,8 @@ function renderFootballPredictions(results) {
         <span class="toolbar-label">筛选</span>
         <div class="toolbar-buttons">
           <button onclick="setFootballQualityFilter('all')" class="tb-btn ${footballQualityFilter === 'all' ? 'tb-active' : ''}">全部</button>
-          <button onclick="setFootballQualityFilter('ultra')" class="tb-btn ${footballQualityFilter === 'ultra' ? 'tb-active' : ''}">超强≥75%</button>
-          <button onclick="setFootballQualityFilter('high')" class="tb-btn ${footballQualityFilter === 'high' ? 'tb-active' : ''}">高置信60%–75%</button>
+          <button onclick="setFootballQualityFilter('ultra')" class="tb-btn ${footballQualityFilter === 'ultra' ? 'tb-active' : ''}">超强可信≥80%</button>
+          <button onclick="setFootballQualityFilter('high')" class="tb-btn ${footballQualityFilter === 'high' ? 'tb-active' : ''}">高可信60%–80%</button>
           <button onclick="setFootballQualityFilter('cautious')" class="tb-btn ${footballQualityFilter === 'cautious' ? 'tb-active' : ''}">谨慎50%–60%</button>
           <button onclick="setFootballQualityFilter('cover')" class="tb-btn ${footballQualityFilter === 'cover' ? 'tb-active' : ''}">双选/观望</button>
         </div>
@@ -2013,14 +2024,15 @@ function renderFootballPredictions(results) {
           <div style="font-size:13px;color:var(--muted)">
             ${esc(m.num || '')} · ${esc(m.time || '')}
           </div>
-          ${cf && cf.label ? `<div style="font-size:12px;color:${cf.level === 'low' ? 'var(--muted)' : cf.level === 'high' ? 'var(--accent2)' : 'var(--warn)'};margin-top:2px">
-            🎯 ${esc(cf.label)} (${(cf.score * 100).toFixed(0)}%)
+          ${cf && cf.score != null ? `<div style="font-size:12px;color:${cf.level === 'low' ? 'var(--muted)' : cf.level === 'high' ? 'var(--accent2)' : 'var(--warn)'};margin-top:2px">
+            📡 信息完整度 ${(cf.score * 100).toFixed(0)}%
           </div>` : ''}
           <div style="font-size:11px;margin-top:3px;color:${officialBetAllowed ? '#4ade80' : '#fbbf24'}">
             ${officialBetAllowed ? '✓ 已通过全局生产门控' : '🧪 研究预测 · 尚未通过盈利门控'}
           </div>
           <div style="font-size:12px;color:${tierColor};margin-top:3px;font-weight:600">
             ${esc(resultTier.label)} · ${esc(resultTier.prediction)} ${(resultTier.probability * 100).toFixed(0)}%
+            · 预测可信度 ${(resultTier.predictionReliability * 100).toFixed(0)}%
             ${resultTier.downgradeReasons.length ? `<span style="font-weight:normal;color:var(--muted)">（已降级：${esc(resultTier.downgradeReasons.join('、'))}）</span>` : ''}
           </div>
         </div>
@@ -2125,7 +2137,7 @@ function renderFootballPredictions(results) {
             : '○ 未达80%精选门槛：观望';
           itemHtml += `<div style="margin-bottom:7px;padding:5px 7px;border-radius:6px;background:${gateColor}18;color:${gateColor};font-size:11px;font-weight:700">
             ${esc(gateLabel)}
-            <span style="font-weight:400;color:var(--muted)"> · 当前最高概率 ${((gate.probability || 0) * 100).toFixed(0)}% · 最低门槛 ${((gate.minimum_probability || 0) * 100).toFixed(0)}%</span>
+            <span style="font-weight:400;color:var(--muted)"> · 赛果概率 ${((gate.probability || 0) * 100).toFixed(0)}% · 信息完整度 ${((gate.information_completeness || 0) * 100).toFixed(0)}% · 预测可信度 ${((gate.prediction_reliability || 0) * 100).toFixed(0)}%</span>
           </div>`;
           if (!gate.selected && gate.reasons?.length) {
             itemHtml += `<div style="margin:-3px 0 7px;font-size:10px;color:var(--muted)">观望原因：${gate.reasons.map(esc).join('；')}</div>`;
@@ -3213,6 +3225,7 @@ function renderResult(r) {
   };
 
   const { match: m, asian: a, euro: e, total: t, model: md, team: tm, confidence: cf, league_profile: lp } = r;
+  const detailResultTier = getFootballResultTier({ result: r });
   const top = md && md.top_scores ? md.top_scores : [];
   if (!top.length) {
     app.innerHTML = backBtn() + `<div class="status error">✗ 未找到预测结果</div>`;
@@ -3250,7 +3263,7 @@ function renderResult(r) {
     <div class="meta">${m.num ? esc(m.num) + ' · ' : ''}${esc(m.league || '')} ${esc(m.time || '')}</div>
     ${lp && lp.name && lp.name !== 'default' && lp.avg_goal != null ? `<div class="meta">联赛模型 ${esc(lp.name)} · 场均 ${lp.avg_goal.toFixed(2)} 球</div>` : ''}
     ${modelInfo.length ? `<div class="meta" style="color:${'var(--warn)'}">${modelInfo.join(' · ')}</div>` : ''}
-    ${cf && cf.score != null ? `<div class="meta" style="color:${cf.level === 'low' ? 'var(--away)' : 'var(--accent2)'}">置信度 ${esc(cf.label)} (${(cf.score * 100).toFixed(0)}%)</div>` : ''}</div>`;
+    ${cf && cf.score != null ? `<div class="meta" style="color:${cf.level === 'low' ? 'var(--away)' : 'var(--accent2)'}">信息完整度 ${(cf.score * 100).toFixed(0)}% · 赛果概率 ${(detailResultTier.probability * 100).toFixed(0)}% · 预测可信度 ${(detailResultTier.predictionReliability * 100).toFixed(0)}%</div>` : ''}</div>`;
 
   html += renderModelStatus(r.model_status);
   html += renderModelWeights(r.model_weights);

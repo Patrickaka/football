@@ -1,18 +1,35 @@
 import unittest
 
-from src.football.accuracy_gate import build_accuracy_gate
+from src.football.accuracy_gate import build_accuracy_gate, prediction_reliability
 
 
 class FootballAccuracyGateTests(unittest.TestCase):
     def test_spf_selects_only_strong_market_aligned_pick(self):
         result = build_accuracy_gate({
             "standard": {
-                "probabilities": {"胜": 0.76, "平": 0.14, "负": 0.10},
-                "market_probabilities": {"胜": 0.74, "平": 0.15, "负": 0.11},
+                "probabilities": {"胜": 0.84, "平": 0.09, "负": 0.07},
+                "market_probabilities": {"胜": 0.82, "平": 0.10, "负": 0.08},
             }
         })
         self.assertTrue(result["spf"]["selected"])
         self.assertEqual(result["spf"]["decision"], "胜")
+
+    def test_prediction_reliability_combines_probability_and_information(self):
+        reliability = prediction_reliability(0.72, 0.88)
+        self.assertAlmostEqual(reliability, 0.6736, places=4)
+        self.assertLess(reliability, 0.80)
+
+    def test_information_complete_but_reliability_below_80_abstains(self):
+        result = build_accuracy_gate({
+            "standard": {
+                "probabilities": {"胜": 0.72, "平": 0.19, "负": 0.09},
+                "market_probabilities": {"胜": 0.70, "平": 0.20, "负": 0.10},
+            },
+        }, confidence={"score": 0.88})
+        self.assertFalse(result["spf"]["selected"])
+        self.assertAlmostEqual(result["spf"]["information_completeness"], 0.88)
+        self.assertAlmostEqual(result["spf"]["prediction_reliability"], 0.6736)
+        self.assertIn("预测可信度低于80%", result["spf"]["reasons"])
 
     def test_spf_abstains_below_threshold(self):
         result = build_accuracy_gate({

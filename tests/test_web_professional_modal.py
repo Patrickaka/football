@@ -18,17 +18,23 @@ class WebProfessionalModalTests(unittest.TestCase):
             html,
         )
 
-    def test_confidence_filter_uses_displayed_confidence_score(self):
+    def test_filter_uses_prediction_reliability_not_information_completeness(self):
         path = os.path.join(ROOT, 'web', 'index.html')
         with open(path, encoding='utf-8') as handle:
             html = handle.read()
         self.assertIn(
-            'const confidence = Number(item?.result?.confidence?.score);',
+            'calculateFootballPredictionReliability(probability, informationCompleteness)',
             html,
         )
-        self.assertIn("confidence >= 0.75", html)
-        self.assertIn("confidence >= 0.60 && confidence < 0.75", html)
-        self.assertIn("高置信60%–75%", html)
+        self.assertIn("reliability >= 0.80", html)
+        self.assertIn(
+            "reliability >= 0.60 && reliability < 0.80",
+            html,
+        )
+        self.assertIn("超强可信≥80%", html)
+        self.assertIn("高可信60%–80%", html)
+        self.assertIn("📡 信息完整度", html)
+        self.assertIn("预测可信度", html)
 
     def test_professional_status_falls_back_to_static_backtest(self):
         path = os.path.join(ROOT, 'web', 'index.html')

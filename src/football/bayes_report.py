@@ -43,7 +43,7 @@ MANIFEST_PATH = os.path.join(DEFAULT_REPORTS_DIR, "football_bayes_manifest.json"
 
 # 防止并发请求同时生成同一报告
 REPORT_GEN_LOCK = Lock()
-REPORT_SCHEMA_VERSION = "6"
+REPORT_SCHEMA_VERSION = "7"
 _PRO_VALIDATION_CACHE = {"mtime": None, "value": {}}
 
 
@@ -367,6 +367,11 @@ def render_html(report: dict) -> str:
     leading_label, leading_probability = ranked_wdl[0]
     probability_gap = leading_probability - ranked_wdl[1][1]
     selected = spf_gate.get("selected") is True
+    prediction_reliability = float(
+        spf_gate.get("prediction_reliability")
+        if spf_gate.get("prediction_reliability") is not None
+        else leading_probability
+    )
     verdict = (
         f"80%目标精选：{spf_gate.get('decision')}"
         if selected else f"研究倾向：{leading_label}；未达到80%精选门槛，建议观望"
@@ -380,7 +385,8 @@ def render_html(report: dict) -> str:
              f"<div class='b away'><div class='l'>客胜</div><div class='v'>{pct(w.get('away', 0))}</div></div></div>")
     h.append(f"<div class='{'okb' if selected else 'warn'}'><b>{verdict}</b><br>"
              f"第一方向领先第二方向 {pct(probability_gap)}；"
-             f"数据置信度 {report.get('confidence_score', '?')}；"
+             f"信息完整度 {pct(float(report.get('confidence_score', 0) or 0))}；"
+             f"预测可信度 {pct(prediction_reliability)}；"
              f"风险等级 {report.get('risk_level', '?')}。</div>")
     market_notes = []
     if evidence.get("asian_handicap") is not None:
