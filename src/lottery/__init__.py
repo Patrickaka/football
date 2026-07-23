@@ -1865,6 +1865,99 @@ class LotteryAnalyzer:
 
         return selected
 
+    def _diversify_picked(self, picked_front, picked_back,
+                          other_front_sets, other_back_sets,
+                          front_votes, back_votes,
+                          front_rank_scores, back_rank_scores,
+                          front_candidates, back_candidates):
+        """精选一注去重：确保与任一其它推荐组的前区重合<=2、后区<=1。
+
+        历史上单组命中 3+1 极少；若精选组只是其它组的近克隆（重合 3+ 个），
+        则无独立覆盖价值。算法：每轮从"当前重合最多的最差组"里删一个跨组
+        负载最高的枢纽号，替换为使"新最大重合严格下降"的候选（贪心单调收敛），
+        通过有限次单码替换实现轻微调整；最后用约束修复保证形态合理，
+        且约束修复的候选池仅含不破坏去重者，杜绝修复回潮。
+        """
+        def _trial_overlaps(cur, remove_n, add_n, other_sets):
+            trial = [x for x in cur if x != remove_n] + [add_n]
+            return [len([x for x in trial if x in s]) for s in other_sets]
+
+        # ---------- 前区 ----------
+        cur_f = list(picked_front)
+        fcand = list(front_candidates)
+        for _ in range(len(cur_f) + 3):
+            cur_ov = [len([x for x in cur_f if x in s]) for s in other_front_sets]
+            old_max = max(cur_ov) if cur_ov else 0
+            if old_max <= 2:
+                break
+            # 最差组
+            worst = other_front_sets[max(range(len(other_front_sets)),
+                                          key=lambda i: cur_ov[i])]
+            shared = [n for n in cur_f if n in worst]
+            load = {n: sum(1 for s in other_front_sets if n in s) for n in shared}
+            # 从最差组里删跨组负载最高的枢纽号（其次低票），保证该组重合必降
+            remove_n = min(shared, key=lambda n: (
+                -load[n], front_votes.get(n, 0), -front_rank_scores.get(n, 0.0)))
+            pool = [n for n in fcand if n not in cur_f]
+            if not pool:
+                pool = [n for n in FRONT_NUMBERS if n not in cur_f]
+            best_n, best_key = None, None
+            for n in pool:
+                ov = _trial_overlaps(cur_f, remove_n, n, other_front_sets)
+                new_max = max(ov)
+                total = sum(ov)
+                # 优先降低最大重合，其次降低总重合，再次偏好高票/高分候选
+                key = (new_max, total,
+                       -front_votes.get(n, 0), -front_rank_scores.get(n, 0.0))
+                if best_key is None or key < best_key:
+                    best_key, best_n = key, n
+            if best_n is None or best_key[0] > old_max:
+                break  # 无法继续改善则停止
+            cur_f[cur_f.index(remove_n)] = best_n
+        # 约束修复：候选池只用"不破坏去重"的号
+        safe_pool = set(fcand)
+        for n in cur_f:
+            safe_pool.add(n)
+        all_scored_f = []
+        for num in safe_pool:
+            feat = self._calculate_feature_score(num, is_front=True)
+            sc = sum(feat.get(k, 0) * FEATURE_WEIGHTS.get(k, 0) for k in FEATURE_WEIGHTS)
+            all_scored_f.append((num, sc))
+        new_front = self._apply_front_constraints(sorted(cur_f), all_scored_f)
+
+        # ---------- 后区 ----------
+        cur_b = list(picked_back)
+        bcand = list(back_candidates)
+        for _ in range(len(cur_b) + 2):
+            cur_ov = [len([x for x in cur_b if x in s]) for s in other_back_sets]
+            old_max = max(cur_ov) if cur_ov else 0
+            if old_max <= 1:
+                break
+            worst = other_back_sets[max(range(len(other_back_sets)),
+                                         key=lambda i: cur_ov[i])]
+            shared = [n for n in cur_b if n in worst]
+            load = {n: sum(1 for s in other_back_sets if n in s) for n in shared}
+            remove_n = min(shared, key=lambda n: (
+                -load[n], back_votes.get(n, 0), -back_rank_scores.get(n, 0.0)))
+            pool = [n for n in bcand if n not in cur_b]
+            if not pool:
+                pool = [n for n in BACK_NUMBERS if n not in cur_b]
+            best_n, best_key = None, None
+            for n in pool:
+                ov = _trial_overlaps(cur_b, remove_n, n, other_back_sets)
+                new_max = max(ov)
+                total = sum(ov)
+                key = (new_max, total,
+                       -back_votes.get(n, 0), -back_rank_scores.get(n, 0.0))
+                if best_key is None or key < best_key:
+                    best_key, best_n = key, n
+            if best_n is None or best_key[0] > old_max:
+                break
+            cur_b[cur_b.index(remove_n)] = best_n
+        new_back = sorted(cur_b)
+
+        return new_front, new_back
+
     def generate_recommendation(self, method: str = 'balanced',
                                  exclude_front: List[int] = None,
                                  exclude_back: List[int] = None,
@@ -2150,12 +2243,25 @@ class LotteryAnalyzer:
             picked_back_candidates, 2, is_front=False,
             fallback_pool=BACK_NUMBERS, exclude=set()
         )
+
+        # 去重：精选一注不应与任一其它组前区重合>2、后区重合>1
+        # （历史上单组命中 3+1 极少，若精选组只是其它组的近克隆则无独立覆盖价值）
+        other_front_sets = [set(r.get('front', [])) for r in recommendations]
+        other_back_sets = [set(r.get('back', [])) for r in recommendations]
+        picked_front, picked_back = self._diversify_picked(
+            picked_front, picked_back,
+            other_front_sets, other_back_sets,
+            dict(front_votes), dict(back_votes),
+            front_rank_scores, back_rank_scores,
+            picked_front_candidates, picked_back_candidates,
+        )
+
         recommendations.append({
             'front': picked_front,
             'back': picked_back,
             'method': '精选一注',
             'strategy': 'picked',
-            'picked_reason': '五组投票聚合：前区高频号码经约束修复后精选',
+            'picked_reason': '五组投票聚合后做去重：与任一其它组前区重合≤2、后区≤1，避免沦为近克隆',
             'front_vote_detail': {n: int(front_votes[n]) for n in picked_front},
             'back_vote_detail': {n: int(back_votes[n]) for n in picked_back},
         })
