@@ -43,6 +43,8 @@ MANIFEST_PATH = os.path.join(DEFAULT_REPORTS_DIR, "football_bayes_manifest.json"
 
 # 防止并发请求同时生成同一报告
 REPORT_GEN_LOCK = Lock()
+REPORT_SCHEMA_VERSION = "5"
+_PRO_VALIDATION_CACHE = {"mtime": None, "value": {}}
 
 
 # ===================== 通用工具 =====================
@@ -51,6 +53,42 @@ def load_module_cache(pkl_path: str) -> dict:
     with open(pkl_path, "rb") as f:
         d = pickle.load(f)
     return d
+
+
+def load_professional_validation_summary() -> dict:
+    """Load the lightweight strict-OOS summary without rerunning a backtest."""
+    path = os.path.join(DEFAULT_REPORTS_DIR, "professional_football_backtest.json")
+    try:
+        mtime = os.path.getmtime(path)
+        if _PRO_VALIDATION_CACHE["mtime"] == mtime:
+            return dict(_PRO_VALIDATION_CACHE["value"])
+        with open(path, "r", encoding="utf-8") as handle:
+            report = json.load(handle)
+        model = report.get("model_metrics") or {}
+        market = report.get("market_baseline_metrics") or {}
+        strategy = report.get("strategy") or {}
+        checks = {
+            "model_beats_market": (
+                float(model.get("logloss", 99)) < float(market.get("logloss", 99))
+            ),
+            "positive_roi": float(strategy.get("roi", 0) or 0) > 0,
+            "positive_clv": float(strategy.get("mean_clv", 0) or 0) > 0,
+            "enough_samples": int(report.get("out_of_sample_n", 0) or 0) >= 1000,
+        }
+        value = {
+            "available": True,
+            "out_of_sample_n": report.get("out_of_sample_n", 0),
+            "model": model,
+            "market": market,
+            "strategy": strategy,
+            "checks": checks,
+            "production_ready": all(checks.values()),
+            "generated_at": datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M"),
+        }
+        _PRO_VALIDATION_CACHE.update({"mtime": mtime, "value": value})
+        return dict(value)
+    except Exception as exc:
+        return {"available": False, "production_ready": False, "reason": str(exc)}
 
 
 def pct(x: float) -> str:
@@ -287,16 +325,72 @@ li{margin:4px 0;}
 
 def render_html(report: dict) -> str:
     m = report["match"]
-    title = f"{m['league']} {m['home']} vs {m['away']} | {m.get('time','')} | {m.get('num','')}"
+    title = f"{m['league']} {m['home']} vs {m['away']} | {m.get('time') or ''} | {m.get('num') or ''}"
     w = report["wdl"]
     p0 = report["p0"]
     css = _REPORT_CSS
     h = []
-    h.append(f"<!doctype html><html lang='zh-CN'><head><meta charset='utf-8'>"
+    h.append(f"<!doctype html><html lang='zh-CN' data-report-schema='{REPORT_SCHEMA_VERSION}'><head><meta charset='utf-8'>"
              f"<meta name='viewport' content='width=device-width,initial-scale=1'>"
              f"<title>深度报告 · {title}</title><style>{css}</style></head><body><div class='wrap'>")
     h.append(f"<h1>足球深度研究报告</h1>")
     h.append(f"<div class='sub'>{title} ｜ 数据时间戳：{report['ts']} ｜ 模块版本：{report['module_version']}</div>")
+
+    quality = report.get("live_context_quality") or {}
+    validation = report.get("professional_validation") or {}
+    gate = report.get("decision_gate") or {}
+    gate_ok = gate.get("official_bet_allowed") is True
+    h.append("<div class='card'><h2>专业状态总览 "
+             f"<span class='tag {'ok' if gate_ok else 'u'}'>"
+             f"{'生产门控通过' if gate_ok else '研究模式 / 禁止正式投注'}</span></h2>")
+    h.append("<div class='grid2'>")
+    h.append("<div><b>实时数据质量</b><br>"
+             f"<span class='muted'>质量分 {quality.get('quality_score', '-')}；"
+             f"置信乘数 {quality.get('confidence_multiplier', '-')}；"
+             f"时效 {quality.get('age_hours') if quality.get('age_hours') is not None else 'UNAVAILABLE'}"
+             f"{' 小时' if quality.get('age_hours') is not None else ''}</span></div>")
+    if validation.get("available"):
+        model = validation.get("model") or {}
+        market = validation.get("market") or {}
+        strategy = validation.get("strategy") or {}
+        roi = float(strategy.get("roi", 0) or 0)
+        clv = float(strategy.get("mean_clv", 0) or 0)
+        h.append("<div><b>严格样本外验证</b><br>"
+                 f"<span class='muted'>{validation.get('out_of_sample_n', 0)} 场；"
+                 f"LogLoss 模型 {model.get('logloss', 0):.3f} / 市场 {market.get('logloss', 0):.3f}；"
+                 f"ROI {roi*100:.2f}%；CLV {clv*100:.2f}%</span></div>")
+    else:
+        h.append("<div><b>严格样本外验证</b><br><span class='warn'>UNAVAILABLE</span></div>")
+    h.append("</div>")
+    if not gate_ok:
+        h.append("<div class='warn' style='margin-top:12px'>本报告用于研究展示。"
+                 "在模型未同时跑赢市场 LogLoss、取得正样本外 ROI 与正 CLV 前，不生成正式投注指令。</div>")
+    accuracy_gate = report.get("accuracy_gate") or {}
+    if accuracy_gate:
+        h.append("<div class='grid2' style='margin-top:12px'>")
+        for key, label in (("spf", "胜平负"), ("rqspf", "让球胜平负")):
+            decision = accuracy_gate.get(key) or {}
+            selected = decision.get("selected") is True
+            reasons = "；".join(decision.get("reasons") or [])
+            validation = decision.get("validation") or {}
+            validation_text = (
+                f"；历史赔率代理命中率 {pct(validation.get('accuracy', 0))}"
+                f"（{validation.get('sample_count', 0)} 场，覆盖 "
+                f"{pct(validation.get('coverage', 0))}）"
+                if validation else ""
+            )
+            h.append(
+                f"<div><b>{label} · 80%目标精选</b><br>"
+                f"<span class='{'okb' if selected else 'warn'}'>"
+                f"{decision.get('decision', '观望')}｜最高概率 "
+                f"{pct(decision.get('probability', 0))}｜"
+                f"{'通过门控' if selected else '观望'}</span>"
+                f"<div class='muted'>{reasons or '赔率与模型方向一致，且概率和领先优势达标'}"
+                f"{validation_text}"
+                f"{'；让球玩法仍待独立历史样本验证' if key == 'rqspf' else ''}</div></div>"
+            )
+        h.append("</div>")
+    h.append("</div>")
 
     h.append("<div class='card'><h2>数据来源与工具调用凭证 <span class='tag'>合规区</span></h2>")
     if report["tool_log"]:
@@ -440,9 +534,11 @@ def update_manifest(out_path: str, match: dict):
 
 def build_report(cache_path: str, live: dict, out_path: str) -> dict:
     from .live_context_quality import assess_live_context
+    from .accuracy_gate import build_accuracy_gate
 
     live = dict(live or {})
     live["quality"] = assess_live_context(live)
+    professional_validation = load_professional_validation_summary()
     d = load_module_cache(cache_path)
     match = d.get("match", {})
     league = match.get("league", "")
@@ -462,6 +558,13 @@ def build_report(cache_path: str, live: dict, out_path: str) -> dict:
     risks = risk_list(d.get("risk_level"), tactical, live)
     conf = d.get("confidence", {})
     rlevel = d.get("risk_level", {})
+    accuracy_gate = (d.get("lottery") or {}).get("accuracy_gate")
+    if not accuracy_gate:
+        accuracy_gate = build_accuracy_gate(
+            d.get("lottery") or {},
+            confidence=conf,
+            anomaly=d.get("anomaly") or {},
+        )
 
     report = {
         "match": match,
@@ -481,6 +584,16 @@ def build_report(cache_path: str, live: dict, out_path: str) -> dict:
         "risk_level": rlevel.get("level", "?"),
         "injury_conflict": live.get("injury_conflict"),
         "live_context_quality": live.get("quality"),
+        "professional_validation": professional_validation,
+        "accuracy_gate": accuracy_gate,
+        "decision_gate": {
+            "official_bet_allowed": (
+                live.get("quality", {}).get("official_bet_allowed") is True
+                and professional_validation.get("production_ready") is True
+            ),
+            "live_context_passed": live.get("quality", {}).get("official_bet_allowed") is True,
+            "professional_validation_passed": professional_validation.get("production_ready") is True,
+        },
     }
     html = render_html(report)
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
@@ -870,6 +983,15 @@ def ensure_football_report(mid: str, force: bool = False) -> Optional[str]:
     mid = str(mid)
     out_path = os.path.join(DEFAULT_REPORTS_DIR, f"football_bayes_{mid}.html")
     exists = os.path.exists(out_path)
+    if exists and not force:
+        try:
+            with open(out_path, "r", encoding="utf-8") as existing_report:
+                head = existing_report.read(512)
+            if f"data-report-schema='{REPORT_SCHEMA_VERSION}'" not in head:
+                os.remove(out_path)
+                exists = False
+        except OSError:
+            exists = False
     if exists and not force:
         # 变盘检测：当前 pkl 的盘口与生成时快照偏差明显则重生成
         try:

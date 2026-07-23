@@ -28,9 +28,6 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
 
-from src.football import fetch_match_list, analyze_match
-from src.lottery3d import run_prediction
-from src.lottery3d.ml import fetch_data, predict_current
 from src.ssq import run_prediction as ssq_run_prediction, clear_cache as ssq_clear_cache
 from src.lottery import get_lottery_analyzer, run_prediction as lottery_run_prediction
 from src.lottery.ml import predict_with_ml, clear_ml_cache
@@ -48,18 +45,101 @@ from src.kl8 import (
 from src.common.logger import setup_logger
 from src.common.paths import data_path
 
-# 深度报告按需生成（失败不影响主流程）
-try:
-    from src.football.bayes_report import (
-        ensure_football_report, ensure_beidan_report,
-        football_reportable_ids, persist_beidan_recs,
-        sync_football_reports, sync_beidan_reports,
-        refresh_football_cache_index,
-    )
-    _BAYES_REPORT_AVAILABLE = True
-except Exception as _e:  # pragma: no cover
-    _BAYES_REPORT_AVAILABLE = False
-    print(f"[WARN] 深度报告模块不可用: {_e}")
+# 足球预测及报告模块体积较大，服务启动时不加载；首次真正访问足球接口时
+# 再初始化。这样彩票等接口不需要为不相关的 CatBoost/足球历史付冷启动成本。
+_FOOTBALL_MODULE = None
+_BAYES_REPORT_MODULE = None
+_LOTTERY3D_MODULE = None
+_LOTTERY3D_ML_MODULE = None
+_FOOTBALL_IMPORT_LOCK = threading.Lock()
+_LOTTERY3D_IMPORT_LOCK = threading.Lock()
+_BAYES_REPORT_AVAILABLE = True
+
+
+def _get_football_module():
+    global _FOOTBALL_MODULE
+    if _FOOTBALL_MODULE is None:
+        with _FOOTBALL_IMPORT_LOCK:
+            if _FOOTBALL_MODULE is None:
+                _FOOTBALL_MODULE = importlib.import_module('src.football')
+    return _FOOTBALL_MODULE
+
+
+def fetch_match_list(*args, **kwargs):
+    return _get_football_module().fetch_match_list(*args, **kwargs)
+
+
+def analyze_match(*args, **kwargs):
+    return _get_football_module().analyze_match(*args, **kwargs)
+
+
+def _get_bayes_report_module():
+    global _BAYES_REPORT_MODULE, _BAYES_REPORT_AVAILABLE
+    if _BAYES_REPORT_MODULE is None:
+        try:
+            _BAYES_REPORT_MODULE = importlib.import_module('src.football.bayes_report')
+        except Exception:
+            _BAYES_REPORT_AVAILABLE = False
+            raise
+    return _BAYES_REPORT_MODULE
+
+
+def ensure_football_report(*args, **kwargs):
+    return _get_bayes_report_module().ensure_football_report(*args, **kwargs)
+
+
+def ensure_beidan_report(*args, **kwargs):
+    return _get_bayes_report_module().ensure_beidan_report(*args, **kwargs)
+
+
+def football_reportable_ids(*args, **kwargs):
+    return _get_bayes_report_module().football_reportable_ids(*args, **kwargs)
+
+
+def persist_beidan_recs(*args, **kwargs):
+    return _get_bayes_report_module().persist_beidan_recs(*args, **kwargs)
+
+
+def sync_football_reports(*args, **kwargs):
+    return _get_bayes_report_module().sync_football_reports(*args, **kwargs)
+
+
+def sync_beidan_reports(*args, **kwargs):
+    return _get_bayes_report_module().sync_beidan_reports(*args, **kwargs)
+
+
+def refresh_football_cache_index(*args, **kwargs):
+    return _get_bayes_report_module().refresh_football_cache_index(*args, **kwargs)
+
+
+def _get_lottery3d_module():
+    global _LOTTERY3D_MODULE
+    if _LOTTERY3D_MODULE is None:
+        with _LOTTERY3D_IMPORT_LOCK:
+            if _LOTTERY3D_MODULE is None:
+                _LOTTERY3D_MODULE = importlib.import_module('src.lottery3d')
+    return _LOTTERY3D_MODULE
+
+
+def _get_lottery3d_ml_module():
+    global _LOTTERY3D_ML_MODULE
+    if _LOTTERY3D_ML_MODULE is None:
+        with _LOTTERY3D_IMPORT_LOCK:
+            if _LOTTERY3D_ML_MODULE is None:
+                _LOTTERY3D_ML_MODULE = importlib.import_module('src.lottery3d.ml')
+    return _LOTTERY3D_ML_MODULE
+
+
+def run_prediction(*args, **kwargs):
+    return _get_lottery3d_module().run_prediction(*args, **kwargs)
+
+
+def fetch_data(*args, **kwargs):
+    return _get_lottery3d_ml_module().fetch_data(*args, **kwargs)
+
+
+def predict_current(*args, **kwargs):
+    return _get_lottery3d_ml_module().predict_current(*args, **kwargs)
 
 
 REPORTS_DIR = Path(os.path.join(os.path.dirname(__file__), 'reports'))
@@ -850,6 +930,8 @@ class Handler(BaseHTTPRequestHandler):
         elif path == '/api/football/review':
             params = parse_qs(route.query)
             self._serve_json(self._football_review_payload(params))
+        elif path == '/api/football/professional-status':
+            self._serve_json(self._football_professional_status_payload())
         elif path == '/api/3d':
             self._serve_json(self._lottery_3d_payload())
         elif path == '/api/3d-ml':
@@ -1072,6 +1154,12 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send_json_error(403, 'Forbidden')
         except Exception:
             return self._send_json_error(404, 'Not Found')
+        if rel.startswith('football_bayes_') and rel.endswith('.html'):
+            # ensure_football_report performs a cheap schema/odds check and
+            # regenerates stale report layouts on first access.
+            generated = self._try_generate_report(rel)
+            if generated and os.path.exists(generated):
+                file_path = Path(generated)
         if not file_path.exists() or not file_path.is_file():
             # 报告文件不存在 → 若可生成则按需现生成（生产环境无需手动跑脚本）
             generated = self._try_generate_report(rel)
@@ -1288,6 +1376,61 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:
             self._log.error('足球赛后复盘失败', exc_info=True)
             return {'error': f'复盘失败: {str(e)}'}
+
+    def _football_professional_status_payload(self):
+        """严格样本外验证、投注门控和磁盘健康的轻量状态接口。"""
+        try:
+            report_path = REPORTS_DIR / 'professional_football_backtest.json'
+            validation = {}
+            generated_at = None
+            if report_path.exists():
+                with report_path.open(encoding='utf-8') as handle:
+                    validation = json.load(handle)
+                generated_at = datetime.fromtimestamp(
+                    report_path.stat().st_mtime
+                ).isoformat(timespec='seconds')
+
+            from src.common.maintenance import disk_status
+            disk = disk_status()
+            model = validation.get('model_metrics') or {}
+            market = validation.get('market_baseline_metrics') or {}
+            strategy = validation.get('strategy') or {}
+            checks = {
+                'model_beats_market_logloss': (
+                    bool(model) and bool(market)
+                    and float(model.get('logloss', 99)) < float(market.get('logloss', 99))
+                ),
+                'positive_oos_roi': float(strategy.get('roi', 0) or 0) > 0,
+                'positive_clv': float(strategy.get('mean_clv', 0) or 0) > 0,
+                'enough_oos_samples': int(validation.get('out_of_sample_n', 0) or 0) >= 1000,
+                'disk_healthy': not disk['under_pressure'],
+            }
+            production_ready = all((
+                checks['model_beats_market_logloss'],
+                checks['positive_oos_roi'],
+                checks['positive_clv'],
+                checks['enough_oos_samples'],
+            ))
+            return {
+                'result': {
+                    'schema_version': 'football-professional-status-v1',
+                    'generated_at': generated_at,
+                    'validation_available': bool(validation),
+                    'production_ready': production_ready,
+                    'official_betting_allowed': production_ready,
+                    'status_label': '生产验证通过' if production_ready else '研究模式：暂未跑赢市场',
+                    'checks': checks,
+                    'model_metrics': model,
+                    'market_metrics': market,
+                    'strategy': strategy,
+                    'out_of_sample_n': validation.get('out_of_sample_n', 0),
+                    'audit': validation.get('audit') or {},
+                    'disk': disk,
+                }
+            }
+        except Exception as e:
+            self._log.error('读取专业验证状态失败', exc_info=True)
+            return {'error': f'专业验证状态不可用: {str(e)}'}
 
     def _lottery_3d_payload(self):
         # 单飞 + stale-while-revalidate：命中直接返回；陈旧返回旧值并后台刷新；

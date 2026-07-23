@@ -7901,6 +7901,15 @@ def analyze_match(match, force_refresh=False):
         lottery['primary'] = lottery['standard']
     else:
         lottery['primary'] = None
+    from .accuracy_gate import build_accuracy_gate
+    lottery['accuracy_gate'] = build_accuracy_gate(
+        lottery,
+        confidence=confidence,
+        anomaly={
+            'joint_water': joint_anomaly,
+            'euro_asian_deviation': euro_asian_dev,
+        },
+    )
 
     result = {
         'match': {k: match.get(k) for k in (

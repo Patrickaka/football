@@ -13,6 +13,7 @@ binlog 的主策略应是 MySQL 服务端配置 `binlog_expire_logs_seconds`（�
 自身滚动过期，最可靠）；本模块的 purge 只是兜底，防止配置缺失时 binlog 失控。
 """
 import os
+import shutil
 import time
 import threading
 from datetime import datetime, timedelta
@@ -29,6 +30,93 @@ LOG_RETENTION_DAYS = int(os.getenv('LOG_RETENTION_DAYS', '3'))
 MAINTENANCE_INTERVAL_HOURS = float(os.getenv('MAINTENANCE_INTERVAL_HOURS', '24'))
 # 启动后延迟首次执行，避开与预热/同步线程争抢启动资源
 MAINTENANCE_STARTUP_DELAY_SECONDS = int(os.getenv('MAINTENANCE_STARTUP_DELAY_SECONDS', '60'))
+ARTIFACT_RETENTION_DAYS = int(os.getenv('ARTIFACT_RETENTION_DAYS', '3'))
+DISK_MIN_FREE_GB = float(os.getenv('DISK_MIN_FREE_GB', '2'))
+DISK_MIN_FREE_PERCENT = float(os.getenv('DISK_MIN_FREE_PERCENT', '10'))
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+CACHE_DIR = PROJECT_ROOT / 'src' / 'football' / 'cache'
+REPORTS_DIR = PROJECT_ROOT / 'reports'
+CATBOOST_INFO_DIR = PROJECT_ROOT / 'catboost_info'
+
+# Only these reproducible artifacts may be deleted automatically. Training
+# data, model files, prediction history and calibration databases are excluded.
+REGENERABLE_TARGETS = (
+    (CACHE_DIR, ('*.pkl', '*.tmp')),
+    (REPORTS_DIR, (
+        'football_bayes_*.html', 'beidan_bayes_*.html',
+        '_snap_*.json', 'live_context_*.json', '_agent_findings_*.json',
+    )),
+    (CATBOOST_INFO_DIR, ('*.log', '*.tsv', '*.json', '*.tmp')),
+    (Path(LOG_DIR), ('football.log.*', '*.txt', '*.tmp')),
+)
+
+
+def _is_within(path: Path, root: Path) -> bool:
+    """Reject symlinks and path traversal before any automatic deletion."""
+    try:
+        return not path.is_symlink() and path.resolve().is_relative_to(root.resolve())
+    except (OSError, RuntimeError, ValueError):
+        return False
+
+
+def disk_status(path: Path = PROJECT_ROOT) -> dict:
+    usage = shutil.disk_usage(path)
+    free_percent = usage.free / usage.total * 100 if usage.total else 0.0
+    return {
+        'total_bytes': usage.total,
+        'used_bytes': usage.used,
+        'free_bytes': usage.free,
+        'free_gb': round(usage.free / (1024 ** 3), 3),
+        'free_percent': round(free_percent, 2),
+        'under_pressure': (
+            usage.free < DISK_MIN_FREE_GB * 1024 ** 3
+            or free_percent < DISK_MIN_FREE_PERCENT
+        ),
+    }
+
+
+def cleanup_regenerable_artifacts(
+    retention_days: int = None,
+    dry_run: bool = False,
+) -> dict:
+    """Delete only allow-listed, reproducible files older than the cutoff."""
+    retention_days = ARTIFACT_RETENTION_DAYS if retention_days is None else max(0, retention_days)
+    cutoff = time.time() - retention_days * 86400
+    removed = []
+    errors = []
+    bytes_freed = 0
+    for root, patterns in REGENERABLE_TARGETS:
+        if not root.exists() or root.is_symlink():
+            continue
+        seen = set()
+        for pattern in patterns:
+            for path in root.glob(pattern):
+                if path in seen or not path.is_file() or not _is_within(path, root):
+                    continue
+                seen.add(path)
+                try:
+                    stat = path.stat()
+                    if stat.st_mtime >= cutoff:
+                        continue
+                    item = {
+                        'path': str(path.relative_to(PROJECT_ROOT)),
+                        'bytes': stat.st_size,
+                    }
+                    if not dry_run:
+                        path.unlink()
+                    removed.append(item)
+                    bytes_freed += stat.st_size
+                except OSError as exc:
+                    errors.append({'path': str(path), 'error': str(exc)})
+    return {
+        'dry_run': dry_run,
+        'retention_days': retention_days,
+        'removed_count': len(removed),
+        'bytes_freed': bytes_freed,
+        'removed': removed,
+        'errors': errors,
+    }
 
 
 def purge_binlogs(retention_days: int = None) -> bool:
@@ -89,6 +177,17 @@ def run_maintenance() -> dict:
     except Exception as e:
         log.error(f"日志清理异常：{e}")
         result['logs_removed'] = 0
+    try:
+        before = disk_status()
+        # Under pressure, remove reproducible artifacts older than one day;
+        # otherwise apply the normal three-day retention window.
+        retention = 1 if before['under_pressure'] else ARTIFACT_RETENTION_DAYS
+        result['artifacts'] = cleanup_regenerable_artifacts(retention)
+        result['disk_before'] = before
+        result['disk_after'] = disk_status()
+    except Exception as e:
+        log.error(f"可再生文件清理异常：{e}")
+        result['artifacts'] = {'removed_count': 0, 'bytes_freed': 0, 'errors': [str(e)]}
     log.info(f"维护清理完成：{result}")
     return result
 

@@ -21,6 +21,8 @@ import json
 import pickle
 import hashlib
 import logging
+import threading
+from collections import OrderedDict
 
 _log = logging.getLogger('football')
 
@@ -33,7 +35,34 @@ class FootballCacheManager:
     
     def __init__(self, cache_dir: str = None):
         self.cache_dir = cache_dir or os.path.join(os.path.dirname(__file__), 'cache')
+        self.memory_limit = max(0, int(os.getenv('FOOTBALL_MEMORY_CACHE_ITEMS', '256')))
+        self._memory = OrderedDict()
+        self._memory_lock = threading.RLock()
         self._ensure_cache_dir()
+
+    def _memory_get(self, file_path: str, ttl_minutes: int = None):
+        if self.memory_limit <= 0:
+            return None
+        with self._memory_lock:
+            entry = self._memory.get(file_path)
+            if not entry:
+                return None
+            cached_at, value = entry
+            max_age = ttl_minutes * 60 if ttl_minutes is not None else 86400
+            if datetime.now().timestamp() - cached_at >= max_age:
+                self._memory.pop(file_path, None)
+                return None
+            self._memory.move_to_end(file_path)
+            return value
+
+    def _memory_set(self, file_path: str, value: Any):
+        if self.memory_limit <= 0:
+            return
+        with self._memory_lock:
+            self._memory[file_path] = (datetime.now().timestamp(), value)
+            self._memory.move_to_end(file_path)
+            while len(self._memory) > self.memory_limit:
+                self._memory.popitem(last=False)
     
     def _ensure_cache_dir(self):
         """确保缓存目录存在"""
@@ -163,13 +192,19 @@ class FootballCacheManager:
         
         # 根据比赛时间决定TTL
         ttl_minutes = self._get_ttl_for_match(match_time_str) if match_time_str else None
+
+        memory_value = self._memory_get(file_path, ttl_minutes)
+        if memory_value is not None:
+            return memory_value
         
         if not self._is_cache_valid(file_path, ttl_minutes):
             return None
         
         try:
             with open(file_path, 'rb') as f:
-                return pickle.load(f)
+                value = pickle.load(f)
+            self._memory_set(file_path, value)
+            return value
         except Exception as e:
             _log.debug(f"读取缓存失败: {e}")
             return None
@@ -188,8 +223,11 @@ class FootballCacheManager:
         file_path = self._get_cache_file_path(cache_type, key)
         
         try:
-            with open(file_path, 'wb') as f:
+            temp_path = file_path + f'.{os.getpid()}.tmp'
+            with open(temp_path, 'wb') as f:
                 pickle.dump(data, f)
+            os.replace(temp_path, file_path)
+            self._memory_set(file_path, data)
         except Exception as e:
             _log.debug(f"写入缓存失败: {e}")
         
@@ -199,8 +237,10 @@ class FootballCacheManager:
             layer_file_path = self._get_cache_file_path(cache_type, key, time_layer)
             
             try:
-                with open(layer_file_path, 'wb') as f:
+                temp_layer_path = layer_file_path + f'.{os.getpid()}.tmp'
+                with open(temp_layer_path, 'wb') as f:
                     pickle.dump(data, f)
+                os.replace(temp_layer_path, layer_file_path)
                 
                 _log.debug(f"保存时间分层缓存: {time_layer}")
             except Exception as e:
@@ -255,6 +295,8 @@ class FootballCacheManager:
             file_path = os.path.join(self.cache_dir, filename)
             try:
                 os.remove(file_path)
+                with self._memory_lock:
+                    self._memory.pop(file_path, None)
             except Exception as e:
                 _log.debug(f"删除缓存文件失败: {e}")
     
@@ -266,6 +308,8 @@ class FootballCacheManager:
                 os.remove(file_path)
             except Exception as e:
                 _log.debug(f"删除缓存文件失败: {e}")
+        with self._memory_lock:
+            self._memory.clear()
     
     def clear_expired(self):
         """清除过期缓存（昨天及更早的）"""
@@ -278,6 +322,10 @@ class FootballCacheManager:
                     os.remove(file_path)
                 except Exception as e:
                     _log.debug(f"删除过期缓存失败: {e}")
+        with self._memory_lock:
+            for file_path in list(self._memory):
+                if not os.path.basename(file_path).startswith(today_str):
+                    self._memory.pop(file_path, None)
 
 
 # 全局缓存管理器实例

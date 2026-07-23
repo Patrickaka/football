@@ -448,6 +448,31 @@
     border-color: rgba(44, 58, 78, 0.8);
 }
   .card.model-health { border-color: rgba(46, 160, 67, 0.3); }
+  .pro-status { border:1px solid rgba(245,158,11,.38); background:linear-gradient(135deg,rgba(245,158,11,.10),rgba(15,23,42,.35)); }
+  .pro-status.ready { border-color:rgba(34,197,94,.48); background:linear-gradient(135deg,rgba(34,197,94,.12),rgba(15,23,42,.35)); }
+  .pro-head { display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:12px; }
+  .pro-gate { padding:5px 10px;border-radius:999px;font-size:12px;font-weight:700;background:rgba(245,158,11,.18);color:#fbbf24;white-space:nowrap; }
+  .pro-status.ready .pro-gate { background:rgba(34,197,94,.18);color:#4ade80; }
+  .pro-metrics { display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px; }
+  .pro-metric { padding:10px;border-radius:9px;background:rgba(0,0,0,.18);border:1px solid rgba(148,163,184,.13); }
+  .pro-metric .pm-label { font-size:11px;color:var(--muted); }
+  .pro-metric .pm-value { font-size:18px;font-weight:750;margin-top:2px; }
+  .pro-checks { display:flex;flex-wrap:wrap;gap:6px;margin-top:10px; }
+  .pro-check { font-size:11px;padding:4px 7px;border-radius:6px;background:rgba(239,68,68,.12);color:#fca5a5; }
+  .pro-check.ok { background:rgba(34,197,94,.12);color:#86efac; }
+  .pro-modal-window {
+    width:min(920px,94vw);max-height:88vh;overflow:auto;padding:18px;
+    border-radius:14px;background:#111820;border:1px solid rgba(245,158,11,.34);
+    box-shadow:0 24px 60px rgba(0,0,0,.48);animation:bayesPop .18s ease;
+  }
+  .pro-modal-window .pro-status { margin:0; }
+  .pro-modal-top { display:flex;justify-content:flex-end;margin-bottom:8px; }
+  .pro-modal-close {
+    border:0;background:rgba(148,163,184,.13);color:#cbd5e1;width:32px;height:32px;
+    border-radius:8px;font-size:18px;cursor:pointer;
+  }
+  .pro-modal-close:hover { background:rgba(148,163,184,.25); }
+  @media(max-width:680px){.pro-metrics{grid-template-columns:repeat(2,minmax(0,1fr));}.pro-head{display:block}.pro-gate{display:inline-block;margin-top:8px}}
   .status-item { display: flex; align-items: flex-start; gap: 10px; padding: 6px 0; font-size: 13px; }
   .status-item .status-dot { font-size: 16px; }
   .status-item .status-name { color: var(--text); font-weight: 500; }
@@ -1495,6 +1520,7 @@ function showError(text) {
 
 async function loadMatches() {
   loading('正在联网获取今日比赛列表…');
+  loadFootballProfessionalStatus();
   try {
     const data = await fetchJson('/api/matches');
     if (data.error) return showError(data.error);
@@ -1505,6 +1531,100 @@ async function loadMatches() {
     showError('网络请求失败：' + e.message);
   }
 }
+
+let footballProfessionalStatus = null;
+let footballProfessionalStatusLoading = false;
+
+async function loadFootballProfessionalStatus() {
+  if (footballProfessionalStatusLoading) return;
+  footballProfessionalStatusLoading = true;
+  try {
+    const data = await fetchJson('/api/football/professional-status');
+    if (!data.error) footballProfessionalStatus = data.result || null;
+  } catch (_) {
+    footballProfessionalStatus = null;
+  } finally {
+    footballProfessionalStatusLoading = false;
+    const modalBody = document.getElementById('football-pro-modal-body');
+    if (modalBody) modalBody.innerHTML = renderFootballProfessionalStatus(footballProfessionalStatus);
+    if (allPredictions && allPredictions.length && activeTab === 'football') {
+      renderFootballPredictions(allPredictions);
+    }
+  }
+}
+
+function renderFootballProfessionalStatus(status) {
+  if (!status) {
+    return `<div class="card pro-status"><div class="pro-head"><div><h3>🧪 专业验证状态</h3>
+      <div class="status-desc">正在读取严格样本外回测与生产门控…</div></div></div></div>`;
+  }
+  const model = status.model_metrics || {};
+  const market = status.market_metrics || {};
+  const strategy = status.strategy || {};
+  const checks = status.checks || {};
+  const ready = status.production_ready === true;
+  const checkLabels = {
+    model_beats_market_logloss: 'LogLoss跑赢市场',
+    positive_oos_roi: '样本外ROI为正',
+    positive_clv: 'CLV为正',
+    enough_oos_samples: '样本量达标',
+    disk_healthy: '磁盘健康'
+  };
+  const metric = (label, value, color) => `<div class="pro-metric">
+    <div class="pm-label">${esc(label)}</div><div class="pm-value" style="color:${color || 'var(--text)'}">${esc(value)}</div></div>`;
+  return `<div class="card pro-status ${ready ? 'ready' : ''}">
+    <div class="pro-head"><div><h3>🧪 专业验证与生产门控</h3>
+      <div class="status-desc">扩展窗口 Walk-forward · 阈值仅使用更早的样本外预测 · ${status.out_of_sample_n || 0} 场</div>
+    </div><span class="pro-gate">${ready ? '✓ 可进入生产验证' : '⚠ 仅研究展示，禁止正式投注'}</span></div>
+    <div class="pro-metrics">
+      ${metric('模型 / 市场 LogLoss', `${fmtNum(model.logloss, 3)} / ${fmtNum(market.logloss, 3)}`, Number(model.logloss) < Number(market.logloss) ? '#4ade80' : '#fca5a5')}
+      ${metric('样本外 ROI', strategy.roi == null ? '-' : `${(Number(strategy.roi) * 100).toFixed(2)}%`, Number(strategy.roi) > 0 ? '#4ade80' : '#fca5a5')}
+      ${metric('平均 CLV', strategy.mean_clv == null ? '-' : `${(Number(strategy.mean_clv) * 100).toFixed(2)}%`, Number(strategy.mean_clv) > 0 ? '#4ade80' : '#fca5a5')}
+      ${metric('最大回撤', strategy.max_drawdown_units == null ? '-' : `${fmtNum(strategy.max_drawdown_units, 2)} 单位`, '#fbbf24')}
+    </div>
+    <div class="pro-checks">${Object.entries(checkLabels).map(([key,label]) =>
+      `<span class="pro-check ${checks[key] ? 'ok' : ''}">${checks[key] ? '✓' : '✗'} ${esc(label)}</span>`).join('')}
+    </div>
+    <div class="note" style="margin-top:10px">当前结论：${esc(status.status_label || '-')}。高命中率不等于盈利，正式推荐必须同时通过概率、ROI 与 CLV 门槛。</div>
+  </div>`;
+}
+
+function openFootballProfessionalModal() {
+  let backdrop = document.getElementById('football-pro-modal-backdrop');
+  if (!backdrop) {
+    backdrop = document.createElement('div');
+    backdrop.id = 'football-pro-modal-backdrop';
+    backdrop.className = 'bayes-modal-backdrop';
+    backdrop.innerHTML = `<div class="pro-modal-window" role="dialog" aria-modal="true" aria-label="专业验证与生产门控">
+      <div class="pro-modal-top">
+        <button class="pro-modal-close" onclick="closeFootballProfessionalModal()" title="关闭">×</button>
+      </div>
+      <div id="football-pro-modal-body"></div>
+    </div>`;
+    backdrop.addEventListener('click', event => {
+      if (event.target === backdrop) closeFootballProfessionalModal();
+    });
+    document.body.appendChild(backdrop);
+  }
+  document.getElementById('football-pro-modal-body').innerHTML =
+    renderFootballProfessionalStatus(footballProfessionalStatus);
+  backdrop.classList.add('open');
+  document.body.style.overflow = 'hidden';
+  if (!footballProfessionalStatus && !footballProfessionalStatusLoading) {
+    loadFootballProfessionalStatus();
+  }
+}
+
+function closeFootballProfessionalModal() {
+  const backdrop = document.getElementById('football-pro-modal-backdrop');
+  if (!backdrop) return;
+  backdrop.classList.remove('open');
+  document.body.style.overflow = '';
+}
+
+document.addEventListener('keydown', event => {
+  if (event.key === 'Escape') closeFootballProfessionalModal();
+});
 
 let footballQualityFilter = 'all';
 let footballSort = 'time';
@@ -1735,6 +1855,7 @@ function renderFootballPredictions(results) {
       </div>
       <div class="toolbar-divider"></div>
       <button onclick="switchTab('predictions')" class="tb-refresh">📋 预测记录</button>
+      <button onclick="openFootballProfessionalModal()" class="tb-refresh">🧪 专业验证</button>
       <button onclick="loadMatches()" class="tb-refresh">🔄 刷新</button>
     </div>
     <div class="toolbar-row">
@@ -1785,6 +1906,7 @@ function renderFootballPredictions(results) {
     const resultTier = getFootballResultTier(item);
     const tierColor = { ultra: '#22c55e', high: '#3b82f6', cautious: '#f59e0b', cover: '#94a3b8' }[resultTier.tier];
     const reportUrl = m.bayes_report_url ? apiPrefix() + m.bayes_report_url : '';
+    const officialBetAllowed = footballProfessionalStatus?.official_betting_allowed === true;
 
     let itemHtml = `<div class="match" style="display:block;padding:12px">
       <div style="display:flex;justify-content:space-between;align-items:flex-start">
@@ -1798,6 +1920,9 @@ function renderFootballPredictions(results) {
           ${cf && cf.label ? `<div style="font-size:12px;color:${cf.level === 'low' ? 'var(--muted)' : cf.level === 'high' ? 'var(--accent2)' : 'var(--warn)'};margin-top:2px">
             🎯 ${esc(cf.label)} (${(cf.score * 100).toFixed(0)}%)
           </div>` : ''}
+          <div style="font-size:11px;margin-top:3px;color:${officialBetAllowed ? '#4ade80' : '#fbbf24'}">
+            ${officialBetAllowed ? '✓ 已通过全局生产门控' : '🧪 研究预测 · 尚未通过盈利门控'}
+          </div>
           <div style="font-size:12px;color:${tierColor};margin-top:3px;font-weight:600">
             ${esc(resultTier.label)} · ${esc(resultTier.prediction)} ${(resultTier.probability * 100).toFixed(0)}%
             ${resultTier.downgradeReasons.length ? `<span style="font-weight:normal;color:var(--muted)">（已降级：${esc(resultTier.downgradeReasons.join('、'))}）</span>` : ''}
@@ -1844,6 +1969,7 @@ function renderFootballPredictions(results) {
 
       const officialLotteryMatched = Boolean(r.lottery?.offer_matched);
       const standardMarket = r.lottery?.standard;
+      const accuracyGate = r.lottery?.accuracy_gate || {};
       const linkedSelections = getLotteryLinkedSelections(r.lottery);
       const standardPrediction = standardMarket
         ? {
@@ -1864,6 +1990,7 @@ function renderFootballPredictions(results) {
           keys: ['胜', '平', '负'],
           odds: r.lottery?.spf_available ? r.lottery?.spf_odds : null,
           handicap: false,
+          accuracyGate: accuracyGate.spf,
         });
       }
       if (officialLotteryMatched && r.lottery?.rqspf_available && r.lottery?.handicap) {
@@ -1887,19 +2014,41 @@ function renderFootballPredictions(results) {
           keys: ['让胜', '让平', '让负'],
           odds: r.lottery?.rqspf_odds,
           handicap: true,
+          accuracyGate: accuracyGate.rqspf,
           explanation: getLotteryHandicapExplanation(r.lottery),
         });
       }
       marketCards.forEach(card => {
         itemHtml += '<div style="margin-top:8px;padding:8px;background:var(--bg2);border-radius:8px">';
         itemHtml += `<div style="font-size:12px;color:var(--muted);margin-bottom:6px">${card.title}</div>`;
+        if (card.accuracyGate) {
+          const gate = card.accuracyGate;
+          const gateColor = gate.selected ? '#22c55e' : '#f59e0b';
+          const gateLabel = gate.selected
+            ? `✓ 80%目标精选：${gate.decision}`
+            : '○ 未达80%精选门槛：观望';
+          itemHtml += `<div style="margin-bottom:7px;padding:5px 7px;border-radius:6px;background:${gateColor}18;color:${gateColor};font-size:11px;font-weight:700">
+            ${esc(gateLabel)}
+            <span style="font-weight:400;color:var(--muted)"> · 当前最高概率 ${((gate.probability || 0) * 100).toFixed(0)}% · 最低门槛 ${((gate.minimum_probability || 0) * 100).toFixed(0)}%</span>
+          </div>`;
+          if (!gate.selected && gate.reasons?.length) {
+            itemHtml += `<div style="margin:-3px 0 7px;font-size:10px;color:var(--muted)">观望原因：${gate.reasons.map(esc).join('；')}</div>`;
+          }
+          if (gate.validation) {
+            itemHtml += `<div style="margin:-3px 0 7px;font-size:10px;color:#93c5fd">历史赔率代理验证：命中率 ${(gate.validation.accuracy * 100).toFixed(2)}% · 样本 ${gate.validation.sample_count} 场 · 覆盖率 ${(gate.validation.coverage * 100).toFixed(1)}%</div>`;
+          } else if (card.handicap) {
+            itemHtml += '<div style="margin:-3px 0 7px;font-size:10px;color:#f59e0b">让球胜平负缺少独立体彩终盘历史样本，当前只执行严格门控，不宣称已达到80%。</div>';
+          }
+        }
         itemHtml += '<div style="display:flex;gap:12px">';
         card.keys.forEach(key => {
           const prob = card.prediction.probs[key] || 0;
           const probabilityAvailable = Object.prototype.hasOwnProperty.call(card.prediction.probs, key);
           const odd = card.odds?.[key];
-          const selectedPredictions = card.prediction.preds?.length
-            ? card.prediction.preds : [card.prediction.pred];
+          const selectedPredictions = card.accuracyGate && !card.accuracyGate.selected
+            ? []
+            : (card.prediction.preds?.length
+              ? card.prediction.preds : [card.prediction.pred]);
           const isPred = selectedPredictions.includes(key);
           const colors = {
             '胜': '#ef4444', '平': '#f59e0b', '负': '#22c55e',

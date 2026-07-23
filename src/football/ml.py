@@ -1099,10 +1099,22 @@ def load_trained_ml_model() -> bool:
         
         # 加载元数据
         _meta = kv_store.load('ml_metadata')
+        if _meta is None and os.path.exists(metadata_file):
+            with open(metadata_file, encoding='utf-8') as metadata_handle:
+                _meta = json.load(metadata_handle)
         if _meta is not None:
             _trained_ml_metadata = _meta
             _trained_ml_feature_names = _trained_ml_metadata.get('features', [])
             print(f"ML元数据加载成功，特征数: {len(_trained_ml_feature_names)}")
+        else:
+            # The feature contract is deterministic; using it is safer than an
+            # empty vector when an older deployment lacks the metadata sidecar.
+            from .ml_feature_schema import get_feature_names
+            _trained_ml_feature_names = get_feature_names()
+            _trained_ml_metadata = {
+                'model_version': 'legacy-with-v2-feature-contract',
+                'features': _trained_ml_feature_names,
+            }
         
         return True
     except Exception as e:
