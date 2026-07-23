@@ -1761,6 +1761,15 @@ function getFootballResultTier(item) {
 
 function footballMatchPassesFilter(item) {
   if (footballQualityFilter === 'all') return true;
+  const confidence = Number(item?.result?.confidence?.score);
+  if (Number.isFinite(confidence)) {
+    if (footballQualityFilter === 'ultra') return confidence >= 0.75;
+    if (footballQualityFilter === 'high') return confidence >= 0.60 && confidence < 0.75;
+    if (footballQualityFilter === 'cautious') return confidence >= 0.50 && confidence < 0.60;
+    if (footballQualityFilter === 'cover') {
+      return confidence < 0.50 || getFootballResultTier(item).tier === 'cover';
+    }
+  }
   return getFootballResultTier(item).tier === footballQualityFilter;
 }
 
@@ -1848,7 +1857,7 @@ function renderFootballPredictions(results) {
         <div class="toolbar-buttons">
           <button onclick="setFootballQualityFilter('all')" class="tb-btn ${footballQualityFilter === 'all' ? 'tb-active' : ''}">全部</button>
           <button onclick="setFootballQualityFilter('ultra')" class="tb-btn ${footballQualityFilter === 'ultra' ? 'tb-active' : ''}">超强≥75%</button>
-          <button onclick="setFootballQualityFilter('high')" class="tb-btn ${footballQualityFilter === 'high' ? 'tb-active' : ''}">高置信≥60%</button>
+          <button onclick="setFootballQualityFilter('high')" class="tb-btn ${footballQualityFilter === 'high' ? 'tb-active' : ''}">高置信60%–75%</button>
           <button onclick="setFootballQualityFilter('cautious')" class="tb-btn ${footballQualityFilter === 'cautious' ? 'tb-active' : ''}">谨慎50%–60%</button>
           <button onclick="setFootballQualityFilter('cover')" class="tb-btn ${footballQualityFilter === 'cover' ? 'tb-active' : ''}">双选/观望</button>
         </div>
