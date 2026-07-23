@@ -5270,21 +5270,26 @@ async function getLotteryRecommend() {
     recommendations.forEach((rec, idx) => {
       const front = (rec.front || []).map(n => String(n).padStart(2, '0')).join(' ');
       const back = (rec.back || []).map(n => String(n).padStart(2, '0')).join(' ');
-      const strategyName = rec.method || '推荐';
+      const isPicked = rec.strategy === 'picked' || rec.method === '精选一注';
+      const strategyName = isPicked ? '精选一注' : (rec.method || '推荐');
       const coreFront = (rec.core_front || []).map(n => String(n).padStart(2, '0')).join(' ');
       const coreBack = (rec.core_back || []).map(n => String(n).padStart(2, '0')).join(' ');
       const coreNote = (coreFront || coreBack)
         ? `<div style="text-align:center;font-size:10px;color:#93c5fd;margin-top:3px">核心 ${esc(coreFront)}${coreBack ? ` + ${esc(coreBack)}` : ''} · 基于 ${esc(rec.based_on_issue || '最新期')}</div>`
         : '';
-      html += `<div class="highlight" style="margin-bottom:8px">
+      const voteNote = isPicked
+        ? `<div style="text-align:center;font-size:10px;color:#93c5fd;margin-top:3px">五组投票聚合 · 前区 ${Object.entries(rec.front_vote_detail || {}).map(([k, v]) => `${String(k).padStart(2, '0')}:${v}票`).join(' ')} · 后区 ${Object.entries(rec.back_vote_detail || {}).map(([k, v]) => `${String(k).padStart(2, '0')}:${v}票`).join(' ')}</div>`
+        : '';
+      html += `<div class="highlight" style="margin-bottom:8px;${isPicked ? 'border:1px solid #f85149;background:rgba(248,81,73,0.08)' : ''}">
         <div style="display:flex;justify-content:center;align-items:center;gap:12px">
           <span style="font-size:12px;color:var(--muted)">${idx + 1}.</span>
           <span class="big" style="letter-spacing:4px;color:#f85149">${front}</span>
           <span style="color:var(--muted);font-size:24px">+</span>
           <span class="big" style="letter-spacing:4px;color:#4493f8">${back}</span>
         </div>
-        <div style="text-align:center;font-size:11px;color:var(--muted);margin-top:2px">${strategyName}</div>
+        <div style="text-align:center;font-size:11px;color:var(--muted);margin-top:2px">${isPicked ? '⭐ ' : ''}${strategyName}</div>
         ${coreNote}
+        ${voteNote}
       </div>`;
     });
     
@@ -6392,8 +6397,10 @@ function renderDLTRecordsPage() {
     if (actual) html += `<div class="note">开奖号：${(actual.front || []).map(p2).join(' ')} + ${(actual.back || []).map(p2).join(' ')}</div>`;
     if (unverified) html += `<div class="note" style="color:var(--warn)">缺少开奖前生成凭证，可能存在数据穿越，不计入实盘命中。</div>`;
     Object.entries(record.recommendations || {}).forEach(([method, rec]) => {
+      const isPicked = method === 'picked';
+      const methodLabel = isPicked ? '⭐ 精选一注' : esc(method);
       const hitText = record.settled && !unverified ? ` · 前区中 ${record[method + '_front_hit'] || 0} 个 · 后区中 ${record[method + '_back_hit'] || 0} 个` : '';
-      html += `<div class="note">${esc(method)}：${(rec.front || []).map(p2).join(' ')} + ${(rec.back || []).map(p2).join(' ')}${hitText}</div>`;
+      html += `<div class="note" style="${isPicked ? 'color:#f85149;font-weight:600' : ''}">${methodLabel}：${(rec.front || []).map(p2).join(' ')} + ${(rec.back || []).map(p2).join(' ')}${hitText}</div>`;
     });
     html += `</div>`;
   });

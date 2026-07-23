@@ -53,6 +53,7 @@ try:
     from src.football.bayes_report import (
         ensure_football_report, ensure_beidan_report,
         football_reportable_ids, persist_beidan_recs,
+        sync_football_reports, sync_beidan_reports,
     )
     _BAYES_REPORT_AVAILABLE = True
 except Exception as _e:  # pragma: no cover
@@ -62,6 +63,47 @@ except Exception as _e:  # pragma: no cover
 
 REPORTS_DIR = Path(os.path.join(os.path.dirname(__file__), 'reports'))
 BAYES_MANIFEST_PATH = REPORTS_DIR / 'football_bayes_manifest.json'
+
+
+# ===================== 深度报告后台同步（新拉取时预生成 + 变盘重生成） =====================
+
+# 节流：避免每次 HTTP 请求都启动扫描线程（后台生成本身较慢）。
+_REPORT_SYNC_LOCK = threading.Lock()
+_LAST_FOOTBALL_SYNC = 0.0
+_LAST_BEIDAN_SYNC = 0.0
+_REPORT_SYNC_INTERVAL = 30  # 秒
+
+
+def _trigger_football_report_sync(mids):
+    """对一批足球比赛在后台线程里同步深度报告（无则生成、变盘则重生成）。"""
+    if not mids:
+        return
+    now = time.time()
+    with _REPORT_SYNC_LOCK:
+        global _LAST_FOOTBALL_SYNC
+        if now - _LAST_FOOTBALL_SYNC < _REPORT_SYNC_INTERVAL:
+            return
+        _LAST_FOOTBALL_SYNC = now
+    threading.Thread(
+        target=sync_football_reports, args=(list(mids),),
+        daemon=True, name='ReportSyncFootball',
+    ).start()
+
+
+def _trigger_beidan_report_sync(recs):
+    """对一批北单 rec 在后台线程里同步深度报告（无则生成、变盘则重生成）。"""
+    if not recs:
+        return
+    now = time.time()
+    with _REPORT_SYNC_LOCK:
+        global _LAST_BEIDAN_SYNC
+        if now - _LAST_BEIDAN_SYNC < _REPORT_SYNC_INTERVAL:
+            return
+        _LAST_BEIDAN_SYNC = now
+    threading.Thread(
+        target=sync_beidan_reports, args=(recs,),
+        daemon=True, name='ReportSyncBeidan',
+    ).start()
 
 
 def _load_bayes_manifest():
@@ -1023,6 +1065,14 @@ class Handler(BaseHTTPRequestHandler):
                 return dt <= now
 
             matches = [m for m in matches if not _started(m)]
+            # 后台预生成深度报告：对未开赛且有缓存的比赛，无报告则生成、变盘则重生成
+            try:
+                reportable = football_reportable_ids()
+                sync_mids = [str(m.get('match_id')) for m in matches
+                             if str(m.get('match_id')) in reportable]
+                _trigger_football_report_sync(sync_mids)
+            except Exception:
+                pass
             return {'matches': _attach_bayes_report_url(matches)}
         except Exception:
             self._log.error('获取比赛列表失败', exc_info=True)
@@ -1248,6 +1298,8 @@ class Handler(BaseHTTPRequestHandler):
                             rec['bayes_report_url'] = f"/reports/beidan_bayes_{mid}.html"
                 else:
                     _attach_bayes_report_url(recs, kind='beidan')
+                # 后台预生成深度报告：无报告则生成、变盘则重生成
+                _trigger_beidan_report_sync(recs)
 
             return {'result': result}
         except Exception as e:
@@ -1603,7 +1655,7 @@ class Handler(BaseHTTPRequestHandler):
             recommendation_map = prediction.get('recommendations') or {}
             recommendations = []
             for strategy, rec in recommendation_map.items():
-                recommendations.append({
+                item = {
                     'strategy': strategy,
                     'method': rec.get('label') or rec.get('method') or strategy,
                     'front': rec.get('front', []),
@@ -1611,7 +1663,12 @@ class Handler(BaseHTTPRequestHandler):
                     'core_front': rec.get('core_front', []),
                     'core_back': rec.get('core_back', []),
                     'based_on_issue': rec.get('based_on_issue'),
-                })
+                }
+                # 透传精选一注的投票详情等额外字段
+                for extra in ('picked_reason', 'front_vote_detail', 'back_vote_detail'):
+                    if extra in rec:
+                        item[extra] = rec[extra]
+                recommendations.append(item)
 
             return {
                 'result': {

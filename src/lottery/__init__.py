@@ -22,7 +22,7 @@ import random
 import math
 import time
 import threading
-from collections import defaultdict
+from collections import defaultdict, Counter
 from typing import Dict, List, Tuple, Any, Optional
 
 # 导入公共日志模块
@@ -2119,6 +2119,47 @@ class LotteryAnalyzer:
             'method': 'exact_combinatorial_portfolio',
         }
 
+        # ---- 新增：从五组推荐中再精选一注 ----
+        # 思路：五组推荐里被多个策略共同看中的号码，置信度相对更高。
+        # 用投票数（出现次数）构造候选池，再交给 _score_based_select 做约束修复，
+        # 保证奇偶/大小/区间/连号等形态合理。
+        front_rank_scores = {n: s for n, s, _ in front_ranked}
+        back_rank_scores = {n: s for n, s, _ in back_ranked}
+        front_votes = Counter()
+        back_votes = Counter()
+        for item in recommendations:
+            for n in item.get('front', []):
+                front_votes[n] += 1
+            for n in item.get('back', []):
+                back_votes[n] += 1
+
+        picked_front_candidates = sorted(
+            front_votes.keys(),
+            key=lambda n: (-front_votes[n], -front_rank_scores.get(n, 0.0))
+        )[:20]
+        picked_back_candidates = sorted(
+            back_votes.keys(),
+            key=lambda n: (-back_votes[n], -back_rank_scores.get(n, 0.0))
+        )[:12]
+
+        picked_front = self._score_based_select(
+            picked_front_candidates, 5, is_front=True,
+            fallback_pool=FRONT_NUMBERS, exclude=set()
+        )
+        picked_back = self._score_based_select(
+            picked_back_candidates, 2, is_front=False,
+            fallback_pool=BACK_NUMBERS, exclude=set()
+        )
+        recommendations.append({
+            'front': picked_front,
+            'back': picked_back,
+            'method': '精选一注',
+            'strategy': 'picked',
+            'picked_reason': '五组投票聚合：前区高频号码经约束修复后精选',
+            'front_vote_detail': {n: int(front_votes[n]) for n in picked_front},
+            'back_vote_detail': {n: int(back_votes[n]) for n in picked_back},
+        })
+
         return {
             'recommendations': recommendations,
             'portfolio_policy': {
@@ -3121,7 +3162,7 @@ def run_prediction(force_refresh=False, enable_backtest=True,
         recommendations = {}
         for item in multi.get('recommendations') or []:
             key = item.get('strategy') or item.get('method') or 'unknown'
-            recommendations[key] = {
+            rec_entry = {
                 'front': item.get('front', []),
                 'back': item.get('back', []),
                 'method': key,
@@ -3130,6 +3171,11 @@ def run_prediction(force_refresh=False, enable_backtest=True,
                 'core_back': item.get('core_back', []),
                 'based_on_issue': item.get('based_on_issue'),
             }
+            # 透传精选一注的投票详情等额外字段
+            for extra in ('picked_reason', 'front_vote_detail', 'back_vote_detail'):
+                if extra in item:
+                    rec_entry[extra] = item[extra]
+            recommendations[key] = rec_entry
 
         # ML推荐 (v2.2新增策略)
         if ml_prediction and ml_prediction.get('front_top'):

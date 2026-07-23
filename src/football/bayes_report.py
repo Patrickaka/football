@@ -489,6 +489,12 @@ def build_report(cache_path: str, live: dict, out_path: str) -> dict:
     print(f"P1(模块校准): 主{pct(report['wdl']['home'])} 平{pct(report['wdl']['draw'])} 客{pct(report['wdl']['away'])}")
     print(f"战术语境: {'已接入' if tactical['available'] else 'UNAVAILABLE(降级)'}")
     print(f"置信: {conf.get('label')} / 风险: {rlevel.get('level')}")
+
+    # 保存赔率快照（生成时刻的盘口），供后续变盘检测决定是否重生成
+    mid = _extract_mid_from_report_path(out_path)
+    if mid:
+        euro = d.get("euro", {})
+        save_odds_snapshot(mid, "football", euro.get("instant") or euro.get("open") or {})
     return report
 
 
@@ -614,6 +620,11 @@ def build_beidan_report(rec: dict, live: dict, out_path: str) -> dict:
     print(f"比赛: {league} {home} vs {away} @ {match.get('time','')}")
     print(f"P0(赔率隐含): 主{pct(p0['home'])} 平{pct(p0['draw'])} 客{pct(p0['away'])}")
     print(f"P1(模型校准): 主{pct(report['wdl']['home'])} 平{pct(report['wdl']['draw'])} 客{pct(report['wdl']['away'])}")
+
+    # 保存赔率快照（生成时刻的赔率），供后续变盘检测决定是否重生成
+    mid = rec.get("match_id") or _extract_mid_from_report_path(out_path)
+    if mid:
+        save_odds_snapshot(mid, "beidan", (rec.get("spf") or {}).get("odds") or {})
     print(f"战术语境: {'已接入' if tactical['available'] else 'UNAVAILABLE(降级)'}")
     return report
 
@@ -820,15 +831,34 @@ def load_live_context(mid: str) -> dict:
     return {}
 
 
-def ensure_football_report(mid: str) -> Optional[str]:
-    """确保某足球比赛的深度报告存在；若不存在则现生成。
+def ensure_football_report(mid: str, force: bool = False) -> Optional[str]:
+    """确保某足球比赛的深度报告存在；若不存在则现生成；若已存在但赔率变盘明显则重生成。
 
+    force=True 时无论是否存在、是否变盘都强制重生成。
     返回报告文件绝对路径；若无法生成（无缓存）返回 None。
     """
     mid = str(mid)
     out_path = os.path.join(DEFAULT_REPORTS_DIR, f"football_bayes_{mid}.html")
-    if os.path.exists(out_path):
-        return out_path
+    exists = os.path.exists(out_path)
+    if exists and not force:
+        # 变盘检测：当前 pkl 的盘口与生成时快照偏差明显则重生成
+        try:
+            idx = _football_cache_index()
+            pkl = idx.get(mid)
+            if pkl:
+                d = load_module_cache(os.path.join(FOOTBALL_CACHE_DIR, pkl))
+                euro = d.get("euro", {})
+                cur = euro.get("instant") or euro.get("open") or {}
+                if odds_drifted(mid, "football", cur):
+                    print(f"[INFO] 足球 {mid} 检测到变盘，重生成报告")
+                    try:
+                        os.remove(out_path)
+                    except OSError:
+                        pass
+                else:
+                    return out_path
+        except Exception:
+            return out_path
     with REPORT_GEN_LOCK:
         # double-check after acquiring lock
         if os.path.exists(out_path):
@@ -838,24 +868,42 @@ def ensure_football_report(mid: str) -> Optional[str]:
         if not pkl:
             return None
         pkl_path = os.path.join(FOOTBALL_CACHE_DIR, pkl)
-        live = load_live_context(mid)
         try:
-            build_report(pkl_path, live, out_path)
+            build_report(pkl_path, load_live_context(mid), out_path)  # 内部存快照
             return out_path
         except Exception as e:
             print(f"[ERR] 足球报告生成失败 {mid}: {e}")
             return None
 
 
-def ensure_beidan_report(mid: str) -> Optional[str]:
-    """确保某北单比赛的深度报告存在；若不存在则现生成。
+def ensure_beidan_report(mid: str, force: bool = False) -> Optional[str]:
+    """确保某北单比赛的深度报告存在；若不存在则现生成；若已存在但赔率变盘明显则重生成。
 
+    force=True 时无论是否存在、是否变盘都强制重生成。
     返回报告文件绝对路径；若无法生成（无 rec 缓存）返回 None。
     """
     mid = str(mid)
     out_path = os.path.join(DEFAULT_REPORTS_DIR, f"beidan_bayes_{mid}.html")
-    if os.path.exists(out_path):
-        return out_path
+    exists = os.path.exists(out_path)
+    if exists and not force:
+        # 变盘检测：当前 rec 的赔率与生成时快照偏差明显则重生成
+        rec_path = os.path.join(BEIDAN_CACHE_DIR, f"beidan_{mid}.json")
+        if not os.path.exists(rec_path):
+            return out_path  # 无 rec 可对比，保留旧报告
+        try:
+            with open(rec_path, "r", encoding="utf-8") as f:
+                rec = json.load(f)
+            odds = (rec.get("spf") or {}).get("odds") or {}
+            if odds_drifted(mid, "beidan", odds):
+                print(f"[INFO] 北单 {mid} 检测到变盘，重生成报告")
+                try:
+                    os.remove(out_path)
+                except OSError:
+                    pass
+            else:
+                return out_path
+        except Exception:
+            return out_path
     with REPORT_GEN_LOCK:
         if os.path.exists(out_path):
             return out_path
@@ -871,7 +919,7 @@ def ensure_beidan_report(mid: str) -> Optional[str]:
         rec["match_id"] = mid
         live = load_live_context(mid)
         try:
-            build_beidan_report(rec, live, out_path)
+            build_beidan_report(rec, live, out_path)  # 内部存快照
             return out_path
         except Exception as e:
             print(f"[ERR] 北单报告生成失败 {mid}: {e}")
@@ -897,6 +945,126 @@ def persist_beidan_recs(recs: List[dict]) -> List[str]:
         except Exception as e:
             print(f"[WARN] 北单 rec 落盘失败 {mid}: {e}")
     return persisted
+
+
+# ===================== 赔率快照 & 变盘检测（自动重生成） =====================
+
+# 变盘阈值：胜平负隐含概率任一方绝对偏差 >= 此值即视为「变盘明显」，需重生成报告。
+DRIFT_THRESHOLD = 0.03  # 3 个百分点
+
+
+def _snapshot_path(mid: str, kind: str) -> str:
+    return os.path.join(DEFAULT_REPORTS_DIR, f"_snap_{kind}_{mid}.json")
+
+
+def save_odds_snapshot(mid: str, kind: str, odds: dict):
+    """保存生成报告时刻的赔率快照。
+
+    kind='football': odds 为 {home,draw,away} 隐含概率（来自 pkl euro）；
+    kind='beidan':   odds 为 {胜,平,负} 十进制赔率（来自 rec.spf.odds）。
+    以原始值存储，比较时再归一化为隐含概率，避免双重换算误差。
+    """
+    try:
+        os.makedirs(DEFAULT_REPORTS_DIR, exist_ok=True)
+        with open(_snapshot_path(mid, kind), "w", encoding="utf-8") as f:
+            json.dump({
+                "mid": mid, "kind": kind, "odds": odds,
+                "ts": datetime.now().strftime("%Y-%m-%d %H:%M"),
+            }, f, ensure_ascii=False)
+    except Exception:
+        pass
+
+
+def load_odds_snapshot(mid: str, kind: str):
+    try:
+        with open(_snapshot_path(mid, kind), "r", encoding="utf-8") as f:
+            return json.load(f).get("odds")
+    except Exception:
+        return None
+
+
+def _to_implied(odds):
+    """把 {home,draw,away} 或 {胜,平,负} 的赔率/概率统一转成隐含概率 dict。
+
+    输入若 >1（赔率量级）则取 1/odd 再归一化；若 <1（概率量级）则直接归一化。
+    返回 {home,draw,away} 或 None。
+    """
+    if not odds:
+        return None
+    h = odds.get("home", odds.get("胜"))
+    d = odds.get("draw", odds.get("平"))
+    a = odds.get("away", odds.get("负"))
+    try:
+        h, d, a = float(h), float(d), float(a)
+    except (TypeError, ValueError):
+        return None
+    if h <= 0 or d <= 0 or a <= 0:
+        return None
+    if h > 1.0 or d > 1.0 or a > 1.0:  # 赔率量级 → 转隐含概率
+        h, d, a = 1.0 / h, 1.0 / d, 1.0 / a
+    s = h + d + a
+    if s <= 0:
+        return None
+    return {"home": h / s, "draw": d / s, "away": a / s}
+
+
+def odds_drifted(mid: str, kind: str, current_odds, threshold: float = DRIFT_THRESHOLD) -> bool:
+    """对比当前赔率与报告生成时的快照，判定是否变盘明显。
+
+    返回 True 表示存在明显变盘（需重新生成报告）。
+    """
+    if not current_odds:
+        return False
+    cur = _to_implied(current_odds)
+    if not cur:
+        return False
+    prev = load_odds_snapshot(mid, kind)
+    if not prev:
+        return False  # 无快照（首次生成）不视为变盘
+    prev_i = _to_implied(prev)
+    if not prev_i:
+        return False
+    drift = max(abs(cur[k] - prev_i[k]) for k in ("home", "draw", "away"))
+    return drift >= threshold
+
+
+# ===================== 批量后台同步（新拉取时预生成 + 变盘重生成） =====================
+
+def sync_football_reports(mids):
+    """批量同步足球深度报告（供 server 后台线程调用）。
+
+    - 报告不存在 → 生成；
+    - 报告已存在但赔率变盘明显 → 删除后重生成；
+    已开赛比赛由调用方（server 列表过滤）保证不会传入，这里不再判断。
+    """
+    if not mids:
+        return
+    try:
+        reportable = football_reportable_ids()
+    except Exception:
+        return
+    for mid in mids:
+        mid = str(mid)
+        if mid not in reportable:
+            continue
+        try:
+            ensure_football_report(mid)  # 内部含「不存在则生成 / 变盘则重生成」
+        except Exception as e:
+            print(f"[ERR] 后台同步足球报告失败 {mid}: {e}")
+
+
+def sync_beidan_reports(recs):
+    """批量同步北单深度报告（供 server 后台线程调用）。"""
+    if not recs:
+        return
+    for rec in recs:
+        mid = str(rec.get("match_id") or (rec.get("spf") or {}).get("match_id", "") or "")
+        if not mid:
+            continue
+        try:
+            ensure_beidan_report(mid)
+        except Exception as e:
+            print(f"[ERR] 后台同步北单报告失败 {mid}: {e}")
 
 
 # ===================== 报告留存清理（retention） =====================
