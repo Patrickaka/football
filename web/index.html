@@ -1535,14 +1535,92 @@ async function loadMatches() {
 let footballProfessionalStatus = null;
 let footballProfessionalStatusLoading = false;
 
+const bundledProfessionalBacktest = Object.freeze({
+  method: 'expanding-window-walk-forward',
+  out_of_sample_n: 1804,
+  generated_at: '2026-07-23T14:13:38+08:00',
+  baseline_version: 'football-oos-2026-07-23-v1',
+  model_metrics: {
+    n: 1804, accuracy: 0.5238359201773836,
+    logloss: 0.9965126754063698, brier: 0.593481284345111,
+  },
+  market_baseline_metrics: {
+    n: 1804, accuracy: 0.5360310421286031,
+    logloss: 0.9773157271504305, brier: 0.5816143229560724,
+  },
+  strategy: {
+    bets: 293, wins: 175, hit_rate: 0.5972696245733788,
+    coverage: 0.16241685144124168, profit: -5.620000000000001,
+    roi: -0.019180887372013657, max_drawdown_units: 14.170000000000002,
+    mean_clv: -0.006273251680351913, clv_samples: 293,
+  },
+});
+
+function normalizeProfessionalBacktest(report) {
+  const model = report?.model_metrics || {};
+  const market = report?.market_baseline_metrics || {};
+  const strategy = report?.strategy || {};
+  const checks = {
+    model_beats_market_logloss: Number(model.logloss) < Number(market.logloss),
+    positive_oos_roi: Number(strategy.roi) > 0,
+    positive_clv: Number(strategy.mean_clv) > 0,
+    enough_oos_samples: Number(report?.out_of_sample_n) >= 1000,
+    disk_healthy: true,
+  };
+  return {
+    available: true,
+    source: report?.source || 'static_backtest_fallback',
+    baseline_version: report?.baseline_version,
+    generated_at: report?.generated_at,
+    out_of_sample_n: Number(report?.out_of_sample_n || 0),
+    model_metrics: model,
+    market_metrics: market,
+    strategy,
+    checks,
+    production_ready: Object.values(checks).every(Boolean),
+    status_label: (
+      checks.model_beats_market_logloss
+      && checks.positive_oos_roi
+      && checks.positive_clv
+      && checks.enough_oos_samples
+    ) ? '已通过严格样本外门控' : '研究模式：暂未跑赢市场',
+  };
+}
+
+async function loadProfessionalBacktestFallback() {
+  try {
+    const report = await fetchJson('/reports/professional_football_backtest.json');
+    if (!report?.model_metrics || !report?.market_baseline_metrics) {
+      throw new Error('静态回测报告格式无效');
+    }
+    return normalizeProfessionalBacktest(report);
+  } catch (_) {
+    return normalizeProfessionalBacktest({
+      ...bundledProfessionalBacktest,
+      source: 'bundled_audited_baseline',
+    });
+  }
+}
+
 async function loadFootballProfessionalStatus() {
   if (footballProfessionalStatusLoading) return;
   footballProfessionalStatusLoading = true;
   try {
     const data = await fetchJson('/api/football/professional-status');
-    if (!data.error) footballProfessionalStatus = data.result || null;
-  } catch (_) {
-    footballProfessionalStatus = null;
+    if (data.error || !data.result) {
+      footballProfessionalStatus = await loadProfessionalBacktestFallback();
+    } else {
+      footballProfessionalStatus = data.result;
+    }
+  } catch (error) {
+    try {
+      footballProfessionalStatus = await loadProfessionalBacktestFallback();
+    } catch (fallbackError) {
+      footballProfessionalStatus = {
+        available: false,
+        error: `${error?.message || '专业验证接口请求失败'}；${fallbackError?.message || '静态回测报告读取失败'}`,
+      };
+    }
   } finally {
     footballProfessionalStatusLoading = false;
     const modalBody = document.getElementById('football-pro-modal-body');
@@ -1557,6 +1635,14 @@ function renderFootballProfessionalStatus(status) {
   if (!status) {
     return `<div class="card pro-status"><div class="pro-head"><div><h3>🧪 专业验证状态</h3>
       <div class="status-desc">正在读取严格样本外回测与生产门控…</div></div></div></div>`;
+  }
+  if (status.available === false || status.error) {
+    return `<div class="card pro-status">
+      <div class="pro-head"><div><h3>🧪 专业验证与生产门控</h3>
+        <div class="status-desc" style="color:#f59e0b">数据读取失败，不代表样本为0场</div>
+      </div><span class="pro-gate">⚠ 暂不可用</span></div>
+      <div class="note">原因：${esc(status.error || status.reason || '专业验证接口暂时不可用')}。请刷新或检查服务版本，系统不会用0场和横杠冒充验证结果。</div>
+    </div>`;
   }
   const model = status.model_metrics || {};
   const market = status.market_metrics || {};
@@ -1575,6 +1661,7 @@ function renderFootballProfessionalStatus(status) {
   return `<div class="card pro-status ${ready ? 'ready' : ''}">
     <div class="pro-head"><div><h3>🧪 专业验证与生产门控</h3>
       <div class="status-desc">扩展窗口 Walk-forward · 阈值仅使用更早的样本外预测 · ${status.out_of_sample_n || 0} 场</div>
+      ${status.baseline_version ? `<div class="status-desc">基线 ${esc(status.baseline_version)} · ${esc(status.generated_at || '时间未知')} · ${(status.source || status.validation_source) === 'bundled_audited_baseline' ? '随代码发布' : '运行时报告'}</div>` : ''}
     </div><span class="pro-gate">${ready ? '✓ 可进入生产验证' : '⚠ 仅研究展示，禁止正式投注'}</span></div>
     <div class="pro-metrics">
       ${metric('模型 / 市场 LogLoss', `${fmtNum(model.logloss, 3)} / ${fmtNum(market.logloss, 3)}`, Number(model.logloss) < Number(market.logloss) ? '#4ade80' : '#fca5a5')}

@@ -1380,15 +1380,22 @@ class Handler(BaseHTTPRequestHandler):
     def _football_professional_status_payload(self):
         """严格样本外验证、投注门控和磁盘健康的轻量状态接口。"""
         try:
+            from src.football.professional_baseline import (
+                BASELINE_GENERATED_AT,
+                BASELINE_VERSION,
+                bundled_professional_baseline,
+            )
             report_path = REPORTS_DIR / 'professional_football_backtest.json'
-            validation = {}
-            generated_at = None
+            validation = bundled_professional_baseline()
+            generated_at = BASELINE_GENERATED_AT
+            validation_source = 'bundled_audited_baseline'
             if report_path.exists():
                 with report_path.open(encoding='utf-8') as handle:
                     validation = json.load(handle)
                 generated_at = datetime.fromtimestamp(
                     report_path.stat().st_mtime
                 ).isoformat(timespec='seconds')
+                validation_source = 'runtime_report'
 
             from src.common.maintenance import disk_status
             disk = disk_status()
@@ -1414,7 +1421,9 @@ class Handler(BaseHTTPRequestHandler):
             return {
                 'result': {
                     'schema_version': 'football-professional-status-v1',
+                    'baseline_version': BASELINE_VERSION,
                     'generated_at': generated_at,
+                    'validation_source': validation_source,
                     'validation_available': bool(validation),
                     'production_ready': production_ready,
                     'official_betting_allowed': production_ready,

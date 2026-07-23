@@ -1,4 +1,7 @@
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 import server
 
@@ -15,6 +18,17 @@ class ServerProfessionalStatusTests(unittest.TestCase):
         self.assertFalse(result['production_ready'])
         self.assertFalse(result['official_betting_allowed'])
         self.assertGreaterEqual(result['out_of_sample_n'], 1000)
+
+    def test_status_uses_bundled_baseline_without_report_file(self):
+        handler = server.Handler.__new__(server.Handler)
+        handler._log = server.log
+        with TemporaryDirectory() as temp_dir:
+            with patch.object(server, 'REPORTS_DIR', Path(temp_dir)):
+                payload = handler._football_professional_status_payload()
+        result = payload['result']
+        self.assertEqual(result['out_of_sample_n'], 1804)
+        self.assertEqual(result['validation_source'], 'bundled_audited_baseline')
+        self.assertEqual(result['baseline_version'], 'football-oos-2026-07-23-v1')
 
 
 if __name__ == '__main__':

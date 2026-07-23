@@ -57,13 +57,26 @@ def load_module_cache(pkl_path: str) -> dict:
 
 def load_professional_validation_summary() -> dict:
     """Load the lightweight strict-OOS summary without rerunning a backtest."""
+    from .professional_baseline import (
+        BASELINE_GENERATED_AT,
+        BASELINE_VERSION,
+        bundled_professional_baseline,
+    )
     path = os.path.join(DEFAULT_REPORTS_DIR, "professional_football_backtest.json")
     try:
-        mtime = os.path.getmtime(path)
+        report_exists = os.path.exists(path)
+        mtime = os.path.getmtime(path) if report_exists else "bundled"
         if _PRO_VALIDATION_CACHE["mtime"] == mtime:
             return dict(_PRO_VALIDATION_CACHE["value"])
-        with open(path, "r", encoding="utf-8") as handle:
-            report = json.load(handle)
+        if report_exists:
+            with open(path, "r", encoding="utf-8") as handle:
+                report = json.load(handle)
+            generated_at = datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M")
+            source = "runtime_report"
+        else:
+            report = bundled_professional_baseline()
+            generated_at = BASELINE_GENERATED_AT
+            source = "bundled_audited_baseline"
         model = report.get("model_metrics") or {}
         market = report.get("market_baseline_metrics") or {}
         strategy = report.get("strategy") or {}
@@ -83,7 +96,9 @@ def load_professional_validation_summary() -> dict:
             "strategy": strategy,
             "checks": checks,
             "production_ready": all(checks.values()),
-            "generated_at": datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M"),
+            "generated_at": generated_at,
+            "source": source,
+            "baseline_version": BASELINE_VERSION,
         }
         _PRO_VALIDATION_CACHE.update({"mtime": mtime, "value": value})
         return dict(value)
