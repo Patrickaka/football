@@ -564,9 +564,17 @@ def fetch_basketball_schedule(date=None):
                 except ValueError:
                     pass
         
-        matches = [m for m in matches if m['status'] != 'finished']
-        
-        log.info(f"获取到 {len(matches)} 场未完结篮球比赛")
+        # 仅保留「未开赛」比赛：已开赛(kickoff<=now)/已完结的不进入列表与逐场分析，
+        # 既减少前端渲染量，也避免对已开赛比赛做无意义的模型分析（提速）。
+        def _started(m):
+            try:
+                dt = datetime.strptime(f"{m['date']} {m['time']}", '%Y-%m-%d %H:%M')
+                return dt <= now
+            except (ValueError, KeyError, TypeError):
+                return False
+        matches = [m for m in matches if not _started(m)]
+
+        log.info(f"获取到 {len(matches)} 场未开赛篮球比赛")
         return matches
     
     except Exception as e:

@@ -16,6 +16,8 @@ import hmac
 import base64
 import socket
 import time
+import re
+from datetime import datetime, timedelta
 import webbrowser
 import importlib
 import threading
@@ -997,7 +999,31 @@ class Handler(BaseHTTPRequestHandler):
 
     def _matches_payload(self):
         try:
-            return {'matches': _attach_bayes_report_url(fetch_match_list())}
+            matches = fetch_match_list()
+
+            # 过滤掉「已开赛」的比赛：列表只保留未开赛场次，减少前端渲染量、
+            # 也避免对已经无法进行投注分析的比赛做无谓展示（提速）。
+            def _started(m):
+                t = m.get('time', '') or ''
+                mm = re.match(r'(\d{2})-(\d{2})\s+(\d{2}):(\d{2})', t)
+                if not mm:
+                    return False  # 时间缺失无法判断，保守保留
+                mo, da, hh, mi = (int(x) for x in mm.groups())
+                now = datetime.now()
+                try:
+                    dt = datetime(now.year, mo, da, hh, mi)
+                except ValueError:
+                    return False
+                # 跨年修正：若按今年解析明显在过去很久，视为明年（如 12 月看 1 月场）
+                if dt < now - timedelta(days=180):
+                    try:
+                        dt = datetime(now.year + 1, mo, da, hh, mi)
+                    except ValueError:
+                        return False
+                return dt <= now
+
+            matches = [m for m in matches if not _started(m)]
+            return {'matches': _attach_bayes_report_url(matches)}
         except Exception:
             self._log.error('获取比赛列表失败', exc_info=True)
             return {'error': '获取比赛列表失败'}

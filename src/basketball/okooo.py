@@ -747,7 +747,10 @@ def fetch_okooo_basketball_schedule(date: Optional[str] = None) -> List[Dict]:
         except ValueError:
             pass
 
-    log.info(f"澳客篮球获取到 {len(live)} 场未完结比赛 (原始{len(matches)})")
+    # 仅保留未开赛：已开赛(in_progress)/已完结的不进入列表与逐场分析，减少数量、提速
+    live = [m for m in live if m['status'] != 'in_progress']
+
+    log.info(f"澳客篮球获取到 {len(live)} 场未开赛比赛 (原始{len(matches)})")
     return live
 
 
