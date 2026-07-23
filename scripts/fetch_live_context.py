@@ -44,6 +44,12 @@ import urllib.error
 from datetime import datetime
 from typing import Dict, List, Optional
 
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)
+
+from src.football.live_context_quality import assess_live_context
+
 UA = {"User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                      "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")}
 
@@ -222,6 +228,7 @@ def build_context(match: Dict, findings: List[Dict], auto_log: List[Dict]) -> Di
     }
     if conflict:
         ctx["injury_conflict"] = conflict
+    ctx["quality"] = assess_live_context(ctx)
     return ctx
 
 

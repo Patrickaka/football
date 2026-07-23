@@ -238,6 +238,9 @@ def risk_list(module_risk: dict, tactical: dict, live: dict) -> List[str]:
         risks.append("伤停未知：关键中轴缺阵可能显著改变先验，当前按完整阵容估计。")
     if not live.get("lineup"):
         risks.append("首发未知：预计首发未获取，临场变阵风险未纳入。")
+    quality = live.get("quality") or {}
+    if quality.get("blockers"):
+        risks.append("实时数据质量门控：" + "、".join(quality["blockers"]) + "，禁止作为正式投注。")
     risks.append("盘口已含市场预期：胜平负概率含庄家 margin，存在系统性偏差可能。")
     risks.append("单场偶然性：即便高置信场次，足球单场噪声仍可能推翻模型结论。")
     return risks[:6]
@@ -436,6 +439,10 @@ def update_manifest(out_path: str, match: dict):
 
 
 def build_report(cache_path: str, live: dict, out_path: str) -> dict:
+    from .live_context_quality import assess_live_context
+
+    live = dict(live or {})
+    live["quality"] = assess_live_context(live)
     d = load_module_cache(cache_path)
     match = d.get("match", {})
     league = match.get("league", "")
@@ -473,6 +480,7 @@ def build_report(cache_path: str, live: dict, out_path: str) -> dict:
         "confidence_score": conf.get("score", "?"),
         "risk_level": rlevel.get("level", "?"),
         "injury_conflict": live.get("injury_conflict"),
+        "live_context_quality": live.get("quality"),
     }
     html = render_html(report)
     os.makedirs(os.path.dirname(out_path), exist_ok=True)

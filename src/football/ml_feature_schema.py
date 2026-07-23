@@ -14,7 +14,7 @@ from typing import Dict, List, Any
 
 
 # ==================== 特征版本 ====================
-FEATURE_VERSION = "v1"
+FEATURE_VERSION = "v2"
 
 
 # ==================== 特征字段定义 ====================
@@ -52,10 +52,10 @@ RECENT_FORM_10_FEATURES = [
 
 # 主客场拆分特征
 HOME_AWAY_FEATURES = [
-    {'name': 'home_h Goals_for_5', 'type': 'float', 'default': 1.5, 'description': '主队最近5个主场进球/场'},
-    {'name': 'home_h Goals_against_5', 'type': 'float', 'default': 1.5, 'description': '主队最近5个主场失球/场'},
-    {'name': 'away_a Goals_for_5', 'type': 'float', 'default': 1.5, 'description': '客队最近5个客场进球/场'},
-    {'name': 'away_a Goals_against_5', 'type': 'float', 'default': 1.5, 'description': '客队最近5个客场失球/场'},
+    {'name': 'home_h_goals_for_5', 'type': 'float', 'default': 1.5, 'description': '主队最近5个主场进球/场'},
+    {'name': 'home_h_goals_against_5', 'type': 'float', 'default': 1.5, 'description': '主队最近5个主场失球/场'},
+    {'name': 'away_a_goals_for_5', 'type': 'float', 'default': 1.5, 'description': '客队最近5个客场进球/场'},
+    {'name': 'away_a_goals_against_5', 'type': 'float', 'default': 1.5, 'description': '客队最近5个客场失球/场'},
 ]
 
 # 样本量特征
@@ -152,6 +152,22 @@ def validate_features(features: Dict[str, Any]) -> Dict[str, Any]:
                     result[key] = value
     
     return result
+
+
+def audit_feature_payload(features: Dict[str, Any]) -> Dict[str, Any]:
+    """Return a machine-readable contract audit without silently hiding drift."""
+    expected = set(get_feature_names())
+    supplied = set(features or {})
+    missing = sorted(expected - supplied)
+    unknown = sorted(supplied - expected)
+    return {
+        'feature_version': FEATURE_VERSION,
+        'expected_count': len(expected),
+        'supplied_count': len(supplied),
+        'missing': missing,
+        'unknown': unknown,
+        'complete': not missing and not unknown,
+    }
 
 
 def get_feature_description(name: str) -> str:

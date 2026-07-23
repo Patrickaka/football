@@ -16,6 +16,7 @@ import os
 import json
 import pickle
 import math
+import hashlib
 from datetime import datetime
 from typing import Dict, List, Tuple, Any
 
@@ -356,19 +357,40 @@ class MLModelTrainer:
         print(f"模型已保存到: {MODEL_FILE}")
         
         # 保存元数据
+        from .ml_feature_schema import FEATURE_VERSION
+
+        dataset_sha256 = None
+        if os.path.exists(TRAINING_DATA_FILE):
+            digest = hashlib.sha256()
+            with open(TRAINING_DATA_FILE, 'rb') as dataset:
+                for chunk in iter(lambda: dataset.read(1024 * 1024), b''):
+                    digest.update(chunk)
+            dataset_sha256 = digest.hexdigest()
+
         self.metadata = {
-            'model_version': f"ml-v1-{datetime.now().strftime('%Y%m%d')}",
+            'model_version': f"ml-{FEATURE_VERSION}-{datetime.now().strftime('%Y%m%d')}",
             'model_type': type(self.model).__name__,
             'trained_at': datetime.now().isoformat(),
-            'feature_version': 'v1',
+            'feature_version': FEATURE_VERSION,
             'features': self.feature_names,
             'train_count': self.metadata.get('train_count', 0),
             'validation_count': self.metadata.get('validation_count', 0),
             'test_count': self.metadata.get('test_count', 0),
             'metrics': test_metrics or {},
+            'dataset': {
+                'path': os.path.basename(TRAINING_DATA_FILE),
+                'sha256': dataset_sha256,
+                'split_method': 'chronological-70-15-15',
+            },
         }
         
         kv_store.save('ml_metadata', self.metadata)
+        # Keep a portable sidecar next to the pickle even when MySQL/KV storage
+        # is unavailable. It is part of the deployable model artifact.
+        temp_metadata = METADATA_FILE + '.tmp'
+        with open(temp_metadata, 'w', encoding='utf-8') as handle:
+            json.dump(self.metadata, handle, ensure_ascii=False, indent=2)
+        os.replace(temp_metadata, METADATA_FILE)
         print("元数据已保存到 MySQL kv_store: ml_metadata")
     
     def load(self) -> bool:
@@ -388,6 +410,9 @@ class MLModelTrainer:
             print(f"模型加载成功")
             
             _meta = kv_store.load('ml_metadata')
+            if _meta is None and os.path.exists(METADATA_FILE):
+                with open(METADATA_FILE, encoding='utf-8') as handle:
+                    _meta = json.load(handle)
             if _meta is not None:
                 self.metadata = _meta
                 self.feature_names = self.metadata.get('features', [])
