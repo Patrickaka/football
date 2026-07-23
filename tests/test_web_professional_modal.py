@@ -17,6 +17,9 @@ class WebProfessionalModalTests(unittest.TestCase):
             'let html = renderFootballProfessionalStatus(footballProfessionalStatus);',
             html,
         )
+        self.assertIn("openFootballEvidenceModal", html)
+        self.assertIn("🔎 证据审计", html)
+        self.assertIn("deriveFootballEvidence", html)
 
     def test_filter_uses_prediction_reliability_not_information_completeness(self):
         path = os.path.join(ROOT, 'web', 'index.html')

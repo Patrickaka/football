@@ -1764,8 +1764,111 @@ function closeFootballProfessionalModal() {
   document.body.style.overflow = '';
 }
 
+function deriveFootballEvidence(result) {
+  if (result?.professional_evidence?.coverage_score != null) {
+    const existing = result.professional_evidence;
+    const legacyCombined = (existing.checks || []).find(item => item.key === 'lineup_injuries');
+    if (!legacyCombined) return existing;
+    const live = result?.live_context || {};
+    const checks = (existing.checks || []).filter(item => item.key !== 'lineup_injuries');
+    checks.push(
+      {key:'injuries', label:'伤停与停赛', weight:2, available:Array.isArray(live.injuries) && live.injuries.length > 0},
+      {key:'confirmed_lineup', label:'确认首发', weight:2, available:!!live.lineup && Object.keys(live.lineup).length > 0}
+    );
+    return {
+      ...existing,
+      checks,
+      missing: checks.filter(item => !item.available).map(item => item.label),
+      blockers: [
+        ...(existing.blockers || []).filter(item => item !== '未取得确认首发'),
+        ...(!(Array.isArray(live.injuries) && live.injuries.length) ? ['未取得可核验伤停'] : []),
+        ...(!(live.lineup && Object.keys(live.lineup).length) ? ['未取得确认首发'] : [])
+      ]
+    };
+  }
+  const lottery = result?.lottery || {};
+  const team = result?.team || {};
+  const ml = result?.model?.ml || {};
+  const live = result?.live_context || {};
+  const checks = [
+    ['euro_odds', '欧赔初终盘', 16, !!result?.euro],
+    ['asian_odds', '亚盘初终盘', 16, !!result?.asian],
+    ['total_odds', '大小球初终盘', 10, !!result?.total],
+    ['team_form', '球队近期攻防', 12, Object.keys(team).length > 0],
+    ['expected_goals', 'xG/xGA', 10, ['home_xg_last5','away_xg_last5'].some(key => team[key] != null && team[key] !== 0)],
+    ['bookmaker_consensus', '多公司一致性', 8, !!result?.bookmaker_consensus],
+    ['market_movement', '盘口时序变化', 8, !!result?.market_change?.used || !!result?.steam_move],
+    ['historical_analogs', '相似盘口历史', 7, Number(result?.similar_market?.sample_count || 0) >= 30],
+    ['ml_shadow', '机器学习影子模型', 5, !!ml.ml_available || !!ml.is_trained],
+    ['official_lottery_odds', '官方胜平负/让球赔率', 4, !!lottery.spf_odds || !!lottery.rqspf_odds],
+    ['injuries', '伤停与停赛', 2, Array.isArray(live.injuries) && live.injuries.length > 0],
+    ['confirmed_lineup', '确认首发', 2, !!live.lineup && Object.keys(live.lineup).length > 0]
+  ].map(([key,label,weight,available]) => ({key,label,weight,available}));
+  const totalWeight = checks.reduce((sum,item) => sum + item.weight, 0);
+  const availableWeight = checks.filter(item => item.available).reduce((sum,item) => sum + item.weight, 0);
+  const score = totalWeight ? availableWeight / totalWeight : 0;
+  const grade = score >= .85 ? 'A' : score >= .70 ? 'B' : score >= .50 ? 'C' : 'D';
+  return {
+    coverage_score: score,
+    coverage_grade: grade,
+    checks,
+    missing: checks.filter(item => !item.available).map(item => item.label),
+    blockers: [
+      ...(!lottery?.standard?.market_probabilities ? ['缺少官方赔率去水概率'] : []),
+      ...(!(Array.isArray(live.injuries) && live.injuries.length) ? ['未取得可核验伤停'] : []),
+      ...(!(live.lineup && Object.keys(live.lineup).length) ? ['未取得确认首发'] : []),
+      ...(score < .70 ? ['专业证据覆盖不足70%'] : [])
+    ]
+  };
+}
+
+function openFootballEvidenceModal(matchId) {
+  const item = (allPredictions || []).find(entry =>
+    String(entry?.match?.match_id || entry?.result?.match?.match_id || '') === String(matchId)
+  );
+  if (!item) return;
+  const result = item.result || {};
+  const match = item.match || result.match || {};
+  const evidence = deriveFootballEvidence(result);
+  let backdrop = document.getElementById('football-evidence-modal-backdrop');
+  if (!backdrop) {
+    backdrop = document.createElement('div');
+    backdrop.id = 'football-evidence-modal-backdrop';
+    backdrop.className = 'bayes-modal-backdrop';
+    backdrop.innerHTML = `<div class="pro-modal-window" role="dialog" aria-modal="true" aria-label="本场专业证据审计">
+      <div class="pro-modal-top"><button class="pro-modal-close" onclick="closeFootballEvidenceModal()" title="关闭">×</button></div>
+      <div id="football-evidence-modal-body"></div>
+    </div>`;
+    backdrop.addEventListener('click', event => {
+      if (event.target === backdrop) closeFootballEvidenceModal();
+    });
+    document.body.appendChild(backdrop);
+  }
+  const score = Number(evidence.coverage_score || 0);
+  document.getElementById('football-evidence-modal-body').innerHTML = `<div class="card pro-status">
+    <div class="pro-head"><div><h3>🔎 本场专业证据审计</h3>
+      <div class="status-desc">${esc(match.home || '')} vs ${esc(match.away || '')}</div>
+    </div><span class="pro-gate">${esc(evidence.coverage_grade || '?')}级 · ${(score * 100).toFixed(0)}%</span></div>
+    <div class="pro-checks">${(evidence.checks || []).map(item =>
+      `<span class="pro-check ${item.available ? 'ok' : ''}">${item.available ? '✓' : '✗'} ${esc(item.label || '')}</span>`).join('')}</div>
+    ${(evidence.blockers || []).length ? `<div class="note" style="margin-top:12px;color:var(--warn)">限制：${evidence.blockers.map(esc).join('；')}</div>` : ''}
+    <div class="note" style="margin-top:10px">伤停和首发只有在数据带来源与时间戳并已进入本场实时上下文后才计入，系统不会用通用文案冒充实时数据。</div>
+  </div>`;
+  backdrop.classList.add('open');
+  document.body.style.overflow = 'hidden';
+}
+
+function closeFootballEvidenceModal() {
+  const backdrop = document.getElementById('football-evidence-modal-backdrop');
+  if (backdrop) backdrop.classList.remove('open');
+  document.body.style.overflow = '';
+}
+
 document.addEventListener('keydown', event => {
-  if (event.key === 'Escape') closeFootballProfessionalModal();
+  if (event.key === 'Escape') {
+    closeFootballProfessionalModal();
+    closeFootballEvidenceModal();
+  }
 });
 
 let footballQualityFilter = 'all';
@@ -2091,7 +2194,10 @@ function renderFootballPredictions(results) {
             ${resultTier.downgradeReasons.length ? `<span style="font-weight:normal;color:var(--muted)">（已降级：${esc(resultTier.downgradeReasons.join('、'))}）</span>` : ''}
           </div>
         </div>
-        ${reportUrl ? `<div style="margin-left:10px;flex-shrink:0"><button class="bayes-report-btn" onclick="openBayesModal('${esc(reportUrl)}', '${esc(m.home)} vs ${esc(m.away)}')">📊 深度报告</button></div>` : ''}
+        <div style="margin-left:10px;flex-shrink:0;display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end">
+          <button class="bayes-report-btn" onclick="openFootballEvidenceModal('${esc(m.match_id || r.match?.match_id || '')}')">🔎 证据审计</button>
+          ${reportUrl ? `<button class="bayes-report-btn" onclick="openBayesModal('${esc(reportUrl)}', '${esc(m.home)} vs ${esc(m.away)}')">📊 深度报告</button>` : ''}
+        </div>
       </div>`;
       
       if (top.length) {
