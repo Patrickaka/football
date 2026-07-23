@@ -28,6 +28,7 @@ import math
 import os
 import pickle
 import re
+import time
 from datetime import datetime
 from threading import Lock
 from typing import Dict, List, Optional
@@ -780,16 +781,25 @@ def discover_daily_caches(date: str) -> list:
 
 # ===================== 服务端按需生成接口 =====================
 
+# 索引缓存有效期：超过此时间则强制重扫缓存目录，避免新生成的 pkl 长时间不可见。
+_INDEX_TTL = 10 * 60  # 10 分钟
+
+
 def _football_cache_index(force: bool = False) -> Dict[str, str]:
     """建立 match_id -> 缓存 pkl 文件名的索引（缓存到 JSON，避免每次全量扫描）。
 
     返回 dict: { match_id(str): pkl_filename(str) }
+
+    为避免「索引一次性缓存、永不再刷新」导致新分析出的 pkl 长期不被识别
+    （表现为部分比赛始终无法生成深度报告），这里引入 TTL：索引文件 mtime
+    超过 _INDEX_TTL 时强制重扫。force=True 立即重扫。
     """
     idx_path = os.path.join(FOOTBALL_CACHE_DIR, "_report_index.json")
     if not force and os.path.exists(idx_path):
         try:
-            with open(idx_path, "r", encoding="utf-8") as f:
-                return json.load(f)
+            if (time.time() - os.path.getmtime(idx_path)) < _INDEX_TTL:
+                with open(idx_path, "r", encoding="utf-8") as f:
+                    return json.load(f)
         except Exception:
             pass
     idx: Dict[str, str] = {}
@@ -819,6 +829,14 @@ def football_reportable_ids() -> set:
     return set(_football_cache_index().keys())
 
 
+def refresh_football_cache_index() -> set:
+    """强制重扫缓存目录并刷新索引，返回最新可生成报告的 match_id 集合。
+
+    供后台「自动补分析」流程在生成新 pkl 后调用，使按钮可见性及时更新。
+    """
+    return set(_football_cache_index(force=True).keys())
+
+
 def load_live_context(mid: str) -> dict:
     """读取 reports/live_context_{mid}.json（若存在）。"""
     lp = os.path.join(DEFAULT_REPORTS_DIR, f"live_context_{mid}.json")
@@ -836,6 +854,10 @@ def ensure_football_report(mid: str, force: bool = False) -> Optional[str]:
 
     force=True 时无论是否存在、是否变盘都强制重生成。
     返回报告文件绝对路径；若无法生成（无缓存）返回 None。
+
+    注：pkl 文件名后缀是哈希而非 match_id，无法按 id 直接 glob，故以索引
+    （match_id -> pkl 文件名）定位。索引引入 TTL 自动刷新；若索引未命中
+    （如刚分析完、索引尚滞后），这里强制重扫一次再试，保证自愈。
     """
     mid = str(mid)
     out_path = os.path.join(DEFAULT_REPORTS_DIR, f"football_bayes_{mid}.html")
@@ -843,10 +865,9 @@ def ensure_football_report(mid: str, force: bool = False) -> Optional[str]:
     if exists and not force:
         # 变盘检测：当前 pkl 的盘口与生成时快照偏差明显则重生成
         try:
-            idx = _football_cache_index()
-            pkl = idx.get(mid)
+            pkl = _lookup_pkl(mid)
             if pkl:
-                d = load_module_cache(os.path.join(FOOTBALL_CACHE_DIR, pkl))
+                d = load_module_cache(pkl)
                 euro = d.get("euro", {})
                 cur = euro.get("instant") or euro.get("open") or {}
                 if odds_drifted(mid, "football", cur):
@@ -863,17 +884,31 @@ def ensure_football_report(mid: str, force: bool = False) -> Optional[str]:
         # double-check after acquiring lock
         if os.path.exists(out_path):
             return out_path
-        idx = _football_cache_index()
-        pkl = idx.get(mid)
+        pkl = _lookup_pkl(mid)
         if not pkl:
             return None
-        pkl_path = os.path.join(FOOTBALL_CACHE_DIR, pkl)
         try:
-            build_report(pkl_path, load_live_context(mid), out_path)  # 内部存快照
+            build_report(pkl, load_live_context(mid), out_path)  # 内部存快照
             return out_path
         except Exception as e:
             print(f"[ERR] 足球报告生成失败 {mid}: {e}")
             return None
+
+
+def _lookup_pkl(mid: str):
+    """按 match_id 从索引定位 pkl 文件路径；索引未命中时强制重扫一次再试。
+
+    因 pkl 文件名是哈希、不含 match_id，只能依赖索引。返回 pkl 绝对路径或 None。
+    """
+    mid = str(mid)
+    idx = _football_cache_index()
+    fn = idx.get(mid)
+    if not fn:
+        # 索引可能滞后（如刚跑完 analyze_match），强制刷新后重试
+        fn = _football_cache_index(force=True).get(mid)
+    if not fn:
+        return None
+    return os.path.join(FOOTBALL_CACHE_DIR, fn)
 
 
 def ensure_beidan_report(mid: str, force: bool = False) -> Optional[str]:

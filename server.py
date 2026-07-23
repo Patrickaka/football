@@ -54,6 +54,7 @@ try:
         ensure_football_report, ensure_beidan_report,
         football_reportable_ids, persist_beidan_recs,
         sync_football_reports, sync_beidan_reports,
+        refresh_football_cache_index,
     )
     _BAYES_REPORT_AVAILABLE = True
 except Exception as _e:  # pragma: no cover
@@ -104,6 +105,76 @@ def _trigger_beidan_report_sync(recs):
         target=sync_beidan_reports, args=(recs,),
         daemon=True, name='ReportSyncBeidan',
     ).start()
+
+
+# ===================== 足球自动补分析（名单内缺缓存的场自动分析） =====================
+
+# 节流：补分析较重（每次都抓赔率），避免每次请求都触发；且与报告同步错开。
+_ANALYZE_LOCK = threading.Lock()
+_LAST_FOOTBALL_ANALYZE = 0.0
+_ANALYZE_SYNC_INTERVAL = 60  # 秒（比报告同步更保守）
+# 单次最多补分析的场次，避免一次拉取把源站打爆；其余场次在后续请求中陆续补齐。
+_ANALYZE_BATCH_MAX = 15
+
+
+def _trigger_football_analysis(matches):
+    """对名单内「没有分析缓存 pkl」的比赛，后台补跑 analyze_match，使其可生成深度报告。
+
+    仅对当前未开赛列表中、且不在可生成集合（无 pkl）的比赛触发；已能生成报告的
+    比赛不需要再分析。补分析完成后直接 ensure_football_report 出报告，并刷新索引。
+    """
+    if not matches:
+        return
+    now = time.time()
+    with _ANALYZE_LOCK:
+        global _LAST_FOOTBALL_ANALYZE
+        if now - _LAST_FOOTBALL_ANALYZE < _ANALYZE_SYNC_INTERVAL:
+            return
+        _LAST_FOOTBALL_ANALYZE = now
+    try:
+        reportable = football_reportable_ids()
+    except Exception:
+        reportable = set()
+    need = [m for m in matches if str(m.get('match_id')) not in reportable]
+    if not need:
+        return
+    if len(need) > _ANALYZE_BATCH_MAX:
+        need = need[:_ANALYZE_BATCH_MAX]
+    threading.Thread(
+        target=_run_football_analysis, args=(need,),
+        daemon=True, name='FootballAnalyze',
+    ).start()
+
+
+def _run_football_analysis(matches):
+    """后台线程：逐场补分析并生成深度报告。
+
+    传入的 matches 均为「名单内、且当前无分析缓存 pkl」的比赛。补分析后
+    ensure_football_report 会自动强制刷新索引并重生成报告（自愈）。
+    """
+    done = False
+    for m in matches:
+        mid = str(m.get('match_id') or '')
+        if not mid:
+            continue
+        try:
+            # 已生成报告则跳过
+            if os.path.exists(os.path.join(REPORTS_DIR, f"football_bayes_{mid}.html")):
+                continue
+            log.info("后台补分析比赛 %s %s vs %s",
+                     mid, m.get('home', ''), m.get('away', ''))
+            analyze_match(m, force_refresh=False)
+            done = True
+            # 分析后直接生成深度报告（ensure_football_report 内部会强制刷新索引定位 pkl）
+            ensure_football_report(mid)
+        except Exception as e:
+            log.warning("后台补分析失败 %s: %s", mid, e)
+    # 本轮有新增 pkl，强制刷新索引，使按钮可见性及时更新
+    if done:
+        try:
+            refresh_football_cache_index()
+        except Exception:
+            pass
 
 
 def _load_bayes_manifest():
@@ -1071,6 +1142,8 @@ class Handler(BaseHTTPRequestHandler):
                 sync_mids = [str(m.get('match_id')) for m in matches
                              if str(m.get('match_id')) in reportable]
                 _trigger_football_report_sync(sync_mids)
+                # 名单内缺分析缓存的比赛，后台自动补分析（分析后即可生成深度报告）
+                _trigger_football_analysis(matches)
             except Exception:
                 pass
             return {'matches': _attach_bayes_report_url(matches)}
