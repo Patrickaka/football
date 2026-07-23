@@ -36,6 +36,35 @@ class BayesReportProfessionalGateTests(unittest.TestCase):
         self.assertIn('研究模式 / 禁止正式投注', html)
         self.assertIn('严格样本外验证', html)
         self.assertIn('ROI -1.92%', html)
+        self.assertIn('本场专属结论', html)
+        self.assertIn('研究倾向：主胜', html)
+        self.assertIn('本场未提供可核验的体彩让球盘', html)
+        self.assertNotIn('让球胜平负 · 80%目标精选', html)
+
+    def test_match_specific_verdict_changes_with_probabilities(self):
+        base = {
+            'match': {'league': '英超', 'home': 'A', 'away': 'B', 'time': '20:00', 'num': '001'},
+            'p0': {'home': .4, 'draw': .3, 'away': .3},
+            'ts': '2026-07-23 12:00',
+            'module_version': 'test',
+            'tool_log': [],
+            'tactical': {'available': False, 'trap_note': 'missing'},
+            'league': {'lines': ['test']},
+            'update': {'evidence': []},
+            'confidence_label': '中',
+            'confidence_score': .6,
+            'risk_level': '中',
+            'scripts': [],
+            'trap_warn': {'available': False, 'note': 'missing'},
+            'risks': ['test'],
+            'live_context_quality': {},
+            'professional_validation': {'available': False},
+            'decision_gate': {'official_bet_allowed': False},
+        }
+        home_report = dict(base, wdl={'home': .72, 'draw': .19, 'away': .09})
+        away_report = dict(base, wdl={'home': .18, 'draw': .22, 'away': .60})
+        self.assertIn('研究倾向：主胜', render_html(home_report))
+        self.assertIn('研究倾向：客胜', render_html(away_report))
 
 
 if __name__ == '__main__':

@@ -43,7 +43,7 @@ MANIFEST_PATH = os.path.join(DEFAULT_REPORTS_DIR, "football_bayes_manifest.json"
 
 # 防止并发请求同时生成同一报告
 REPORT_GEN_LOCK = Lock()
-REPORT_SCHEMA_VERSION = "5"
+REPORT_SCHEMA_VERSION = "6"
 _PRO_VALIDATION_CACHE = {"mtime": None, "value": {}}
 
 
@@ -340,9 +340,66 @@ def render_html(report: dict) -> str:
     validation = report.get("professional_validation") or {}
     gate = report.get("decision_gate") or {}
     gate_ok = gate.get("official_bet_allowed") is True
-    h.append("<div class='card'><h2>专业状态总览 "
+    accuracy_gate = report.get("accuracy_gate") or {}
+    spf_gate = accuracy_gate.get("spf") or {}
+    evidence = report.get("match_evidence") or {}
+    ranked_wdl = sorted(
+        (("主胜", float(w.get("home", 0))), ("平局", float(w.get("draw", 0))),
+         ("客胜", float(w.get("away", 0)))),
+        key=lambda item: item[1],
+        reverse=True,
+    )
+    leading_label, leading_probability = ranked_wdl[0]
+    probability_gap = leading_probability - ranked_wdl[1][1]
+    selected = spf_gate.get("selected") is True
+    verdict = (
+        f"80%目标精选：{spf_gate.get('decision')}"
+        if selected else f"研究倾向：{leading_label}；未达到80%精选门槛，建议观望"
+    )
+    h.append("<div class='card'><h2>本场专属结论 "
+             f"<span class='tag {'ok' if selected else 'u'}'>"
+             f"{'精选通过' if selected else '观望'}</span></h2>")
+    h.append("<div class='prob'>"
+             f"<div class='b home'><div class='l'>主胜</div><div class='v'>{pct(w.get('home', 0))}</div></div>"
+             f"<div class='b draw'><div class='l'>平局</div><div class='v'>{pct(w.get('draw', 0))}</div></div>"
+             f"<div class='b away'><div class='l'>客胜</div><div class='v'>{pct(w.get('away', 0))}</div></div></div>")
+    h.append(f"<div class='{'okb' if selected else 'warn'}'><b>{verdict}</b><br>"
+             f"第一方向领先第二方向 {pct(probability_gap)}；"
+             f"数据置信度 {report.get('confidence_score', '?')}；"
+             f"风险等级 {report.get('risk_level', '?')}。</div>")
+    market_notes = []
+    if evidence.get("asian_handicap") is not None:
+        market_notes.append(
+            f"亚盘 {evidence.get('asian_handicap'):+g}"
+            f"（{evidence.get('asian_trend') or '走势未标注'}）"
+        )
+    if evidence.get("total_line") is not None:
+        market_notes.append(f"大小球 {evidence.get('total_line'):g}")
+    if evidence.get("euro_close"):
+        close = evidence["euro_close"]
+        market_notes.append(
+            f"欧赔终盘隐含 主{pct(close.get('home', 0))}/"
+            f"平{pct(close.get('draw', 0))}/客{pct(close.get('away', 0))}"
+        )
+    h.append(f"<div class='muted'>{'；'.join(market_notes) or '本场盘口明细缺失'}</div>")
+    reasons = spf_gate.get("reasons") or []
+    if reasons:
+        h.append(f"<div class='muted'>未入选原因：{'；'.join(reasons)}</div>")
+    rqspf_gate = accuracy_gate.get("rqspf") or {}
+    if evidence.get("lottery_handicap") is not None and rqspf_gate.get("candidate"):
+        h.append(
+            f"<div class='muted'>让球胜平负（主队 {evidence['lottery_handicap']:+g}）："
+            f"{rqspf_gate.get('decision', '观望')}，最高概率 "
+            f"{pct(rqspf_gate.get('probability', 0))}。</div>"
+        )
+    else:
+        h.append("<div class='muted'>让球胜平负：本场未提供可核验的体彩让球盘，"
+                 "不生成0%占位结论。</div>")
+    h.append("</div>")
+
+    h.append("<details class='card'><summary><b>全局专业验证与使用限制</b> "
              f"<span class='tag {'ok' if gate_ok else 'u'}'>"
-             f"{'生产门控通过' if gate_ok else '研究模式 / 禁止正式投注'}</span></h2>")
+             f"{'生产门控通过' if gate_ok else '研究模式 / 禁止正式投注'}</span></summary>")
     h.append("<div class='grid2'>")
     h.append("<div><b>实时数据质量</b><br>"
              f"<span class='muted'>质量分 {quality.get('quality_score', '-')}；"
@@ -365,32 +422,7 @@ def render_html(report: dict) -> str:
     if not gate_ok:
         h.append("<div class='warn' style='margin-top:12px'>本报告用于研究展示。"
                  "在模型未同时跑赢市场 LogLoss、取得正样本外 ROI 与正 CLV 前，不生成正式投注指令。</div>")
-    accuracy_gate = report.get("accuracy_gate") or {}
-    if accuracy_gate:
-        h.append("<div class='grid2' style='margin-top:12px'>")
-        for key, label in (("spf", "胜平负"), ("rqspf", "让球胜平负")):
-            decision = accuracy_gate.get(key) or {}
-            selected = decision.get("selected") is True
-            reasons = "；".join(decision.get("reasons") or [])
-            validation = decision.get("validation") or {}
-            validation_text = (
-                f"；历史赔率代理命中率 {pct(validation.get('accuracy', 0))}"
-                f"（{validation.get('sample_count', 0)} 场，覆盖 "
-                f"{pct(validation.get('coverage', 0))}）"
-                if validation else ""
-            )
-            h.append(
-                f"<div><b>{label} · 80%目标精选</b><br>"
-                f"<span class='{'okb' if selected else 'warn'}'>"
-                f"{decision.get('decision', '观望')}｜最高概率 "
-                f"{pct(decision.get('probability', 0))}｜"
-                f"{'通过门控' if selected else '观望'}</span>"
-                f"<div class='muted'>{reasons or '赔率与模型方向一致，且概率和领先优势达标'}"
-                f"{validation_text}"
-                f"{'；让球玩法仍待独立历史样本验证' if key == 'rqspf' else ''}</div></div>"
-            )
-        h.append("</div>")
-    h.append("</div>")
+    h.append("</details>")
 
     h.append("<div class='card'><h2>数据来源与工具调用凭证 <span class='tag'>合规区</span></h2>")
     if report["tool_log"]:
@@ -586,6 +618,16 @@ def build_report(cache_path: str, live: dict, out_path: str) -> dict:
         "live_context_quality": live.get("quality"),
         "professional_validation": professional_validation,
         "accuracy_gate": accuracy_gate,
+        "match_evidence": {
+            "asian_handicap": (d.get("asian") or {}).get("handicap"),
+            "asian_trend": (d.get("asian") or {}).get("handicap_trend"),
+            "total_line": (
+                (d.get("total") or {}).get("close_line")
+                or (d.get("total") or {}).get("line")
+            ),
+            "euro_close": (d.get("euro") or {}).get("close") or {},
+            "lottery_handicap": (d.get("match") or {}).get("lottery_handicap"),
+        },
         "decision_gate": {
             "official_bet_allowed": (
                 live.get("quality", {}).get("official_bet_allowed") is True
@@ -1012,8 +1054,13 @@ def ensure_football_report(mid: str, force: bool = False) -> Optional[str]:
             return out_path
     with REPORT_GEN_LOCK:
         # double-check after acquiring lock
-        if os.path.exists(out_path):
+        if os.path.exists(out_path) and not force:
             return out_path
+        if force and os.path.exists(out_path):
+            try:
+                os.remove(out_path)
+            except OSError:
+                pass
         pkl = _lookup_pkl(mid)
         if not pkl:
             return None
