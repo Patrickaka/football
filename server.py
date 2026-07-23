@@ -1398,6 +1398,7 @@ class Handler(BaseHTTPRequestHandler):
                 validation_source = 'runtime_report'
 
             from src.common.maintenance import disk_status
+            from src.football.professional_readiness import build_system_gap_assessment
             disk = disk_status()
             model = validation.get('model_metrics') or {}
             market = validation.get('market_baseline_metrics') or {}
@@ -1435,6 +1436,7 @@ class Handler(BaseHTTPRequestHandler):
                     'out_of_sample_n': validation.get('out_of_sample_n', 0),
                     'audit': validation.get('audit') or {},
                     'disk': disk,
+                    'professional_assessment': build_system_gap_assessment(validation),
                 }
             }
         except Exception as e:

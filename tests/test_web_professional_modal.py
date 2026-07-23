@@ -35,6 +35,7 @@ class WebProfessionalModalTests(unittest.TestCase):
         self.assertIn("高可信60%–80%", html)
         self.assertIn("📡 信息完整度", html)
         self.assertIn("预测可信度", html)
+        self.assertIn("本场专业证据审计", html)
 
     def test_professional_status_falls_back_to_static_backtest(self):
         path = os.path.join(ROOT, 'web', 'index.html')
@@ -47,6 +48,7 @@ class WebProfessionalModalTests(unittest.TestCase):
         self.assertIn("normalizeProfessionalBacktest", html)
         self.assertIn("bundledProfessionalBacktest", html)
         self.assertIn("bundled_audited_baseline", html)
+        self.assertIn("距离专业生产系统的差距", html)
         self.assertIn("数据读取失败，不代表样本为0场", html)
 
 

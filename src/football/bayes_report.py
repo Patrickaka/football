@@ -43,7 +43,7 @@ MANIFEST_PATH = os.path.join(DEFAULT_REPORTS_DIR, "football_bayes_manifest.json"
 
 # 防止并发请求同时生成同一报告
 REPORT_GEN_LOCK = Lock()
-REPORT_SCHEMA_VERSION = "7"
+REPORT_SCHEMA_VERSION = "8"
 _PRO_VALIDATION_CACHE = {"mtime": None, "value": {}}
 
 
@@ -418,6 +418,31 @@ def render_html(report: dict) -> str:
                  "不生成0%占位结论。</div>")
     h.append("</div>")
 
+    professional_evidence = report.get("professional_evidence") or {}
+    if professional_evidence:
+        coverage = float(professional_evidence.get("coverage_score", 0) or 0)
+        agreement_labels = {
+            "strong": "模型与市场高度一致",
+            "moderate": "模型与市场基本一致",
+            "conflict": "模型与市场分歧较大",
+            "unavailable": "缺少可比市场概率",
+        }
+        available_checks = [
+            item.get("label") for item in professional_evidence.get("checks", [])
+            if item.get("available")
+        ]
+        missing_checks = professional_evidence.get("missing") or []
+        h.append("<details class='card'><summary><b>本场专业证据审计</b> "
+                 f"<span class='tag {'ok' if coverage >= .70 else 'u'}'>"
+                 f"{professional_evidence.get('coverage_grade', '?')}级 · {pct(coverage)}</span></summary>")
+        h.append(f"<div class='muted'>"
+                 f"{agreement_labels.get(professional_evidence.get('model_market_agreement'), '未知')}；"
+                 f"已覆盖：{'、'.join(available_checks) or '无'}。</div>")
+        if missing_checks:
+            h.append(f"<div class='warn' style='margin-top:10px'>仍缺："
+                     f"{'、'.join(missing_checks)}。</div>")
+        h.append("</details>")
+
     h.append("<details class='card'><summary><b>全局专业验证与使用限制</b> "
              f"<span class='tag {'ok' if gate_ok else 'u'}'>"
              f"{'生产门控通过' if gate_ok else '研究模式 / 禁止正式投注'}</span></summary>")
@@ -618,6 +643,10 @@ def build_report(cache_path: str, live: dict, out_path: str) -> dict:
             confidence=conf,
             anomaly=d.get("anomaly") or {},
         )
+    professional_evidence = d.get("professional_evidence")
+    if not professional_evidence:
+        from .professional_readiness import build_match_evidence_profile
+        professional_evidence = build_match_evidence_profile(d)
 
     report = {
         "match": match,
@@ -639,6 +668,7 @@ def build_report(cache_path: str, live: dict, out_path: str) -> dict:
         "live_context_quality": live.get("quality"),
         "professional_validation": professional_validation,
         "accuracy_gate": accuracy_gate,
+        "professional_evidence": professional_evidence,
         "match_evidence": {
             "asian_handicap": (d.get("asian") or {}).get("handicap"),
             "asian_trend": (d.get("asian") or {}).get("handicap_trend"),

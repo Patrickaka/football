@@ -7980,6 +7980,13 @@ def analyze_match(match, force_refresh=False):
         },
     }
 
+    try:
+        from .professional_readiness import build_match_evidence_profile
+        result['professional_evidence'] = build_match_evidence_profile(result)
+    except Exception as e:
+        log.warning(f"专业证据覆盖评估失败: {e}")
+        result['professional_evidence'] = None
+
     # ========== 元宝式赛果分析（胜负倾向→比分区间→进球数方向→理由，三者同源自洽）==========
     try:
         result['analysis'] = build_match_analysis(result)

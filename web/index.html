@@ -1567,6 +1567,25 @@ function normalizeProfessionalBacktest(report) {
     enough_oos_samples: Number(report?.out_of_sample_n) >= 1000,
     disk_healthy: true,
   };
+  const professionalAssessment = {
+    capabilities: [
+      '欧赔、亚盘、大小球联合建模',
+      '概率校准与多模型集成',
+      '严格时间顺序 Walk-forward 回测',
+      '赛后自动回填、滚动诊断与样本质量过滤',
+      'ROI、CLV、LogLoss、Brier 与回撤监控',
+      '低置信自动观望和生产磁盘保护'
+    ],
+    gaps: [
+      ...(!checks.model_beats_market_logloss ? [{priority:'P0', name:'模型尚未跑赢市场概率', action:'继续积累无泄漏样本，按联赛和时间层重训并校准'}] : []),
+      ...(!checks.positive_oos_roi ? [{priority:'P0', name:'样本外ROI尚未转正', action:'保持观望门控，禁止用命中率替代盈利验证'}] : []),
+      ...(!checks.positive_clv ? [{priority:'P0', name:'平均CLV尚未转正', action:'持续保存开盘、推荐时点和收盘赔率'}] : []),
+      {priority:'P1', name:'确认首发、伤停和停赛覆盖不足', action:'接入可靠实时数据源并记录来源与时间戳'},
+      {priority:'P1', name:'让球胜平负独立历史验证不足', action:'单独沉淀体彩让球赔率、预测和赛果'},
+      {priority:'P1', name:'跨公司赔率时序深度不足', action:'保存多公司T-24h/T-6h/T-1h/临场快照'},
+      {priority:'P2', name:'联赛/赛季漂移监控仍需加强', action:'按联赛、月份、概率桶监控校准误差与覆盖率'}
+    ]
+  };
   return {
     available: true,
     source: report?.source || 'static_backtest_fallback',
@@ -1577,6 +1596,7 @@ function normalizeProfessionalBacktest(report) {
     market_metrics: market,
     strategy,
     checks,
+    professional_assessment: professionalAssessment,
     production_ready: Object.values(checks).every(Boolean),
     status_label: (
       checks.model_beats_market_logloss
@@ -1648,6 +1668,9 @@ function renderFootballProfessionalStatus(status) {
   const market = status.market_metrics || {};
   const strategy = status.strategy || {};
   const checks = status.checks || {};
+  const assessment = status.professional_assessment || {};
+  const capabilities = assessment.capabilities || [];
+  const gaps = assessment.gaps || [];
   const ready = status.production_ready === true;
   const checkLabels = {
     model_beats_market_logloss: 'LogLoss跑赢市场',
@@ -1673,6 +1696,13 @@ function renderFootballProfessionalStatus(status) {
       `<span class="pro-check ${checks[key] ? 'ok' : ''}">${checks[key] ? '✓' : '✗'} ${esc(label)}</span>`).join('')}
     </div>
     <div class="note" style="margin-top:10px">当前结论：${esc(status.status_label || '-')}。高命中率不等于盈利，正式推荐必须同时通过概率、ROI 与 CLV 门槛。</div>
+    ${capabilities.length ? `<details style="margin-top:12px"><summary style="cursor:pointer;color:var(--accent2);font-weight:600">已具备的专业能力（${capabilities.length}项）</summary>
+      <div class="note">${capabilities.map(item => `✓ ${esc(item)}`).join('<br>')}</div></details>` : ''}
+    ${gaps.length ? `<details open style="margin-top:12px"><summary style="cursor:pointer;color:#fbbf24;font-weight:600">距离专业生产系统的差距（${gaps.length}项）</summary>
+      <div style="margin-top:8px">${gaps.map(item => `<div class="diag-panel" style="margin-top:6px">
+        <div class="diag-title">${esc(item.priority || '')} · ${esc(item.name || '')}</div>
+        <div class="diag-line">${esc(item.action || '')}</div>
+      </div>`).join('')}</div></details>` : ''}
   </div>`;
 }
 
@@ -3266,6 +3296,23 @@ function renderResult(r) {
     ${cf && cf.score != null ? `<div class="meta" style="color:${cf.level === 'low' ? 'var(--away)' : 'var(--accent2)'}">信息完整度 ${(cf.score * 100).toFixed(0)}% · 赛果概率 ${(detailResultTier.probability * 100).toFixed(0)}% · 预测可信度 ${(detailResultTier.predictionReliability * 100).toFixed(0)}%</div>` : ''}</div>`;
 
   html += renderModelStatus(r.model_status);
+  const professionalEvidence = r.professional_evidence || {};
+  if (professionalEvidence.coverage_score != null) {
+    const evidenceChecks = professionalEvidence.checks || [];
+    const agreementText = {
+      strong: '模型与市场高度一致',
+      moderate: '模型与市场基本一致',
+      conflict: '模型与市场分歧较大',
+      unavailable: '缺少可比市场概率'
+    }[professionalEvidence.model_market_agreement] || '未知';
+    html += `<div class="card"><h3>🔎 本场专业证据审计</h3>
+      <div class="row"><span class="k">证据覆盖</span><span class="v">${(Number(professionalEvidence.coverage_score) * 100).toFixed(0)}% · ${esc(professionalEvidence.coverage_grade || '?')}级</span></div>
+      <div class="row"><span class="k">模型/市场一致性</span><span class="v">${esc(agreementText)}</span></div>
+      <div class="pro-checks">${evidenceChecks.map(item =>
+        `<span class="pro-check ${item.available ? 'ok' : ''}">${item.available ? '✓' : '✗'} ${esc(item.label || '')}</span>`).join('')}</div>
+      ${(professionalEvidence.blockers || []).length ? `<div class="note" style="margin-top:8px;color:var(--warn)">限制：${professionalEvidence.blockers.map(esc).join('；')}</div>` : ''}
+    </div>`;
+  }
   html += renderModelWeights(r.model_weights);
   html += renderCalibrationEffect(r.calibration_effect);
   html += renderSimilarMarketDetail(r.similar_market_detail);
