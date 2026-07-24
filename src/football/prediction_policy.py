@@ -369,6 +369,61 @@ def normalize_score_matrix(matrix: Dict[Tuple[int, int], float]) -> Dict[Tuple[i
     return {score: prob / total for score, prob in matrix.items()}
 
 
+def select_diverse_score_scenarios(candidates, limit: int = 5):
+    """Rank display scenarios without changing the underlying probabilities.
+
+    The primary score follows the aggregate 1X2 direction. Remaining slots
+    cover distinct total-goal scenarios before filling by raw probability.
+    This avoids presenting the global modal score (often 1-1) as if it were
+    the model's only match script.
+    """
+    candidates = list(candidates or [])
+    if not candidates:
+        return []
+
+    def outcome(score):
+        home, away = score
+        return "H" if home > away else ("D" if home == away else "A")
+
+    masses = {"H": 0.0, "D": 0.0, "A": 0.0}
+    for score, probability in candidates:
+        masses[outcome(score)] += float(probability)
+    primary_outcome = max(masses, key=masses.get)
+    primary = next(
+        (item for item in candidates if outcome(item[0]) == primary_outcome),
+        candidates[0],
+    )
+
+    selected = [primary]
+    selected_scores = {primary[0]}
+    used_totals = {sum(primary[0])}
+
+    global_mode = candidates[0]
+    if global_mode[0] not in selected_scores:
+        selected.append(global_mode)
+        selected_scores.add(global_mode[0])
+        used_totals.add(sum(global_mode[0]))
+
+    for item in candidates:
+        score = item[0]
+        if score in selected_scores or sum(score) in used_totals:
+            continue
+        selected.append(item)
+        selected_scores.add(score)
+        used_totals.add(sum(score))
+        if len(selected) >= limit:
+            return selected
+
+    for item in candidates:
+        if item[0] in selected_scores:
+            continue
+        selected.append(item)
+        selected_scores.add(item[0])
+        if len(selected) >= limit:
+            break
+    return selected
+
+
 def apply_score_distribution_policy(matrix: Dict[Tuple[int, int], float],
                                     asian: Dict = None,
                                     total: Dict = None,

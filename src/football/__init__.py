@@ -29,7 +29,7 @@ from ..common.logger import setup_logger
 
 log = setup_logger('football')
 
-FOOTBALL_PREDICTION_LOGIC_VERSION = '2026-07-21-gated-accuracy-v13'
+FOOTBALL_PREDICTION_LOGIC_VERSION = '2026-07-24-score-scenarios-v14'
 LOTTERY_OFFICIAL_ODDS_WEIGHT = 0.40
 
 # ELO 评分系统（延迟导入）
@@ -7021,6 +7021,7 @@ def analyze_match(match, force_refresh=False):
                         (cached_lottery.get('linked_recommendation') or {}).get('handicap_conditional_probabilities')
                         or (cached_lottery.get('handicap') or {}).get('probabilities')
                     ),
+                    goal_count=model.get('goal_count'),
                 )
                 log.info(f"缓存结果的预测记录已保存: {home} vs {away}")
                 if 'model_status' in cached_result:
@@ -7459,10 +7460,15 @@ def analyze_match(match, force_refresh=False):
         max_upsets = 0  # 强弱分明且无爆冷迹象，不给出冷门
     
     # 过滤冷门比分
+    try:
+        from .prediction_policy import select_diverse_score_scenarios
+        display_candidates = select_diverse_score_scenarios(candidates, limit=12)
+    except Exception:
+        display_candidates = candidates
     filtered_candidates = []
     upset_count = 0
     
-    for (h, a), prob in candidates:
+    for (h, a), prob in display_candidates:
         # 检查是否是冷门
         diff = h - a
         is_upset = False
@@ -8055,6 +8061,7 @@ def analyze_match(match, force_refresh=False):
                 (lottery.get('linked_recommendation') or {}).get('handicap_conditional_probabilities')
                 or (lottery.get('handicap') or {}).get('probabilities')
             ),
+            goal_count=goal_count_result,
         )
         prediction_saved = True
         log.info(f"预测记录已保存: {home} vs {away}")

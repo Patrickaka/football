@@ -39,6 +39,9 @@ class WebProfessionalModalTests(unittest.TestCase):
         self.assertIn("📡 信息完整度", html)
         self.assertIn("预测可信度", html)
         self.assertIn("本场专业证据审计", html)
+        self.assertIn("精确比分Top3", html)
+        self.assertIn("进球数Top3", html)
+        self.assertIn("实际比分模型位置", html)
 
     def test_professional_status_falls_back_to_static_backtest(self):
         path = os.path.join(ROOT, 'web', 'index.html')

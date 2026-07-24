@@ -480,6 +480,7 @@ class PredictionHistory:
                        ml_feature_snapshot: Dict = None,
                        lottery_handicap: int = None,
                        predicted_rqspf: Dict[str, float] = None,
+                       goal_count: Dict = None,
                        model_version: str = PRODUCTION_MODEL_VERSION):
         """
         添加预测记录
@@ -548,6 +549,8 @@ class PredictionHistory:
                     update_data['ml_feature_snapshot'] = ml_feature_snapshot
                 update_data['lottery_handicap'] = lottery_handicap
                 update_data['predicted_rqspf'] = predicted_rqspf
+                if goal_count:
+                    update_data['goal_count'] = goal_count
                 record.update(update_data)
 
                 # 更新对应时间层的预测
@@ -607,6 +610,7 @@ class PredictionHistory:
             'decision_snapshot': _prediction_decision_snapshot(predicted_1x2),
             'lottery_handicap': lottery_handicap,
             'predicted_rqspf': predicted_rqspf,
+            'goal_count': goal_count,
             'predicted_half_full': predicted_half_full,  # 新增：半全场预测
             'time_layers': time_layers,  # 新增：时间分层预测记录
             'odds_layers': odds_layers,  # 新增：赔率分层记录
@@ -2117,6 +2121,7 @@ def save_prediction(match_id: str, league: str, home: str, away: str,
                    ml_feature_snapshot: Dict = None,
                    lottery_handicap: int = None,
                    predicted_rqspf: Dict[str, float] = None,
+                   goal_count: Dict = None,
                    model_version: str = PRODUCTION_MODEL_VERSION):
     """保存预测记录"""
     return _global_history.add_prediction(
@@ -2130,6 +2135,7 @@ def save_prediction(match_id: str, league: str, home: str, away: str,
         ml_feature_snapshot=ml_feature_snapshot,
         lottery_handicap=lottery_handicap,
         predicted_rqspf=predicted_rqspf,
+        goal_count=goal_count,
         model_version=model_version,
     )
 
@@ -2561,7 +2567,7 @@ def get_prediction_export() -> Dict:
         'match_id', 'league', 'home', 'away', 'match_time',
         'created_at', 'updated_at', 'settled_at', 'model_version',
         'prediction_logic_version', 'asian', 'total_line',
-        'predicted_scores', 'predicted_1x2', 'predicted_rqspf',
+        'predicted_scores', 'predicted_1x2', 'predicted_rqspf', 'goal_count',
         'lottery_handicap', 'predicted_half_full',
         'time_layers', 'odds_layers', 'odds_snapshot',
         'base_1x2', 'ml_1x2', 'ml_model_version', 'ml_available',

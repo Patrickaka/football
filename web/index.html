@@ -7813,10 +7813,35 @@ async function loadPredictions() {
         };
         const status = statusMap[record.sync_status] || statusMap['pending'];
         
-        // 获取预测比分Top1
+        // 精确比分单点概率天然集中在常见低比分，同时展示Top3和进球数分布，
+        // 避免把1-1这个众数误读为模型只分析了1-1。
         const predictedScores = record.predicted_scores || {};
-        const topScore = Object.entries(predictedScores).sort((a, b) => b[1] - a[1])[0];
+        const rankedScores = Object.entries(predictedScores).sort((a, b) => b[1] - a[1]);
+        const topScore = rankedScores[0];
         const topScoreStr = topScore ? `${topScore[0]} (${(topScore[1] * 100).toFixed(1)}%)` : '-';
+        const top3ScoreStr = rankedScores.slice(0, 3)
+          .map(([score, probability]) => `${esc(score)} ${(Number(probability) * 100).toFixed(1)}%`)
+          .join(' · ') || '-';
+        const goalDistribution = {};
+        rankedScores.forEach(([score, probability]) => {
+          const parts = String(score).split('-').map(Number);
+          if (parts.length !== 2 || parts.some(Number.isNaN)) return;
+          const goals = parts[0] + parts[1];
+          goalDistribution[goals] = (goalDistribution[goals] || 0) + Number(probability || 0);
+        });
+        const topGoals = Object.entries(goalDistribution).sort((a,b) => b[1] - a[1]).slice(0,3);
+        const topGoalsStr = topGoals.map(([goals, probability]) =>
+          `${goals}球 ${(Number(probability) * 100).toFixed(1)}%`
+        ).join(' · ') || '-';
+        const capturedGoalMass = Object.values(goalDistribution).reduce((sum, probability) => sum + Number(probability), 0);
+        const expectedGoalsRaw = Object.entries(goalDistribution).reduce(
+          (sum,[goals, probability]) => sum + Number(goals) * Number(probability), 0
+        );
+        const expectedGoals = capturedGoalMass > 0 ? expectedGoalsRaw / capturedGoalMass : 0;
+        const actualRank = record.actual_score
+          ? rankedScores.findIndex(([score]) => score === record.actual_score) + 1
+          : 0;
+        const actualProbability = record.actual_score ? Number(predictedScores[record.actual_score] || 0) : 0;
         
         html += `<div class="card" style="${idx > 0 ? 'margin-top:8px' : ''}">
           <div style="display:flex;justify-content:space-between;align-items:center">
@@ -7834,11 +7859,15 @@ async function loadPredictions() {
           // 已结算
           const hitTop1 = record.hit_top1 ? '✅' : '❌';
           const hitTop3 = record.hit_top3 ? '✅' : '❌';
-          html += `<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--line);display:flex;gap:16px;font-size:13px">
-            <div><span style="color:var(--muted)">预测：</span>${topScoreStr}</div>
+          html += `<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--line);font-size:13px">
+            <div><span style="color:var(--muted)">精确比分Top3：</span>${top3ScoreStr}</div>
+            <div style="margin-top:4px"><span style="color:var(--muted)">进球数Top3：</span>${topGoalsStr}${expectedGoals ? ` · 期望 ${expectedGoals.toFixed(2)}球` : ''}</div>
+            <div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:4px">
             <div><span style="color:var(--muted)">实际：</span><b style="color:var(--accent2)">${esc(record.actual_score || '-')}</b></div>
+            <div><span style="color:var(--muted)">实际比分模型位置：</span>${actualRank > 0 ? `第${actualRank}位 / ${actualProbability > 0 ? (actualProbability * 100).toFixed(2) + '%' : '极低概率'}` : '未进入候选范围'}</div>
             <div><span style="color:var(--muted)">Top1：</span>${hitTop1}</div>
             <div><span style="color:var(--muted)">Top3：</span>${hitTop3}</div>
+            </div>
           </div>`;
         } else if (record.sync_status === 'failed') {
           // 同步失败
@@ -7849,7 +7878,8 @@ async function loadPredictions() {
         } else {
           // 待同步
           html += `<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--line);font-size:12px">
-            <div><span style="color:var(--muted)">预测Top1：</span>${topScoreStr}</div>
+            <div><span style="color:var(--muted)">精确比分Top3：</span>${top3ScoreStr}</div>
+            <div style="margin-top:4px"><span style="color:var(--muted)">进球数Top3：</span>${topGoalsStr}${expectedGoals ? ` · 期望 ${expectedGoals.toFixed(2)}球` : ''}</div>
             ${record.next_sync_at ? `<div style="color:var(--muted);margin-top:2px">预计同步：${record.next_sync_at?.replace('T', ' ').slice(0, 16) || '-'}</div>` : ''}
           </div>`;
         }
