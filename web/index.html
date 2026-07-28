@@ -6288,7 +6288,10 @@ function renderKL8(r) {
       html += renderKL8ShapeProfile(sel.shape_profile, sel.numbers);
       if (sel.repeat_profile) {
         const actualRepeats = sel.numbers.filter(n => (r.statistics?.last_numbers || []).includes(n)).length;
-        html += `<div style="font-size:11px;color:#8b949e;margin-top:4px">重号结构：本组 ${actualRepeats} 个 · 近${esc(sel.repeat_profile.sample_size || 0)}期相邻开奖平均 ${esc(sel.repeat_profile.mean_draw_overlap || 0)} 个 · 动态目标 ${esc(sel.repeat_profile.target || 0)} 个</div>`;
+        const repeatRule = sel.repeat_profile.constraint_applied
+          ? ` · 策略约束至少 ${esc(sel.repeat_profile.configured_minimum || 0)} 个`
+          : ' · 仅统计观察，不强制换入重号';
+        html += `<div style="font-size:11px;color:#8b949e;margin-top:4px">重号结构：本组 ${actualRepeats} 个 · 近${esc(sel.repeat_profile.sample_size || 0)}期相邻开奖平均 ${esc(sel.repeat_profile.mean_draw_overlap || 0)} 个${repeatRule}</div>`;
       }
       html += renderKL8AccuracyProfile(sel.accuracy_profile);
       // v9.4: 隐藏多注覆盖方案展示（用户只看主推单组参考号）

@@ -47,7 +47,7 @@ from src.common.logger import setup_logger
 
 log = setup_logger('kl8')
 
-KL8_PREDICTOR_VERSION = "kl8-v9.4-mainpool"
+KL8_PREDICTOR_VERSION = "kl8-v9.5-single-hit"
 
 # ─── v9.2: 只显示已验证策略模式 ───
 VERIFY_ONLY_MODE = False  # True=未验证玩法不输出号码; False=回退参考策略(始终输出号码)
@@ -134,14 +134,6 @@ MULTI_SLIP_CONFIG = {
     'select_7': {'n_slips': 8},
     'select_10': {'n_slips': 6},
 }
-
-# ─── 主推大底（v9.4：提升“主推”命中率的可视化方案）───
-# 快乐8 为独立均匀摇奖，单注 5/6 码无预测 edge（中3+/中4+ 仅约 9.7%/3.2% 每期）。
-# 唯一可确定提升“主推命中”的杠杆是扩大覆盖：把主推从单薄单组变成“排名前 N 的大底”，
-# 用户用这 N 码打选N复式，与开奖号重叠概率按组合数理确定性提高（与号码怎么选无关）。
-# MAIN_POOL_SIZE 即大底码数；N 越大中N率越高、成本 C(N,选号数) 也越高。
-# 选五大底8码=C(8,5)=56注(112元)，中3+约32%/期（单注5码仅9.7%）；选六大底8码=C(8,6)=28注(56元)，中4+约11%/期。
-MAIN_POOL_SIZE = 8
 
 # ─── 特征开关配置（v5：所有特征默认停用，需回测验证才能启用）───
 # 按玩法分开评估: 每个特征可以有per-play-type的enabled状态
@@ -4338,16 +4330,23 @@ class KL8Analyzer:
                 select_type,
                 strategy.get('final_min_last_numbers', 0),
             )
-            final_pool = _enforce_minimum_repeats(
-                final_pool,
-                selection_candidates,
-                self.statistics.get('last_numbers', set()),
-                repeat_profile['target'],
+            # v9.5: 默认不再为了“形态好看”强制换入上期重号。严格 walk-forward
+            # 回测显示该后处理会降低选5/选6的平均命中；仅当某个已验证策略显式配置
+            # final_min_last_numbers > 0 时才应用，避免启发式覆盖真实排名信号。
+            configured_repeat_min = strategy.get('final_min_last_numbers')
+            repeat_constraint_applied = (
+                configured_repeat_min is not None and configured_repeat_min > 0
             )
+            if repeat_constraint_applied:
+                final_pool = _enforce_minimum_repeats(
+                    final_pool,
+                    selection_candidates,
+                    self.statistics.get('last_numbers', set()),
+                    configured_repeat_min,
+                )
+            repeat_profile['constraint_applied'] = repeat_constraint_applied
+            repeat_profile['configured_minimum'] = configured_repeat_min
             numbers = sorted(num for num, _ in final_pool)
-            # v9.4: 主推大底——取排名前 MAIN_POOL_SIZE 个号码作为“主推”，
-            # 用户以这 N 码打选N复式，按组合数理中N率确定性高于单薄单组。
-            main_pool = sorted(num for num, _ in pool_candidates[:MAIN_POOL_SIZE])
             variants = self._candidate_variants(pool_candidates, select_type, final_repeat_cap)
             shape_profile = _shape_profile(numbers, self.statistics.get('last_numbers', set()))
             accuracy_profile = _play_accuracy_profile(
@@ -4362,8 +4361,6 @@ class KL8Analyzer:
                 'desc': config['desc'],
                 'pick': config['pick'],
                 'numbers': numbers,
-                'main_pool': main_pool,
-                'main_pool_size': len(main_pool),
                 'shape_profile': shape_profile,
                 'repeat_profile': repeat_profile,
                 'accuracy_profile': accuracy_profile,
