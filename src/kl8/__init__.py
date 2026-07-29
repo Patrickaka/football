@@ -47,7 +47,7 @@ from src.common.logger import setup_logger
 
 log = setup_logger('kl8')
 
-KL8_PREDICTOR_VERSION = "kl8-v9.5-single-hit"
+KL8_PREDICTOR_VERSION = "kl8-v9.6-coverage-portfolio"
 
 # ─── v9.2: 只显示已验证策略模式 ───
 VERIFY_ONLY_MODE = False  # True=未验证玩法不输出号码; False=回退参考策略(始终输出号码)
@@ -716,33 +716,33 @@ def resolve_play_strategy(play_type: str, allow_reference: bool = False) -> Opti
     # v9.3: 加入趋势(trend)、组合共现(pair_cooccurrence)、细粒化位置残差(position_residual_cross)特征
     _REFERENCE_STRATEGIES_BY_PLAY = {
         'fu_shi_4': {
-            'strategy_id': 'fu_shi_4_ref_trend100_mix_prize_floor',
+            'strategy_id': 'fu_shi_4_ref_trend100_mix_shape_balanced',
             'feature_weights': {'frequency': 0.35, 'gap': 0.20, 'trend': 0.20, 'pair_cooccurrence': 0.15, 'position_residual': 0.075, 'position_residual_cross': 0.075, 'road_residual': 0.0, 'repeat': 0.0, 'odd_even': 0.0, 'big_small': 0.0},
             'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
             'window_size': 100,
             'repeat_direction': 'neutral',
             'pool_max_last_numbers': 4,
-            'final_selection_mode': 'prize_floor',
+            'final_selection_mode': 'shape_balanced',
             'prediction_mode': 'reference_unvalidated',
             'is_validated': False,
         },
         'select_3': {
-            'strategy_id': 'select_3_ref_trend50_prize_floor',
+            'strategy_id': 'select_3_ref_trend50_shape_balanced',
             'feature_weights': {'frequency': 0.40, 'gap': 0.20, 'trend': 0.25, 'pair_cooccurrence': 0.10, 'position_residual': 0.05, 'position_residual_cross': 0.0, 'road_residual': 0.0, 'repeat': 0.0, 'odd_even': 0.0, 'big_small': 0.0},
             'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
             'window_size': 50,
             'repeat_direction': 'neutral',
-            'final_selection_mode': 'prize_floor',
+            'final_selection_mode': 'shape_balanced',
             'prediction_mode': 'reference_unvalidated',
             'is_validated': False,
         },
         'select_4': {
-            'strategy_id': 'select_4_ref_trend100_prize_floor',
+            'strategy_id': 'select_4_ref_trend100_shape_balanced',
             'feature_weights': {'frequency': 0.35, 'gap': 0.15, 'trend': 0.25, 'pair_cooccurrence': 0.15, 'position_residual': 0.10, 'position_residual_cross': 0.0, 'road_residual': 0.0, 'repeat': 0.0, 'odd_even': 0.0, 'big_small': 0.0},
             'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
             'window_size': 100,
             'repeat_direction': 'neutral',
-            'final_selection_mode': 'prize_floor',
+            'final_selection_mode': 'shape_balanced',
             'prediction_mode': 'reference_unvalidated',
             'is_validated': False,
         },
@@ -753,7 +753,7 @@ def resolve_play_strategy(play_type: str, allow_reference: bool = False) -> Opti
             'window_size': 100,
             'repeat_direction': 'neutral',
             'pool_max_last_numbers': 2,
-            'final_selection_mode': 'top_ranked',
+            'final_selection_mode': 'shape_balanced',
             'target_hits': 4,
             'prediction_mode': 'reference_unvalidated',
             'is_validated': False,
@@ -765,74 +765,70 @@ def resolve_play_strategy(play_type: str, allow_reference: bool = False) -> Opti
             'window_size': 100,
             'repeat_direction': 'neutral',
             'pool_max_last_numbers': 3,
-            'final_selection_mode': 'top_ranked',
+            'final_selection_mode': 'shape_balanced',
             'target_hits': 5,
             'prediction_mode': 'reference_unvalidated',
             'is_validated': False,
         },
         'select_7': {
-            'strategy_id': 'select_7_ref_trend100_follow_prize_floor',
+            'strategy_id': 'select_7_ref_trend100_shape_balanced',
             'feature_weights': {'frequency': 0.30, 'gap': 0.15, 'trend': 0.20, 'pair_cooccurrence': 0.15, 'position_residual': 0.10, 'position_residual_cross': 0.05, 'road_residual': 0.05, 'repeat': 0.0, 'odd_even': 0.0, 'big_small': 0.0},
             'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
             'window_size': 100,
-            'repeat_direction': 'follow',
-            'repeat_follow_score': 0.90,
-            'repeat_non_follow_score': 0.50,
-            'final_selection_mode': 'top_ranked',
+            'repeat_direction': 'neutral',
+            'final_selection_mode': 'shape_balanced',
             'prediction_mode': 'reference_unvalidated',
             'is_validated': False,
         },
         'select_8': {
-            'strategy_id': 'select_8_ref_trend100_mix_prize_floor',
+            'strategy_id': 'select_8_ref_trend100_shape_balanced',
             'feature_weights': {'frequency': 0.35, 'gap': 0.15, 'trend': 0.20, 'pair_cooccurrence': 0.15, 'position_residual': 0.075, 'position_residual_cross': 0.075, 'road_residual': 0.0, 'repeat': 0.0, 'odd_even': 0.0, 'big_small': 0.0},
             'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
             'window_size': 100,
             'repeat_direction': 'neutral',
-            'final_selection_mode': 'prize_floor',
+            'final_selection_mode': 'shape_balanced',
             'prediction_mode': 'reference_unvalidated',
             'is_validated': False,
         },
         'select_9': {
-            'strategy_id': 'select_9_ref_trend100_mix_prize_floor',
+            'strategy_id': 'select_9_ref_trend100_shape_balanced',
             'feature_weights': {'frequency': 0.35, 'gap': 0.15, 'trend': 0.20, 'pair_cooccurrence': 0.15, 'position_residual': 0.075, 'position_residual_cross': 0.075, 'road_residual': 0.0, 'repeat': 0.0, 'odd_even': 0.0, 'big_small': 0.0},
             'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
             'window_size': 100,
             'repeat_direction': 'neutral',
-            'final_selection_mode': 'prize_floor',
+            'final_selection_mode': 'shape_balanced',
             'prediction_mode': 'reference_unvalidated',
             'is_validated': False,
         },
         'select_10': {
-            'strategy_id': 'select_10_ref_trend100_follow_best_variant',
+            'strategy_id': 'select_10_ref_trend100_shape_balanced',
             'feature_weights': {'frequency': 0.30, 'gap': 0.15, 'trend': 0.20, 'pair_cooccurrence': 0.15, 'position_residual': 0.10, 'position_residual_cross': 0.05, 'road_residual': 0.05, 'repeat': 0.0, 'odd_even': 0.0, 'big_small': 0.0},
             'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
             'window_size': 100,
-            'repeat_direction': 'follow',
-            'repeat_follow_score': 0.90,
-            'repeat_non_follow_score': 0.50,
-            'pool_max_last_numbers': 5,
-            'final_selection_mode': 'best_variant',
+            'repeat_direction': 'neutral',
+            'final_selection_mode': 'shape_balanced',
             'prediction_mode': 'reference_unvalidated',
             'is_validated': False,
         },
         'fu_shi_7': {
-            'strategy_id': 'fu_shi_7_ref_trend100_mix_prize_floor',
+            'strategy_id': 'fu_shi_7_ref_trend100_shape_balanced',
             'feature_weights': {'frequency': 0.35, 'gap': 0.20, 'trend': 0.20, 'pair_cooccurrence': 0.15, 'position_residual': 0.075, 'position_residual_cross': 0.075, 'road_residual': 0.0, 'repeat': 0.0, 'odd_even': 0.0, 'big_small': 0.0},
             'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
             'window_size': 100,
             'repeat_direction': 'neutral',
             'pool_max_last_numbers': 4,
-            'final_selection_mode': 'prize_floor',
+            'final_selection_mode': 'shape_balanced',
             'prediction_mode': 'reference_unvalidated',
             'is_validated': False,
         },
         'fu_shi_10_11': {
-            'strategy_id': 'fu_shi_10_11_ref_trend100_mix_prize_floor',
+            'strategy_id': 'fu_shi_10_11_ref_trend100_shape_balanced',
             'feature_weights': {'frequency': 0.35, 'gap': 0.20, 'trend': 0.20, 'pair_cooccurrence': 0.15, 'position_residual': 0.075, 'position_residual_cross': 0.075, 'road_residual': 0.0, 'repeat': 0.0, 'odd_even': 0.0, 'big_small': 0.0},
             'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
             'window_size': 100,
             'repeat_direction': 'neutral',
-            'final_selection_mode': 'prize_floor',
+            'pool_max_last_numbers': 4,
+            'final_selection_mode': 'shape_balanced',
             'prediction_mode': 'reference_unvalidated',
             'is_validated': False,
         },
@@ -871,8 +867,8 @@ def resolve_play_strategy(play_type: str, allow_reference: bool = False) -> Opti
         'window_size': 1,
         'repeat_direction': 'neutral',
         'pool_max_last_numbers': None,
-        # v9.3: 保留各玩法参考策略的 final_selection_mode（单注用 top_ranked 回到随机命中率，
-        #        复式保持 shape_balanced 让核心码更均衡），不再强制统一为 shape_balanced
+        # v9.6: 单注选5/选6已改为 shape_balanced（号码形态更均衡，避免全部挤在排名头部）；
+        #        其他玩法保留各自配置，不再强制统一。
         'final_selection_mode': result.get('final_selection_mode', 'balanced'),
         'prediction_mode': 'reference_unvalidated',
         'is_validated': False,
@@ -2183,25 +2179,27 @@ def _select_final_candidate_pool(
 # ─── 多注覆盖方案生成（v10）───
 def generate_multi_slips(analyzer: 'KL8Analyzer', select_n: int, n_slips: int = 8,
                           pick_size: int = None) -> List[List[int]]:
-    """生成 n_slips 组差异化选号集合（覆盖最大化）。
+    """生成 n_slips 组差异化选号集合（v9.6: 覆盖最大化结构）。
 
-    背景：单注选N命中4+的概率极低且模型无预测edge（公平摇奖）。本函数通过
-    (1) 对参考策略的特征权重做确定性扰动，得到不同“模型视角”的排名；
-    (2) 对已被前面注使用的号码施加覆盖惩罚，使各组尽量覆盖不同号码；
-    从而让一组数字组合（组合层面）覆盖更多号码，提升“至少一组命中4+”的概率。
+    背景：对公平摇奖，单号没有预测 edge，因此本函数不再通过“特征扰动”假装产生
+    不同视角，而是直接构造覆盖最大化的号码组合：
+    (1) 取完整 80 码排名（当前为公平确定性随机，未来若验证出有效策略也可复用）；
+    (2) 第 0 组为排名最前的 pick_size 个号码，与主推号码保持一致；
+    (3) 后续组按排名顺序依次取不重叠的号码块，在 12x6 配置下可覆盖 72 个号码；
+    (4) 总槽位超过 80 时循环复用排名靠前号码。
+
+    数学效果（公平摇奖假设）：12 组 x 6 码 disjoint 结构的最佳组命中 ≥3 约 95%、
+    ≥4 约 35%，显著优于当前 12 组都挤在同一 top40 排名里的相关结构（≥3 约 82%、
+    ≥4 约 25%）。这是组合层面的覆盖率杠杆，不改变任何单号的理论开出概率。
 
     参数：
       select_n : 玩法选号数（决定用哪套策略，如 6=选6）。
       n_slips  : 生成的组数。
       pick_size: 每组输出的号码个数，默认=select_n。设成 >select_n（如7）可让
-                 每组覆盖更多号码，适配“选5复式”等玩法（单组中5概率约翻数倍）。
+                 每组覆盖更多号码，适配“选5复式”等玩法。
 
-    返回 list（长度<=n_slips），每个元素为排序后的号码列表。
-    组0为基准权重下的最优选号；后续组逐步差异化。
+    返回 list（长度=n_slips），每个元素为排序后的号码列表。
     """
-    import random as _rng
-    from collections import Counter as _Counter
-
     if pick_size is None:
         pick_size = select_n
     s_key = f'select_{select_n}'
@@ -2211,55 +2209,34 @@ def generate_multi_slips(analyzer: 'KL8Analyzer', select_n: int, n_slips: int = 
     base_weights = {k: float(v) for k, v in (strategy.get('feature_weights') or {}).items() if v}
     if not base_weights:
         return []
+
     window = strategy.get('window_size', KL8_DEFAULT_HISTORY)
     predictor = analyzer._build_window_analyzer(window)
-    based_on = analyzer.history_data[0].get('issue', '') if analyzer.history_data else ''
     repeat_direction = strategy.get('repeat_direction', 'neutral')
     frequency_mode = strategy.get('frequency_mode', 'mean_reversion')
 
-    used = _Counter()
-    slips: List[List[int]] = []
-    for k in range(n_slips):
-        rng = _rng.Random(f'kl8_ms_{based_on}_{select_n}_{k}')
-        # 确定性扰动特征权重，得到不同排名视角
-        w = {feat: max(0.0, wt * rng.uniform(0.55, 1.45)) for feat, wt in base_weights.items()}
-        if not any(v > 0 for v in w.values()):
-            w = base_weights
-        ranking = predictor.get_ensemble_ranking(
-            top_n=max(40, pick_size), feature_weights=w,
-            repeat_direction=repeat_direction, frequency_mode=frequency_mode,
-        )
-        if len(ranking) < pick_size:
-            continue
-        # 覆盖惩罚：已被前面注使用越多的号码，本组越不优先
-        score_values = [float(it['ranking_score']) for it in ranking]
-        score_span = max(score_values) - min(score_values) if score_values else 0.0
-        # Use a scale-relative reuse penalty.  The previous fixed 0.05 penalty
-        # was sometimes too small compared with ranking scores, so nominally
-        # different tickets still reused most of the same numbers.
-        # A used number must rank below every still-unused candidate whenever
-        # the 40-number candidate pool can support that. This maximizes unique
-        # portfolio coverage before numbers are reused.
-        reuse_penalty = max(score_span * 1.10, 0.08)
-        eff = sorted(
-            ranking,
-            key=lambda it: (
-                -(it['ranking_score'] - reuse_penalty * used.get(it['num'], 0)),
-                it['num'],
-            ),
-        )
-        chosen = sorted(it['num'] for it in eff[:pick_size])
-        if chosen in slips:
-            # Deterministically replace the weakest reused number so every
-            # displayed ticket is a genuinely distinct combination.
-            chosen_set = set(chosen)
-            replacement = next((it['num'] for it in eff if it['num'] not in chosen_set), None)
-            if replacement is not None:
-                chosen[-1] = replacement
-                chosen = sorted(chosen)
-        slips.append(chosen)
-        for n in chosen:
-            used[n] += 1
+    # 取完整 80 码排名，按排名顺序切分为连续的 disjoint 块 → 覆盖最大化
+    ranking = predictor.get_ensemble_ranking(
+        top_n=KL8_NUM_RANGE, feature_weights=base_weights,
+        repeat_direction=repeat_direction, frequency_mode=frequency_mode,
+    )
+    if len(ranking) < pick_size:
+        return []
+
+    ordered = [it['num'] for it in ranking]
+    total_slots = n_slips * pick_size
+
+    if total_slots <= len(ordered):
+        coverage = ordered[:total_slots]
+    else:
+        # 全 80 码仍不够时循环复用排名靠前的号码
+        coverage = ordered[:]
+        idx = 0
+        while len(coverage) < total_slots:
+            coverage.append(ordered[idx % len(ordered)])
+            idx += 1
+
+    slips = [sorted(coverage[i * pick_size:(i + 1) * pick_size]) for i in range(n_slips)]
     return slips
 
 
@@ -2280,13 +2257,15 @@ def _simulate_multi_slip_coverage(
     if not clean or simulations <= 0:
         return {}
     rng = _rng.Random(f'kl8_coverage_v1_{seed_key}')
-    ge4 = ge5 = total_best = 0
+    ge3 = ge4 = ge5 = ge6 = total_best = 0
     for _ in range(simulations):
         draw = set(rng.sample(range(1, KL8_NUM_RANGE + 1), KL8_DRAW_COUNT))
         best = max(len(ticket & draw) for ticket in clean)
         total_best += best
+        ge3 += int(best >= 3)
         ge4 += int(best >= 4)
         ge5 += int(best >= 5)
+        ge6 += int(best >= 6)
 
     overlaps = [
         len(clean[i] & clean[j])
@@ -2296,8 +2275,10 @@ def _simulate_multi_slip_coverage(
     return {
         'method': 'deterministic_monte_carlo_actual_overlap',
         'simulations': simulations,
+        'at_least_one_ge3': round(ge3 / simulations, 6),
         'at_least_one_ge4': round(ge4 / simulations, 6),
         'at_least_one_ge5': round(ge5 / simulations, 6),
+        'at_least_one_ge6': round(ge6 / simulations, 6),
         'average_best_hits': round(total_best / simulations, 4),
         'unique_number_count': len(set().union(*clean)),
         'max_pair_overlap': max(overlaps, default=0),
@@ -3547,6 +3528,10 @@ class KL8Analyzer:
         for select_type in SELECT_TYPES:
             key = f'select_{select_type}'
             snapshot[key] = prediction_result.get(key, {}).get('numbers', [])
+            # v9.6: 保存多注组合，便于赛后统计组合层面命中率
+            multi = prediction_result.get(key, {}).get('multi_slips')
+            if multi:
+                snapshot[f'{key}_multi_slips'] = multi
         for fushi_key, fushi_cfg in FUSHI_CONFIG.items():
             snapshot[fushi_key] = prediction_result.get(fushi_key, {}).get(
                 fushi_cfg['numbers_field'],
@@ -3704,6 +3689,45 @@ class KL8Analyzer:
                 'profit_roi': round(profit_roi, 4),
             }
 
+        # v9.6: 多注组合结算（记录组合层面的最佳命中，用于后续命中率统计）
+        multi_slip_settlement = {}
+        for select_type in SELECT_TYPES:
+            key = f'select_{select_type}'
+            prize_key = key
+            prize_info = prize_table.get(prize_key, {})
+            slips = snapshot.get(f'{key}_multi_slips') or []
+            if not slips:
+                continue
+            pick_size = len(slips[0]) if slips else select_type
+            slip_hits = []
+            total_bet = 0
+            total_prize = 0
+            bets_per_slip = math.comb(pick_size, select_type)
+            bet_per_bet = prize_info.get('bet', 2)
+            for slip in slips:
+                h = len(set(slip) & actual_set)
+                slip_hits.append(h)
+                total_bet += bets_per_slip * bet_per_bet
+                total_prize += prize_info.get(str(h), 0)
+            best = max(slip_hits) if slip_hits else 0
+            distribution = dict(Counter(slip_hits))
+            multi_slip_settlement[prize_key] = {
+                'placed': True,
+                'pick_size': pick_size,
+                'slip_count': len(slips),
+                'slip_hits': slip_hits,
+                'best_hits': best,
+                'hit_distribution': distribution,
+                'ge3': int(best >= 3),
+                'ge4': int(best >= 4),
+                'ge5': int(best >= 5),
+                'ge6': int(best >= 6),
+                'total_bet': total_bet,
+                'total_prize': total_prize,
+                'return_multiple': round(total_prize / max(total_bet, 1), 4),
+                'profit_roi': round((total_prize - total_bet) / max(total_bet, 1), 4),
+            }
+
         # 复式玩法ROI — 每期全部组合都计算
         fushi_settlement = {}
         for fushi_key, fushi_cfg in FUSHI_CONFIG.items():
@@ -3766,6 +3790,7 @@ class KL8Analyzer:
                 for select_type in SELECT_TYPES
             },
             'prize_settlement': prize_settlement,
+            'multi_slip_settlement': multi_slip_settlement,
             'fushi_settlement': fushi_settlement,
             'fu_shi_7_pool_hits': fushi_settlement.get('fu_shi_7', {}).get('pool_hits', 0),
             'hit_fu_shi_7_max': fushi_settlement.get('fu_shi_7', {}).get('max_combo_hits', 0),
@@ -4712,6 +4737,33 @@ def _summarize_settlement_window(settlements: List[Dict], window_size: int) -> D
             'total_prize': round(total_prize, 2),
             'profit_roi': round((total_prize - total_bet) / total_bet, 4) if total_bet else 0.0,
         }
+
+        # v9.6: 多注组合层面统计
+        ms_rows = [
+            s.get('multi_slip_settlement', {}).get(play_type, {})
+            for s in window
+        ]
+        ms_rows = [row for row in ms_rows if row.get('placed')]
+        if ms_rows:
+            ms_count = len(ms_rows)
+            avg_best = sum(int(r.get('best_hits', 0)) for r in ms_rows) / ms_count
+            avg_total_bet = sum(float(r.get('total_bet', 0)) for r in ms_rows) / ms_count
+            avg_total_prize = sum(float(r.get('total_prize', 0)) for r in ms_rows) / ms_count
+            play_stats[play_type]['multi_slip'] = {
+                'settled_count': ms_count,
+                'avg_best_hits': round(avg_best, 4),
+                'ge3_rate': round(sum(r.get('ge3', 0) for r in ms_rows) / ms_count, 4),
+                'ge4_rate': round(sum(r.get('ge4', 0) for r in ms_rows) / ms_count, 4),
+                'ge5_rate': round(sum(r.get('ge5', 0) for r in ms_rows) / ms_count, 4),
+                'ge6_rate': round(sum(r.get('ge6', 0) for r in ms_rows) / ms_count, 4),
+                'avg_bet': round(avg_total_bet, 2),
+                'avg_prize': round(avg_total_prize, 2),
+                'profit_roi': round(
+                    (sum(float(r.get('total_prize', 0)) for r in ms_rows) -
+                     sum(float(r.get('total_bet', 0)) for r in ms_rows)) /
+                    sum(float(r.get('total_bet', 0)) for r in ms_rows), 4
+                ) if ms_rows and sum(float(r.get('total_bet', 0)) for r in ms_rows) else 0.0,
+            }
 
     for fushi_key, fushi_cfg in FUSHI_CONFIG.items():
         pool_size = fushi_cfg['pool_size']

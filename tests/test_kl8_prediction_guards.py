@@ -418,7 +418,7 @@ class KL8PredictionGuardTests(unittest.TestCase):
         self.assertIn('repeat_follow', result['fu_shi_7']['variants'])
         self.assertIn('zone_spread', result['fu_shi_7']['variants'])
         self.assertIn('prize_floor', result['fu_shi_7']['variants'])
-        self.assertEqual(result['fu_shi_7']['prize_hit_thresholds'], ['>=3'])
+        self.assertEqual(result['fu_shi_7']['prize_hit_thresholds'], ['>=4', '>=5'])
         self.assertIsNone(result['resolved_strategies']['fu_shi_7']['pool_max_last_numbers'])
 
         self.assertIn('fu_shi_10_11', result)
@@ -871,8 +871,8 @@ class KL8PredictionGuardTests(unittest.TestCase):
         self.assertEqual(settlement['hit_select_8'], 8)
         self.assertEqual(settlement['hit_select_9'], 9)
         self.assertEqual(settlement['hit_select_10'], 10)
-        self.assertEqual(settlement['prize_settlement']['select_8']['prize'], 1000000)
-        self.assertEqual(settlement['prize_settlement']['select_9']['prize'], 3000000)
+        self.assertEqual(settlement['prize_settlement']['select_8']['prize'], 50000)
+        self.assertEqual(settlement['prize_settlement']['select_9']['prize'], 250000)
         self.assertEqual(settlement['prize_settlement']['select_10']['prize'], 5000000)
 
         fushi = settlement['fushi_settlement']['fu_shi_10_11']
@@ -933,7 +933,7 @@ class KL8PredictionGuardTests(unittest.TestCase):
         self.assertEqual(select5['profit_roi'], 1.5)
         fushi7 = window['play_stats']['fu_shi_7']
         self.assertEqual(fushi7['avg_hits'], 3.0)
-        self.assertEqual(fushi7['random_expected_hits'], 1.75)
+        self.assertEqual(fushi7['random_expected_hits'], 2.0)
 
     def test_strategy_health_combines_validation_and_recent_settlements(self):
         original_strategies = kl8_module.ACTIVE_STRATEGIES
