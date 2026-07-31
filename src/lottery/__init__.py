@@ -22,6 +22,7 @@ import random
 import math
 import time
 import threading
+import itertools
 from collections import defaultdict, Counter
 from typing import Dict, List, Tuple, Any, Optional
 
@@ -1958,6 +1959,275 @@ class LotteryAnalyzer:
 
         return new_front, new_back
 
+    def _build_hybrid_number_scores(self, candidates: List[int], is_front: bool,
+                                    rank_scores: Dict[int, float],
+                                    votes: Counter,
+                                    cycles: Dict[int, Dict],
+                                    base_weights: Dict[str, float] = None,
+                                    blend_weights: Tuple[float, ...] = None) -> Dict[int, float]:
+        """精选一注 v7：融合多个信号计算号码级混合得分。
+
+        Args:
+            base_weights: 计算基础特征分时使用的权重；None 则按前后区使用默认权重。
+            blend_weights: (base, rank, vote, cold, hot, cycle) 六元组；
+                           None 则使用经验默认 (0.30, 0.20, 0.15, 0.25, 0.05, 0.05)。
+
+        融合来源：
+        - 基础特征分（可自定义权重，如前区使用冷号权重）
+        - 排名模型分（归一化）
+        - 多模型投票分（归一化）
+        - 冷号回补分（基于遗漏偏离，避免机械取冷号Top-N）
+        - 热号强度分（衰减频率，但不过热）
+        - 周期状态奖励（升温/冷门回补）
+        """
+        stats = self.statistics
+        scores = {}
+        all_numbers = FRONT_NUMBERS if is_front else BACK_NUMBERS
+        expected_gap = 35.0 / 5.0 if is_front else 12.0 / 2.0
+
+        max_rank = max(abs(rank_scores.get(n, 0.0)) for n in all_numbers) or 1.0
+        max_vote = max(votes.values()) if votes else 1.0
+
+        freq_key = 'front_frequency_decayed' if is_front else 'back_frequency_decayed'
+        gap_key = 'front_current_gaps' if is_front else 'back_current_gaps'
+        freq_decayed = stats.get(freq_key, {})
+        gaps = stats.get(gap_key, {})
+        max_freq = max(freq_decayed.values()) if freq_decayed else 1.0
+
+        bw = blend_weights or (0.30, 0.20, 0.15, 0.25, 0.05, 0.05)
+        w_base, w_rank, w_vote, w_cold, w_hot, w_cycle = bw
+
+        if base_weights is None:
+            base_weights = FEATURE_WEIGHTS if is_front else BACK_FEATURE_WEIGHTS
+
+        for num in candidates:
+            if is_front:
+                feat = self._calculate_feature_score(num, is_front=True)
+            else:
+                feat = self._calculate_back_feature_score(num)
+            base_score = sum(feat.get(k, 0.0) * base_weights.get(k, 0.0)
+                             for k in base_weights)
+
+            rank_s = rank_scores.get(num, 0.0) / max_rank
+            vote_s = votes.get(num, 0) / max_vote if max_vote > 0 else 0.0
+
+            # 冷号回补分：遗漏接近/略高于期望时最高；进入长冷后下降
+            gap = gaps.get(num, expected_gap)
+            gap_ratio = gap / expected_gap
+            if gap_ratio <= 1.3:
+                cold_s = 0.5 + 0.5 * gap_ratio / 1.3
+            else:
+                cold_s = max(0.2, 1.0 - 0.4 * (gap_ratio - 1.3))
+
+            # 热号强度分：近期衰减频率越高越强，但上限防止追热过度
+            freq = freq_decayed.get(num, 0)
+            hot_s = 0.3 + 0.7 * (freq / max_freq) if max_freq > 0 else 0.3
+
+            # 周期状态奖励
+            status = cycles.get(num, {})
+            cycle_bonus = 0.0
+            if status.get('status') == '热门':
+                cycle_bonus += 0.05
+            elif status.get('status') == '冷门':
+                cycle_bonus += 0.10
+            if status.get('trend') == '升温':
+                cycle_bonus += 0.10
+            elif status.get('trend') == '降温':
+                cycle_bonus -= 0.05
+
+            scores[num] = (
+                w_base * base_score +
+                w_rank * rank_s +
+                w_vote * vote_s +
+                w_cold * cold_s +
+                w_hot * hot_s +
+                w_cycle * cycle_bonus
+            )
+
+        return scores
+
+    def _score_combo(self, combo: List[int], num_scores: Dict[int, float],
+                     is_front: bool, other_sets: List[set] = None) -> float:
+        """精选一注 v7：对一个组合做组合级评分。
+
+        包含：个体分之和、形态分（区间/奇偶/大小/连号）、与已有推荐差异化分。
+        """
+        other_sets = other_sets or []
+        score = sum(num_scores.get(n, 0.0) for n in combo)
+
+        if is_front and len(combo) == 5:
+            # 区间覆盖：覆盖越多区间越好
+            zones = set()
+            for n in combo:
+                if n <= 12:
+                    zones.add(1)
+                elif n <= 24:
+                    zones.add(2)
+                else:
+                    zones.add(3)
+            score += 0.25 * len(zones)
+
+            # 奇偶平衡：3:2 或 2:3 最佳
+            odd = sum(1 for n in combo if n % 2 == 1)
+            score += 0.20 * (1.0 - abs(odd - 2.5) / 2.5)
+
+            # 大小平衡：2-3个小号最佳
+            small = sum(1 for n in combo if n <= 17)
+            score += 0.15 * (1.0 - abs(small - 2.5) / 2.5)
+
+            # 连号惩罚：超过1对连号扣分
+            consecutive = sum(1 for i in range(len(combo) - 1)
+                              if combo[i + 1] - combo[i] == 1)
+            if consecutive > 1:
+                score -= 0.25 * (consecutive - 1)
+        elif not is_front and len(combo) == 2:
+            # 后区：奇偶1:1、大小1:1最佳
+            odd = sum(1 for n in combo if n % 2 == 1)
+            score += 0.10 * (1.0 - abs(odd - 1) / 2.0)
+            small = sum(1 for n in combo if n <= 6)
+            score += 0.10 * (1.0 - abs(small - 1) / 2.0)
+
+        # 差异化：前区与已有推荐组的重合超过阈值则扣分。
+        # 后区仅12码且5组已占10个位置，差异化在 _diversify_picked 中保证
+        #  pair 不重复即可，此处不额外惩罚，避免逼到低分号码。
+        if is_front:
+            max_overlap = 2
+            for s in other_sets:
+                overlap = len(set(combo) & s)
+                if overlap > max_overlap:
+                    score -= 0.30 * (overlap - max_overlap)
+
+        return score
+
+    def _optimize_combo(self, num_scores: Dict[int, float], count: int,
+                        is_front: bool, other_sets: List[set] = None,
+                        max_iter: int = 200) -> List[int]:
+        """精选一注 v7：贪心初始 + 局部搜索，选出评分最高的组合。"""
+        other_sets = other_sets or []
+        sorted_candidates = sorted(num_scores.items(), key=lambda x: -x[1])
+        pool = [n for n, _ in sorted_candidates]
+
+        # 贪心初始：取分数最高的 count 个
+        selected = sorted([n for n, _ in sorted_candidates[:count]])
+
+        # 前区应用既有约束修复
+        if is_front and len(selected) == 5:
+            all_scored = [(n, num_scores.get(n, 0.0)) for n in pool]
+            selected = self._apply_front_constraints(selected, all_scored)
+
+        best_score = self._score_combo(selected, num_scores, is_front, other_sets)
+
+        # 局部搜索：单码替换，直到无法改进
+        for _ in range(max_iter):
+            improved = False
+            for i, n in enumerate(selected):
+                for m in pool:
+                    if m in selected:
+                        continue
+                    trial = list(selected)
+                    trial[i] = m
+                    trial = sorted(trial)
+                    score = self._score_combo(trial, num_scores, is_front, other_sets)
+                    if score > best_score:
+                        best_score = score
+                        selected = trial
+                        improved = True
+                        break
+                if improved:
+                    break
+            if not improved:
+                break
+
+        return sorted(selected)
+
+    def _generate_picked_v7(self, recommendations: List[Dict],
+                            front_ranked: List[Tuple],
+                            back_ranked: List[Tuple],
+                            voting: Dict) -> Tuple[List[int], List[int]]:
+        """精选一注 v7 主入口。
+
+        与 v6 的 rank Top3 + cold Top2 机械拼接不同，v7 通过组合级优化，
+        在多信号融合的候选池中搜索形态均衡且与已有推荐差异化的 5+2。
+        """
+        other_front_sets = [set(item.get('front', [])) for item in recommendations]
+        other_back_sets = [set(item.get('back', [])) for item in recommendations]
+
+        # 统计已有推荐中的号码出现次数
+        front_votes = Counter()
+        back_votes = Counter()
+        for item in recommendations:
+            for n in item.get('front', []):
+                front_votes[n] += 1
+            for n in item.get('back', []):
+                back_votes[n] += 1
+
+        front_rank_scores = {n: s for n, s, _ in front_ranked}
+        back_rank_scores = {n: s for n, s, _ in back_ranked}
+
+        cycles = self.identify_cycles()
+
+        # 候选池：综合排名、热号、冷号、投票候选
+        stats = self.statistics or {}
+        front_candidates = list(dict.fromkeys(
+            [n for n, _, _ in front_ranked[:15]] +
+            [n for n, _ in stats.get('hot_front', [])[:10]] +
+            [n for n, _ in stats.get('cold_front', [])[:10]] +
+            [c.get('number') for c in voting.get('front_candidates', [])[:12]]
+        ))
+        back_candidates = list(dict.fromkeys(
+            [n for n, _, _ in back_ranked[:8]] +
+            [n for n, _ in stats.get('hot_back', [])[:6]] +
+            [n for n, _ in stats.get('cold_back', [])[:6]] +
+            [c.get('number') for c in voting.get('back_candidates', [])[:6]]
+        ))
+
+        # 过滤掉可能的 None
+        front_candidates = [n for n in front_candidates if n is not None]
+        back_candidates = [n for n in back_candidates if n is not None]
+
+        # v7.2: 前区使用冷号策略权重作为基础（回测中冷号前区命中最稳），
+        # 后区使用默认后区权重并强化投票/排名信号。
+        cold_front_weights = {
+            'frequency': 0.05, 'gap': 0.25, 'position': 0.14,
+            'road': 0.10, 'sum': 0.12, 'trend': 0.04,
+            'zone': 0.10, 'repeat': 0.10, 'adjacent': 0.05,
+        }
+        front_scores = self._build_hybrid_number_scores(
+            front_candidates, is_front=True,
+            rank_scores=front_rank_scores,
+            votes=front_votes,
+            cycles=cycles.get('front', {}),
+            base_weights=cold_front_weights,
+            blend_weights=(0.55, 0.20, 0.15, 0.05, 0.03, 0.02),
+        )
+        back_scores = self._build_hybrid_number_scores(
+            back_candidates, is_front=False,
+            rank_scores=back_rank_scores,
+            votes=back_votes,
+            cycles=cycles.get('back', {}),
+            base_weights=BACK_FEATURE_WEIGHTS,
+            blend_weights=(0.45, 0.30, 0.20, 0.03, 0.01, 0.01),
+        )
+
+        # 组合优化
+        picked_front = self._optimize_combo(
+            front_scores, 5, is_front=True, other_sets=other_front_sets
+        )
+        picked_back = self._optimize_combo(
+            back_scores, 2, is_front=False, other_sets=other_back_sets
+        )
+
+        # 去重微调：确保与任一其它推荐组前区重合<=2、后区<=1
+        picked_front, picked_back = self._diversify_picked(
+            picked_front, picked_back,
+            other_front_sets, other_back_sets,
+            front_votes, back_votes,
+            front_rank_scores, back_rank_scores,
+            front_candidates, back_candidates,
+        )
+
+        return picked_front, picked_back
+
     def generate_recommendation(self, method: str = 'balanced',
                                  exclude_front: List[int] = None,
                                  exclude_back: List[int] = None,
@@ -2212,15 +2482,14 @@ class LotteryAnalyzer:
             'method': 'exact_combinatorial_portfolio',
         }
 
-        # ---- 新增：从五组推荐中再精选一注（v6优化版）----
-        # 核心思路：融合排名模型+冷号策略，追求稳定高命中率
-        # 分析发现：冷号策略平均命中0.93个，远高于其他策略
-        # 优化策略：精选一注采用"排名Top3 + 冷号Top2"的混合模式
-        
-        front_rank_scores = {n: s for n, s, _ in front_ranked}
-        back_rank_scores = {n: s for n, s, _ in back_ranked}
-        
-        # 统计投票数
+        # ---- 精选一注（v7 组合级优化）----
+        # v6 的 rank Top3 + cold Top2 为机械拼接，未考虑组合形态与组间差异；
+        # v7 改为：多信号融合候选池 + 组合级评分 + 局部搜索 + 去重微调。
+        picked_front, picked_back = self._generate_picked_v7(
+            recommendations, front_ranked, back_ranked, voting
+        )
+
+        # 统计投票数用于展示
         front_votes = Counter()
         back_votes = Counter()
         for item in recommendations:
@@ -2228,65 +2497,13 @@ class LotteryAnalyzer:
                 front_votes[n] += 1
             for n in item.get('back', []):
                 back_votes[n] += 1
-        
-        # 获取冷号排名
-        cold_front = [num for num, _ in self.statistics.get('cold_front', [])[:20]]
-        cold_back = [num for num, _ in self.statistics.get('cold_back', [])[:10]]
-        
-        # 计算冷号评分（使用冷号策略的权重）
-        cold_weights = {
-            'frequency': 0.05, 'gap': 0.25, 'position': 0.14,
-            'road': 0.10, 'sum': 0.12, 'trend': 0.04,
-            'zone': 0.10, 'repeat': 0.10, 'adjacent': 0.05,
-        }
-        
-        def _calc_cold_score(num):
-            features = self._calculate_feature_score(num, is_front=True)
-            return sum(features.get(k, 0) * cold_weights.get(k, 0) for k in cold_weights)
-        
-        # 前区：排名Top3 + 冷号Top2（排除已选）
-        top3_front = list(ranked_front_numbers[:3])
-        cold_scored_front = [(n, _calc_cold_score(n)) for n in cold_front if n not in top3_front]
-        cold_scored_front.sort(key=lambda x: -x[1])
-        cold_top2_front = [n for n, _ in cold_scored_front[:2]]
-        
-        picked_front = top3_front + cold_top2_front
-        
-        # 后区：排名Top1 + 冷号Top1
-        top1_back = list(ranked_back_numbers[:1])
-        cold_scored_back = [(n, _calc_cold_score(n)) for n in cold_back if n not in top1_back]
-        cold_scored_back.sort(key=lambda x: -x[1])
-        cold_top1_back = [n for n, _ in cold_scored_back[:1]]
-        
-        picked_back = top1_back + cold_top1_back
-        
-        # 确保数量正确
-        picked_front = sorted(picked_front[:5])
-        picked_back = sorted(picked_back[:2])
-        
-        # 如果数量不足，用排名号码补充
-        if len(picked_front) < 5:
-            for n in ranked_front_numbers:
-                if n not in picked_front:
-                    picked_front.append(n)
-                    if len(picked_front) >= 5:
-                        break
-            picked_front.sort()
-        
-        if len(picked_back) < 2:
-            for n in ranked_back_numbers:
-                if n not in picked_back:
-                    picked_back.append(n)
-                    if len(picked_back) >= 2:
-                        break
-            picked_back.sort()
-        
+
         recommendations.append({
             'front': picked_front,
             'back': picked_back,
             'method': '精选一注',
-            'strategy': 'picked_v6',
-            'picked_reason': 'v6优化：融合排名Top3+冷号Top2，追求稳定高命中率，冷热平衡覆盖',
+            'strategy': 'picked_v7',
+            'picked_reason': 'v7优化：多信号融合候选池 + 组合级评分 + 局部搜索 + 去重微调',
             'front_vote_detail': {n: int(front_votes.get(n, 0)) for n in picked_front},
             'back_vote_detail': {n: int(back_votes.get(n, 0)) for n in picked_back},
         })
