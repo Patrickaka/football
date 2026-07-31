@@ -4405,26 +4405,6 @@ class KL8Analyzer:
                 ),
             }
 
-            # v10: 多注覆盖方案（提升组合层面命中4+概率）
-            ms_cfg = MULTI_SLIP_CONFIG.get(s_key)
-            if ms_cfg:
-                try:
-                    slips = generate_multi_slips(
-                        self, select_type,
-                        ms_cfg.get('n_slips', 8),
-                        ms_cfg.get('pick_size'),
-                    )
-                except Exception as _e:  # 多注生成失败不影响主推荐
-                    log.warning(f'快乐8 多注生成失败 {s_key}: {_e}')
-                    slips = []
-                if slips:
-                    results[s_key]['multi_slips'] = slips
-                    results[s_key]['multi_slips_count'] = len(slips)
-                    results[s_key]['multi_slip_coverage'] = _simulate_multi_slip_coverage(
-                        slips,
-                        seed_key=f'{self.history_data[0].get("issue", "") if self.history_data else ""}_{s_key}',
-                    )
-
         # 复式玩法（v9.2: 也按自己的策略独立验证）
         for fushi_key, fushi_cfg in FUSHI_CONFIG.items():
             strategy = resolve_play_strategy(fushi_key)

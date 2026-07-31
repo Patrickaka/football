@@ -6294,10 +6294,6 @@ function renderKL8(r) {
         html += `<div style="font-size:11px;color:#8b949e;margin-top:4px">重号结构：本组 ${actualRepeats} 个 · 近${esc(sel.repeat_profile.sample_size || 0)}期相邻开奖平均 ${esc(sel.repeat_profile.mean_draw_overlap || 0)} 个${repeatRule}</div>`;
       }
       html += renderKL8AccuracyProfile(sel.accuracy_profile);
-      // v9.6: 重新启用多注覆盖方案展示，这是选5/选6提升组合层面命中率的主要途径
-      if (sel.multi_slips && sel.multi_slips.length > 0) {
-        html += renderKL8MultiSlips(sel, st);
-      }
       if (isRef && sel.warning) {
         html += `<div style="font-size:11px;color:#9a6700;margin-top:6px">⚠ ${esc(sel.warning)}</div>`;
       }
@@ -6456,51 +6452,6 @@ function renderKL8PerformanceSummary(performance) {
   return `<div class="card" style="padding:10px 14px;margin:8px 0 12px;border-left:3px solid #4493f8">
     <div style="font-size:12px;color:#8b949e;margin-bottom:5px">最近 ${esc(current.settled_count || available)} 期实际结算（与随机基线比较）</div>
     <div style="font-size:12px;line-height:1.7">${cells}</div>
-  </div>`;
-}
-
-// 多注覆盖方案（v9.6）：渲染 N 组覆盖最大化号码，诚实展示组合层面命中率
-function renderKL8MultiSlips(sel, st) {
-  const slips = sel.multi_slips;
-  if (!Array.isArray(slips) || slips.length === 0) return '';
-  const nSlips = slips.length;
-  const pick = slips[0].length || sel.pick || st;
-  const coverage = sel.multi_slip_coverage || {};
-  const unique = Number(coverage.unique_number_count || 0);
-  const maxOverlap = coverage.max_pair_overlap != null ? coverage.max_pair_overlap : '-';
-  const sims = coverage.simulations || 0;
-
-  // 每组多少注 = C(pick, st)
-  const betsPerGroup = combCount(pick, st);
-  const cost = nSlips * betsPerGroup * 2;
-  const playLabel = `选${st}`;
-
-  // 不同玩法关注的中奖档位
-  const thresholds = [];
-  if (st >= 5) thresholds.push({ k: 3, label: '中3+', val: Number(coverage.at_least_one_ge3 || 0) * 100 });
-  if (st >= 4) thresholds.push({ k: 4, label: '中4+', val: Number(coverage.at_least_one_ge4 || 0) * 100 });
-  if (st >= 5) thresholds.push({ k: 5, label: '中5+', val: Number(coverage.at_least_one_ge5 || 0) * 100 });
-  if (st >= 6) thresholds.push({ k: 6, label: '中6+', val: Number(coverage.at_least_one_ge6 || 0) * 100 });
-  const probLine = thresholds.map(t => `${t.label} <b style="color:#2ea043">${t.val.toFixed(1)}%</b>`).join(' · ');
-
-  let cards = '';
-  slips.forEach((s, i) => {
-    cards += `<div style="display:flex;align-items:center;gap:5px;margin-bottom:4px">`;
-    cards += `<span style="font-size:11px;color:#8b949e;min-width:34px">第${i + 1}组</span>`;
-    for (const n of s) {
-      cards += `<span class="kl8-ball highlight-ball" style="width:28px;height:28px;font-size:11px">${String(n).padStart(2,'0')}</span>`;
-    }
-    cards += `</div>`;
-  });
-
-  return `<div style="margin-top:10px;border-top:1px dashed var(--line);padding-top:8px">
-    <div style="font-size:12px;font-weight:700;color:#4493f8;margin-bottom:5px">🎯 多注覆盖方案（${nSlips}组 × ${pick}码，打${playLabel}）</div>
-    <div style="font-size:11px;color:#8b949e;margin-bottom:7px;line-height:1.6">
-      每组 ${pick} 个号打${playLabel} = C(${pick},${st})=${betsPerGroup} 注，共 ${nSlips} 组。v9.6 起采用“覆盖最大化”结构：12 组号码互不重复，最多覆盖 72/80 个号码，组间最大重复 ${esc(maxOverlap)} 个。
-      按实际重叠结构模拟 ${esc(sims)} 次公平开奖，${playLabel} 组合层面：${probLine}。每期成本约 <b>${cost}</b> 元。
-    </div>
-    ${cards}
-    <div style="font-size:11px;color:#9a6700;margin-top:6px">⚠ 这是“多买几组”的覆盖率杠杆，不保证单组必中；单注期望命中仍为 ${(pick * 0.25).toFixed(2)} 个。请理性投注。</div>
   </div>`;
 }
 
