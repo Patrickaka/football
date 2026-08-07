@@ -3,7 +3,7 @@ from unittest.mock import patch
 
 import src.football as football
 from src.football import assess_football_upset
-from src.football.prediction_policy import select_diverse_score_scenarios
+from src.football.prediction_policy import blend_score_matrices, select_diverse_score_scenarios
 from src.football.result_sync import PredictionHistory
 
 
@@ -34,7 +34,16 @@ class ScoreScenarioDiversityTests(unittest.TestCase):
         self.assertEqual(result['candidates'][0]['scenario'], 'draw_cover')
 
     def test_prediction_logic_version_invalidates_old_diversified_ranking_cache(self):
-        self.assertIn('context-fusion', football.FOOTBALL_PREDICTION_LOGIC_VERSION)
+        self.assertIn('dc-market-ensemble', football.FOOTBALL_PREDICTION_LOGIC_VERSION)
+
+    def test_score_matrix_ensemble_is_normalized(self):
+        blended = blend_score_matrices(
+            {(1, 0): .7, (1, 1): .3},
+            {(1, 0): .4, (1, 1): .4, (0, 1): .2},
+            .5,
+        )
+        self.assertAlmostEqual(sum(blended.values()), 1.0)
+        self.assertAlmostEqual(blended[(1, 0)], .55)
 
     def test_primary_score_follows_aggregate_result_not_global_draw_mode(self):
         candidates = [

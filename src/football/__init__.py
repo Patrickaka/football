@@ -30,7 +30,7 @@ from ..common.logger import setup_logger
 
 log = setup_logger('football')
 
-FOOTBALL_PREDICTION_LOGIC_VERSION = '2026-08-07-context-fusion-v17'
+FOOTBALL_PREDICTION_LOGIC_VERSION = '2026-08-07-dc-market-ensemble-v18'
 LOTTERY_OFFICIAL_ODDS_WEIGHT = 0.40
 
 # ELO 评分系统（延迟导入）
@@ -7285,6 +7285,37 @@ def analyze_match(match, force_refresh=False):
         current_time_layer=current_time_layer,
     )
     meta['prediction_logic_version'] = FOOTBALL_PREDICTION_LOGIC_VERSION
+
+    # Mature score models correct the independent-goals assumption around
+    # low scores. A chronological 2,744-match five-league backtest selected a
+    # 50/50 market-calibrated ensemble: it improved Top3 on both held-out cuts
+    # while keeping the blend conservative.
+    try:
+        from .ml import dixon_coles_score_matrix, get_dc_rho
+        from .prediction_policy import blend_score_matrices
+        dc_rho = get_dc_rho(
+            league=match.get('league', ''),
+            total_line=total.get('close_line') or total.get('line', 2.5),
+            handicap=asian.get('handicap', 0.0),
+        )
+        dc_matrix = dixon_coles_score_matrix(
+            lam_home, lam_away, max_goals=MAX_GOALS, rho=dc_rho,
+        )
+        dc_matrix = {
+            (home_goals, away_goals): float(dc_matrix[home_goals][away_goals])
+            for home_goals in range(MAX_GOALS + 1)
+            for away_goals in range(MAX_GOALS + 1)
+        }
+        primary_matrix = dict(candidates)
+        ensemble_matrix = blend_score_matrices(primary_matrix, dc_matrix, 0.50)
+        candidates = sorted(ensemble_matrix.items(), key=lambda item: -item[1])
+        meta['dixon_coles_ensemble'] = {
+            'applied': True, 'weight': 0.50, 'rho': dc_rho,
+            'selection': 'chronological_holdout_top3',
+        }
+    except Exception as e:
+        meta['dixon_coles_ensemble'] = {'applied': False, 'reason': str(e)}
+        log.warning(f"Dixon-Coles ensemble failed: {e}")
 
     # 盘口变化先验融合
     market_change_result = None

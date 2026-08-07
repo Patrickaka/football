@@ -369,6 +369,20 @@ def normalize_score_matrix(matrix: Dict[Tuple[int, int], float]) -> Dict[Tuple[i
     return {score: prob / total for score, prob in matrix.items()}
 
 
+def blend_score_matrices(primary, secondary, secondary_weight: float = 0.50):
+    """Convex blend of two score distributions with auditable fixed weight."""
+    weight = max(0.0, min(1.0, float(secondary_weight)))
+    primary = dict(primary or {})
+    secondary = dict(secondary or {})
+    keys = set(primary) | set(secondary)
+    blended = {
+        score: (1.0 - weight) * float(primary.get(score, 0.0))
+        + weight * float(secondary.get(score, 0.0))
+        for score in keys
+    }
+    return normalize_score_matrix(blended)
+
+
 def select_diverse_score_scenarios(candidates, limit: int = 5):
     """Rank display scenarios without changing the underlying probabilities.
 
