@@ -6287,12 +6287,16 @@ function renderKL8(r) {
       const badgeText = isCoverage ? '公平覆盖' : (isRef ? '参考' : '已验证');
       const badgeColor = isRef ? '#9a6700' : '#2ea043';
 
-      // 主推号码：选几个就是几个（直接显示预测的主推单组，不放大底）
+      // 主推号码：每个玩法只输出一组。
       const kl8MinWin = { 3: 3, 4: 4, 5: 3, 6: 4, 7: 4, 8: 4, 9: 4, 10: 5 };
       const winTh = kl8MinWin[st] || st;
       html += `<div class="kl8-select-card" style="border-color:${borderColor}">`;
       html += `<div class="kl8-select-title">🎯 ${esc(sel.desc)} — 主推 ${sel.numbers.length}码 <span style="font-size:11px;color:${badgeColor};font-weight:700;margin-left:8px">[${badgeText}]</span></div>`;
       html += `<div style="font-size:11px;color:#8b949e;margin-bottom:4px">策略: ${esc(sel.strategy_id || '')}</div>`;
+      if (sel.strategy_evidence) {
+        const ev = sel.strategy_evidence;
+        html += `<div style="font-size:11px;color:#9a6700;margin-bottom:5px">单号弱信号：${(Number(ev.empirical_next_hit_rate || 0) * 100).toFixed(2)}% vs 随机 ${(Number(ev.random_baseline || 0) * 100).toFixed(2)}% · 未通过显著性验证</div>`;
+      }
       html += `<div class="kl8-numbers-row">`;
       const playChangeInfo = (changeInfo.play_changes || {})[key];
       const addedSet = new Set(playChangeInfo ? playChangeInfo.added : []);
@@ -6315,10 +6319,6 @@ function renderKL8(r) {
         html += `<div style="font-size:11px;color:#8b949e;margin-top:4px">重号结构：本组 ${actualRepeats} 个 · 近${esc(sel.repeat_profile.sample_size || 0)}期相邻开奖平均 ${esc(sel.repeat_profile.mean_draw_overlap || 0)} 个${repeatRule}</div>`;
       }
       html += renderKL8AccuracyProfile(sel.accuracy_profile);
-      // v9.6: 重新启用多注覆盖方案展示，这是选5/选6提升组合层面命中率的主要途径
-      if (sel.multi_slips && sel.multi_slips.length > 0) {
-        html += renderKL8MultiSlips(sel, st);
-      }
       if (isRef && sel.warning) {
         html += `<div style="font-size:11px;color:#9a6700;margin-top:6px">⚠ ${esc(sel.warning)}</div>`;
       }
