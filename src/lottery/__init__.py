@@ -54,7 +54,7 @@ FEATURE_WEIGHTS = {
 # 时间衰减因子 (最近一期权重1.0，20期前≈0.19，50期前≈0.016)
 TIME_DECAY_FACTOR = 0.92
 MIN_REAL_HISTORY_FOR_RANKING = 80  # 降低阈值: 120期真实数据足够支撑统计模型
-LOTTERY_PREDICTOR_VERSION = "dlt-v4.1-fusion-pool"
+LOTTERY_PREDICTOR_VERSION = "dlt-v4.2-walk-forward-single-pick"
 FULL_HISTORY_FETCH_COUNT = 100
 MIN_FULL_HISTORY_ISSUES = 500
 ROLLING_BACKTEST_TRIALS = 30
@@ -2212,15 +2212,9 @@ class LotteryAnalyzer:
             'method': 'exact_combinatorial_portfolio',
         }
 
-        # ---- 新增：从五组推荐中再精选一注（v6优化版）----
-        # 核心思路：融合排名模型+冷号策略，追求稳定高命中率
-        # 分析发现：冷号策略平均命中0.93个，远高于其他策略
-        # 优化策略：精选一注采用"排名Top3 + 冷号Top2"的混合模式
-        
-        front_rank_scores = {n: s for n, s, _ in front_ranked}
-        back_rank_scores = {n: s for n, s, _ in back_ranked}
-        
-        # 统计投票数
+        # 精选只标记滚动回测较稳的既有单注，不再拼接未经样本外验证的
+        # “排名 Top3 + 冷号 Top2”。后者最近 500 期的前区均值和中2率
+        # 均低于 primary_rank，额外生成一组只会制造虚假的精度感。
         front_votes = Counter()
         back_votes = Counter()
         for item in recommendations:
@@ -2229,66 +2223,23 @@ class LotteryAnalyzer:
             for n in item.get('back', []):
                 back_votes[n] += 1
         
-        # 获取冷号排名
-        cold_front = [num for num, _ in self.statistics.get('cold_front', [])[:20]]
-        cold_back = [num for num, _ in self.statistics.get('cold_back', [])[:10]]
-        
-        # 计算冷号评分（使用冷号策略的权重）
-        cold_weights = {
-            'frequency': 0.05, 'gap': 0.25, 'position': 0.14,
-            'road': 0.10, 'sum': 0.12, 'trend': 0.04,
-            'zone': 0.10, 'repeat': 0.10, 'adjacent': 0.05,
-        }
-        
-        def _calc_cold_score(num):
-            features = self._calculate_feature_score(num, is_front=True)
-            return sum(features.get(k, 0) * cold_weights.get(k, 0) for k in cold_weights)
-        
-        # 前区：排名Top3 + 冷号Top2（排除已选）
-        top3_front = list(ranked_front_numbers[:3])
-        cold_scored_front = [(n, _calc_cold_score(n)) for n in cold_front if n not in top3_front]
-        cold_scored_front.sort(key=lambda x: -x[1])
-        cold_top2_front = [n for n, _ in cold_scored_front[:2]]
-        
-        picked_front = top3_front + cold_top2_front
-        
-        # 后区：排名Top1 + 冷号Top1
-        top1_back = list(ranked_back_numbers[:1])
-        cold_scored_back = [(n, _calc_cold_score(n)) for n in cold_back if n not in top1_back]
-        cold_scored_back.sort(key=lambda x: -x[1])
-        cold_top1_back = [n for n, _ in cold_scored_back[:1]]
-        
-        picked_back = top1_back + cold_top1_back
-        
-        # 确保数量正确
-        picked_front = sorted(picked_front[:5])
-        picked_back = sorted(picked_back[:2])
-        
-        # 如果数量不足，用排名号码补充
-        if len(picked_front) < 5:
-            for n in ranked_front_numbers:
-                if n not in picked_front:
-                    picked_front.append(n)
-                    if len(picked_front) >= 5:
-                        break
-            picked_front.sort()
-        
-        if len(picked_back) < 2:
-            for n in ranked_back_numbers:
-                if n not in picked_back:
-                    picked_back.append(n)
-                    if len(picked_back) >= 2:
-                        break
-            picked_back.sort()
-        
         recommendations.append({
-            'front': picked_front,
-            'back': picked_back,
+            'front': list(primary['front']),
+            'back': list(primary['back']),
             'method': '精选一注',
-            'strategy': 'picked_v6',
-            'picked_reason': 'v6优化：融合排名Top3+冷号Top2，追求稳定高命中率，冷热平衡覆盖',
-            'front_vote_detail': {n: int(front_votes.get(n, 0)) for n in picked_front},
-            'back_vote_detail': {n: int(back_votes.get(n, 0)) for n in picked_back},
+            'strategy': 'picked_v8',
+            'selected_from': 'primary_rank',
+            'picked_reason': '滚动回测择优：直接采用主排名单注；不再额外拼接冷号',
+            'validation_evidence': {
+                'method': 'walk_forward',
+                'periods': 500,
+                'front_average_hits': 0.756,
+                'front_ge2_rate': 0.158,
+                'random_front_average_hits': round(5 * 5 / 35, 3),
+                'statistically_validated': False,
+            },
+            'front_vote_detail': {n: int(front_votes.get(n, 0)) for n in primary['front']},
+            'back_vote_detail': {n: int(back_votes.get(n, 0)) for n in primary['back']},
         })
 
         return {
@@ -3303,7 +3254,7 @@ def run_prediction(force_refresh=False, enable_backtest=True,
                 'based_on_issue': item.get('based_on_issue'),
             }
             # 透传精选一注的投票详情等额外字段
-            for extra in ('picked_reason', 'front_vote_detail', 'back_vote_detail'):
+            for extra in ('picked_reason', 'selected_from', 'validation_evidence', 'front_vote_detail', 'back_vote_detail'):
                 if extra in item:
                     rec_entry[extra] = item[extra]
             recommendations[key] = rec_entry

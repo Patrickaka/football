@@ -15,11 +15,12 @@ class DltPortfolioTests(unittest.TestCase):
         self.assertEqual(policy['name'], 'rank_core_rotating_primary_back_coverage')
         self.assertEqual(len(policy['front_anchors']), 2)
         self.assertEqual(len(policy['back_anchors']), 0)
+        portfolio = [item for item in recommendations if not item['strategy'].startswith('picked')]
         tickets = {
             (tuple(item['front']), tuple(item['back']))
-            for item in recommendations
+            for item in portfolio
         }
-        self.assertEqual(len(tickets), len(recommendations))
+        self.assertEqual(len(tickets), len(portfolio))
         back_numbers = {
             number
             for item in recommendations
@@ -68,7 +69,19 @@ class DltPortfolioTests(unittest.TestCase):
         )
 
     def test_predictor_version_invalidates_old_cache(self):
-        self.assertEqual(LOTTERY_PREDICTOR_VERSION, 'dlt-v4.0-primary-rotation')
+        self.assertEqual(LOTTERY_PREDICTOR_VERSION, 'dlt-v4.2-walk-forward-single-pick')
+
+    def test_single_pick_designates_walk_forward_winner_without_fake_mix(self):
+        result = self.analyzer.generate_multi_strategy_recommendations()
+        by_strategy = {item['strategy']: item for item in result['recommendations']}
+        picked = by_strategy['picked_v8']
+        primary = by_strategy['primary_rank']
+
+        self.assertEqual(picked['front'], primary['front'])
+        self.assertEqual(picked['back'], primary['back'])
+        self.assertEqual(picked['selected_from'], 'primary_rank')
+        self.assertEqual(picked['validation_evidence']['method'], 'walk_forward')
+        self.assertFalse(picked['validation_evidence']['statistically_validated'])
 
 
 if __name__ == '__main__':

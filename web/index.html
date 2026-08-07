@@ -5727,7 +5727,7 @@ async function getLotteryRecommend() {
     recommendations.forEach((rec, idx) => {
       const front = (rec.front || []).map(n => String(n).padStart(2, '0')).join(' ');
       const back = (rec.back || []).map(n => String(n).padStart(2, '0')).join(' ');
-      const isPicked = rec.strategy === 'picked' || rec.method === '精选一注';
+      const isPicked = String(rec.strategy || '').startsWith('picked') || rec.method === '精选一注';
       const strategyName = isPicked ? '精选一注' : (rec.method || '推荐');
       const coreFront = (rec.core_front || []).map(n => String(n).padStart(2, '0')).join(' ');
       const coreBack = (rec.core_back || []).map(n => String(n).padStart(2, '0')).join(' ');
@@ -5735,7 +5735,7 @@ async function getLotteryRecommend() {
         ? `<div style="text-align:center;font-size:10px;color:#93c5fd;margin-top:3px">核心 ${esc(coreFront)}${coreBack ? ` + ${esc(coreBack)}` : ''} · 基于 ${esc(rec.based_on_issue || '最新期')}</div>`
         : '';
       const voteNote = isPicked
-        ? `<div style="text-align:center;font-size:10px;color:#93c5fd;margin-top:3px">五组投票聚合 · 前区 ${Object.entries(rec.front_vote_detail || {}).map(([k, v]) => `${String(k).padStart(2, '0')}:${v}票`).join(' ')} · 后区 ${Object.entries(rec.back_vote_detail || {}).map(([k, v]) => `${String(k).padStart(2, '0')}:${v}票`).join(' ')}</div>`
+        ? `<div style="text-align:center;font-size:10px;color:#93c5fd;margin-top:3px">${esc(rec.picked_reason || '滚动回测择优单注')} · 前区 ${Object.entries(rec.front_vote_detail || {}).map(([k, v]) => `${String(k).padStart(2, '0')}:${v}票`).join(' ')} · 后区 ${Object.entries(rec.back_vote_detail || {}).map(([k, v]) => `${String(k).padStart(2, '0')}:${v}票`).join(' ')}</div>`
         : '';
       html += `<div class="highlight" style="margin-bottom:8px;${isPicked ? 'border:1px solid #f85149;background:rgba(248,81,73,0.08)' : ''}">
         <div style="display:flex;justify-content:center;align-items:center;gap:12px">

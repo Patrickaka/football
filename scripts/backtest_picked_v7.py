@@ -28,7 +28,7 @@ def main(trials=50):
     saved_data = list(data)
     saved_stats = dict(analyzer.statistics) if analyzer.statistics else {}
 
-    methods = ['primary_rank', 'balanced', 'rank', 'hot', 'cold', 'picked_v7', 'random']
+    methods = ['primary_rank', 'balanced', 'rank', 'hot', 'cold', 'picked_v8', 'random']
     front_dist = {m: {i: 0 for i in range(6)} for m in methods}
     back_dist = {m: {i: 0 for i in range(3)} for m in methods}
     front_sum = {m: 0 for m in methods}
@@ -93,7 +93,7 @@ def main(trials=50):
             'rank': '排名',
             'hot': '热号',
             'cold': '冷号',
-            'picked_v7': '精选一注v7',
+            'picked_v8': '精选一注v8',
             'random': '真实随机',
         }.get(m, m)
         print(f"{label:<14} | {fge2*100:5.1f}% | {fge3*100:5.1f}% | {bge1*100:5.1f}% | {bge2*100:5.1f}% | {front_sum[m]/n:.2f} | {back_sum[m]/n:.2f}")
@@ -115,7 +115,7 @@ def main(trials=50):
             'rank': '排名',
             'hot': '热号',
             'cold': '冷号',
-            'picked_v7': '精选一注v7',
+            'picked_v8': '精选一注v8',
             'random': '真实随机',
         }.get(m, m)
         vals = " | ".join(f"{front_dist[m][i]:4d}" for i in range(6))
@@ -134,7 +134,7 @@ def main(trials=50):
             'rank': '排名',
             'hot': '热号',
             'cold': '冷号',
-            'picked_v7': '精选一注v7',
+            'picked_v8': '精选一注v8',
             'random': '真实随机',
         }.get(m, m)
         vals = " | ".join(f"{back_dist[m][i]:4d}" for i in range(3))

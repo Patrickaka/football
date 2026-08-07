@@ -1943,7 +1943,7 @@ class Handler(BaseHTTPRequestHandler):
                     'based_on_issue': rec.get('based_on_issue'),
                 }
                 # 透传精选一注的投票详情等额外字段
-                for extra in ('picked_reason', 'front_vote_detail', 'back_vote_detail'):
+                for extra in ('picked_reason', 'selected_from', 'validation_evidence', 'front_vote_detail', 'back_vote_detail'):
                     if extra in rec:
                         item[extra] = rec[extra]
                 recommendations.append(item)
