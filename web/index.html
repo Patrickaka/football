@@ -1523,7 +1523,11 @@ async function loadMatches() {
   loadFootballProfessionalStatus();
   try {
     const data = await fetchJson('/api/matches');
-    if (data.error) return showError(data.error);
+    if (data.error) {
+      const source = data.source_status?.source || 'unknown';
+      const errorType = data.error_type ? ` (${data.error_type})` : '';
+      return showError(`${data.error}${errorType} · 赛程源状态: ${source}。请确认部署包含最新后端代码并已重启进程。`);
+    }
     allMatches = data.matches || [];
     if (!allMatches.length) return showError('未找到任何比赛数据，请稍后重试。');
     await loadAllPredictions();

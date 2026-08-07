@@ -27,6 +27,7 @@ import urllib.error
 import random
 from typing import Dict, Tuple
 from ..common.logger import setup_logger
+from ..common.paths import data_path
 
 log = setup_logger('football')
 
@@ -109,6 +110,13 @@ sys.stdout.reconfigure(encoding='utf-8')
 # ===================== 常量 =====================
 BASE = 'https://odds.500.com'
 INDEX_URL = f'{BASE}/index_jczq.shtml'
+INDEX_URLS = (
+    INDEX_URL,
+    'http://odds.500.com/index_jczq.shtml',
+    f'{BASE}/',
+)
+MATCH_LIST_CACHE_PATH = data_path('football_match_list_cache.json')
+_MATCH_LIST_STATUS = {'source': 'not_requested', 'stale': False, 'error': None}
 HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
                   '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -498,10 +506,22 @@ def lottery_market_probabilities(candidates, lottery_handicap=None, spf_odds=Non
 
 # ===================== 抓取比赛列表 =====================
 
-def fetch_match_list():
+def _fetch_match_list_remote():
     """抓取今日比赛列表，返回 [{home, away, match_id, league, time}, ...]"""
     log.info('获取比赛列表')
-    html = fetch(INDEX_URL)
+    html = None
+    upstream_errors = []
+    for index_url in INDEX_URLS:
+        try:
+            candidate = fetch(index_url)
+            if 'shuju-' in candidate:
+                html = candidate
+                break
+            upstream_errors.append(f'{index_url}: missing schedule markers')
+        except Exception as exc:
+            upstream_errors.append(f'{index_url}: {type(exc).__name__}: {str(exc)[:120]}')
+    if html is None:
+        raise OSError('; '.join(upstream_errors) or 'all schedule upstreams failed')
 
     matches = []
 
@@ -646,6 +666,67 @@ def fetch_match_list():
 
     log.info('获取到 %d 场比赛', len(matches))
     return matches
+
+
+def _save_match_list_cache(matches):
+    """持久化最后一次成功赛程，供生产出网抖动时降级。"""
+    if not matches:
+        return
+    payload = {
+        'schema_version': 1,
+        'saved_at': time.strftime('%Y-%m-%dT%H:%M:%S'),
+        'matches': matches,
+    }
+    temporary = MATCH_LIST_CACHE_PATH + '.tmp'
+    with open(temporary, 'w', encoding='utf-8') as handle:
+        json.dump(payload, handle, ensure_ascii=False, indent=2)
+    os.replace(temporary, MATCH_LIST_CACHE_PATH)
+
+
+def _load_match_list_cache():
+    try:
+        with open(MATCH_LIST_CACHE_PATH, encoding='utf-8') as handle:
+            payload = json.load(handle)
+        matches = payload.get('matches') if isinstance(payload, dict) else None
+        return list(matches) if isinstance(matches, list) else []
+    except (OSError, ValueError, TypeError):
+        return []
+
+
+def get_match_list_status():
+    return dict(_MATCH_LIST_STATUS)
+
+
+def fetch_match_list():
+    """优先抓取实时赛程；源站不可用时回退最后成功快照。
+
+    生产环境偶发 DNS/TLS/WAF 故障不应让整个足球页面变空。
+    后续的 server 层仍会过滤已开赛项，因此陈旧快照不会展示过期比赛。
+    """
+    try:
+        matches = _fetch_match_list_remote()
+        if not matches:
+            raise ValueError('upstream returned no parseable matches')
+        try:
+            _save_match_list_cache(matches)
+        except OSError as exc:
+            log.warning('比赛列表快照写入失败: %s', exc)
+        _MATCH_LIST_STATUS.update({'source': 'live', 'stale': False, 'error': None})
+        return matches
+    except Exception as exc:
+        cached = _load_match_list_cache()
+        if cached:
+            _MATCH_LIST_STATUS.update({
+                'source': 'disk_cache', 'stale': True,
+                'error': f'{type(exc).__name__}: {str(exc)[:180]}',
+            })
+            log.warning('实时比赛源失败，回退快照 %d 场: %s', len(cached), exc)
+            return cached
+        _MATCH_LIST_STATUS.update({
+            'source': 'unavailable', 'stale': False,
+            'error': f'{type(exc).__name__}: {str(exc)[:180]}',
+        })
+        raise
 
 
 def search_match(matches, home_key, away_key):

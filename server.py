@@ -69,6 +69,10 @@ def fetch_match_list(*args, **kwargs):
     return _get_football_module().fetch_match_list(*args, **kwargs)
 
 
+def get_match_list_status():
+    return _get_football_module().get_match_list_status()
+
+
 def analyze_match(*args, **kwargs):
     return _get_football_module().analyze_match(*args, **kwargs)
 
@@ -1236,10 +1240,17 @@ class Handler(BaseHTTPRequestHandler):
                 _trigger_football_analysis(matches)
             except Exception:
                 pass
-            return {'matches': _attach_bayes_report_url(matches)}
-        except Exception:
+            return {
+                'matches': _attach_bayes_report_url(matches),
+                'source_status': get_match_list_status(),
+            }
+        except Exception as exc:
             self._log.error('获取比赛列表失败', exc_info=True)
-            return {'error': '获取比赛列表失败'}
+            return {
+                'error': '获取比赛列表失败',
+                'source_status': get_match_list_status(),
+                'error_type': type(exc).__name__,
+            }
 
     def _predict_payload(self, params):
         match_id = params.get('match_id', [''])[0]
