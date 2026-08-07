@@ -2,7 +2,15 @@
 flask>=3.0.0  # app.py Web 界面
 PyMySQL>=1.1.0  # MySQL 持久化（数据存储）
 requests>=2.31.0  # src/beidan 抓取数据
+# 生产曾执行“移除未使用包”，不能再依赖 requests 的隐式传递依赖。
+urllib3>=2.2.0
+certifi>=2024.2.2
+charset-normalizer>=3.3.0
+idna>=3.6
+APScheduler>=3.10.4  # 赛果回填、快乐8定时任务
 numpy>=2.1.0
+pandas>=2.2.0  # 彩票 ML 特征整形
+scipy>=1.14.0  # 诊断统计检验
 scikit-learn>=1.5.2
 lightgbm>=4.5.0
 xgboost-cpu>=2.0.0  # 使用 CPU 版本避免 NVIDIA 依赖
