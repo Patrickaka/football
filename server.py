@@ -2764,10 +2764,11 @@ class Handler(BaseHTTPRequestHandler):
         """
         try:
             from src.football.result_sync import (
-                get_prediction_records,
+                get_prediction_export,
                 get_sync_status_summary,
             )
-            records = get_prediction_records(include_hidden=False)
+            full_export = get_prediction_export()
+            records = full_export.get('records') or []
             try:
                 sync = get_sync_status_summary()
             except Exception as inner:  # noqa: BLE001
@@ -2793,6 +2794,7 @@ class Handler(BaseHTTPRequestHandler):
                     'model_versions': sorted({
                         v for r in records if (v := r.get('model_version'))
                     }),
+                    'stats': full_export.get('stats') or {},
                     'sync_status': sync,
                     'diagnostics': diagnostics,
                     'records': records,

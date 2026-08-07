@@ -29,7 +29,7 @@ from ..common.logger import setup_logger
 
 log = setup_logger('football')
 
-FOOTBALL_PREDICTION_LOGIC_VERSION = '2026-07-24-score-scenarios-v14'
+FOOTBALL_PREDICTION_LOGIC_VERSION = '2026-08-07-accuracy-ranking-v15'
 LOTTERY_OFFICIAL_ODDS_WEIGHT = 0.40
 
 # ELO 评分系统（延迟导入）
@@ -7459,12 +7459,11 @@ def analyze_match(match, force_refresh=False):
     elif is_clear_favorite:
         max_upsets = 0  # 强弱分明且无爆冷迹象，不给出冷门
     
-    # 过滤冷门比分
-    try:
-        from .prediction_policy import select_diverse_score_scenarios
-        display_candidates = select_diverse_score_scenarios(candidates, limit=12)
-    except Exception:
-        display_candidates = candidates
+    # “最高概率比分”必须保持真实概率顺序。此前为了展示不同比赛剧本而
+    # 重排这里，会把较低概率比分挤进 Top5，历史样本中 Top5 命中率由
+    # 52.48% 降至 50.44%。多样化剧本仍由 analyst.score_strategy 单独提供，
+    # 不再混入可结算、可回测的概率排名。
+    display_candidates = candidates
     filtered_candidates = []
     upset_count = 0
     

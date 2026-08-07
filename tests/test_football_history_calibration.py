@@ -7,6 +7,24 @@ from src.football.history_calibration import (
 
 
 class FootballHistoryCalibrationTests(unittest.TestCase):
+    def test_legacy_settled_score_snapshots_can_calibrate_conservatively(self):
+        records = []
+        for index in range(80):
+            records.append({
+                'match_id': str(index),
+                'match_time': f'2026-06-{(index % 28) + 1:02d} 12:00',
+                'settled': True,
+                'sync_status': 'synced',
+                'actual_score': '3-1',
+                'predicted_scores': {'1-0': 0.45, '1-1': 0.35, '2-0': 0.20},
+            })
+
+        profile = estimate_history_calibration(records, min_samples=60)
+
+        self.assertTrue(profile['applied'])
+        self.assertGreater(profile['effective_weight'], 0)
+        self.assertGreater(profile['goal_beta'], 0)
+
     @staticmethod
     def _record(index, actual_score='3-1'):
         return {

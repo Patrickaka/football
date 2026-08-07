@@ -48,7 +48,33 @@ def _quality_weight(record: Dict) -> float:
     try:
         from .sample_quality import assess_record_quality
 
-        return max(0.0, min(1.0, float(assess_record_quality(record).get('calibration_weight', 0.0))))
+        quality = assess_record_quality(record)
+        weight = max(0.0, min(1.0, float(quality.get('calibration_weight', 0.0))))
+        if weight > 0:
+            return weight
+
+        # Older production snapshots contain the immutable prediction, final
+        # score and a successful sync marker, but pre-date the odds/result
+        # quality metadata.  Rejecting all of them leaves runtime calibration
+        # permanently disabled (even with hundreds of settled predictions).
+        # They are sufficient for the score-shape calibration performed here;
+        # use a deliberately small weight and never admit failed/ignored rows.
+        legacy_score_sample = (
+            record.get('settled')
+            and record.get('sync_status') == 'synced'
+            and _score_tuple(record.get('actual_score')) is not None
+            and bool(_normalized_scores(record))
+            and not record.get('exclude_from_calibration')
+        )
+        if legacy_score_sample and set(quality.get('reasons') or []).issubset({
+            'missing_predicted_1x2',
+            'missing_result_quality',
+            'missing_asian_line',
+            'missing_total_line',
+            'missing_odds_snapshot',
+        }):
+            return 0.35
+        return 0.0
     except Exception:
         return 0.0
 
