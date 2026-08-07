@@ -7871,26 +7871,41 @@ async function loadPredictions() {
 }
 
 async function exportPredictionRecords() {
+  const btn = event?.target;
+  const restore = btn
+    ? (() => { const t = btn.textContent; btn.disabled = true; btn.textContent = '准备导出…'; return () => { btn.textContent = t; btn.disabled = false; }; })()
+    : null;
   let payload;
   try {
-    const data = await fetchJson('/api/predictions/export');
-    if (!data.result) throw new Error(data.error || '导出接口未返回数据');
-    payload = data.result;
+    // 优先使用预测页面已经加载好的快照，零额外请求
+    if (predictionExportData && predictionExportData.records) {
+      payload = predictionExportData;
+    } else {
+      // 兜底：直接请求服务端导出接口（即使没打开过预测页也能导出）
+      const data = await fetchJson('/api/predictions/export');
+      if (!data.result) throw new Error(data.error || '导出接口未返回数据');
+      payload = data.result;
+    }
   } catch (error) {
-    alert('导出失败：' + error.message);
+    alert('导出失败：' + error.message + '\n\n提示：先点击「立即同步一次」加载预测数据，再点导出。');
+    if (restore) restore();
     return;
   }
-  const json = JSON.stringify(payload, null, 2);
-  const blob = new Blob([json], { type: 'application/json;charset=utf-8' });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-  link.href = url;
-  link.download = `football-predictions-${stamp}.json`;
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  try {
+    const json = JSON.stringify(payload, null, 2);
+    const blob = new Blob([json], { type: 'application/json;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    link.href = url;
+    link.download = `football-predictions-${stamp}.json`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  } finally {
+    if (restore) restore();
+  }
 }
 
 async function triggerSync() {

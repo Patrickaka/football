@@ -1057,6 +1057,8 @@ class Handler(BaseHTTPRequestHandler):
             self._serve_json(self._backtest_stats_payload(params))
         elif path == '/api/predictions':
             self._serve_json(self._predictions_payload())
+        elif path == '/api/predictions/export':
+            self._serve_json(self._predictions_export_payload())
         elif path == '/api/sync/status':
             self._serve_json(self._sync_status_payload())
         elif path == '/api/sync/trigger':
@@ -2754,6 +2756,51 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:
             self._log.error('获取预测记录失败', exc_info=True)
             return {'error': f'获取失败: {str(e)}'}
+
+    def _predictions_export_payload(self):
+        """导出预测记录的完整快照（含同步状态、诊断、模型版本）
+
+        前端如果未先加载预测列表，可通过此端点一次性取走导出所需的全部数据。
+        """
+        try:
+            from src.football.result_sync import (
+                get_prediction_records,
+                get_sync_status_summary,
+            )
+            records = get_prediction_records(include_hidden=False)
+            try:
+                sync = get_sync_status_summary()
+            except Exception as inner:  # noqa: BLE001
+                self._log.warning('获取同步状态失败（不影响导出）: %s', inner)
+                sync = {}
+            try:
+                diagnostics = self._football_diagnostics_payload({})
+                if not isinstance(diagnostics, dict):
+                    diagnostics = {}
+                diagnostics = diagnostics.get('result') or {}
+            except Exception as inner:  # noqa: BLE001
+                self._log.warning('获取诊断信息失败（不影响导出）: %s', inner)
+                diagnostics = {}
+            return {
+                'result': {
+                    'schema_version': 'football-prediction-export-v1',
+                    'exported_at': datetime.now().isoformat(),
+                    'record_count': len(records),
+                    'settled_count': sum(
+                        1 for r in records
+                        if r.get('settled') or r.get('actual_score')
+                    ),
+                    'model_versions': sorted({
+                        v for r in records if (v := r.get('model_version'))
+                    }),
+                    'sync_status': sync,
+                    'diagnostics': diagnostics,
+                    'records': records,
+                }
+            }
+        except Exception as e:
+            self._log.error('导出预测记录失败', exc_info=True)
+            return {'error': f'导出失败: {str(e)}'}
 
     def _sync_status_payload(self):
         """获取自动同步状态"""
