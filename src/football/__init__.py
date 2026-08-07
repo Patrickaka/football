@@ -16,6 +16,7 @@
 """
 
 import sys
+import os
 import math
 import re
 import time
@@ -29,7 +30,7 @@ from ..common.logger import setup_logger
 
 log = setup_logger('football')
 
-FOOTBALL_PREDICTION_LOGIC_VERSION = '2026-08-07-accuracy-ranking-v15'
+FOOTBALL_PREDICTION_LOGIC_VERSION = '2026-08-07-context-fusion-v17'
 LOTTERY_OFFICIAL_ODDS_WEIGHT = 0.40
 
 # ELO 评分系统（延迟导入）
@@ -6682,24 +6683,36 @@ def assess_football_upset(asian, euro, team, candidates):
     else:
         level, alert = 'low', False
 
-    # 反向方向：允许非热门胜出的比分
+    # 反向方向分成“逼平”和“真正逆转获胜”。旧逻辑把两者混在一起按
+    # 单比分概率排序，结果所谓爆冷候选几乎永远又是 0-0 / 1-1。
+    # 高风险时优先展示非热门方直接获胜；中风险才优先用平局防冷。
     if favorite == '胜':
-        allow = lambda h, a: h <= a          # 平 或 负
+        outright = lambda h, a: h < a
+        cover_draw = lambda h, a: h == a
     elif favorite == '负':
-        allow = lambda h, a: h >= a          # 胜 或 平
+        outright = lambda h, a: h > a
+        cover_draw = lambda h, a: h == a
     else:
-        allow = lambda h, a: h != a          # 胜 或 负
+        outright = lambda h, a: h != a
+        cover_draw = lambda h, a: False
 
-    picked = []
+    outright_picked = []
+    draw_picked = []
     for (h, a), prob in (candidates or []):
-        if allow(h, a):
-            picked.append({
+        target = outright_picked if outright(h, a) else draw_picked if cover_draw(h, a) else None
+        if target is not None:
+            target.append({
                 'score': f"{h}-{a}",
                 'result': _result_label(h, a),
                 'probability': float(prob),
+                'scenario': 'outright_upset' if target is outright_picked else 'draw_cover',
             })
-    picked.sort(key=lambda x: -x['probability'])
-    picked = picked[:2]
+    outright_picked.sort(key=lambda x: -x['probability'])
+    draw_picked.sort(key=lambda x: -x['probability'])
+    if level == 'high':
+        picked = (outright_picked[:1] + draw_picked[:1])[:2]
+    else:
+        picked = (draw_picked[:1] + outright_picked[:1])[:2]
 
     label = {'high': '🔴高风险爆冷', 'medium': '🟠需警惕爆冷', 'low': '稳健'}.get(level, '稳健')
     return {
@@ -6711,6 +6724,8 @@ def assess_football_upset(asian, euro, team, candidates):
         'upset_prob': upset_p,
         'risk_score': risk_score,
         'candidates': picked,
+        'outright_candidates': outright_picked[:2],
+        'draw_candidates': draw_picked[:2],
     }
 
 
@@ -6803,7 +6818,7 @@ def build_match_analysis(result):
                 uh, ua = (int(x) for x in upset_cands[0]['score'].split('-'))
                 uprob = next((p for (h, a), p in candidates if h == uh and a == ua), 0.0)
                 score_picks.append({
-                    'type': '防冷',
+                    'type': '爆冷' if upset_cands[0].get('scenario') == 'outright_upset' else '防冷平',
                     'score': f"{uh}-{ua}",
                     'home': uh, 'away': ua,
                     'result': _result_label(uh, ua),
@@ -7354,6 +7369,27 @@ def analyze_match(match, force_refresh=False):
         meta['score_total_movement_adjusted'] = False
         meta['score_total_movement'] = {'applied': False, 'reason': str(e)}
         log.warning(f"score total movement adjustment failed: {e}")
+
+    # Structured H2H / motivation context participates in the same score
+    # distribution as 1X2 and totals. Free-form previews are never converted
+    # into probabilities; only sourced, quality-scored fields are accepted.
+    try:
+        live_context = match.get('live_context') or {}
+        if not live_context:
+            safe_mid = re.sub(r'[^0-9A-Za-z_-]', '', str(mid))
+            context_path = os.path.join(
+                os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+                'reports', f'live_context_{safe_mid}.json',
+            )
+            if safe_mid and os.path.exists(context_path):
+                with open(context_path, encoding='utf-8') as context_file:
+                    live_context = json.load(context_file)
+        from .contextual_fusion import apply_contextual_fusion
+        candidates, contextual_adjustment = apply_contextual_fusion(candidates, live_context)
+        meta['contextual_fusion'] = contextual_adjustment
+    except Exception as e:
+        meta['contextual_fusion'] = {'applied': False, 'reason': str(e)}
+        log.warning(f"contextual fusion failed: {e}")
 
     # Exact-score calibration can change the marginal goal mean. Re-anchor the
     # final score matrix to the market-implied total without changing 1X2 mass.
