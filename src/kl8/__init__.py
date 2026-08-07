@@ -47,7 +47,7 @@ from src.common.logger import setup_logger
 
 log = setup_logger('kl8')
 
-KL8_PREDICTOR_VERSION = "kl8-v9.6-coverage-portfolio"
+KL8_PREDICTOR_VERSION = "kl8-v9.7-single-primary"
 
 # ─── v9.2: 只显示已验证策略模式 ───
 VERIFY_ONLY_MODE = False  # True=未验证玩法不输出号码; False=回退参考策略(始终输出号码)
@@ -874,6 +874,43 @@ def resolve_play_strategy(play_type: str, allow_reference: bool = False) -> Opti
         'is_validated': False,
         'baseline_type': 'fair_deterministic_coverage',
     })
+
+    # v9.7 单组主推：850期 true walk-forward 中，近100期 Top10
+    # 热号的下期出现率为 25.73%，随机基线为25.00%；近50期
+    # 反而低于基线。该提升很弱且未通过FDR显著性，因此仅用于
+    # 用户明确要求的单组选5/选6参考，不激活为 validated 策略。
+    if play_type in {'select_5', 'select_6'}:
+        result.update({
+            'strategy_id': f'{play_type}_single_hot100_weak_signal_v1',
+            'feature_weights': {
+                'frequency': 1.0,
+                'gap': 0.0,
+                'trend': 0.0,
+                'pair_cooccurrence': 0.0,
+                'position_residual': 0.0,
+                'position_residual_cross': 0.0,
+                'road_residual': 0.0,
+                'repeat': 0.0,
+                'odd_even': 0.0,
+                'big_small': 0.0,
+                'seeded_random': 0.0,
+            },
+            'window_size': 100,
+            'frequency_mode': 'hot',
+            'final_selection_mode': 'top_ranked',
+            'pool_max_last_numbers': None,
+            'final_max_last_numbers': None,
+            'baseline_type': 'single_hot100_weak_signal',
+            'strategy_evidence': {
+                'method': 'true_walk_forward',
+                'history_periods': 850,
+                'observations': 7490,
+                'empirical_next_hit_rate': 0.2573,
+                'random_baseline': 0.25,
+                'edge_pp': 0.73,
+                'statistically_validated': False,
+            },
+        })
     result.pop('final_max_last_numbers', None)
     result.pop('final_min_last_numbers', None)
     return result
@@ -4398,12 +4435,16 @@ class KL8Analyzer:
                 'prediction_mode': strategy['prediction_mode'],
                 'is_validated': strategy['is_validated'],
                 'baseline_type': strategy.get('baseline_type', ''),
+                'strategy_evidence': strategy.get('strategy_evidence'),
                 'final_selection_mode': selected_mode,
                 'warning': (
                     '' if strategy['is_validated']
+                    else '近100期热度仅显示微弱历史优势，未通过显著性验证，不代表下期概率必然提高。'
+                    if strategy.get('baseline_type') == 'single_hot100_weak_signal'
                     else '公平覆盖基线：不使用冷热、遗漏或趋势猜号；仅优化组间覆盖，不提高单号开出概率。'
                 ),
             }
+
 
         # 复式玩法（v9.2: 也按自己的策略独立验证）
         for fushi_key, fushi_cfg in FUSHI_CONFIG.items():

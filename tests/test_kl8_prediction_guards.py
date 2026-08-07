@@ -41,16 +41,17 @@ class KL8PredictionGuardTests(unittest.TestCase):
         self.assertEqual(profile['unique_number_count'], 6)
         self.assertEqual(profile['max_pair_overlap'], 6)
 
-    def test_reference_select_5_and_6_use_fair_coverage_baseline(self):
+    def test_reference_select_5_and_6_use_single_hot100_weak_signal(self):
         for pick in (5, 6):
             strategy = resolve_play_strategy(f'select_{pick}')
 
-            self.assertEqual(strategy['final_selection_mode'], 'shape_balanced')
+            self.assertEqual(strategy['final_selection_mode'], 'top_ranked')
             self.assertIsNone(strategy['pool_max_last_numbers'])
             self.assertNotIn('final_min_last_numbers', strategy)
-            self.assertEqual(strategy['feature_weights']['seeded_random'], 1.0)
+            self.assertEqual(strategy['feature_weights']['seeded_random'], 0.0)
+            self.assertEqual(strategy['feature_weights']['frequency'], 1.0)
             self.assertEqual(strategy['feature_weights']['pair_cooccurrence'], 0.0)
-            self.assertEqual(strategy['baseline_type'], 'fair_deterministic_coverage')
+            self.assertEqual(strategy['baseline_type'], 'single_hot100_weak_signal')
 
     def test_normalize_record_strips_issue_and_rejects_bad_numbers(self):
         record = normalize_record({'issue': ' 2026001 ', 'numbers': list(range(1, 21))})
@@ -328,11 +329,11 @@ class KL8PredictionGuardTests(unittest.TestCase):
         finally:
             kl8_module.VERIFY_ONLY_MODE = original_verify_only
 
-        self.assertEqual(select5['final_selection_mode'], 'shape_balanced')
-        self.assertEqual(select6['final_selection_mode'], 'shape_balanced')
+        self.assertEqual(select5['final_selection_mode'], 'top_ranked')
+        self.assertEqual(select6['final_selection_mode'], 'top_ranked')
         self.assertEqual(select10['final_selection_mode'], 'shape_balanced')
-        self.assertIn('fair_coverage', select5['strategy_id'])
-        self.assertIn('fair_coverage', select6['strategy_id'])
+        self.assertIn('single_hot100', select5['strategy_id'])
+        self.assertIn('single_hot100', select6['strategy_id'])
         self.assertIn('fair_coverage', select10['strategy_id'])
         self.assertEqual(select5['target_hits'], 4)
         self.assertEqual(select6['target_hits'], 5)
@@ -370,6 +371,18 @@ class KL8PredictionGuardTests(unittest.TestCase):
         finally:
             KL8Analyzer._save_prediction_snapshot = original_save
 
+        for pick in range(3, 11):
+            self.assertNotIn('multi_slips', result[f'select_{pick}'])
+        self.assertEqual(
+            result['select_5']['strategy_id'],
+            'select_5_single_hot100_weak_signal_v1',
+        )
+        self.assertEqual(result['select_5']['final_selection_mode'], 'top_ranked')
+        self.assertAlmostEqual(
+            result['select_5']['strategy_evidence']['empirical_next_hit_rate'],
+            .2573,
+        )
+
         for pick in [8, 9, 10]:
             key = f'select_{pick}'
             self.assertIn(key, result)
@@ -378,7 +391,7 @@ class KL8PredictionGuardTests(unittest.TestCase):
             self.assertEqual(result[key]['numbers'], sorted(result[key]['numbers']))
 
         for key in [f'select_{pick}' for pick in range(3, 11)]:
-            expected_mode = 'shape_balanced'
+            expected_mode = 'top_ranked' if key in {'select_5', 'select_6'} else 'shape_balanced'
             self.assertEqual(
                 result['resolved_strategies'][key]['final_selection_mode'],
                 expected_mode,
@@ -403,7 +416,7 @@ class KL8PredictionGuardTests(unittest.TestCase):
         self.assertEqual(result['select_6']['accuracy_profile']['expected_hits_random'], 1.5)
         self.assertEqual(result['select_6']['accuracy_profile']['key_thresholds'], ['>=5', '>=4'])
         self.assertEqual(result['select_6']['accuracy_profile']['target_hits'], 5)
-        self.assertEqual(result['select_6']['accuracy_profile']['selected_mode'], 'shape_balanced')
+        self.assertEqual(result['select_6']['accuracy_profile']['selected_mode'], 'top_ranked')
         self.assertIn('high_tier_chase', result['select_6']['variants'])
         self.assertEqual(
             result['resolved_strategies']['select_10']['final_selection_mode'],
