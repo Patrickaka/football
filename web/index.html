@@ -2219,6 +2219,14 @@ function renderFootballPredictions(results) {
         itemHtml += '</div>';
       }
       const historyCalibration = r.model?.production_history_calibration;
+      const logicVersion = r.model?.prediction_logic_version || r.model_status?.prediction_logic_version;
+      const dcEnsemble = r.model?.dixon_coles_ensemble;
+      if (logicVersion) {
+        itemHtml += `<div style="margin-top:5px;font-size:10px;color:var(--muted)">
+          模型 ${esc(logicVersion)}
+          ${dcEnsemble?.applied ? `<span style="color:#4ade80">· Dixon-Coles 融合已生效 (${Math.round(Number(dcEnsemble.weight || 0) * 100)}%)</span>` : '<span style="color:#f59e0b">· DC 融合未生效</span>'}
+        </div>`;
+      }
       if (historyCalibration?.applied) {
         itemHtml += `<div style="margin-top:5px;font-size:10px;color:#93c5fd">
           📈 生产历史校准 ${historyCalibration.sample_count || 0} 场 · 预期进球 ${Number(historyCalibration.expected_goals_before || 0).toFixed(2)} → ${Number(historyCalibration.expected_goals_after || 0).toFixed(2)}
@@ -2226,13 +2234,20 @@ function renderFootballPredictions(results) {
       }
       
       const upset = r.upset;
-      if (upset && upset.alert && upset.candidates && upset.candidates.length) {
+      if (upset && upset.alert) {
         const uColor = upset.level === 'high' ? '#ef4444' : '#f59e0b';
-        const cands = upset.candidates.map(c => `<span style="display:inline-block;padding:2px 7px;margin:2px 4px 2px 0;background:${uColor}18;color:${uColor};border-radius:5px;font-size:12px;font-weight:bold">${esc(c.score)}<span style="font-weight:normal;color:var(--muted)"> ${esc(c.result || '')} ${((c.probability || 0) * 100).toFixed(1)}%</span></span>`).join('');
+        const renderScenario = (label, candidates, color) => {
+          if (!candidates || !candidates.length) return '';
+          const chips = candidates.slice(0, 2).map(c => `<span style="display:inline-block;padding:2px 7px;margin:2px 4px 2px 0;background:${color}18;color:${color};border-radius:5px;font-size:12px;font-weight:bold">${esc(c.score)}<span style="font-weight:normal;color:var(--muted)"> ${esc(c.result || '')} ${((c.probability || 0) * 100).toFixed(1)}%</span></span>`).join('');
+          return `<div style="margin-top:4px"><span style="display:inline-block;min-width:58px;color:var(--muted)">${label}</span>${chips}</div>`;
+        };
+        const drawCandidates = upset.draw_candidates || (upset.candidates || []).filter(c => c.scenario === 'draw_cover');
+        const outrightCandidates = upset.outright_candidates || (upset.candidates || []).filter(c => c.scenario === 'outright_upset');
         itemHtml += `<div style="margin-top:8px;padding:7px 8px;background:var(--bg2);border-left:3px solid ${uColor};border-radius:6px;font-size:12px">
           <span style="color:${uColor};font-weight:bold">${esc(upset.label)}</span>
           <span style="color:var(--muted)"> · 热门${esc(upset.favorite)} ${((upset.favorite_prob || 0) * 100).toFixed(0)}%</span>
-          <div style="margin-top:4px">${cands}</div>
+          ${renderScenario('真正爆冷', outrightCandidates, '#ef4444')}
+          ${renderScenario('防冷平局', drawCandidates, '#f59e0b')}
         </div>`;
       }
 
