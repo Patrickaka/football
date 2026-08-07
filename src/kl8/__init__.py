@@ -47,7 +47,7 @@ from src.common.logger import setup_logger
 
 log = setup_logger('kl8')
 
-KL8_PREDICTOR_VERSION = "kl8-v9.8-hot150-single-primary"
+KL8_PREDICTOR_VERSION = "kl8-v9.9-per-play-single-primary"
 
 # ─── v9.2: 只显示已验证策略模式 ───
 VERIFY_ONLY_MODE = False  # True=未验证玩法不输出号码; False=回退参考策略(始终输出号码)
@@ -875,15 +875,16 @@ def resolve_play_strategy(play_type: str, allow_reference: bool = False) -> Opti
         'baseline_type': 'fair_deterministic_coverage',
     })
 
-    # v9.7 单组主推：前后分段 walk-forward 中，150期窗口比
-    # 100期窗口在最近325期验证段更稳定：选5平均命中
-    # 1.231 -> 1.265，选6从1.489 -> 1.508。时间衰减贝叶斯虽改善
+    # v9.8 单组主推：前后分段 walk-forward 中，选5的75期窗口
+    # 在开发段平均1.302、最近325期验证段1.265；选6使用150期
+    # 窗口，验证段1.508（原100期1.489）。时间衰减贝叶斯虽改善
     # Brier校准，但单组命中下降，因此只保留为影子对照不上线。
     # 该提升仍很弱且未通过FDR显著性，因此仅用于
     # 用户明确要求的单组选5/选6参考，不激活为 validated 策略。
     if play_type in {'select_5', 'select_6'}:
+        selected_window = 75 if play_type == 'select_5' else 150
         result.update({
-            'strategy_id': f'{play_type}_single_hot150_weak_signal_v2',
+            'strategy_id': f'{play_type}_single_hot{selected_window}_weak_signal_v3',
             'feature_weights': {
                 'frequency': 1.0,
                 'gap': 0.0,
@@ -897,12 +898,13 @@ def resolve_play_strategy(play_type: str, allow_reference: bool = False) -> Opti
                 'big_small': 0.0,
                 'seeded_random': 0.0,
             },
-            'window_size': 150,
+            'window_size': selected_window,
             'frequency_mode': 'hot',
             'final_selection_mode': 'top_ranked',
+            'pool_diversify': False,
             'pool_max_last_numbers': None,
             'final_max_last_numbers': None,
-            'baseline_type': 'single_hot150_weak_signal',
+            'baseline_type': f'single_hot{selected_window}_weak_signal',
             'strategy_evidence': {
                 'method': 'true_walk_forward',
                 'history_periods': 850,
@@ -4444,7 +4446,7 @@ class KL8Analyzer:
                 'warning': (
                     '' if strategy['is_validated']
                     else '近100期热度仅显示微弱历史优势，未通过显著性验证，不代表下期概率必然提高。'
-                    if strategy.get('baseline_type') == 'single_hot150_weak_signal'
+                    if str(strategy.get('baseline_type', '')).startswith('single_hot')
                     else '公平覆盖基线：不使用冷热、遗漏或趋势猜号；仅优化组间覆盖，不提高单号开出概率。'
                 ),
             }

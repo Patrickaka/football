@@ -41,7 +41,7 @@ class KL8PredictionGuardTests(unittest.TestCase):
         self.assertEqual(profile['unique_number_count'], 6)
         self.assertEqual(profile['max_pair_overlap'], 6)
 
-    def test_reference_select_5_and_6_use_single_hot150_weak_signal(self):
+    def test_reference_select_5_and_6_use_per_play_hot_window(self):
         for pick in (5, 6):
             strategy = resolve_play_strategy(f'select_{pick}')
 
@@ -51,8 +51,10 @@ class KL8PredictionGuardTests(unittest.TestCase):
             self.assertEqual(strategy['feature_weights']['seeded_random'], 0.0)
             self.assertEqual(strategy['feature_weights']['frequency'], 1.0)
             self.assertEqual(strategy['feature_weights']['pair_cooccurrence'], 0.0)
-            self.assertEqual(strategy['baseline_type'], 'single_hot150_weak_signal')
-            self.assertEqual(strategy['window_size'], 150)
+            expected_window = 75 if pick == 5 else 150
+            self.assertEqual(strategy['baseline_type'], f'single_hot{expected_window}_weak_signal')
+            self.assertEqual(strategy['window_size'], expected_window)
+            self.assertFalse(strategy['pool_diversify'])
 
     def test_normalize_record_strips_issue_and_rejects_bad_numbers(self):
         record = normalize_record({'issue': ' 2026001 ', 'numbers': list(range(1, 21))})
@@ -333,7 +335,7 @@ class KL8PredictionGuardTests(unittest.TestCase):
         self.assertEqual(select5['final_selection_mode'], 'top_ranked')
         self.assertEqual(select6['final_selection_mode'], 'top_ranked')
         self.assertEqual(select10['final_selection_mode'], 'shape_balanced')
-        self.assertIn('single_hot150', select5['strategy_id'])
+        self.assertIn('single_hot75', select5['strategy_id'])
         self.assertIn('single_hot150', select6['strategy_id'])
         self.assertIn('fair_coverage', select10['strategy_id'])
         self.assertEqual(select5['target_hits'], 4)
@@ -376,7 +378,7 @@ class KL8PredictionGuardTests(unittest.TestCase):
             self.assertNotIn('multi_slips', result[f'select_{pick}'])
         self.assertEqual(
             result['select_5']['strategy_id'],
-            'select_5_single_hot150_weak_signal_v2',
+            'select_5_single_hot75_weak_signal_v3',
         )
         self.assertEqual(result['select_5']['final_selection_mode'], 'top_ranked')
         self.assertAlmostEqual(
