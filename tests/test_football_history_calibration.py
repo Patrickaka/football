@@ -56,6 +56,13 @@ class FootballHistoryCalibrationTests(unittest.TestCase):
         self.assertGreater(profile['goal_beta'], 0)
         self.assertLessEqual(profile['goal_beta'], 0.18)
         self.assertGreater(profile['actual_goal_mean'], profile['predicted_goal_mean'])
+        self.assertEqual(profile['guards']['reliability_curve'], 'sqrt_effective_weight')
+
+    def test_broad_history_is_not_double_shrunk_to_negligible_weight(self):
+        profile = estimate_history_calibration([self._record(i) for i in range(343)])
+        linear_reliability = profile['effective_weight'] / 180.0
+        self.assertGreater(profile['reliability'], linear_reliability)
+        self.assertLessEqual(profile['reliability'], 1.0)
 
     def test_applying_positive_tilt_increases_expected_goals_and_normalizes(self):
         candidates = [((0, 0), 0.30), ((1, 0), 0.30), ((1, 1), 0.25), ((3, 1), 0.15)]

@@ -147,7 +147,12 @@ def estimate_history_calibration(records: Iterable[Dict], min_samples: int = MIN
 
     actual_goal_mean = actual_goals_sum / weight_sum
     predicted_goal_mean = predicted_goals_sum / weight_sum
-    reliability = min(1.0, weight_sum / 180.0)
+    # Effective weights are deliberately below one for legacy snapshots.  A
+    # second linear shrink here made hundreds of settled matches behave like a
+    # tiny sample and left a persistent goal-mean error almost untouched.  Use
+    # square-root shrinkage: it remains conservative for small samples, while
+    # allowing a broad, consistently biased history to make a visible repair.
+    reliability = min(1.0, math.sqrt(weight_sum / 180.0))
 
     raw_outcome_weights = {}
     outcome_weights = {}
@@ -183,6 +188,7 @@ def estimate_history_calibration(records: Iterable[Dict], min_samples: int = MIN
             'min_samples': min_samples,
             'half_life': HISTORY_HALF_LIFE,
             'max_goal_beta': MAX_GOAL_BETA,
+            'reliability_curve': 'sqrt_effective_weight',
         },
     }
 

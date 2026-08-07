@@ -30,7 +30,7 @@ from ..common.logger import setup_logger
 
 log = setup_logger('football')
 
-FOOTBALL_PREDICTION_LOGIC_VERSION = '2026-08-07-dc-market-ensemble-v18'
+FOOTBALL_PREDICTION_LOGIC_VERSION = '2026-08-07-goal-bias-calibration-v19'
 LOTTERY_OFFICIAL_ODDS_WEIGHT = 0.40
 
 # ELO 评分系统（延迟导入）
