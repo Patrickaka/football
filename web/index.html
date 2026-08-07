@@ -1172,7 +1172,7 @@
 <div class="wrap">
   <header>
     <h1 id="page-title">⚽ 足球比分预测</h1>
-    <p id="page-desc">数据来源：odds.500.com（<span style="color:var(--accent2)">Bet365/Pinnacle 独赔</span>） · 泊松概率模型</p>
+    <p id="page-desc">赛程源：澳客主备切换 · 盘口源：500/Bet365/Pinnacle · 多模型融合</p>
   </header>
   <div class="tabs" role="tablist">
     <button type="button" class="tab active" data-tab="football" role="tab">⚽ 足球预测</button>
@@ -1267,7 +1267,7 @@ let beidanMatches = [];
 const TAB_META = {
   football: {
     title: '⚽ 足球比分预测',
-    desc: '数据来源：odds.500.com（Bet365/Pinnacle 独赔） · 泊松概率模型',
+    desc: '赛程源：澳客主备切换 · 盘口源：500/Bet365/Pinnacle · 多模型融合',
     disclaimer: '⚠ 以上分析仅为概率统计参考，体育赛事结果受多种不确定因素影响，不构成任何投注建议。请理性对待！',
   },
   beidan: {
@@ -1928,7 +1928,9 @@ async function loadAllPredictions() {
         lottery_rqspf_available: String(Boolean(m.lottery_rqspf_available)),
         lottery_spf_odds: m.lottery_spf_odds ? JSON.stringify(m.lottery_spf_odds) : '',
         lottery_rqspf_odds: m.lottery_rqspf_odds ? JSON.stringify(m.lottery_rqspf_odds) : '',
-        okooo_id: m.okooo_id || ''
+        okooo_id: m.okooo_id || '',
+        schedule_source: m.schedule_source || '',
+        analysis_source_id_available: String(m.analysis_source_id_available !== false)
       });
       try {
         const data = await fetchJson('/api/predict?' + q);

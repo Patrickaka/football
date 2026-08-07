@@ -697,6 +697,53 @@ def get_match_list_status():
     return dict(_MATCH_LIST_STATUS)
 
 
+def _okooo_schedule_fallback(cached_matches=None):
+    """将澳客竞彩赛程转换为足球主列表结构。
+
+    若上次 500 快照中存在同一竞彩编号，沿用其 match_id，
+    这样比分分析仍可使用原有的 500 盘口链路。
+    """
+    from .okooo_lottery import fetch_okooo_jczq_schedule
+
+    offers = fetch_okooo_jczq_schedule(force_refresh=True)
+    if not offers:
+        return []
+    cached_matches = cached_matches or []
+    cached_by_num = {
+        str(item.get('num') or '').replace(' ', ''): item
+        for item in cached_matches if item.get('num')
+    }
+    converted = []
+    for offer in offers:
+        num = str(offer.get('num') or '').replace(' ', '')
+        previous = cached_by_num.get(num, {})
+        handicap = offer.get('lottery_handicap')
+        rq_available = bool(offer.get('rqspf_available') and handicap not in (None, 0))
+        spf_available = bool(offer.get('spf_available'))
+        converted.append({
+            'home': offer.get('home') or previous.get('home') or '',
+            'away': offer.get('away') or previous.get('away') or '',
+            'match_id': str(previous.get('match_id') or offer.get('okooo_id') or ''),
+            'time': previous.get('time') or offer.get('time') or '',
+            'league': previous.get('league') or offer.get('league') or '',
+            'num': num,
+            'schedule_source': 'okooo',
+            'analysis_source_id_available': bool(previous.get('match_id')),
+            'okooo_id': offer.get('okooo_id'),
+            'lottery_source': 'okooo',
+            'lottery_offer_matched': True,
+            'lottery_unavailable_reason': None,
+            'lottery_handicap': handicap,
+            'lottery_primary_market': 'rqspf' if rq_available else 'spf' if spf_available else None,
+            'lottery_available_markets': offer.get('available_markets') or [],
+            'lottery_spf_available': spf_available,
+            'lottery_rqspf_available': rq_available,
+            'lottery_spf_odds': offer.get('spf_odds'),
+            'lottery_rqspf_odds': offer.get('rqspf_odds'),
+        })
+    return [item for item in converted if item['home'] and item['away'] and item['match_id']]
+
+
 def fetch_match_list():
     """优先抓取实时赛程；源站不可用时回退最后成功快照。
 
@@ -715,6 +762,18 @@ def fetch_match_list():
         return matches
     except Exception as exc:
         cached = _load_match_list_cache()
+        try:
+            okooo_matches = _okooo_schedule_fallback(cached)
+        except Exception as okooo_exc:
+            okooo_matches = []
+            log.warning('澳客备用赛程也失败: %s', okooo_exc)
+        if okooo_matches:
+            _MATCH_LIST_STATUS.update({
+                'source': 'okooo', 'stale': False,
+                'error': f'500 upstream: {type(exc).__name__}: {str(exc)[:140]}',
+            })
+            log.warning('500赛程源失败，已切换澳客赛程 %d 场', len(okooo_matches))
+            return okooo_matches
         if cached:
             _MATCH_LIST_STATUS.update({
                 'source': 'disk_cache', 'stale': True,
@@ -7130,43 +7189,66 @@ def analyze_match(match, force_refresh=False):
                 log.error(f"保存缓存结果的预测记录失败: {e}")
             return cached_result
 
-    try:
-        yazhi_raw = fetch_yazhi(mid)
-        asian = analyze_asian(yazhi_raw)
-        log.debug(f"亚盘数据获取成功: keys={list(asian.keys())}")
-    except Exception as e:
-        raise ValueError(f"亚盘数据获取失败: {e}")
-    
-    try:
-        euro_raw = fetch_ouzhi(mid)
-        log.debug(f"欧赔原始数据获取成功: keys={list(euro_raw.keys())}")
-    except Exception as e:
-        raise ValueError(f"欧赔原始数据获取失败: {e}")
-    
-    try:
+    okooo_only = (
+        match.get('schedule_source') == 'okooo'
+        and not match.get('analysis_source_id_available')
+    )
+    if okooo_only:
+        # 澳客独立降级：官方胜平负决定方向；缺少连续亚盘/大小球时
+        # 使用中性盘与联赛基准，后续置为低信息完整度。
+        spf = match.get('lottery_spf_odds') or {}
+        home_odd = float(spf.get('胜') or 2.50)
+        draw_odd = float(spf.get('平') or 3.20)
+        away_odd = float(spf.get('负') or 2.80)
+        asian_raw = {
+            'open': {'handicap': 0.0, 'home_odds': 1.0, 'away_odds': 1.0},
+            'close': {'handicap': 0.0, 'home_odds': 1.0, 'away_odds': 1.0},
+        }
+        euro_raw = {
+            'open': {'home': home_odd, 'draw': draw_odd, 'away': away_odd},
+            'close': {'home': home_odd, 'draw': draw_odd, 'away': away_odd},
+            'series': [],
+        }
+        total_raw = {
+            'open': {'line': 2.5, 'over_odds': 1.0, 'under_odds': 1.0},
+            'close': {'line': 2.5, 'over_odds': 1.0, 'under_odds': 1.0},
+        }
+        yazhi_raw = asian_raw
+        daxiao_raw = total_raw
+        asian = analyze_asian(asian_raw)
         euro = analyze_euro(euro_raw)
-        log.debug(f"欧赔分析完成: keys={list(euro.keys())}")
-    except Exception as e:
-        raise ValueError(f"欧赔分析失败: {e}")
-    
-    try:
-        daxiao_raw = fetch_daxiao(mid)
-        total = analyze_total(daxiao_raw)
-        log.debug(f"大小球数据获取成功: keys={list(total.keys())}")
-    except Exception as e:
-        raise ValueError(f"大小球数据获取失败: {e}")
-    
-    team = fetch_team_strength(mid, home, away, league_profile)
+        total = analyze_total(total_raw)
+        team = None
+        log.warning('比赛 %s 使用澳客独立降级模型', mid)
+    else:
+        try:
+            yazhi_raw = fetch_yazhi(mid)
+            asian = analyze_asian(yazhi_raw)
+            log.debug(f"亚盘数据获取成功: keys={list(asian.keys())}")
+        except Exception as e:
+            raise ValueError(f"亚盘数据获取失败: {e}")
+        try:
+            euro_raw = fetch_ouzhi(mid)
+            euro = analyze_euro(euro_raw)
+        except Exception as e:
+            raise ValueError(f"欧赔数据获取/分析失败: {e}")
+        try:
+            daxiao_raw = fetch_daxiao(mid)
+            total = analyze_total(daxiao_raw)
+        except Exception as e:
+            raise ValueError(f"大小球数据获取失败: {e}")
+        team = fetch_team_strength(mid, home, away, league_profile)
     if team:
         team['league_profile'] = league_profile
     
     # ========== 新增：抓取 Bet365 和 Pinnacle 独赔数据 ==========
     single_odds = None
-    try:
-        single_odds = fetch_single_company_odds(mid)
-        log.info(f"独赔数据抓取结果: Bet365={'有' if single_odds.get('bet365') else '无'}, Pinnacle={'有' if single_odds.get('pinnacle') else '无'}")
-    except Exception as e:
-        log.warning(f"抓取独赔数据失败: {e}")
+    if not okooo_only:
+        try:
+            single_odds = fetch_single_company_odds(mid)
+            log.info(f"独赔数据抓取结果: Bet365={'有' if single_odds.get('bet365') else '无'}, Pinnacle={'有' if single_odds.get('pinnacle') else '无'}")
+        except Exception as e:
+            log.warning(f"抓取独赔数据失败: {e}")
     
     # ========== 计算博彩公司分歧指数（在替换之前保存原始平均盘口） ==========
     bookmaker_consensus = None
@@ -7260,6 +7342,14 @@ def analyze_match(match, force_refresh=False):
         euro['kelly']['trend'] = kelly_trend
 
     confidence = compute_prediction_confidence(asian, euro, total, team)
+    if okooo_only:
+        confidence = {
+            'score': 0.44,
+            'level': 'low',
+            'label': '澳客单源·低置信',
+            'notes': ['500盘口不可用', '缺少连续大小球与亚盘'],
+            'recommend_count': 1,
+        }
 
     # 新增：机器学习模型预测
     ml_result = None
@@ -7269,6 +7359,8 @@ def analyze_match(match, force_refresh=False):
     ml_feature_snapshot = {}
     
     try:
+        if okooo_only:
+            raise RuntimeError('澳客单源降级不启用 ML 融合')
         # 准备特征
         ml_features = {
             'elo_home': team.get('elo_home', 1500) if team else 1500,

@@ -1260,6 +1260,24 @@ class Handler(BaseHTTPRequestHandler):
         # 检查是否强制刷新缓存
         force_refresh = params.get('force_refresh', ['false'])[0].lower() == 'true'
         
+        def _json_param(name):
+            raw = params.get(name, [''])[0]
+            if not raw:
+                return None
+            try:
+                value = json.loads(raw)
+                return value if isinstance(value, dict) else None
+            except (TypeError, ValueError):
+                return None
+
+        def _number_param(name):
+            raw = params.get(name, [''])[0]
+            try:
+                value = float(raw)
+                return int(value) if value.is_integer() else value
+            except (TypeError, ValueError):
+                return None
+
         match = {
             'match_id': match_id,
             'home': params.get('home', [''])[0],
@@ -1267,6 +1285,20 @@ class Handler(BaseHTTPRequestHandler):
             'league': params.get('league', [''])[0],
             'time': params.get('time', [''])[0],
             'num': params.get('num', [''])[0],
+            'schedule_source': params.get('schedule_source', [''])[0],
+            'analysis_source_id_available': params.get('analysis_source_id_available', ['true'])[0].lower() == 'true',
+            'okooo_id': params.get('okooo_id', [''])[0],
+            'lottery_handicap': _number_param('lottery_handicap'),
+            'lottery_primary_market': params.get('lottery_primary_market', [''])[0] or None,
+            'lottery_source': params.get('lottery_source', ['unavailable'])[0],
+            'lottery_offer_matched': params.get('lottery_offer_matched', ['false'])[0].lower() == 'true',
+            'lottery_available_markets': [
+                item for item in params.get('lottery_available_markets', [''])[0].split(',') if item
+            ],
+            'lottery_spf_available': params.get('lottery_spf_available', ['false'])[0].lower() == 'true',
+            'lottery_rqspf_available': params.get('lottery_rqspf_available', ['false'])[0].lower() == 'true',
+            'lottery_spf_odds': _json_param('lottery_spf_odds'),
+            'lottery_rqspf_odds': _json_param('lottery_rqspf_odds'),
         }
         try:
             return {'result': analyze_match(match, force_refresh=force_refresh)}
