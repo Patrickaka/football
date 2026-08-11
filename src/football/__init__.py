@@ -6090,8 +6090,40 @@ def _normalize_goal_dist(goal_dist: Dict) -> Dict[int, float]:
     return normalized
 
 
-def _anchor_goal_dist_to_total_line(goal_dist: Dict, total: Dict, max_theta: float = 0.18) -> Tuple[Dict[int, float], Dict]:
-    """Tilt total-goals distribution toward the closing O/U line without hard clipping."""
+def _implied_total_mean(line: float, p_over: float) -> float:
+    """由大小球盘口(line)与 over 概率反解泊松总进球「期望值」。
+
+    关键：盘口线是 over/under 的平衡点（≈中位数），而总进球分布右偏，均值 > 中位数。
+    过去把分布均值直接锚到盘口线，系统性压低了期望总进球（405 场实测：模型对 75%
+    的比赛预测「小球」，真实 over 率却约 48%）。这里解 P(Poisson(m) > line) = p_over
+    得到 skew-aware 的期望 m，作为进球分布的正确锚点。
+    """
+    try:
+        line = float(line)
+        p_over = float(p_over)
+    except (TypeError, ValueError):
+        return None
+    if not (0.0 < p_over < 1.0):
+        return None
+    k = int(math.floor(line))  # over 表示 total >= k+1
+    lo, hi = 0.3, 7.0
+    for _ in range(50):
+        mid = (lo + hi) / 2.0
+        p_le = sum(math.exp(-mid) * mid ** i / math.factorial(i) for i in range(k + 1))
+        if (1.0 - p_le) < p_over:
+            lo = mid
+        else:
+            hi = mid
+    return (lo + hi) / 2.0
+
+
+def _anchor_goal_dist_to_total_line(goal_dist: Dict, total: Dict, max_theta: float = 0.60) -> Tuple[Dict[int, float], Dict]:
+    """把总进球分布锚定到「市场隐含期望总进球」（而非盘口线本身）。
+
+    优先用 line + over 概率反解 skew-aware 期望（_implied_total_mean）；无 over 概率时
+    退回盘口线。用指数倾斜 exp(theta*goals) 并二分求解 theta 使分布期望「命中」目标
+    （旧实现 theta=delta/4 且 0.18 死区会严重欠调）。
+    """
     normalized = _normalize_goal_dist(goal_dist)
     if not normalized:
         return normalized, {'applied': False, 'reason': 'empty_distribution'}
@@ -6100,19 +6132,33 @@ def _anchor_goal_dist_to_total_line(goal_dist: Dict, total: Dict, max_theta: flo
     if line is None:
         return normalized, {'applied': False, 'reason': 'missing_total_line'}
 
+    p_over = (total or {}).get('close_prob', {}).get('over') if isinstance(total, dict) else None
+    target = _implied_total_mean(line, p_over)
+    if target is None:
+        target = float(line)
+
     expected_before = sum(goals * prob for goals, prob in normalized.items())
-    delta = float(line) - expected_before
-    if abs(delta) < 0.18:
+    delta = target - expected_before
+    if abs(delta) < 0.05:
         return normalized, {
-            'applied': False,
-            'reason': 'already_aligned',
-            'line': float(line),
-            'expected_before': expected_before,
-            'expected_after': expected_before,
+            'applied': False, 'reason': 'already_aligned',
+            'line': float(line), 'target': target,
+            'expected_before': expected_before, 'expected_after': expected_before,
         }
 
-    theta = max(-max_theta, min(max_theta, delta / 4.0))
-    tilted = {goals: prob * math.exp(theta * goals) for goals, prob in normalized.items()}
+    # 二分求解 theta 使倾斜后分布期望命中 target（限幅 max_theta 防极端盘口异常）
+    lo, hi = -max_theta, max_theta
+    for _ in range(40):
+        theta = (lo + hi) / 2.0
+        tilted = {g: p * math.exp(theta * g) for g, p in normalized.items()}
+        s = sum(tilted.values())
+        exp_t = sum(g * p / s for g, p in tilted.items()) if s > 0 else expected_before
+        if exp_t < target:
+            lo = theta
+        else:
+            hi = theta
+    theta = (lo + hi) / 2.0
+    tilted = {g: p * math.exp(theta * g) for g, p in normalized.items()}
     total_prob = sum(tilted.values())
     if total_prob <= 0:
         return normalized, {'applied': False, 'reason': 'zero_tilted_total'}
@@ -6122,6 +6168,7 @@ def _anchor_goal_dist_to_total_line(goal_dist: Dict, total: Dict, max_theta: flo
     return adjusted, {
         'applied': True,
         'line': float(line),
+        'target': target,
         'theta': theta,
         'expected_before': expected_before,
         'expected_after': expected_after,
@@ -6813,6 +6860,8 @@ def assess_football_upset(asian, euro, team, candidates):
     favorite = max(probs, key=probs.get)
     fav_p = probs[favorite]
     upset_p = 1.0 - fav_p
+    ranked_p = sorted(probs.values(), reverse=True)
+    gap = ranked_p[0] - (ranked_p[1] if len(ranked_p) > 1 else 0.0)
 
     # 两级阈值：以热门强度为主信号（参考北单回测：爆冷率随热门强度
     # 单调可分，fav<0.45 时爆冷率约 53%~62%），盘口/欧赔异常 risk_score 为辅。
@@ -6822,6 +6871,11 @@ def assess_football_upset(asian, euro, team, candidates):
         level, alert = 'medium', True
     else:
         level, alert = 'low', False
+
+    # 反向「稳胆」档：强热门 + 差距悬殊 → 405 场真实结算样本冷门率仅约 30%
+    # (train 26.7% / test 33.9%，两半均稳)，区分真稳胆与约 44% 抛硬币的弱热门。
+    # 与北单 assess_upset_risk 同阈值；risk_score 偏高（盘口异常）时不判稳胆。
+    confident = (not alert and fav_p >= 0.58 and gap >= 0.20 and risk_score < 0.3)
 
     # 反向方向分成“逼平”和“真正逆转获胜”。旧逻辑把两者混在一起按
     # 单比分概率排序，结果所谓爆冷候选几乎永远又是 0-0 / 1-1。
@@ -6855,13 +6909,17 @@ def assess_football_upset(asian, euro, team, candidates):
         picked = (draw_picked[:1] + outright_picked[:1])[:2]
 
     label = {'high': '🔴高风险爆冷', 'medium': '🟠需警惕爆冷', 'low': '稳健'}.get(level, '稳健')
+    if confident:
+        label = '✅热门稳胆'
     return {
         'level': level,
         'label': label,
         'alert': alert,
+        'confident': confident,
         'favorite': favorite,
         'favorite_prob': fav_p,
         'upset_prob': upset_p,
+        'gap': gap,
         'risk_score': risk_score,
         'candidates': picked,
         'outright_candidates': outright_picked[:2],
@@ -6926,10 +6984,17 @@ def build_match_analysis(result):
         ranked = sorted(candidates, key=lambda x: -x[1])
         primary = ranked[0]
         ph, pa = primary[0]
-        # 次选：优先取 结果方向不同 或 总进球不同 的最高概率比分
+        # 次选：取「结果方向(胜/平/负)不同」的最高概率比分。
+        # 旧逻辑用「方向不同 或 总进球不同」，导致首推为平局(如 1-1)时，把同为平局
+        # 的 0-0 当作合法次选——对高大小球盘尤其荒谬(市场预期近 3 球却推 0-0)。
+        # 改为强制结果方向不同：首推平局 → 次选必为最可能的胜/负比分(2-1/1-0/1-2)，
+        # 既排除了 0-0，又让次选成为真正对冲另一种赛果的有用选项。
+        def _res_sign(h, a):
+            return 1 if h > a else (-1 if h < a else 0)
+        primary_sign = _res_sign(ph, pa)
         secondary = None
         for (h, a), prob in ranked[1:]:
-            if (h > a) != (ph > pa) or (h == a) != (ph == pa) or (h + a) != (ph + pa):
+            if _res_sign(h, a) != primary_sign:
                 secondary = ((h, a), prob)
                 break
         if secondary is None and len(ranked) > 1:
@@ -7031,6 +7096,8 @@ def build_match_analysis(result):
             reasons.append(f"赔率异动：{'；'.join(changes[:3])}")
         if upset.get('alert'):
             reasons.append(f"⚠️ 爆冷预警（{upset.get('label')}）：热门{upset.get('favorite')}仅{fav_p:.0%}，关注反向比分")
+        elif upset.get('confident'):
+            reasons.append(f"✅ 热门稳胆：{upset.get('favorite')}{fav_p:.0%} 且领先次选 {upset.get('gap', 0):.0%}，真实冷门率约 30%")
 
         # ---- 5. 结论句 ----
         if fav == 'home':
