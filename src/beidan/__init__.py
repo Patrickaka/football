@@ -219,9 +219,16 @@ def predict_scores_by_poisson(home_prob, draw_prob, away_prob, league='', handic
         '1x2_prob': {'H': p_home, 'D': p_draw, 'A': p_away},
     }
 
-# 2744 场五大联赛离线回测：-0.08 相比 -0.12/-0.15 同时改善比分
-# Top3 与 LogLoss，并保留温和的低比分相关修正。
-DC_RHO = -0.08
+# Dixon-Coles 低比分相关系数。
+# 历史上取 -0.08（五大联赛离线回测 -0.08 优于 -0.12/-0.15）。但 405 场真实
+# 线上样本（含世界杯/芬超/瑞典超/K1/挪超等实际投注联赛，带 odds_snapshot 可重算）
+# 暴露出严重问题：负 rho 会把 tau(1,1)=1-rho、tau(0,0)=1-λ²rho 抬高，导致
+# 模型把 1-1 当作最看好比分的场次高达 58%（真实 1-1 仅 13%），系统性漏掉
+# 2-1/1-2/2-2 等真实高频比分，并压低总进球（预测均值 2.56 vs 真实 2.77）。
+# 置 0（退化为独立泊松、去掉人为的低分抬高）后：线上 1-1 占比 58%→41%，
+# 总进球 Top2 48.9%→稳健不降、进球 Top1 提升；五大联赛离线回测中性偏好
+# （比分 Top1 11.99%→12.14%、总进球 Top2 45.04%→45.48%）。
+DC_RHO = 0.0
 # 同一回测中 0.6 的总进球 Top1/Top2 和 LogLoss 均优于 0.4/0.5；
 # 仍保留 40% 联赛先验，且下方硬边界会阻止盘口异常值主导。
 OU_TOTAL_BLEND = 0.6
@@ -1767,12 +1774,23 @@ def assess_recommendation_quality(probabilities, prediction=None, context=None):
 #   medium: fav_p<0.52 且 gap<=0.16 且 非热门总概率>=0.52 → 命中爆冷率约 59%（覆盖 33%）
 #   high  : fav_p<0.45 且 gap<=0.10 且 非热门总概率>=0.58 → 命中爆冷率约 63%（覆盖 20%）
 # 全局爆冷率基准约 47%，预警显著抬升真实爆冷占比。
+#
+# 2026-08-11 用 405 场真实结算样本(非五大联赛)复核：
+#   - 现有 medium 预警迁移良好（真实冷门 55% / test 51%，覆盖 32%，高于 44% 基准）。
+#   - 尝试用「平局盘热>=0.28」「热门未被加注」增强预警精度 → train 73% 但 test 仅 51%，
+#     巨大 train/test 落差证明是过拟合，故不采纳（勿再加，详见 [[football-calibration-dormant]]）。
+#   - 新增反向「稳胆」档：强热门 fav_p>=0.58 且 gap>=0.20 → 真实冷门率仅约 30%
+#     (train 26.7% / test 33.9%，两半均稳)，即热门守住约 70%。补上此档以区分
+#     「真稳胆」与原本被笼统标为『热门稳健』实则约 44% 抛硬币的弱热门。
 UPSET_MED_FAV_MAX = 0.52
 UPSET_MED_GAP_MAX = 0.16
 UPSET_MED_MASS_MIN = 0.52
 UPSET_HIGH_FAV_MAX = 0.45
 UPSET_HIGH_GAP_MAX = 0.10
 UPSET_HIGH_MASS_MIN = 0.58
+# 稳胆(confident favorite)阈值
+UPSET_CONFIDENT_FAV_MIN = 0.58
+UPSET_CONFIDENT_GAP_MIN = 0.20
 
 
 def _result_from_score(key):
@@ -1819,10 +1837,18 @@ def assess_upset_risk(probs_1x2):
     else:
         level, label, alert = 'low', '热门稳健', False
 
+    # 反向：稳胆档（强热门 + 差距悬殊 → 真实冷门率约 30%，两半均稳）。
+    # 仅细化未预警场次的正面信号，不改变 level/alert 契约（非破坏性）。
+    confident = (not alert and fav_p >= UPSET_CONFIDENT_FAV_MIN
+                 and gap >= UPSET_CONFIDENT_GAP_MIN)
+    if confident:
+        label = '热门稳胆'
+
     return {
         'level': level,
         'label': label,
         'alert': alert,
+        'confident': confident,
         'favorite': favorite,
         'favorite_prob': round(fav_p, 6),
         'upset_prob': round(upset_mass, 6),
@@ -2226,6 +2252,8 @@ def build_beidan_match_analysis(spf_result):
             reasons.append(f"亚盘走势：{asian_trend.get('direction')}")
         if upset.get('alert'):
             reasons.append(f"⚠️ 爆冷预警（{upset.get('label')}）：热门{upset.get('favorite')}仅{fav_p:.0%}，关注反向比分")
+        elif upset.get('confident'):
+            reasons.append(f"✅ 热门稳胆：{upset.get('favorite')}{fav_p:.0%} 且领先次选 {upset.get('gap'):.0%}，真实冷门率约 30%")
 
         # ---- 5. 结论句 ----
         if fav == 'home':

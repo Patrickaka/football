@@ -29,6 +29,17 @@ from ..common import kv_store
 DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'data')
 CALIBRATION_DB_FILE = os.path.join(DATA_DIR, 'goal_count_calibration.json')
 
+# 部分池化（partial pooling / 经验贝叶斯收缩）参数。
+# 背景：原实现要求单桶加权样本 >=10 才计算校准因子，否则整桶 factors={}。但分桶
+# 维度为 联赛×大小球线×让球×预测总进球 四维，真实数据里绝大多数桶长期只有 1~3
+# 场，永远达不到 10 → 校准因子始终为空 → 校准退化为恒等变换（形同死代码）。
+# 改为部分池化：样本少时因子向 1.0（不校准）收缩，样本多时逐步逼近观测频率比，
+# 严格比“要么不动要么满额”的硬阈值更安全，且让赛后反馈能真正、渐进地作用于预测。
+#   shrink_weight = n / (n + POOLING_K)
+#   factor_shrunk = 1.0 + (factor_raw - 1.0) * shrink_weight
+MIN_ACTIVATION_SAMPLES = 4     # 低于此加权样本量不计算因子（过噪声）
+POOLING_K = 12.0               # 收缩强度：n=K 时因子只生效一半，n>>K 时接近满额
+
 
 class GoalCountCalibrator:
     """
@@ -150,9 +161,9 @@ class GoalCountCalibrator:
         """
         bucket = self.db[bucket_key]
         sample_count = bucket.get('weighted_sample_count', bucket['sample_count'])
-        
-        if sample_count < 10:
-            # 样本不足，不计算校准因子
+
+        if sample_count < MIN_ACTIVATION_SAMPLES:
+            # 样本过少，噪声太大，不计算校准因子
             bucket['calibration_factors'] = {}
             return
         
@@ -184,25 +195,31 @@ class GoalCountCalibrator:
             return
         
         # 计算校准因子：实际频率 / 预测频率
-        # 添加平滑处理，避免除零和极端值
+        # 添加平滑处理，避免除零和极端值；并按样本量做部分池化收缩，
+        # 样本少时因子向 1.0 收缩（弱校准），样本多时逐步逼近观测频率比。
         calibration_factors = {}
         all_goals = set(actual_dist.keys()) | set(pred_dist.keys())
-        
+
+        shrink_weight = sample_count / (sample_count + POOLING_K)
+
         for goals in all_goals:
             actual_prob = actual_dist.get(goals, 0.01)  # 平滑
             pred_prob = pred_dist.get(goals, 0.01)      # 平滑
-            
-            # 计算校准因子，限制在合理范围
+
+            # 原始校准因子，限制在合理范围
             factor = actual_prob / pred_prob
             factor = max(0.5, min(2.0, factor))  # 限制在0.5~2.0之间
-            
+
+            # 部分池化：向 1.0（不校准）收缩，收缩程度随样本量增大而减弱
+            factor = 1.0 + (factor - 1.0) * shrink_weight
+
             calibration_factors[goals] = factor
-        
+
         bucket['calibration_factors'] = calibration_factors
     
     def get_calibration_factors(self, league: str, total_line: float,
                                 expected_total: float, asian: float = 0.0,
-                                min_samples: int = 10) -> Dict[int, float]:
+                                min_samples: int = MIN_ACTIVATION_SAMPLES) -> Dict[int, float]:
         """
         获取分桶的校准因子（精确桶 → 联赛×大小球线 → 纯联赛 粗粒度回退）
         
@@ -243,7 +260,7 @@ class GoalCountCalibrator:
                             goal_dist: Dict[int, float],
                             expected_total: float,
                             asian: float = 0.0,
-                            min_samples: int = 10) -> Dict[int, float]:
+                            min_samples: int = MIN_ACTIVATION_SAMPLES) -> Dict[int, float]:
         """
         校准进球数分布
         
