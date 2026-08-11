@@ -2224,21 +2224,7 @@ function renderFootballPredictions(results) {
         itemHtml += '</div>';
         itemHtml += '</div>';
       }
-      const historyCalibration = r.model?.production_history_calibration;
-      const logicVersion = r.model?.prediction_logic_version || r.model_status?.prediction_logic_version;
-      const dcEnsemble = r.model?.dixon_coles_ensemble;
-      if (logicVersion) {
-        itemHtml += `<div style="margin-top:5px;font-size:10px;color:var(--muted)">
-          模型 ${esc(logicVersion)}
-          ${dcEnsemble?.applied ? `<span style="color:#4ade80">· Dixon-Coles 融合已生效 (${Math.round(Number(dcEnsemble.weight || 0) * 100)}%)</span>` : '<span style="color:#f59e0b">· DC 融合未生效</span>'}
-        </div>`;
-      }
-      if (historyCalibration?.applied) {
-        itemHtml += `<div style="margin-top:5px;font-size:10px;color:#93c5fd">
-          📈 生产历史校准 ${historyCalibration.sample_count || 0} 场 · 预期进球 ${Number(historyCalibration.expected_goals_before || 0).toFixed(2)} → ${Number(historyCalibration.expected_goals_after || 0).toFixed(2)}
-        </div>`;
-      }
-      
+
       const upset = r.upset;
       if (upset && upset.alert) {
         const uColor = upset.level === 'high' ? '#ef4444' : '#f59e0b';
@@ -2254,6 +2240,13 @@ function renderFootballPredictions(results) {
           <span style="color:var(--muted)"> · 热门${esc(upset.favorite)} ${((upset.favorite_prob || 0) * 100).toFixed(0)}%</span>
           ${renderScenario('真正爆冷', outrightCandidates, '#ef4444')}
           ${renderScenario('防冷平局', drawCandidates, '#f59e0b')}
+        </div>`;
+      }
+
+      if (upset && upset.confident) {
+        itemHtml += `<div style="margin-top:8px;padding:7px 8px;background:var(--bg2);border-left:3px solid #22c55e;border-radius:6px;font-size:12px">
+          <span style="color:#22c55e;font-weight:bold">✅ 热门稳胆</span>
+          <span style="color:var(--muted)"> · ${esc(upset.favorite || '')} ${((upset.favorite_prob || 0) * 100).toFixed(0)}% 领先次选 ${((upset.gap || 0) * 100).toFixed(0)}% · 真实冷门率约 30%</span>
         </div>`;
       }
 
@@ -2441,12 +2434,14 @@ function renderFootballPredictions(results) {
         const g = an.goals || {};
         const ou = g.direction ? `${g.direction} ${Math.round((g.direction_prob || 0) * 100)}%` : '';
         const goalTxt = g.most_likely_interval ? `最可能 ${g.most_likely_interval}` : '';
+        const bttsTxt = g.btts_yes != null ? `BTTS ${Math.round((g.btts_yes) * 100)}%(${esc(g.btts_pick || '')})` : '';
         itemHtml += `<div style="margin-top:8px;padding:8px 10px;background:var(--bg2);border-left:3px solid var(--accent);border-radius:8px">
           <div style="font-size:12px;color:var(--muted);margin-bottom:4px">🧠 赛果分析 <span style="color:var(--muted)">· 置信 ${(an.confidence * 100).toFixed(0)}%</span></div>
           <div style="font-size:13px;margin-bottom:5px">${esc(an.verdict)}</div>
           ${an.lottery_verdict ? `<div style="font-size:12px;color:#3b82f6;margin-bottom:5px">${esc(an.lottery_verdict)}</div>` : ''}
+          ${an.open_match ? `<div style="font-size:11px;color:#f59e0b;margin-bottom:5px">⚖️ 势均力敌·比分开放：胜平负接近，比分看区间即可，主看进球数/大小球/BTTS</div>` : ''}
           <div style="margin-bottom:5px">${spChips}</div>
-          <div style="font-size:12px;color:var(--muted)">⚽ ${goalTxt}${ou ? ' · ' + ou : ''}${an.upset_alert ? ' · ⚠️ 防冷' : ''}</div>
+          <div style="font-size:12px;color:var(--muted)">⚽ ${goalTxt}${ou ? ' · ' + ou : ''}${bttsTxt ? ' · ' + bttsTxt : ''}${an.upset_alert ? ' · ⚠️ 防冷' : ''}</div>
         </div>`;
       }
 
