@@ -92,6 +92,8 @@ def save_predictions(date_str: str, matches: List[Dict], version: str = ''):
                 'elo_margin': rqspf.get('elo_margin'),
                 'elo_trust': rqspf.get('elo_trust'),
                 'market_home_prob': rqspf.get('market_home_prob'),
+                'line_movement': rqspf.get('line_movement'),
+                'sharp_confirmed': rqspf.get('sharp_confirmed', False),
             } if rqspf else None,
 
             'dx': {
@@ -108,6 +110,8 @@ def save_predictions(date_str: str, matches: List[Dict], version: str = ''):
                 'elo_total': dx.get('elo_total'),
                 'elo_trust': dx.get('elo_trust'),
                 'market_over_prob': dx.get('market_over_prob'),
+                'line_movement': dx.get('line_movement'),
+                'sharp_confirmed': dx.get('sharp_confirmed', False),
             } if dx else None,
 
             # 赛后结果（初始为 None）

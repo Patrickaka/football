@@ -96,6 +96,25 @@ def _official_pick_status(bet_type, pick_prob, confidence):
     return {'playable': True, 'official': True, 'skip_reason': None}
 
 
+def _movement_accuracy_gate(bet_type, status, movement, confirmation):
+    """Accuracy-first admission for spread and totals official picks."""
+    if bet_type not in ('rqspf', 'dx'):
+        return status
+    if not movement or not movement.get('available'):
+        return {**status, 'playable': False, 'official': False,
+                'skip_reason': 'movement_unavailable'}
+    if movement.get('stale'):
+        return {**status, 'playable': False, 'official': False,
+                'skip_reason': 'movement_stale'}
+    if int(movement.get('samples', 0) or 0) < 2:
+        return {**status, 'playable': False, 'official': False,
+                'skip_reason': 'movement_samples_insufficient'}
+    if not confirmation.get('confirmed'):
+        return {**status, 'playable': False, 'official': False,
+                'skip_reason': 'movement_conflicts_with_model'}
+    return status
+
+
 def _elo_predictions(match):
     """Return ELO estimates with a conservative trust score for known teams."""
     try:
@@ -173,6 +192,7 @@ def analyze_spf(match, movement=None):
     # 聪明钱是否确认本方推荐
     line_movement = None
     sharp_confirmed = False
+    sc = {'confirmed': False, 'reason': 'movement_unavailable', 'boost': 0.0}
     if movement and movement.get('available'):
         from .odds_movement import sharp_confirmation
         sc = sharp_confirmation(movement, recommendation)
@@ -184,6 +204,7 @@ def analyze_spf(match, movement=None):
                 confidence = 'medium'
             elif confidence == 'medium' and sc['boost'] >= 1.0:
                 confidence = 'high'
+        status = _movement_accuracy_gate('rqspf', status, movement, sc)
     
     return {
         'available': True,
@@ -247,6 +268,7 @@ def analyze_rqspf(match, movement=None):
     status = _official_pick_status('rqspf', pick_prob, confidence)
     line_movement = None
     sharp_confirmed = False
+    sc = {'confirmed': False, 'reason': 'movement_unavailable', 'boost': 0.0}
     if movement and movement.get('available'):
         from .odds_movement import sharp_confirmation
         sc = sharp_confirmation(movement, recommendation)
@@ -258,6 +280,7 @@ def analyze_rqspf(match, movement=None):
                 confidence = 'medium'
             elif confidence == 'medium' and sc['boost'] >= 1.0:
                 confidence = 'high'
+    status = _movement_accuracy_gate('rqspf', status, movement, sc)
     
     return {
         'available': True,
@@ -336,6 +359,7 @@ def analyze_daxiao(match, movement=None):
     status = _official_pick_status('dx', pick_prob, confidence)
     line_movement = None
     sharp_confirmed = False
+    sc = {'confirmed': False, 'reason': 'movement_unavailable', 'boost': 0.0}
     if movement and movement.get('available'):
         from .odds_movement import sharp_confirmation
         sc = sharp_confirmation(movement, recommendation)
@@ -347,6 +371,7 @@ def analyze_daxiao(match, movement=None):
                 confidence = 'medium'
             elif confidence == 'medium' and sc['boost'] >= 1.0:
                 confidence = 'high'
+    status = _movement_accuracy_gate('dx', status, movement, sc)
     
     return {
         'available': True,
