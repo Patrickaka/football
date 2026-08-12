@@ -69,7 +69,7 @@ class DltPortfolioTests(unittest.TestCase):
         )
 
     def test_predictor_version_invalidates_old_cache(self):
-        self.assertEqual(LOTTERY_PREDICTOR_VERSION, 'dlt-v4.2-walk-forward-single-pick')
+        self.assertEqual(LOTTERY_PREDICTOR_VERSION, 'dlt-v4.3-balanced-weights')
 
     def test_single_pick_designates_walk_forward_winner_without_fake_mix(self):
         result = self.analyzer.generate_multi_strategy_recommendations()

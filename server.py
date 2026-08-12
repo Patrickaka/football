@@ -566,6 +566,9 @@ def _is_cache_payload_current(key, data):
         return False
     if key == '3d':
         return data.get('version') == _get_lottery3d_module().PREDICTOR_VERSION
+    if key == 'ssq':
+        import src.ssq as _ssq
+        return data.get('version') == _ssq.SSQ_PREDICTION_VERSION
     return True
 
 

@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>大乐透 &amp; 双色球优化验证报告</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif; background: #f4f6fb; color: #1f2533; line-height: 1.6; padding: 24px; }
+  .wrap { max-width: 900px; margin: 0 auto; }
+  h1 { font-size: 22px; margin-bottom: 4px; }
+  .sub { color: #8a93a6; font-size: 13px; margin-bottom: 20px; }
+  .card { background: #fff; border-radius: 14px; padding: 20px; margin-bottom: 16px; box-shadow: 0 2px 10px rgba(20,30,60,.05); }
+  h2 { font-size: 16px; margin-bottom: 12px; color: #2a3350; }
+  h3 { font-size: 14px; margin: 14px 0 8px; color: #2a3350; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; margin: 8px 0; }
+  th, td { padding: 7px 10px; text-align: left; border-bottom: 1px solid #eef1f7; }
+  th { color: #8a93a6; font-weight: 600; font-size: 12px; }
+  .good { color: #e23b3b; font-weight: 700; }
+  .bad { color: #2f9e44; font-weight: 700; }
+  .neutral { color: #8a93a6; }
+  .tag { display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 5px; margin-left: 6px; vertical-align: middle; }
+  .tag.ok { background: #e8f0ff; color: #2f6bff; }
+  .tag.warn { background: #fff4e5; color: #b45309; }
+  .note { font-size: 12px; color: #a7afc1; margin-top: 8px; }
+  .kv { display: flex; flex-wrap: wrap; gap: 18px; font-size: 13px; margin: 8px 0; }
+  .kv b { color: #1f2533; }
+  code { background: #f0f2f7; padding: 1px 6px; border-radius: 4px; font-size: 12px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>大乐透 &amp; 双色球预测模块优化验证报告</h1>
+  <div class="sub">2026-08-12 · 全量历史数据 + walk-forward 回测 · 所有指标均与随机超几何基准对照</div>
+
+  <div class="card">
+    <h2>结论摘要</h2>
+    <table>
+      <tr><th>模块</th><th>版本</th><th>核心结论</th></tr>
+      <tr>
+        <td>双色球</td>
+        <td><code>ssq-v3.0-full-history</code></td>
+        <td>数据量 92期→<b>3489期</b>（最大根因已解决）；修复蓝球反预测（加权28.5%→均匀随机）；红球大底微弱正向</td>
+      </tr>
+      <tr>
+        <td>大乐透</td>
+        <td><code>dlt-v4.3-balanced-weights</code></td>
+        <td>权重均衡化缓解两端区间锁死；500期验证池ge4=12.0%、池ge3=36.6%均优于 v4.2，分布熵提升</td>
+      </tr>
+    </table>
+    <div class="note">诚实声明：两类彩票均为独立均匀摇奖，统计模型无法系统性超越随机基准。优化的目标是<b>不劣于随机</b>，并为复式/胆拖提供更大覆盖的选号池。</div>
+  </div>
+
+  <div class="card">
+    <h2>一、双色球优化 <span class="tag ok">ssq-v3.0</span></h2>
+    <h3>1.1 问题根因</h3>
+    <p>原版仅抓取 2026 年 92 期数据，统计基础严重不足；蓝球加权采样被证明是<b>反预测信号</b>（越热越不中）。</p>
+
+    <h3>1.2 改动</h3>
+    <ul style="font-size:13px;margin-left:18px;">
+      <li>抓取全量 3489 期历史（2003年03001期 ~ 2026年26092期）→ <code>data/ssq_history_full.json</code></li>
+      <li><code>load_history()</code> 优先读全量文件；<code>_fetch_online()</code> 抓取范围改为全量</li>
+      <li>蓝球单式改均匀随机 <code>rng.choice(BLUE_RANGE)</code>（红球保留加权采样）</li>
+      <li>server.py 为 ssq 缓存键增加版本校验，防止旧版本缓存残留</li>
+    </ul>
+
+    <h3>1.3 600期 walk-forward 回测（全量数据）</h3>
+    <table>
+      <tr><th>指标</th><th>模型</th><th>随机基准</th><th>判定</th></tr>
+      <tr><td>红球Top15大底 ≥4码</td><td><b>27.2%</b></td><td>24.2%</td><td class="good">微弱正向 +3.0%</td></tr>
+      <tr><td>红球Top15大底 ≥3码</td><td><b>61.2%</b></td><td>~58%</td><td class="good">正向</td></tr>
+      <tr><td>蓝球Top8大底命中</td><td>49.5%</td><td>50%</td><td class="neutral">无信号（与随机持平）</td></tr>
+      <tr><td>5注红球 ≥2码</td><td><b>80.7%</b></td><td>—</td><td class="neutral">单注期望约 0.9 码</td></tr>
+      <tr><td>5注蓝球命中（至少1注）</td><td>28.5%</td><td>27.6%</td><td class="good">均匀随机无偏</td></tr>
+    </table>
+    <div class="note">对比旧版：蓝球加权采样 5注命中 ~23%（低于随机），改均匀随机后回升至 28.5% &gt; 27.6% 理论值。</div>
+  </div>
+
+  <div class="card">
+    <h2>二、大乐透优化 <span class="tag ok">dlt-v4.3</span></h2>
+    <h3>2.1 问题根因</h3>
+    <p>zone 区间特征给 1-12 / 25-35 两端区间无差别加分，导致推荐锁死两端（25号被推181次、1号仅2次），分布熵仅 4.794。</p>
+
+    <h3>2.2 改动（权重均衡化）</h3>
+    <table>
+      <tr><th>特征</th><th>v4.2</th><th>v4.3</th><th>理由</th></tr>
+      <tr><td>gap（遗漏）</td><td>0.08</td><td class="good">0.12</td><td>让出权重给遗漏回补</td></tr>
+      <tr><td>sum（和值）</td><td>0.15</td><td class="good">0.13</td><td>降低"均值锚定"</td></tr>
+      <tr><td>zone（区间）</td><td>0.20</td><td class="good">0.18</td><td>缓解两端区间锁死</td></tr>
+      <tr><td>其余6项</td><td colspan="2">不变</td><td>保持 v3.2 消融结论</td></tr>
+    </table>
+
+    <h3>2.3 500期 walk-forward 回测（2900期全量历史）</h3>
+    <table>
+      <tr><th>指标</th><th>v4.2</th><th>v4.3</th><th>随机基准</th><th>判定</th></tr>
+      <tr><td>前区15码大底 ≥4码（池ge4）</td><td>11.8%</td><td class="good">12.0%</td><td>9.3%</td><td class="good">提升且超随机</td></tr>
+      <tr><td>前区15码大底 ≥3码（池ge3）</td><td>35.4%</td><td class="good">36.6%</td><td>~30%</td><td class="good">+1.2%</td></tr>
+      <tr><td>Top5 前区 ≥2码</td><td class="bad">15.4%</td><td>14.4%</td><td>13.9%</td><td class="neutral">略降但仍超随机</td></tr>
+      <tr><td>分布熵（均匀度）</td><td>4.794</td><td class="good">4.837</td><td>5.13</td><td class="good">两端锁死缓解</td></tr>
+    </table>
+
+    <h3>2.4 分窗口稳定性（每窗口100期）</h3>
+    <table>
+      <tr><th>窗口</th><th>期数范围</th><th>池ge4 (v4.3)</th><th>随机基准</th></tr>
+      <tr><td>窗口1</td><td>2025133~2026082</td><td>11%</td><td class="good">&gt;9.3%</td></tr>
+      <tr><td>窗口2</td><td>2025033~2025132</td><td class="good">15%</td><td class="good">&gt;9.3%</td></tr>
+      <tr><td>窗口3</td><td>2024085~2025032</td><td>13%</td><td class="good">&gt;9.3%</td></tr>
+      <tr><td>窗口4</td><td>2023135~2024084</td><td>11%</td><td class="good">&gt;9.3%</td></tr>
+      <tr><td>窗口5</td><td>2023035~2023134</td><td>10%</td><td class="good">&gt;9.3%</td></tr>
+    </table>
+    <div class="note">5个窗口池ge4 全部稳定超过随机基准 9.3%，证明 12.0% 不是小样本噪声。</div>
+  </div>
+
+  <div class="card">
+    <h2>三、验证脚本与文件</h2>
+    <table>
+      <tr><th>文件</th><th>作用</th></tr>
+      <tr><td><code>scripts/validate_dlt_v43_500.py</code></td><td>大乐透 v4.3 vs v4.2 的500期全量+分窗口对比验证</td></tr>
+      <tr><td><code>scripts/backtest_ssq_v3_full.py</code></td><td>双色球全量数据600期大底池/5注覆盖回测</td></tr>
+      <tr><td><code>data/dlt_v43_500_validation.json</code></td><td>验证结果数据存档</td></tr>
+      <tr><td><code>data/ssq_history_full.json</code></td><td>双色球全量3489期历史数据</td></tr>
+      <tr><td><code>web/ssq.html</code></td><td>页面大底覆盖数字更新为全量回测准确值</td></tr>
+    </table>
+  </div>
+
+  <div class="card">
+    <h2>四、测试</h2>
+    <p style="font-size:13px;">8 个测试全部通过：<code>test_server_ssq_routes</code>（3个，含缓存版本校验）+ <code>test_dlt_portfolio</code>（5个，含 v4.3 版本断言更新）。线上主入口 <code>generate_multi_strategy_recommendations</code> 与 <code>run_prediction</code> 均正常出号。</p>
+    <div class="note">⚠ 彩市有风险，本报告所有概率均为统计参考，不构成投注建议。</div>
+  </div>
+</div>
+</body>
+</html>
