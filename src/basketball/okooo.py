@@ -215,6 +215,8 @@ def analyze_line_trend(history: List[Dict], kind: str = 'ah') -> Dict:
         'line_move': round(line_move, 4),
         'kind': kind,
         'samples': len(history),
+        'opening_line': first.get('line'),
+        'current_line': last.get('line'),
     }
 
 

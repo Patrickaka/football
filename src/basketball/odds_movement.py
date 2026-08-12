@@ -93,7 +93,7 @@ def track_basketball_odds(date: str = None) -> int:
         # 去重：与上一个快照完全相同则跳过
         if seq and all(seq[-1].get(k) == snap.get(k) for k in (
                 'spf_home', 'spf_away', 'rqspf_home', 'rqspf_away',
-                'dx_over', 'dx_under')):
+                'dx_over', 'dx_under', 'handicap', 'total_line')):
             # 仅更新 ts，便于 staleness 判定
             seq[-1]['ts'] = now_iso
         else:
@@ -108,7 +108,8 @@ def track_basketball_odds(date: str = None) -> int:
     return count
 
 
-def _movement_from_snapshots(snaps: List[Dict], hk: str, ak: str) -> Optional[Dict]:
+def _movement_from_snapshots(snaps: List[Dict], hk: str, ak: str,
+                             line_key: str = None, kind: str = 'ml') -> Optional[Dict]:
     """从快照序列计算两路 movement。hk/ak 为两侧赔率字段名。
 
     返回标准化 movement 字典；样本不足返回 None。
@@ -123,12 +124,25 @@ def _movement_from_snapshots(snaps: List[Dict], hk: str, ak: str) -> Optional[Di
     # 赔率下降 = 该侧被买入 = 资金追捧
     hm = h1 - h0
     am = a1 - a0
-    raw_strength = abs(hm) + abs(am)
+    opening_line = first.get(line_key) if line_key else None
+    current_line = last.get(line_key) if line_key else None
+    try:
+        line_move = float(current_line) - float(opening_line)
+    except (TypeError, ValueError):
+        line_move = 0.0
+    raw_strength = abs(hm) + abs(am) + min(abs(line_move), 5.0) * 0.02
 
     if hm < -0.02 and am > 0.01:
-        side = 'home'
+        side = 'over' if kind == 'ou' else 'home'
     elif am < -0.02 and hm > 0.01:
-        side = 'away'
+        side = 'under' if kind == 'ou' else 'away'
+    elif abs(line_move) >= 0.5:
+        if kind == 'ou':
+            side = 'over' if line_move > 0 else 'under'
+        elif kind == 'ah':
+            side = 'home' if line_move > 0 else 'away'
+        else:
+            side = 'flat'
     else:
         side = 'flat'
 
@@ -144,7 +158,8 @@ def _movement_from_snapshots(snaps: List[Dict], hk: str, ak: str) -> Optional[Di
     last_move_ts = None
     for i in range(len(valid) - 1, 0, -1):
         if (valid[i].get(hk) != valid[i - 1].get(hk) or
-                valid[i].get(ak) != valid[i - 1].get(ak)):
+                valid[i].get(ak) != valid[i - 1].get(ak) or
+                (line_key and valid[i].get(line_key) != valid[i - 1].get(line_key))):
             last_move_ts = _parse_ts(valid[i].get('ts'))
             break
     last_move_age = (now - last_move_ts).total_seconds() / 60.0 if last_move_ts else None
@@ -164,6 +179,10 @@ def _movement_from_snapshots(snaps: List[Dict], hk: str, ak: str) -> Optional[Di
         'last_move_age_min': round(last_move_age, 1) if last_move_age is not None else None,
         'home_move': round(hm, 4),
         'away_move': round(am, 4),
+        'line_move': round(line_move, 4),
+        'opening_line': opening_line,
+        'current_line': current_line,
+        'kind': kind,
     }
 
 
@@ -245,9 +264,13 @@ def build_movement_for_match(match: Dict, kv_history: Dict = None,
             if out['spf'] is None:
                 out['spf'] = _movement_from_snapshots(seq, 'spf_home', 'spf_away')
             if out['rqspf'] is None:
-                out['rqspf'] = _movement_from_snapshots(seq, 'rqspf_home', 'rqspf_away')
+                out['rqspf'] = _movement_from_snapshots(
+                    seq, 'rqspf_home', 'rqspf_away', 'handicap', 'ah'
+                )
             if out['dx'] is None:
-                out['dx'] = _movement_from_snapshots(seq, 'dx_over', 'dx_under')
+                out['dx'] = _movement_from_snapshots(
+                    seq, 'dx_over', 'dx_under', 'total_line', 'ou'
+                )
 
     return out
 

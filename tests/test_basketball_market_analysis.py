@@ -1,6 +1,7 @@
 import unittest
 
 from src.basketball.odds_movement import (
+    _movement_from_snapshots,
     _normalize_okooo_trend,
     describe_market_movement,
 )
@@ -43,6 +44,24 @@ class BasketballMarketAnalysisTests(unittest.TestCase):
         bets = {"spf": {"line_movement": {"confirmed": False}}}
         result = describe_market_movement(movements, bets)
         self.assertEqual(result["level"], "warning")
+
+    def test_snapshot_movement_uses_spread_and_total_line_changes(self):
+        snapshots = [
+            {"ts": "2026-08-12T10:00:00", "h": 1.80, "a": 1.80,
+             "handicap": -3.5, "total": 218.5},
+            {"ts": "2026-08-12T10:10:00", "h": 1.80, "a": 1.80,
+             "handicap": -5.5, "total": 221.5},
+        ]
+        spread = _movement_from_snapshots(
+            snapshots, "h", "a", "handicap", "ah"
+        )
+        total = _movement_from_snapshots(
+            snapshots, "h", "a", "total", "ou"
+        )
+        self.assertEqual(spread["line_move"], -2.0)
+        self.assertEqual(spread["side"], "away")
+        self.assertEqual(total["line_move"], 3.0)
+        self.assertEqual(total["side"], "over")
 
 
 if __name__ == "__main__":

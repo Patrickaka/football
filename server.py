@@ -1655,11 +1655,16 @@ class Handler(BaseHTTPRequestHandler):
         try:
             date = params.get('date', [None])[0]
             bet_types = params.get('types', ['spf,rqspf,dx'])[0].split(',')
+            source = params.get('source', ['okooo'])[0]
+            if source not in ('okooo', '500'):
+                source = 'okooo'
             
-            self._log.info(f'篮球推荐请求: date={date}, types={bet_types}')
+            self._log.info(f'篮球推荐请求: date={date}, types={bet_types}, source={source}')
             
             generate_basketball_recommendations, _, _ = _load_basketball_helpers()
-            result = generate_basketball_recommendations(date=date, bet_types=bet_types)
+            result = generate_basketball_recommendations(
+                date=date, bet_types=bet_types, source=source, use_movement=True
+            )
             
             if 'error' in result:
                 return result

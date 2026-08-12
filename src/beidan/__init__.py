@@ -18,7 +18,7 @@ from ..common import kv_store
 
 log = setup_logger('beidan')
 
-BEIDAN_VERSION = '2026-08-12-joint-market-state-v4'
+BEIDAN_VERSION = '2026-08-12-timed-market-accuracy-v5'
 BEIDAN_HISTORY_KEY = 'beidan_prediction_history'
 BEIDAN_HISTORY_LIMIT = 500
 
@@ -1090,6 +1090,54 @@ def apply_beidan_joint_market_state(score_probs, asian_data=None, goals_data=Non
     })
     return adjusted, state
 
+
+def build_beidan_market_admission(section, bet_type, asian_data=None, goals_data=None):
+    """Accuracy-first gate using the same-match handicap/O-U time series."""
+    state = build_beidan_joint_market_state(asian_data, goals_data)
+    asian_samples = len((asian_data or {}).get('history') or [])
+    goals_samples = len((goals_data or {}).get('history') or [])
+    signal = state['direction_signal'] if bet_type == 'rqspf' else state['tempo_signal']
+    prediction = str((section or {}).get('prediction') or '')
+    if bet_type == 'rqspf':
+        pick_signal = 1.0 if prediction == '让胜' else (-1.0 if prediction == '让负' else 0.0)
+        enough = asian_samples >= 2
+    else:
+        try:
+            goals = 7 if prediction == '7+' else int(prediction)
+        except (TypeError, ValueError):
+            goals = None
+        pick_signal = 1.0 if goals is not None and goals >= 3 else (-1.0 if goals is not None else 0.0)
+        enough = goals_samples >= 2
+    aligned = enough and abs(signal) >= 0.08 and pick_signal * signal > 0
+    reason = None
+    if not enough:
+        reason = 'market_history_insufficient'
+    elif abs(signal) < 0.08:
+        reason = 'market_signal_weak'
+    elif not aligned:
+        reason = 'market_conflicts_with_model'
+    return {
+        'official': bool(aligned), 'playable': bool(aligned), 'skip_reason': reason,
+        'aligned': bool(aligned), 'signal': round(signal, 4),
+        'asian_samples': asian_samples, 'goals_samples': goals_samples,
+        'state': state,
+    }
+
+
+def _beidan_market_snapshot(match):
+    """Compact current snapshot for repeated same-match refreshes."""
+    asian_history = ((match.get('asian') or {}).get('history') or [])
+    goals_history = ((match.get('goals') or {}).get('history') or [])
+    asian = asian_history[-1] if asian_history else {}
+    goals = goals_history[-1] if goals_history else {}
+    return {
+        'ts': datetime.now().isoformat(timespec='seconds'),
+        'asian': {k: asian.get(k) for k in ('handicap', 'home_odds', 'away_odds')},
+        'total': {k: goals.get(k) for k in ('line', 'over_odds', 'under_odds')},
+        'rqspf_admission': (match.get('rqspf') or {}).get('market_admission'),
+        'zjq_admission': (match.get('zjq') or {}).get('market_admission'),
+    }
+
 def analyze_cs_trend(cs_history):
     if not cs_history or len(cs_history) < 2:
         return {'direction': 'stable', 'strength': 0, 'hot_scores': []}
@@ -2086,6 +2134,7 @@ def _compact_beidan_record(match, source):
     return {
         'key': _beidan_record_key(match),
         'source': source,
+        'match_id': match.get('match_id'),
         'date': match.get('date'),
         'num': match.get('num'),
         'time': match.get('time'),
@@ -2109,13 +2158,16 @@ def _compact_beidan_record(match, source):
             'quality': zjq.get('quality'),
             'goal_groups': zjq.get('goal_groups'),
             'probabilities': zjq.get('probabilities'),
+            'market_admission': zjq.get('market_admission'),
         },
         'rqspf': {
             'prediction': rqspf.get('prediction'),
             'confidence': rqspf.get('confidence'),
             'quality': rqspf.get('quality'),
             'probabilities': rqspf.get('probabilities'),
+            'market_admission': rqspf.get('market_admission'),
         },
+        'market_snapshot': _beidan_market_snapshot(match),
     }
 
 def save_beidan_prediction_snapshot(result):
@@ -2135,7 +2187,18 @@ def save_beidan_prediction_snapshot(result):
             compact['actual'] = by_key[key].get('actual')
             compact['settlement'] = by_key[key].get('settlement')
             compact['created_at'] = by_key[key].get('created_at') or compact['created_at']
-        by_key[key] = {**by_key.get(key, {}), **compact}
+        previous = by_key.get(key, {})
+        layers = list(previous.get('market_layers') or [])
+        snapshot = compact.pop('market_snapshot')
+        signature = json.dumps(
+            {'asian': snapshot.get('asian'), 'total': snapshot.get('total')},
+            sort_keys=True, ensure_ascii=False,
+        )
+        previous_signature = layers[-1].get('signature') if layers else None
+        if signature != previous_signature:
+            layers.append({**snapshot, 'signature': signature})
+        compact['market_layers'] = layers[-30:]
+        by_key[key] = {**previous, **compact}
         saved += 1
 
     _save_beidan_history(list(by_key.values()))
@@ -2151,12 +2214,35 @@ def summarize_beidan_history(limit=200):
             levels[level] = levels.get(level, 0) + 1
 
     settled = [r for r in recent if r.get('settled')]
+    market_accuracy = {
+        'rqspf': {'total': 0, 'correct': 0, 'accuracy': 0.0},
+        'zjq': {'total': 0, 'correct': 0, 'accuracy': 0.0},
+    }
+    for record in settled:
+        for bet_type, actual_fn in (
+            ('rqspf', _actual_rqspf_from_record),
+            ('zjq', _actual_zjq_from_record),
+        ):
+            section = record.get(bet_type) or {}
+            admission = section.get('market_admission') or {}
+            if not admission.get('official'):
+                continue
+            actual = actual_fn(record)
+            prediction = section.get('prediction')
+            if actual is None or prediction is None:
+                continue
+            market_accuracy[bet_type]['total'] += 1
+            market_accuracy[bet_type]['correct'] += int(str(prediction) == str(actual))
+    for stats in market_accuracy.values():
+        if stats['total']:
+            stats['accuracy'] = round(stats['correct'] / stats['total'], 4)
     return {
         'total_records': len(records),
         'recent_records': len(recent),
         'settled_records': len(settled),
         'pending_records': len(recent) - len(settled),
         'quality_levels': levels,
+        'market_accuracy': market_accuracy,
         'latest': recent[:30],
     }
 
@@ -3065,6 +3151,7 @@ def generate_beidan_recommendations(date=None, bet_types=None, source='okooo', s
     
     for match in matches:
         rec = {
+            'match_id': match['id'],
             'num': match['num'],
             'date': match['date'],
             'time': match['time'],
@@ -3093,12 +3180,18 @@ def generate_beidan_recommendations(date=None, bet_types=None, source='okooo', s
         
         if 'rqspf' in bet_types:
             rec['rqspf'] = analyze_rqspf(match, asian_data, goals_data)
+            rec['rqspf']['market_admission'] = build_beidan_market_admission(
+                rec['rqspf'], 'rqspf', asian_data, goals_data
+            )
         
         if 'bifen' in bet_types:
             rec['bifen'] = analyze_bifen(match, bifen_odds, asian_data, goals_data)
         
         if 'zjq' in bet_types:
             rec['zjq'] = analyze_zjq(match, zjq_odds, asian_data, goals_data)
+            rec['zjq']['market_admission'] = build_beidan_market_admission(
+                rec['zjq'], 'zjq', asian_data, goals_data
+            )
         
         if 'bqc' in bet_types:
             rec['bqc'] = analyze_bqc(match, bqc_odds)
@@ -3127,7 +3220,9 @@ def generate_beidan_recommendations(date=None, bet_types=None, source='okooo', s
             q = sec.get('quality') or {}
             level = q.get('level', 'unknown')
             pick_levels[level] = pick_levels.get(level, 0) + 1
-            if level in ('strong', 'medium'):
+            admission = sec.get('market_admission') or {}
+            market_required = bet_type in ('rqspf', 'zjq')
+            if level in ('strong', 'medium') and (not market_required or admission.get('official')):
                 top_picks.append({
                     'num': rec.get('num'),
                     'league': rec.get('league'),
