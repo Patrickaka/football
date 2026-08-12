@@ -31,7 +31,7 @@ from ..common.paths import data_path
 
 log = setup_logger('football')
 
-FOOTBALL_PREDICTION_LOGIC_VERSION = '2026-08-12-joint-market-state-v21'
+FOOTBALL_PREDICTION_LOGIC_VERSION = '2026-08-12-joint-market-state-evidence-v22'
 LOTTERY_OFFICIAL_ODDS_WEIGHT = 0.40
 
 # ELO 评分系统（延迟导入）
@@ -7765,8 +7765,9 @@ def analyze_match(match, force_refresh=False):
     # Structured H2H / motivation context participates in the same score
     # distribution as 1X2 and totals. Free-form previews are never converted
     # into probabilities; only sourced, quality-scored fields are accepted.
+    live_context = match.get('live_context') or {}
+    live_context_quality = {}
     try:
-        live_context = match.get('live_context') or {}
         if not live_context:
             safe_mid = re.sub(r'[^0-9A-Za-z_-]', '', str(mid))
             context_path = os.path.join(
@@ -7777,6 +7778,8 @@ def analyze_match(match, force_refresh=False):
                 with open(context_path, encoding='utf-8') as context_file:
                     live_context = json.load(context_file)
         from .contextual_fusion import apply_contextual_fusion
+        from .live_context_quality import assess_live_context
+        live_context_quality = assess_live_context(live_context)
         candidates, contextual_adjustment = apply_contextual_fusion(candidates, live_context)
         meta['contextual_fusion'] = contextual_adjustment
     except Exception as e:
@@ -8396,6 +8399,8 @@ def analyze_match(match, force_refresh=False):
         'similar_market': similar_market_result,
         'steam_move': steam_result,
         'market_change': market_change_result,
+        'live_context': live_context,
+        'live_context_quality': live_context_quality,
         
         # ========== 新增字段 ==========
         'model_status': model_status,

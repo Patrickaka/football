@@ -1769,44 +1769,32 @@ function closeFootballProfessionalModal() {
 }
 
 function deriveFootballEvidence(result) {
-  if (result?.professional_evidence?.coverage_score != null) {
-    const existing = result.professional_evidence;
-    const legacyCombined = (existing.checks || []).find(item => item.key === 'lineup_injuries');
-    if (!legacyCombined) return existing;
-    const live = result?.live_context || {};
-    const checks = (existing.checks || []).filter(item => item.key !== 'lineup_injuries');
-    checks.push(
-      {key:'injuries', label:'伤停与停赛', weight:2, available:Array.isArray(live.injuries) && live.injuries.length > 0},
-      {key:'confirmed_lineup', label:'确认首发', weight:2, available:!!live.lineup && Object.keys(live.lineup).length > 0}
-    );
-    return {
-      ...existing,
-      checks,
-      missing: checks.filter(item => !item.available).map(item => item.label),
-      blockers: [
-        ...(existing.blockers || []).filter(item => item !== '未取得确认首发'),
-        ...(!(Array.isArray(live.injuries) && live.injuries.length) ? ['未取得可核验伤停'] : []),
-        ...(!(live.lineup && Object.keys(live.lineup).length) ? ['未取得确认首发'] : [])
-      ]
-    };
-  }
   const lottery = result?.lottery || {};
   const team = result?.team || {};
   const ml = result?.model?.ml || {};
   const live = result?.live_context || {};
+  const consensus = result?.bookmaker_consensus || result?.asian?.bookmaker_consensus;
+  const expectedGoalsAvailable = ['home_xg_last5','away_xg_last5','elo_xg_home','elo_xg_away']
+    .some(key => team[key] != null && team[key] !== 0)
+    || (result?.total?.xg_home != null && result?.total?.xg_away != null);
+  const similarCount = Number(result?.similar_market?.sample_count || result?.similar_market?.count || 0);
+  const verifiedInjuries = Array.isArray(live.injuries) && live.injuries.length > 0
+    && live.injuries.every(item => item?.source && item?.ts);
+  const verifiedLineup = !!live.lineup && Object.keys(live.lineup).length > 0
+    && !!live.lineup.source && !!live.lineup.ts;
   const checks = [
     ['euro_odds', '欧赔初终盘', 16, !!result?.euro],
     ['asian_odds', '亚盘初终盘', 16, !!result?.asian],
     ['total_odds', '大小球初终盘', 10, !!result?.total],
     ['team_form', '球队近期攻防', 12, Object.keys(team).length > 0],
-    ['expected_goals', 'xG/xGA', 10, ['home_xg_last5','away_xg_last5'].some(key => team[key] != null && team[key] !== 0)],
-    ['bookmaker_consensus', '多公司一致性', 8, !!result?.bookmaker_consensus],
+    ['expected_goals', 'xG/xGA', 10, expectedGoalsAvailable],
+    ['bookmaker_consensus', '多公司一致性', 8, !!consensus && consensus.available !== false],
     ['market_movement', '盘口时序变化', 8, !!result?.market_change?.used || !!result?.steam_move],
-    ['historical_analogs', '相似盘口历史', 7, Number(result?.similar_market?.sample_count || 0) >= 30],
+    ['historical_analogs', '相似盘口历史', 7, similarCount >= 30],
     ['ml_shadow', '机器学习影子模型', 5, !!ml.ml_available || !!ml.is_trained],
     ['official_lottery_odds', '官方胜平负/让球赔率', 4, !!lottery.spf_odds || !!lottery.rqspf_odds],
-    ['injuries', '伤停与停赛', 2, Array.isArray(live.injuries) && live.injuries.length > 0],
-    ['confirmed_lineup', '确认首发', 2, !!live.lineup && Object.keys(live.lineup).length > 0]
+    ['injuries', '伤停与停赛', 2, verifiedInjuries],
+    ['confirmed_lineup', '确认首发', 2, verifiedLineup]
   ].map(([key,label,weight,available]) => ({key,label,weight,available}));
   const totalWeight = checks.reduce((sum,item) => sum + item.weight, 0);
   const availableWeight = checks.filter(item => item.available).reduce((sum,item) => sum + item.weight, 0);
@@ -1819,8 +1807,8 @@ function deriveFootballEvidence(result) {
     missing: checks.filter(item => !item.available).map(item => item.label),
     blockers: [
       ...(!lottery?.standard?.market_probabilities ? ['缺少官方赔率去水概率'] : []),
-      ...(!(Array.isArray(live.injuries) && live.injuries.length) ? ['未取得可核验伤停'] : []),
-      ...(!(live.lineup && Object.keys(live.lineup).length) ? ['未取得确认首发'] : []),
+      ...(!verifiedInjuries ? ['未取得可核验伤停'] : []),
+      ...(!verifiedLineup ? ['未取得确认首发'] : []),
       ...(score < .70 ? ['专业证据覆盖不足70%'] : [])
     ]
   };

@@ -9,6 +9,18 @@ def _present(value: Any) -> bool:
     return value not in (None, "", [], {})
 
 
+def _live_item_verified(value: Any) -> bool:
+    """Live information only counts when its provenance can be audited."""
+    if isinstance(value, list):
+        return bool(value) and all(
+            isinstance(item, Mapping) and item.get("source") and item.get("ts")
+            for item in value
+        )
+    return isinstance(value, Mapping) and bool(value) and bool(
+        value.get("source") and value.get("ts")
+    )
+
+
 def _probability_divergence(
     model: Mapping[str, Any] | None,
     market: Mapping[str, Any] | None,
@@ -36,6 +48,16 @@ def build_match_evidence_profile(result: Mapping[str, Any]) -> Dict[str, Any]:
     ml = model.get("ml") or {}
     similar = result.get("similar_market") or {}
     live = result.get("live_context") or {}
+    asian = result.get("asian") or {}
+    total_market = result.get("total") or {}
+    consensus = result.get("bookmaker_consensus") or asian.get("bookmaker_consensus")
+    expected_goals_available = any(
+        _present(team.get(key))
+        for key in ("home_xg_last5", "away_xg_last5", "elo_xg_home", "elo_xg_away")
+    ) or all(_present(total_market.get(key)) for key in ("xg_home", "xg_away"))
+    similar_count = int(similar.get("sample_count", similar.get("count", 0)) or 0)
+    injuries_verified = _live_item_verified(live.get("injuries"))
+    lineup_verified = _live_item_verified(live.get("lineup"))
 
     checks = [
         ("euro_odds", "欧赔初终盘", 16, _present(result.get("euro"))),
@@ -46,13 +68,13 @@ def build_match_evidence_profile(result: Mapping[str, Any]) -> Dict[str, Any]:
             "expected_goals",
             "xG/xGA",
             10,
-            any(_present(team.get(key)) for key in ("home_xg_last5", "away_xg_last5")),
+            expected_goals_available,
         ),
         (
             "bookmaker_consensus",
             "多公司一致性",
             8,
-            _present(result.get("bookmaker_consensus")),
+            bool(consensus and consensus.get("available", True)),
         ),
         (
             "market_movement",
@@ -65,7 +87,7 @@ def build_match_evidence_profile(result: Mapping[str, Any]) -> Dict[str, Any]:
             "historical_analogs",
             "相似盘口历史",
             7,
-            int(similar.get("sample_count", 0) or 0) >= 30,
+            similar_count >= 30,
         ),
         (
             "ml_shadow",
@@ -79,8 +101,8 @@ def build_match_evidence_profile(result: Mapping[str, Any]) -> Dict[str, Any]:
             4,
             bool(lottery.get("spf_odds") or lottery.get("rqspf_odds")),
         ),
-        ("injuries", "伤停与停赛", 2, bool(live.get("injuries"))),
-        ("confirmed_lineup", "确认首发", 2, bool(live.get("lineup"))),
+        ("injuries", "伤停与停赛", 2, injuries_verified),
+        ("confirmed_lineup", "确认首发", 2, lineup_verified),
     ]
     earned = sum(weight for _, _, weight, available in checks if available)
     total = sum(weight for _, _, weight, _ in checks)
@@ -117,9 +139,9 @@ def build_match_evidence_profile(result: Mapping[str, Any]) -> Dict[str, Any]:
         blockers.append("缺少官方赔率去水概率")
     if agreement == "conflict":
         blockers.append("模型与市场概率分歧较大")
-    if not bool(live.get("injuries")):
+    if not injuries_verified:
         blockers.append("未取得可核验伤停")
-    if not bool(live.get("lineup")):
+    if not lineup_verified:
         blockers.append("未取得确认首发")
     if score < 0.70:
         blockers.append("专业证据覆盖不足70%")

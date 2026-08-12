@@ -28,7 +28,9 @@ class ProfessionalReadinessTests(unittest.TestCase):
             "asian": {"handicap": 0},
             "total": {"close_line": 2.5},
             "live_context": {
-                "injuries": [{"team": "A", "player": "P"}],
+                "injuries": [{
+                    "team": "A", "player": "P", "source": "official", "ts": "2026-08-12T00:00:00Z"
+                }],
                 "lineup": {},
             },
         })
@@ -37,6 +39,28 @@ class ProfessionalReadinessTests(unittest.TestCase):
         self.assertFalse(checks["confirmed_lineup"])
         self.assertNotIn("未取得可核验伤停", profile["blockers"])
         self.assertIn("未取得确认首发", profile["blockers"])
+
+    def test_existing_xg_consensus_and_analog_fields_are_recognized(self):
+        profile = build_match_evidence_profile({
+            "team": {"elo_xg_home": 1.8, "elo_xg_away": 1.1},
+            "asian": {"bookmaker_consensus": {"available": True}},
+            "similar_market": {"count": 35},
+        })
+        checks = {item["key"]: item["available"] for item in profile["checks"]}
+        self.assertTrue(checks["expected_goals"])
+        self.assertTrue(checks["bookmaker_consensus"])
+        self.assertTrue(checks["historical_analogs"])
+
+    def test_unverifiable_live_context_does_not_turn_green(self):
+        profile = build_match_evidence_profile({
+            "live_context": {
+                "injuries": [{"team": "A", "player": "P"}],
+                "lineup": {"home": ["P1"]},
+            },
+        })
+        checks = {item["key"]: item["available"] for item in profile["checks"]}
+        self.assertFalse(checks["injuries"])
+        self.assertFalse(checks["confirmed_lineup"])
 
     def test_match_evidence_quantifies_model_market_conflict(self):
         profile = build_match_evidence_profile({
