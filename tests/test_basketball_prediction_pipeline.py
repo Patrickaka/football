@@ -1,7 +1,10 @@
 import unittest
 from unittest.mock import Mock, patch
 
-from src.basketball import analyze_daxiao, analyze_rqspf, analyze_spf, find_value_bets
+from src.basketball import (
+    analyze_daxiao, analyze_rqspf, analyze_spf, find_value_bets,
+    generate_basketball_recommendations,
+)
 from src.basketball.records import save_predictions
 
 
@@ -91,6 +94,22 @@ class BasketballPredictionPipelineTests(unittest.TestCase):
         self.assertEqual(len(saved), 2)
         self.assertEqual(saved[0]['result']['home_score'], 100)
         self.assertEqual(saved[1]['match_id'], 'm2')
+
+    @patch('src.basketball._build_movement_map', return_value={})
+    @patch('src.basketball.fetch_basketball_schedule')
+    def test_started_match_is_visible_but_never_official(self, fetch_schedule, _movement):
+        fetch_schedule.return_value = [{
+            **self.match, 'id': 'm1', 'status': 'in_progress', 'time': '10:00',
+        }]
+        with patch('src.basketball._elo_predictions', return_value=({}, {}, {}, 0.0)), \
+                patch('src.basketball._calibrate_pick', side_effect=lambda _t, a, b, _l, _c: ((a, b), max(a, b))), \
+                patch('src.basketball.records.save_predictions'):
+            payload = generate_basketball_recommendations(source='500')
+        self.assertEqual(payload['count'], 1)
+        self.assertFalse(payload['results'][0]['rqspf']['official'])
+        self.assertEqual(
+            payload['results'][0]['rqspf']['skip_reason'], 'match_already_started'
+        )
 
 
 if __name__ == '__main__':

@@ -741,6 +741,16 @@ def generate_basketball_recommendations(date=None, bet_types=None, source='500',
         if 'dx' in bet_types:
             result['dx'] = analyze_daxiao(match, mv.get('dx'))
 
+        if match.get('status') == 'in_progress':
+            for bet_type in ('spf', 'rqspf', 'dx'):
+                section = result.get(bet_type)
+                if isinstance(section, dict) and section.get('available'):
+                    section.update({
+                        'playable': False,
+                        'official': False,
+                        'skip_reason': 'match_already_started',
+                    })
+
         from .odds_movement import describe_market_movement
         result['market_analysis'] = describe_market_movement(mv, result)
         

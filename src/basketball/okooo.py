@@ -567,10 +567,20 @@ def _parse_match_row(tr: str, date_str: str) -> Optional[Dict]:
         league = league_m2.group(1) if league_m2 else ''
 
 
+    # The date section header can lag behind the actual row.  The row's time
+    # cell carries the authoritative full datetime in its title attribute.
+    row_datetime = re.search(r'(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2})(?::\d{2})?', tr)
+    if row_datetime:
+        date_str = row_datetime.group(1)
+        match_time = row_datetime.group(2)
+    else:
+        match_time = ''
+
     time_cell = _strip_html(tds[1])
     # e.g. "23:00 22:00" → 开赛 / 截止
     tm = re.search(r'(\d{2}:\d{2})', time_cell)
-    match_time = tm.group(1) if tm else ''
+    if not match_time:
+        match_time = tm.group(1) if tm else ''
 
     home_m = re.search(r'class="[^"]*duinameh[^"]*"[^>]*title="([^"]+)"', tds[2])
     away_titles = re.findall(r'class="[^"]*duinameh[^"]*"[^>]*title="([^"]+)"', tds[2])
@@ -733,9 +743,17 @@ def fetch_okooo_basketball_schedule(date: Optional[str] = None) -> List[Dict]:
             log.warning(f"解析澳客篮球行失败: {e}")
 
     # 以页面比分为准过滤完场；时间只用来标进行中，避免 WNBA 晨间场被误杀
-    dated = [m for m in matches if m.get('date') == date]
-    pool = dated if dated else [m for m in matches if m.get('status') != 'finished']
-    live = [m for m in pool if m.get('status') != 'finished']
+    active = [m for m in matches if m.get('status') != 'finished']
+    dated = [m for m in active if m.get('date') == date]
+    if dated:
+        live = dated
+    elif active:
+        # When today's card is already complete, 澳客 commonly shows the next
+        # sale day's card on the same page. Return only that nearest date.
+        nearest_date = min(m.get('date') or '9999-12-31' for m in active)
+        live = [m for m in active if m.get('date') == nearest_date]
+    else:
+        live = []
 
     now = datetime.now()
     for m in live:
@@ -749,10 +767,12 @@ def fetch_okooo_basketball_schedule(date: Optional[str] = None) -> List[Dict]:
         except ValueError:
             pass
 
-    # 仅保留未开赛：已开赛(in_progress)/已完结的不进入列表与逐场分析，减少数量、提速
-    live = [m for m in live if m['status'] != 'in_progress']
-
-    log.info(f"澳客篮球获取到 {len(live)} 场未开赛比赛 (原始{len(matches)})")
+    # 仅返回真正未开赛的场次。行内完整日期优先于分组表头，避免把次日比赛
+    # 错标为今日已开赛并过滤掉。
+    live = [m for m in live if m['status'] == 'not_started']
+    log.info(
+        f"澳客篮球获取到 {len(live)} 场未开赛比赛 (原始{len(matches)})"
+    )
     return live
 
 

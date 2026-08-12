@@ -1678,6 +1678,7 @@ class Handler(BaseHTTPRequestHandler):
                     'league': match_data.get('league', ''),
                     'time': match_data.get('time', ''),
                     'status': match_data.get('status', ''),
+                    'official_open': match_data.get('status') == 'not_started',
                     'market_analysis': r.get('market_analysis'),
                 }
                 
