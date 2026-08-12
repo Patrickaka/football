@@ -2177,7 +2177,6 @@ function renderFootballPredictions(results) {
     const resultTier = getFootballResultTier(item);
     const tierColor = { ultra: '#22c55e', high: '#3b82f6', cautious: '#f59e0b', cover: '#94a3b8' }[resultTier.tier];
     const reportUrl = m.bayes_report_url ? apiPrefix() + m.bayes_report_url : '';
-    const officialBetAllowed = footballProfessionalStatus?.official_betting_allowed === true;
 
     let itemHtml = `<div class="match" style="display:block;padding:12px">
       <div style="display:flex;justify-content:space-between;align-items:flex-start">
@@ -2191,9 +2190,6 @@ function renderFootballPredictions(results) {
           ${cf && cf.score != null ? `<div style="font-size:12px;color:${cf.level === 'low' ? 'var(--muted)' : cf.level === 'high' ? 'var(--accent2)' : 'var(--warn)'};margin-top:2px">
             📡 信息完整度 ${(cf.score * 100).toFixed(0)}%
           </div>` : ''}
-          <div style="font-size:11px;margin-top:3px;color:${officialBetAllowed ? '#4ade80' : '#fbbf24'}">
-            ${officialBetAllowed ? '✓ 已通过全局生产门控' : '🧪 研究预测 · 尚未通过盈利门控'}
-          </div>
           <div style="font-size:12px;color:${tierColor};margin-top:3px;font-weight:600">
             ${esc(resultTier.label)} · ${esc(resultTier.prediction)} ${(resultTier.probability * 100).toFixed(0)}%
             · 预测可信度 ${(resultTier.predictionReliability * 100).toFixed(0)}%
@@ -2304,25 +2300,6 @@ function renderFootballPredictions(results) {
       marketCards.forEach(card => {
         itemHtml += '<div style="margin-top:8px;padding:8px;background:var(--bg2);border-radius:8px">';
         itemHtml += `<div style="font-size:12px;color:var(--muted);margin-bottom:6px">${card.title}</div>`;
-        if (card.accuracyGate) {
-          const gate = card.accuracyGate;
-          const gateColor = gate.selected ? '#22c55e' : '#f59e0b';
-          const gateLabel = gate.selected
-            ? `✓ 80%目标精选：${gate.decision}`
-            : '○ 未达80%精选门槛：观望';
-          itemHtml += `<div style="margin-bottom:7px;padding:5px 7px;border-radius:6px;background:${gateColor}18;color:${gateColor};font-size:11px;font-weight:700">
-            ${esc(gateLabel)}
-            <span style="font-weight:400;color:var(--muted)"> · 赛果概率 ${((gate.probability || 0) * 100).toFixed(0)}% · 信息完整度 ${((gate.information_completeness || 0) * 100).toFixed(0)}% · 预测可信度 ${((gate.prediction_reliability || 0) * 100).toFixed(0)}%</span>
-          </div>`;
-          if (!gate.selected && gate.reasons?.length) {
-            itemHtml += `<div style="margin:-3px 0 7px;font-size:10px;color:var(--muted)">观望原因：${gate.reasons.map(esc).join('；')}</div>`;
-          }
-          if (gate.validation) {
-            itemHtml += `<div style="margin:-3px 0 7px;font-size:10px;color:#93c5fd">历史赔率代理验证：命中率 ${(gate.validation.accuracy * 100).toFixed(2)}% · 样本 ${gate.validation.sample_count} 场 · 覆盖率 ${(gate.validation.coverage * 100).toFixed(1)}%</div>`;
-          } else if (card.handicap) {
-            itemHtml += '<div style="margin:-3px 0 7px;font-size:10px;color:#f59e0b">让球胜平负缺少独立体彩终盘历史样本，当前只执行严格门控，不宣称已达到80%。</div>';
-          }
-        }
         itemHtml += '<div style="display:flex;gap:12px">';
         card.keys.forEach(key => {
           const prob = card.prediction.probs[key] || 0;
@@ -2358,12 +2335,6 @@ function renderFootballPredictions(results) {
             : `<div style="font-size:10px;color:#93c5fd;margin-top:6px">
                 ${esc(sourceKey)}：比分模型 ${(modelValue * 100).toFixed(0)}% · 澳客赔率去水 ${(marketValue * 100).toFixed(0)}% · 综合 ${(fusedValue * 100).toFixed(0)}%（赔率权重 ${marketWeight}%）
               </div>`;
-        }
-        if (card.handicap) {
-          itemHtml += '<div style="font-size:11px;color:var(--muted);margin-top:6px">结算口径：主队进球 + 体彩让球数，再与客队进球比较；不是亚洲盘。</div>';
-          if (card.explanation) {
-            itemHtml += `<div style="font-size:11px;color:#f59e0b;margin-top:5px">💡 ${esc(card.explanation)}</div>`;
-          }
         }
         itemHtml += '</div>';
       });

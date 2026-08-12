@@ -560,6 +560,15 @@ def _is_cache_valid(cache_entry, now):
     return elapsed < cache_entry['expire_seconds'] and _is_same_day(cache_entry['timestamp'])
 
 
+def _is_cache_payload_current(key, data):
+    """Reject persisted predictions produced by an older code version."""
+    if data is None:
+        return False
+    if key == '3d':
+        return data.get('version') == _get_lottery3d_module().PREDICTOR_VERSION
+    return True
+
+
 # 缓存机制
 _CACHE = {
     '3d_ml': {
@@ -639,7 +648,11 @@ def _load_persisted_caches():
             with open(fp, 'r', encoding='utf-8') as f:
                 obj = json.load(f)
             ts = obj.get('timestamp', 0)
-            if obj.get('data') is not None and _is_same_day(ts):
+            if (
+                obj.get('data') is not None
+                and _is_same_day(ts)
+                and _is_cache_payload_current(key, obj['data'])
+            ):
                 _CACHE[key]['data'] = obj['data']
                 _CACHE[key]['timestamp'] = ts
                 log.info('已从磁盘恢复缓存 %s (timestamp=%s)', key, ts)
@@ -658,6 +671,10 @@ def _serve_cached(key, compute_fn, background_refresh=True):
     """
     now = time.time()
     cache = _CACHE[key]
+    if cache['data'] is not None and not _is_cache_payload_current(key, cache['data']):
+        log.info('缓存 %s 版本已过期，强制重新计算', key)
+        cache['data'] = None
+        cache['timestamp'] = 0
     if cache['data'] is not None and _is_cache_valid(cache, now):
         return cache['data'], None
 
