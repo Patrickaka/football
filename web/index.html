@@ -7424,6 +7424,24 @@ function renderBasketball(result) {
             </div>
           </div>
         </div>`;
+
+        const marketAnalysis = m.market_analysis || {};
+        if (marketAnalysis.available) {
+          const levelColor = {
+            strong: '#22c55e', positive: '#3b82f6', warning: '#f59e0b', neutral: 'var(--muted)'
+          }[marketAnalysis.level] || 'var(--muted)';
+          html += `<div style="margin-top:8px;padding:8px;background:var(--bg2);border-left:3px solid ${levelColor};border-radius:7px">
+            <div style="font-size:12px;font-weight:700;color:${levelColor};margin-bottom:5px">📈 盘口变化分析 · ${esc(marketAnalysis.verdict || '')}</div>
+            <div style="display:flex;gap:6px;flex-wrap:wrap">${(marketAnalysis.signals || []).map(signal => {
+              const flowState = signal.aligned_with_model === true ? '同向' : signal.aligned_with_model === false ? '反向' : '中性';
+              const flowColor = signal.aligned_with_model === true ? '#22c55e' : signal.aligned_with_model === false ? '#f59e0b' : 'var(--muted)';
+              return `<span style="padding:4px 7px;border-radius:5px;background:var(--bg);font-size:11px">
+                ${esc(signal.summary || '')} · 强度 ${(Number(signal.strength || 0) * 100).toFixed(0)}%
+                ${signal.steam ? ' · 急速资金' : ''} · <b style="color:${flowColor}">${flowState}</b>
+              </span>`;
+            }).join('')}</div>
+          </div>`;
+        }
         
         if (m.spf && !m.spf.error) {
           html += '<div style="margin-top:8px;padding:8px;background:var(--bg2);border-radius:8px">';
@@ -7461,7 +7479,7 @@ function renderBasketball(result) {
               { key: '客胜', color: '#22c55e', pred: m.rqspf.prediction === '客胜' },
             ];
             items.forEach(item => {
-              const prob = m.spf?.probabilities?.[item.key] || 0;
+              const prob = m.rqspf?.probabilities?.[item.key] || 0;
               const odd = m.rqspf.odds?.[item.key] || '-';
               html += `<div style="flex:1;text-align:center;padding:6px;border-radius:6px${item.pred ? `;background:${item.color}20;color:${item.color};font-weight:bold` : ''}">
                 <div>${item.key}</div>

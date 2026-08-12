@@ -178,9 +178,9 @@ def _normalize_okooo_trend(trend: Optional[Dict], kind: str) -> Optional[Dict]:
     if direction in (None, 'stable'):
         side = 'flat'
     elif direction in ('home_backing', 'over_backing'):
-        side = 'home' if kind in ('ah', 'ml') else 'over'
+        side = 'over' if kind == 'ou' else 'home'
     elif direction in ('away_backing', 'under_backing'):
-        side = 'away' if kind in ('ah', 'ml') else 'under'
+        side = 'under' if kind == 'ou' else 'away'
     elif direction == 'line_up':
         side = 'home' if kind in ('ah', 'ml') else 'over'
     elif direction == 'line_down':
@@ -201,6 +201,10 @@ def _normalize_okooo_trend(trend: Optional[Dict], kind: str) -> Optional[Dict]:
         'last_move_age_min': None,
         'home_move': round(float(trend.get('home_move', 0) or 0), 4),
         'away_move': round(float(trend.get('away_move', 0) or 0), 4),
+        'line_move': round(float(trend.get('line_move', 0) or 0), 4),
+        'opening_line': trend.get('opening_line'),
+        'current_line': trend.get('current_line'),
+        'kind': kind,
     }
 
 
@@ -266,8 +270,8 @@ def movement_to_trend(movement: Optional[Dict]) -> Optional[Dict]:
         'strength': movement.get('strength', 0.0),
         'home_move': movement.get('home_move', 0.0),
         'away_move': movement.get('away_move', 0.0),
-        'line_move': 0.0,
-        'kind': 'ml',
+        'line_move': movement.get('line_move', 0.0),
+        'kind': movement.get('kind', 'ml'),
         'samples': movement.get('samples', 0),
     }
 
@@ -327,6 +331,60 @@ def sharp_confirmation(movement: Optional[Dict], recommendation: str) -> Dict:
     if strength >= 0.3:
         return {'confirmed': True, 'reason': 'strong_confirm', 'boost': 0.5}
     return {'confirmed': True, 'reason': 'mild_confirm', 'boost': 0.0}
+
+
+def describe_market_movement(movements: Dict, bets: Dict) -> Dict:
+    """Build a concise, user-facing joint interpretation of all three markets."""
+    movements = movements or {}
+    bets = bets or {}
+    labels = {
+        'home': '主队', 'away': '客队', 'over': '大分', 'under': '小分', 'flat': '稳定',
+    }
+    market_names = {'spf': '胜负', 'rqspf': '让分', 'dx': '大小分'}
+    signals = []
+    aligned = contrary = steam = 0
+    for key in ('spf', 'rqspf', 'dx'):
+        movement = movements.get(key) or {}
+        if not movement.get('available'):
+            continue
+        side = movement.get('side', 'flat')
+        bet = bets.get(key) or {}
+        confirmed = (bet.get('line_movement') or {}).get('confirmed')
+        if side != 'flat':
+            aligned += int(bool(confirmed))
+            contrary += int(confirmed is False)
+        steam += int(bool(movement.get('steam')))
+        line_move = float(movement.get('line_move', 0) or 0)
+        line_text = ''
+        if abs(line_move) >= 0.01:
+            line_text = f"，盘口{'升' if line_move > 0 else '降'}{abs(line_move):g}分"
+        signals.append({
+            'market': key,
+            'label': market_names[key],
+            'side': side,
+            'side_label': labels.get(side, side),
+            'strength': round(float(movement.get('strength', 0) or 0), 3),
+            'steam': bool(movement.get('steam')),
+            'stale': bool(movement.get('stale')),
+            'samples': int(movement.get('samples', 0) or 0),
+            'line_move': line_move,
+            'summary': f"{market_names[key]}资金偏{labels.get(side, side)}{line_text}",
+            'aligned_with_model': confirmed,
+        })
+    if not signals:
+        return {'available': False, 'verdict': '暂无有效盘口变化样本', 'signals': []}
+    if steam and aligned:
+        verdict, level = '急速资金与模型方向一致，属于强确认信号', 'strong'
+    elif aligned > contrary:
+        verdict, level = '盘口变化总体确认模型方向', 'positive'
+    elif contrary > aligned:
+        verdict, level = '盘口资金与模型方向冲突，建议降低置信度', 'warning'
+    else:
+        verdict, level = '各盘口信号分化，维持谨慎判断', 'neutral'
+    return {
+        'available': True, 'level': level, 'verdict': verdict, 'signals': signals,
+        'aligned_count': aligned, 'contrary_count': contrary, 'steam_count': steam,
+    }
 
 
 def get_odds_history(match_id: str = None) -> Dict:

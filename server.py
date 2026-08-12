@@ -1673,6 +1673,7 @@ class Handler(BaseHTTPRequestHandler):
                     'league': match_data.get('league', ''),
                     'time': match_data.get('time', ''),
                     'status': match_data.get('status', ''),
+                    'market_analysis': r.get('market_analysis'),
                 }
                 
                 spf = r.get('spf')
@@ -1737,6 +1738,9 @@ class Handler(BaseHTTPRequestHandler):
                 'date': result.get('date'),
                 'total_matches': len(matches),
                 'matches': matches,
+                'version': result.get('version'),
+                'source': result.get('source'),
+                'movement_stats': result.get('movement_stats'),
             }}
         except Exception as e:
             self._log.error('篮球推荐失败', exc_info=True)

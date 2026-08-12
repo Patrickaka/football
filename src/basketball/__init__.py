@@ -16,7 +16,7 @@ from ..common import kv_store
 
 log = setup_logger('basketball')
 
-BASKETBALL_VERSION = '2026-07-21-line-movement-v1'
+BASKETBALL_VERSION = '2026-08-12-joint-line-movement-v2'
 BASKETBALL_HISTORY_KEY = 'basketball_prediction_history'
 BASKETBALL_HISTORY_LIMIT = 500
 
@@ -715,6 +715,9 @@ def generate_basketball_recommendations(date=None, bet_types=None, source='500',
         
         if 'dx' in bet_types:
             result['dx'] = analyze_daxiao(match, mv.get('dx'))
+
+        from .odds_movement import describe_market_movement
+        result['market_analysis'] = describe_market_movement(mv, result)
         
         results.append(result)
     
