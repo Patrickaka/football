@@ -31,7 +31,7 @@ from ..common.paths import data_path
 
 log = setup_logger('football')
 
-FOOTBALL_PREDICTION_LOGIC_VERSION = '2026-08-07-goal-bias-calibration-v19'
+FOOTBALL_PREDICTION_LOGIC_VERSION = '2026-08-12-joint-market-state-v21'
 LOTTERY_OFFICIAL_ODDS_WEIGHT = 0.40
 
 # ELO 评分系统（延迟导入）
@@ -5924,6 +5924,101 @@ def _total_market_tempo_signal(total: Dict) -> Dict:
     }
 
 
+def _joint_market_state(asian: Dict, euro: Dict, total: Dict) -> Dict:
+    """Combine handicap, water, 1X2 and O/U movement into one market state."""
+    asian = asian or {}
+    euro = euro or {}
+    tempo = _total_market_tempo_signal(total)
+
+    try:
+        handicap_signal = max(-1.0, min(1.0, float(asian.get('handicap_change', 0.0)) / 0.5))
+    except (TypeError, ValueError):
+        handicap_signal = 0.0
+    prob_change = asian.get('prob_change') or {}
+    try:
+        asian_water_signal = max(-1.0, min(1.0, float(prob_change.get('home', 0.0)) / 0.08))
+    except (TypeError, ValueError):
+        asian_water_signal = 0.0
+    try:
+        euro_signal = max(-1.0, min(1.0, float((euro.get('momentum') or {}).get('shift_supremacy', 0.0)) / 0.25))
+    except (TypeError, ValueError):
+        euro_signal = 0.0
+
+    directional_parts = [handicap_signal, asian_water_signal, euro_signal]
+    active = [value for value in directional_parts if abs(value) >= 0.10]
+    conflict = bool(active and min(active) < -0.10 and max(active) > 0.10)
+    direction_signal = (
+        0.45 * handicap_signal + 0.30 * asian_water_signal + 0.25 * euro_signal
+    )
+    agreement = 1.0
+    if conflict:
+        agreement = 0.40
+        direction_signal *= agreement
+
+    strength = min(1.0, (abs(direction_signal) + abs(tempo['signal'])) / 1.6)
+    return {
+        'direction_signal': max(-1.0, min(1.0, direction_signal)),
+        'tempo_signal': tempo['signal'],
+        'handicap_signal': handicap_signal,
+        'asian_water_signal': asian_water_signal,
+        'euro_signal': euro_signal,
+        'conflict': conflict or bool(tempo.get('conflict')),
+        'agreement_factor': agreement,
+        'strength': strength,
+        'tempo': tempo,
+    }
+
+
+def _apply_joint_market_state(candidates, asian: Dict, euro: Dict, total: Dict):
+    """Jointly tilt result direction and goal tempo without inventing new mass."""
+    rows = list(candidates or [])
+    if not rows:
+        return rows, {'applied': False, 'reason': 'empty_distribution'}
+    state = _joint_market_state(asian, euro, total)
+    direction = state['direction_signal']
+    tempo = state['tempo_signal']
+    if abs(direction) < 0.08 and abs(tempo) < 0.12:
+        state.update({'applied': False, 'reason': 'weak_joint_signal'})
+        return rows, state
+
+    line = state['tempo'].get('line') or 2.5
+    adjusted = []
+    expected_before = 0.0
+    home_mass_before = 0.0
+    for (home, away), probability in rows:
+        probability = max(0.0, float(probability))
+        goals = home + away
+        margin = max(-2.5, min(2.5, home - away))
+        exponent = 0.20 * direction * margin
+        exponent += 0.08 * tempo * max(-3.0, min(3.0, goals - line))
+        # Agreement between stronger-side and over signals favors decisive,
+        # higher-scoring wins; the reverse combination favors narrow wins.
+        if direction * margin > 0:
+            exponent += 0.045 * abs(direction) * tempo * max(-1.5, min(2.0, goals - line))
+        if home == away and abs(direction) >= 0.35:
+            exponent -= 0.08 * abs(direction)
+        adjusted.append(((home, away), probability * math.exp(exponent)))
+        expected_before += goals * probability
+        if home > away:
+            home_mass_before += probability
+
+    total_prob = sum(probability for _, probability in adjusted)
+    if total_prob <= 0:
+        return rows, {'applied': False, 'reason': 'zero_adjusted_mass', **state}
+    adjusted = [(score, probability / total_prob) for score, probability in adjusted]
+    adjusted.sort(key=lambda item: -item[1])
+    expected_after = sum(sum(score) * probability for score, probability in adjusted)
+    home_mass_after = sum(probability for (home, away), probability in adjusted if home > away)
+    state.update({
+        'applied': True,
+        'expected_goals_before': expected_before,
+        'expected_goals_after': expected_after,
+        'home_win_before': home_mass_before,
+        'home_win_after': home_mass_after,
+    })
+    return adjusted, state
+
+
 def _score_total_movement_factor(h: int, a: int, total: Dict) -> float:
     """Soft score-ranking factor from O/U movement so score picks follow goal picks."""
     signal_info = _total_market_tempo_signal(total)
@@ -6030,7 +6125,18 @@ def _anchor_score_candidates_to_goal_mean(candidates, total, max_shift=0.60):
             target = float(get_close_total_line(total or {}))
         except (TypeError, ValueError):
             target = expected_before
-    target = max(expected_before - max_shift, min(expected_before + max_shift, target))
+    requested_target = target
+    # A fixed 0.60-goal cap was too restrictive when exact-score/history
+    # calibration collapsed a genuinely high O/U market back near two goals.
+    # Permit a larger upward repair only for a clear 3.0+ market; ordinary and
+    # low-total matches retain the conservative cap.
+    effective_max_shift = max_shift
+    if requested_target >= 3.0 and requested_target > expected_before:
+        effective_max_shift = max(max_shift, min(1.25, requested_target - expected_before))
+    target = max(
+        expected_before - max_shift,
+        min(expected_before + effective_max_shift, requested_target),
+    )
     if abs(target - expected_before) < 0.08:
         return candidates, {
             'applied': False, 'reason': 'already_aligned',
@@ -6067,7 +6173,8 @@ def _anchor_score_candidates_to_goal_mean(candidates, total, max_shift=0.60):
     adjusted, expected_after = tilt(theta)
     result = sorted(((score, p) for score, p, _ in adjusted), key=lambda item: -item[1])
     return result, {
-        'applied': True, 'target': target, 'theta': theta,
+        'applied': True, 'target': target, 'requested_target': requested_target,
+        'max_shift': effective_max_shift, 'theta': theta,
         'expected_before': expected_before, 'expected_after': expected_after,
         'preserved_1x2': True,
     }
@@ -7714,6 +7821,34 @@ def analyze_match(match, force_refresh=False):
     except Exception as e:
         meta['production_history_calibration'] = {'applied': False, 'reason': str(e)}
         log.warning(f"production history calibration failed: {e}")
+
+    try:
+        candidates, joint_market_adjustment = _apply_joint_market_state(
+            candidates, asian, euro, total
+        )
+        meta['joint_market_state'] = joint_market_adjustment
+    except Exception as e:
+        meta['joint_market_state'] = {'applied': False, 'reason': str(e)}
+        log.warning(f"joint market adjustment failed: {e}")
+
+    # History calibration is useful for residual bias, but it must not undo the
+    # current O/U market's total-goal signal.  Make the market anchor the final
+    # score-distribution transform so high-total matches retain their 4+ tail.
+    try:
+        candidates, final_score_goal_anchor = _anchor_score_candidates_to_goal_mean(
+            candidates, total
+        )
+        meta['final_score_goal_anchor'] = final_score_goal_anchor
+        if final_score_goal_anchor.get('applied'):
+            log.info(
+                "final score goal mean anchored after history: %.3f -> %.3f (target %.3f)",
+                final_score_goal_anchor['expected_before'],
+                final_score_goal_anchor['expected_after'],
+                final_score_goal_anchor['target'],
+            )
+    except Exception as e:
+        meta['final_score_goal_anchor'] = {'applied': False, 'reason': str(e)}
+        log.warning(f"final score goal mean anchor failed: {e}")
 
     dixon_coles_result = None
     try:

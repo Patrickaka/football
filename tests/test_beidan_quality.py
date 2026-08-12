@@ -11,6 +11,8 @@ from src.beidan import (
     assess_score_consistency,
     assess_upset_risk,
     build_zjq_group_recommendation,
+    apply_beidan_joint_market_state,
+    build_beidan_joint_market_state,
     enhance_scores_with_cs,
     generate_beidan_recommendations,
     parse_beidan_handicap,
@@ -21,6 +23,32 @@ from src.beidan import (
 
 
 class BeidanQualityTests(unittest.TestCase):
+    def test_joint_market_state_links_home_backing_and_over_move(self):
+        asian = {'history': [
+            {'handicap': 0.5, 'home_odds': 0.98, 'away_odds': 0.86},
+            {'handicap': 1.0, 'home_odds': 0.82, 'away_odds': 1.02},
+        ]}
+        goals = {'history': [
+            {'line': '2.5', 'over_odds': 1.02, 'under_odds': 0.82},
+            {'line': '3.0', 'over_odds': 0.82, 'under_odds': 1.02},
+        ]}
+        scores = {(1, 0): .25, (0, 1): .25, (1, 1): .25, (3, 1): .25}
+
+        adjusted, state = apply_beidan_joint_market_state(scores, asian, goals)
+
+        self.assertTrue(state['applied'])
+        self.assertGreater(state['home_win_after'], state['home_win_before'])
+        self.assertGreater(state['expected_goals_after'], state['expected_goals_before'])
+        self.assertAlmostEqual(sum(adjusted.values()), 1.0)
+
+    def test_joint_market_state_marks_ou_conflict(self):
+        state = build_beidan_joint_market_state(None, {'history': [
+            {'line': '2.5', 'over_odds': 1.00, 'under_odds': .82},
+            {'line': '3.0', 'over_odds': 1.12, 'under_odds': .76},
+        ]})
+        self.assertTrue(state['conflict'])
+        self.assertEqual(state['agreement_factor'], .40)
+
     def test_narrow_spf_call_is_marked_as_split(self):
         quality = assess_recommendation_quality({'胜': 0.36, '平': 0.34, '负': 0.30}, '胜')
 

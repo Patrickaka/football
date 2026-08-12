@@ -34,7 +34,7 @@ class ScoreScenarioDiversityTests(unittest.TestCase):
         self.assertEqual(result['candidates'][0]['scenario'], 'draw_cover')
 
     def test_prediction_logic_version_invalidates_old_diversified_ranking_cache(self):
-        self.assertIn('goal-bias-calibration', football.FOOTBALL_PREDICTION_LOGIC_VERSION)
+        self.assertIn('joint-market-state', football.FOOTBALL_PREDICTION_LOGIC_VERSION)
 
     def test_score_matrix_ensemble_is_normalized(self):
         blended = blend_score_matrices(

@@ -60,6 +60,23 @@ class LocalMatchAnalysisTests(unittest.TestCase):
         self.assertTrue(meta['applied'])
         self.assertAlmostEqual(meta['expected_after'], meta['target'], places=6)
 
+    def test_high_total_market_restores_large_score_tail(self):
+        candidates = [
+            ((0, 0), 0.20), ((1, 0), 0.24), ((1, 1), 0.22),
+            ((2, 0), 0.14), ((2, 1), 0.10), ((2, 2), 0.05),
+            ((3, 1), 0.03), ((3, 2), 0.02),
+        ]
+        anchored, meta = _anchor_score_candidates_to_goal_mean(
+            candidates, {'implied_total': 3.40}
+        )
+        tail_before = sum(prob for score, prob in candidates if sum(score) >= 4)
+        tail_after = sum(prob for score, prob in anchored if sum(score) >= 4)
+
+        self.assertTrue(meta['applied'])
+        self.assertEqual(meta['requested_target'], 3.40)
+        self.assertGreater(meta['expected_after'], 2.90)
+        self.assertGreater(tail_after, tail_before * 3)
+
     def test_close_match_uses_double_selection(self):
         decision = build_decision({'胜': 0.38, '平': 0.33, '负': 0.29}, confidence='high')
         self.assertEqual(decision['action'], '双选')

@@ -18,7 +18,7 @@ from ..common import kv_store
 
 log = setup_logger('beidan')
 
-BEIDAN_VERSION = '2026-07-21-gated-accuracy-v3'
+BEIDAN_VERSION = '2026-08-12-joint-market-state-v4'
 BEIDAN_HISTORY_KEY = 'beidan_prediction_history'
 BEIDAN_HISTORY_LIMIT = 500
 
@@ -992,6 +992,103 @@ def analyze_asian_trend(asian_history):
         'avg_home_change': round(avg_home_change, 4),
         'avg_away_change': round(avg_away_change, 4),
     }
+
+
+def build_beidan_joint_market_state(asian_data=None, goals_data=None):
+    """Build one direction/tempo state from Beidan handicap and O/U histories."""
+    asian_history = (asian_data or {}).get('history') or []
+    goals_history = (goals_data or {}).get('history') or []
+    asian_trend = analyze_asian_trend(asian_history)
+    goals_trend = analyze_goals_trend(goals_history)
+
+    direction_map = {
+        'home_backing': 1.0, 'away_laying': 0.65,
+        'away_backing': -1.0, 'home_laying': -0.65,
+    }
+    direction = direction_map.get(asian_trend.get('direction'), 0.0)
+    try:
+        direction *= min(1.0, max(0.25, float(asian_trend.get('strength', 0.0)) / 0.12))
+    except (TypeError, ValueError):
+        direction = 0.0
+
+    handicap_signal = 0.0
+    if len(asian_history) >= 2:
+        try:
+            handicap_signal = max(-1.0, min(1.0,
+                (float(asian_history[-1].get('handicap')) -
+                 float(asian_history[0].get('handicap'))) / 0.5
+            ))
+        except (TypeError, ValueError):
+            handicap_signal = 0.0
+    direction = 0.65 * direction + 0.35 * handicap_signal
+
+    tempo_map = {
+        'over_backing': 1.0, 'under_laying': 0.65,
+        'under_backing': -1.0, 'over_laying': -0.65,
+    }
+    water_tempo = tempo_map.get(goals_trend.get('direction'), 0.0)
+    line_signal = 0.0
+    if len(goals_history) >= 2:
+        try:
+            first_line = float(re.search(r'[\d.]+', str(goals_history[0].get('line'))).group())
+            last_line = float(re.search(r'[\d.]+', str(goals_history[-1].get('line'))).group())
+            line_signal = max(-1.0, min(1.0, (last_line - first_line) / 0.5))
+        except (AttributeError, TypeError, ValueError):
+            line_signal = 0.0
+    water_line_conflict = water_tempo * line_signal < -0.12
+    tempo = 0.55 * water_tempo + 0.45 * line_signal
+
+    if water_line_conflict:
+        tempo *= 0.40
+    return {
+        'direction_signal': max(-1.0, min(1.0, direction)),
+        'tempo_signal': max(-1.0, min(1.0, tempo)),
+        'handicap_signal': handicap_signal,
+        'line_signal': line_signal,
+        'asian_trend': asian_trend,
+        'goals_trend': goals_trend,
+        'conflict': water_line_conflict,
+        'agreement_factor': 0.40 if water_line_conflict else 1.0,
+    }
+
+
+def apply_beidan_joint_market_state(score_probs, asian_data=None, goals_data=None):
+    """Apply the shared market state to the score matrix used by all markets."""
+    if not score_probs:
+        return score_probs, {'applied': False, 'reason': 'empty_distribution'}
+    state = build_beidan_joint_market_state(asian_data, goals_data)
+    direction = state['direction_signal']
+    tempo = state['tempo_signal']
+    if abs(direction) < 0.08 and abs(tempo) < 0.10:
+        return score_probs, {**state, 'applied': False, 'reason': 'weak_joint_signal'}
+
+    adjusted = {}
+    before_goals = before_home = 0.0
+    for (home, away), probability in score_probs.items():
+        probability = max(0.0, float(probability))
+        goals = home + away
+        margin = max(-2.5, min(2.5, home - away))
+        exponent = 0.20 * direction * margin + 0.10 * tempo * (goals - 2.5)
+        if direction * margin > 0:
+            exponent += 0.04 * abs(direction) * tempo * (goals - 2.5)
+        if home == away and abs(direction) >= 0.35:
+            exponent -= 0.08 * abs(direction)
+        adjusted[(home, away)] = probability * math.exp(max(-0.7, min(0.7, exponent)))
+        before_goals += goals * probability
+        if home > away:
+            before_home += probability
+    total = sum(adjusted.values())
+    if total <= 0:
+        return score_probs, {**state, 'applied': False, 'reason': 'zero_adjusted_mass'}
+    adjusted = {score: probability / total for score, probability in adjusted.items()}
+    state.update({
+        'applied': True,
+        'expected_goals_before': before_goals,
+        'expected_goals_after': sum(sum(score) * p for score, p in adjusted.items()),
+        'home_win_before': before_home,
+        'home_win_after': sum(p for (h, a), p in adjusted.items() if h > a),
+    })
+    return adjusted, state
 
 def analyze_cs_trend(cs_history):
     if not cs_history or len(cs_history) < 2:
@@ -2294,7 +2391,7 @@ def build_beidan_match_analysis(spf_result):
         return None
 
 
-def analyze_spf(match, asian_data=None, cs_data=None):
+def analyze_spf(match, asian_data=None, cs_data=None, goals_data=None):
     result = {
         'match_id': match['id'],
         'num': match['num'],
@@ -2363,13 +2460,35 @@ def analyze_spf(match, asian_data=None, cs_data=None):
             result['prediction'] = max(model_probs, key=model_probs.get)
             result['confidence'] = model_probs[result['prediction']]
             
+            total_over, total_under = _latest_ou_odds(goals_data)
             score_prediction = predict_scores_by_poisson(
-                home_win_prob,
-                draw_prob,
-                away_win_prob,
+                model_probs.get('胜', home_win_prob),
+                model_probs.get('平', draw_prob),
+                model_probs.get('负', away_win_prob),
                 league=match['league'],
-                handicap=match.get('handicap', 0)
+                handicap=match.get('handicap', 0),
+                total_over_odds=total_over,
+                total_under_odds=total_under,
             )
+            joint_scores, joint_meta = apply_beidan_joint_market_state(
+                score_prediction.get('score_probs'), asian_data, goals_data
+            )
+            score_prediction['score_probs'] = joint_scores
+            score_prediction['top3'] = [
+                {'score': f'{h}-{a}', 'probability': p, 'home_goals': h, 'away_goals': a}
+                for (h, a), p in sorted(joint_scores.items(), key=lambda item: -item[1])[:3]
+            ]
+            result['joint_market_state'] = joint_meta
+
+            # SPF, score and total-goal outputs must be marginals of one matrix.
+            model_probs = {
+                '胜': sum(p for (h, a), p in joint_scores.items() if h > a),
+                '平': sum(p for (h, a), p in joint_scores.items() if h == a),
+                '负': sum(p for (h, a), p in joint_scores.items() if h < a),
+            }
+            result['probabilities'] = model_probs
+            result['prediction'] = max(model_probs, key=model_probs.get)
+            result['confidence'] = model_probs[result['prediction']]
             
             if cs_data and cs_data.get('history'):
                 score_prediction = enhance_scores_with_cs(score_prediction, cs_data['history'])
@@ -2417,7 +2536,7 @@ def analyze_spf(match, asian_data=None, cs_data=None):
     
     return result
 
-def analyze_rqspf(match, asian_data=None):
+def analyze_rqspf(match, asian_data=None, goals_data=None):
     result = {
         'match_id': match['id'],
         'num': match['num'],
@@ -2469,12 +2588,18 @@ def analyze_rqspf(match, asian_data=None):
         )
         result['asian_adjusted'] = True
 
+    total_over, total_under = _latest_ou_odds(goals_data)
     score_prediction = predict_scores_by_poisson(
         home_win_prob,
         draw_prob,
         away_win_prob,
         league=match.get('league', ''),
-        handicap=handicap_value
+        handicap=handicap_value,
+        total_over_odds=total_over,
+        total_under_odds=total_under,
+    )
+    score_prediction['score_probs'], result['joint_market_state'] = apply_beidan_joint_market_state(
+        score_prediction['score_probs'], asian_data, goals_data
     )
     rq_probs, rq_meta = rqspf_probs_from_score_probs(
         score_prediction['score_probs'],
@@ -2605,6 +2730,9 @@ def analyze_bifen(match, bifen_odds=None, asian_data=None, goals_data=None):
         blended, 'bifen', league=match.get('league')
     )
     result['history_calibration'] = calibration_meta
+    blended, result['joint_market_state'] = apply_beidan_joint_market_state(
+        blended, asian_data, goals_data
+    )
 
     # 5. 归一化并生成 "h-a" 字符串键
     total_b = sum(blended.values())
@@ -2678,6 +2806,9 @@ def analyze_zjq(match, zjq_odds=None, asian_data=None, goals_data=None):
     target_total = match_target_total(match.get('league'), total_over, total_under, asian_factor, goals_factor)
     lam_home, lam_away = match_lambdas(home_prob_norm, draw_prob_norm, away_prob_norm, target_total)
     dc_matrix = build_dixon_coles_matrix(lam_home, lam_away)
+    dc_matrix, result['joint_market_state'] = apply_beidan_joint_market_state(
+        dc_matrix, asian_data, goals_data
+    )
     zjq_probs = aggregate_goals_from_scores(dc_matrix)
     mu1, mu2 = lam_home, lam_away
 
@@ -2902,9 +3033,9 @@ def generate_beidan_recommendations(date=None, bet_types=None, source='okooo', s
         with ThreadPoolExecutor(max_workers=8) as executor:
             futures = {}
             for match in matches:
-                if 'spf' in bet_types or 'zjq' in bet_types:
+                if any(bet_type in bet_types for bet_type in ('spf', 'rqspf', 'bifen', 'zjq')):
                     futures[executor.submit(fetch_okooo_asian_history, match['id'])] = ('asian', match['id'])
-                if 'zjq' in bet_types:
+                if any(bet_type in bet_types for bet_type in ('spf', 'rqspf', 'bifen', 'zjq')):
                     futures[executor.submit(fetch_okooo_goals_history, match['id'])] = ('goals', match['id'])
                 if 'spf' in bet_types:
                     futures[executor.submit(fetch_okooo_cs_history, match['id'])] = ('cs', match['id'])
@@ -2955,13 +3086,13 @@ def generate_beidan_recommendations(date=None, bet_types=None, source='okooo', s
             rec['cs'] = cs_data
         
         if 'spf' in bet_types:
-            rec['spf'] = analyze_spf(match, asian_data, cs_data)
+            rec['spf'] = analyze_spf(match, asian_data, cs_data, goals_data)
             spf_a = build_beidan_match_analysis(rec['spf'])
             if spf_a:
                 rec['spf']['analysis'] = spf_a
         
         if 'rqspf' in bet_types:
-            rec['rqspf'] = analyze_rqspf(match, asian_data)
+            rec['rqspf'] = analyze_rqspf(match, asian_data, goals_data)
         
         if 'bifen' in bet_types:
             rec['bifen'] = analyze_bifen(match, bifen_odds, asian_data, goals_data)
@@ -2975,6 +3106,7 @@ def generate_beidan_recommendations(date=None, bet_types=None, source='okooo', s
         recommendations.append(rec)
     
     result = {
+        'model_version': BEIDAN_VERSION,
         'date': date,
         'total_matches': len(matches),
         'pending_matches': len(recommendations),

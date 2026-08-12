@@ -273,6 +273,37 @@ class PredictionPostprocessTests(unittest.TestCase):
         self.assertLess(after, before)
         self.assertAlmostEqual(sum(adjusted.values()), 1.0)
 
+    def test_joint_market_state_raises_home_win_and_high_score_mass(self):
+        candidates = [
+            ((0, 0), .15), ((1, 0), .20), ((0, 1), .18),
+            ((1, 1), .20), ((2, 0), .10), ((0, 2), .08),
+            ((2, 1), .05), ((3, 1), .04),
+        ]
+        adjusted, meta = football._apply_joint_market_state(
+            candidates,
+            {'handicap_change': .5, 'prob_change': {'home': .06}},
+            {'momentum': {'shift_supremacy': .18}},
+            {'open_line': 2.5, 'close_line': 3.0,
+             'open_prob': {'over': .48}, 'close_prob': {'over': .57}},
+        )
+
+        self.assertTrue(meta['applied'])
+        self.assertGreater(meta['home_win_after'], meta['home_win_before'])
+        self.assertGreater(meta['expected_goals_after'], meta['expected_goals_before'])
+        self.assertAlmostEqual(sum(prob for _, prob in adjusted), 1.0)
+
+    def test_joint_market_state_downweights_direction_conflict(self):
+        state = football._joint_market_state(
+            {'handicap_change': .5, 'prob_change': {'home': -.08}},
+            {'momentum': {'shift_supremacy': -.25}},
+            {'open_line': 2.5, 'close_line': 2.5,
+             'open_prob': {'over': .50}, 'close_prob': {'over': .50}},
+        )
+
+        self.assertTrue(state['conflict'])
+        self.assertEqual(state['agreement_factor'], .40)
+        self.assertLess(abs(state['direction_signal']), .20)
+
     def test_team_poisson_lambdas_apply_xg_without_unbound_recent_data(self):
         strength = {
             'attack_home': 1.4,
