@@ -188,6 +188,11 @@ ZU6_RECENT_DECAY = 0.6
 ZU6_USE_KILL = False
 ZU6_CANDIDATE_SIZE = 8
 
+# 组六四码只预测“数字是否进入开奖号集合”，不预测位置。滚动回测显示，
+# 用每期去重后的边际出现率比通用的分位/遗漏/马尔可夫混合分更稳定。
+# 两个相邻窗口等权融合，降低单一窗口偶然波动；较短窗口用于同分时破平。
+ZU6_PRESENCE_WINDOWS = (25, 40)
+
 # 组六专用单码评分权重
 W_ZU6_HOT = 3.0
 W_ZU6_MISS = 1.5
@@ -199,7 +204,7 @@ W_ZU6_BLEND = 1.5
 WINDOW_WEIGHTS_KV_KEY = "lottery3d_window_weights"
 
 # 预测版本号
-PREDICTOR_VERSION = "3d-v4.6-div"
+PREDICTOR_VERSION = "3d-v4.7-zu6-presence"
 ML_MODEL_VERSION = "ml-v6"
 MIN_DATA_PERIODS_FOR_ML_FUSION = 300
 ML_CACHE_MAX_AGE_SECONDS = 36 * 3600
@@ -2248,27 +2253,34 @@ def ensemble_digit_scores(numbers, window_weights, dynamic=None):
 
 
 def zu6_digit_scores(numbers, window_weights=None, dynamic=None):
-    """组六单码评分：全局模型为主，叠加组六历史频率（回测优于纯组六特征）。"""
-    if window_weights is None:
-        window_weights = default_window_weights()
+    """Return position-free digit inclusion scores for the zu6 pool.
 
-    score, _ = ensemble_digit_scores(numbers, window_weights, dynamic=dynamic)
+    A repeated digit in one draw is counted once because a four-digit zu6 pool
+    only cares whether a digit is present.  All draw forms are retained: they
+    are valid observations of the next draw's digit marginals, while filtering
+    to historical zu6 draws discards roughly a quarter of the sample.
 
-    zu6_draws = [n for n in numbers if classify_form(n) == "zu6"]
-    if zu6_draws:
-        recent_zu6 = _recent_slice(zu6_draws, min(90, len(zu6_draws)))
-        freq = exp_weighted_counts([d for n in recent_zu6 for d in set(n)])
-        peak = max(freq.values()) if freq else 1.0
-        for d, cnt in freq.items():
-            score[d] += W_ZU6_HOT * 0.35 * (cnt / peak)
+    ``window_weights`` and ``dynamic`` stay in the signature for API
+    compatibility; the dedicated pool model intentionally does not reuse the
+    positional straight-selection model.
+    """
+    if not numbers:
+        return [0.0] * 10
 
-        for pos in range(3):
-            pos_sc = ensemble_position_digit_scores(
-                numbers, pos, window_weights, dynamic=dynamic
-            )
-            for d, _ in sorted(enumerate(pos_sc), key=lambda x: -x[1])[:3]:
-                score[d] += W_ZU6_POS * 0.25
+    score = [0.0] * 10
+    windows = [w for w in ZU6_PRESENCE_WINDOWS if w > 0]
+    for window in windows:
+        recent = _recent_slice(numbers, window)
+        denom = max(1, len(recent))
+        presence = Counter(d for draw in recent for d in set(draw))
+        for digit in range(10):
+            score[digit] += presence[digit] / denom
 
+    # Deterministic short-window tie-breaker; too small to alter non-ties.
+    short_recent = _recent_slice(numbers, min(windows) if windows else len(numbers))
+    short_presence = Counter(d for draw in short_recent for d in set(draw))
+    for digit in range(10):
+        score[digit] += short_presence[digit] * 1e-6 - digit * 1e-9
     return score
 
 
