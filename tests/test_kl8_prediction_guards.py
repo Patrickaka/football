@@ -31,6 +31,12 @@ def _record(issue: int):
 
 
 class KL8PredictionGuardTests(unittest.TestCase):
+    def test_unvalidated_numbers_are_hidden_by_default(self):
+        self.assertTrue(kl8_module.VERIFY_ONLY_MODE)
+        self.assertIsNone(resolve_play_strategy('select_5'))
+        self.assertIsNone(resolve_play_strategy('select_6'))
+        self.assertIsNone(resolve_play_strategy('fu_shi_7'))
+
     def test_multi_slip_coverage_accounts_for_identical_ticket_overlap(self):
         slips = [[1, 2, 3, 4, 5, 6]] * 8
         profile = _simulate_multi_slip_coverage(slips, simulations=20000, seed_key='test')
@@ -43,7 +49,7 @@ class KL8PredictionGuardTests(unittest.TestCase):
 
     def test_reference_select_5_and_6_use_fair_coverage_baseline(self):
         for pick in (5, 6):
-            strategy = resolve_play_strategy(f'select_{pick}')
+            strategy = resolve_play_strategy(f'select_{pick}', allow_reference=True)
 
             self.assertEqual(strategy['final_selection_mode'], 'shape_balanced')
             self.assertIsNone(strategy['pool_max_last_numbers'])
@@ -161,7 +167,9 @@ class KL8PredictionGuardTests(unittest.TestCase):
         analyzer.statistics = {'last_numbers': set(range(1, 21))}
 
         original_build = KL8Analyzer.build_pool_by_strategy
+        original_verify_only = kl8_module.VERIFY_ONLY_MODE
         try:
+            kl8_module.VERIFY_ONLY_MODE = False
             KL8Analyzer.build_pool_by_strategy = lambda self, strategy, pool_size=20: {
                 'selected': list(range(1, min(pool_size, 40) + 1)),
                 'candidates': [(n, float(100 - n)) for n in range(1, 41)],
@@ -170,6 +178,7 @@ class KL8PredictionGuardTests(unittest.TestCase):
             result = analyzer.recalculate_play_excluding('select_5', [1, 2, 3, 4, 5])
         finally:
             KL8Analyzer.build_pool_by_strategy = original_build
+            kl8_module.VERIFY_ONLY_MODE = original_verify_only
 
         self.assertNotIn('error', result)
         self.assertEqual(len(result['numbers']), 5)
@@ -184,7 +193,9 @@ class KL8PredictionGuardTests(unittest.TestCase):
         analyzer.statistics = {'last_numbers': set(range(1, 21))}
 
         original_build = KL8Analyzer.build_pool_by_strategy
+        original_verify_only = kl8_module.VERIFY_ONLY_MODE
         try:
+            kl8_module.VERIFY_ONLY_MODE = False
             unsorted_candidates = [20, 19, 18, 17, 16, 15, 14, 13, 12, 11] + list(range(21, 51))
             KL8Analyzer.build_pool_by_strategy = lambda self, strategy, pool_size=20: {
                 'selected': list(range(1, min(pool_size, 50) + 1)),
@@ -194,6 +205,7 @@ class KL8PredictionGuardTests(unittest.TestCase):
             result = analyzer.recalculate_play_excluding('select_10', list(range(1, 11)))
         finally:
             KL8Analyzer.build_pool_by_strategy = original_build
+            kl8_module.VERIFY_ONLY_MODE = original_verify_only
 
         self.assertNotIn('error', result)
         self.assertEqual(len(result['numbers']), 10)
@@ -367,11 +379,14 @@ class KL8PredictionGuardTests(unittest.TestCase):
         analyzer.update_statistics()
 
         original_save = KL8Analyzer._save_prediction_snapshot
+        original_verify_only = kl8_module.VERIFY_ONLY_MODE
         try:
+            kl8_module.VERIFY_ONLY_MODE = False
             KL8Analyzer._save_prediction_snapshot = lambda self, prediction_result: None
             result = analyzer.predict_all()
         finally:
             KL8Analyzer._save_prediction_snapshot = original_save
+            kl8_module.VERIFY_ONLY_MODE = original_verify_only
 
         for pick in range(3, 11):
             self.assertNotIn('multi_slips', result[f'select_{pick}'])

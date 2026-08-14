@@ -47,10 +47,13 @@ from src.common.logger import setup_logger
 
 log = setup_logger('kl8')
 
-KL8_PREDICTOR_VERSION = "kl8-v10.1-single-pick-only"
+KL8_PREDICTOR_VERSION = "kl8-v10.2-validated-only"
 
 # ─── v9.2: 只显示已验证策略模式 ───
-VERIFY_ONLY_MODE = False  # True=未验证玩法不输出号码; False=回退参考策略(始终输出号码)
+# 公平摇奖下，未通过样本外验证的启发式/确定性随机号码不能称为“预测”。
+# 默认关闭这类号码和由其衍生的高成本复式；仅在策略通过验证并进入
+# ACTIVE_STRATEGIES 后才对外输出。后台研究仍可显式 allow_reference=True。
+VERIFY_ONLY_MODE = True
 
 # ─── 快乐8常量 ───
 KL8_NUM_RANGE = 80       # 号码范围 1-80
