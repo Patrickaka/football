@@ -47,13 +47,12 @@ from src.common.logger import setup_logger
 
 log = setup_logger('kl8')
 
-KL8_PREDICTOR_VERSION = "kl8-v10.2-validated-only"
+KL8_PREDICTOR_VERSION = "kl8-v10.3-transition-repeat"
 
 # ─── v9.2: 只显示已验证策略模式 ───
-# 公平摇奖下，未通过样本外验证的启发式/确定性随机号码不能称为“预测”。
-# 默认关闭这类号码和由其衍生的高成本复式；仅在策略通过验证并进入
-# ACTIVE_STRATEGIES 后才对外输出。后台研究仍可显式 allow_reference=True。
-VERIFY_ONLY_MODE = True
+# 正式策略优先；尚未通过验证时继续输出玩法专属的动态参考策略，供持续
+# 结算和样本外观察。页面会明确标记“未验证参考”，不能当成稳定优势。
+VERIFY_ONLY_MODE = False
 
 # ─── 快乐8常量 ───
 KL8_NUM_RANGE = 80       # 号码范围 1-80
@@ -581,6 +580,38 @@ VALIDATION_CANDIDATES.update({
     },
 })
 
+# 跨期带出 + 重号筛选的预注册候选。窗口和重号上限固定为少量档位，
+# 由walk-forward验证比较，不根据最终测试结果临时调参。
+VALIDATION_CANDIDATES.update({
+    'transition_repeat_75_cap2': {
+        'strategy_id': 'candidate_transition_repeat_75_cap2',
+        'feature_weights': {'frequency': 0.25, 'gap': 0.15, 'trend': 0.10, 'next_transition': 0.30, 'repeat': 0.05, 'position_residual': 0.10, 'pair_cooccurrence': 0.05},
+        'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
+        'window_size': 75,
+        'repeat_direction': 'follow',
+        'pool_max_last_numbers': 2,
+        'final_selection_mode': 'shape_balanced',
+    },
+    'transition_repeat_100_cap3': {
+        'strategy_id': 'candidate_transition_repeat_100_cap3',
+        'feature_weights': {'frequency': 0.20, 'gap': 0.15, 'trend': 0.10, 'next_transition': 0.30, 'repeat': 0.05, 'position_residual': 0.10, 'position_residual_cross': 0.05, 'pair_cooccurrence': 0.05},
+        'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
+        'window_size': 100,
+        'repeat_direction': 'follow',
+        'pool_max_last_numbers': 3,
+        'final_selection_mode': 'shape_balanced',
+    },
+    'transition_repeat_150_cap4': {
+        'strategy_id': 'candidate_transition_repeat_150_cap4',
+        'feature_weights': {'frequency': 0.20, 'gap': 0.10, 'trend': 0.10, 'next_transition': 0.35, 'repeat': 0.05, 'position_residual': 0.10, 'road_residual': 0.05, 'pair_cooccurrence': 0.05},
+        'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
+        'window_size': 150,
+        'repeat_direction': 'follow',
+        'pool_max_last_numbers': 4,
+        'final_selection_mode': 'shape_balanced',
+    },
+})
+
 # v9.2: CANDIDATE_STRATEGIES 保留为 VALIDATION_CANDIDATES 的别名（向后兼容）
 CANDIDATE_STRATEGIES = VALIDATION_CANDIDATES
 
@@ -595,6 +626,7 @@ ABLATION_FEATURES = {
     'trend': 0.30,
     'position_residual_cross': 0.10,
     'pair_cooccurrence': 0.20,
+    'next_transition': 0.30,
     'adjacent': 0.15,
     'odd_even': 0.10,
     'big_small': 0.05,
@@ -741,11 +773,11 @@ def resolve_play_strategy(play_type: str, allow_reference: bool = False) -> Opti
             'is_validated': False,
         },
         'select_5': {
-            'strategy_id': 'select_5_ref_stable_shape_v2',
-            'feature_weights': {'frequency': 0.30, 'gap': 0.20, 'trend': 0.15, 'pair_cooccurrence': 0.05, 'position_residual': 0.15, 'position_residual_cross': 0.10, 'road_residual': 0.05, 'repeat': 0.0, 'odd_even': 0.0, 'big_small': 0.0},
+            'strategy_id': 'select_5_ref_transition_repeat_v3',
+            'feature_weights': {'frequency': 0.22, 'gap': 0.15, 'trend': 0.12, 'next_transition': 0.20, 'pair_cooccurrence': 0.04, 'position_residual': 0.12, 'position_residual_cross': 0.08, 'road_residual': 0.04, 'repeat': 0.03, 'odd_even': 0.0, 'big_small': 0.0},
             'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
             'window_size': 100,
-            'repeat_direction': 'neutral',
+            'repeat_direction': 'follow',
             'pool_max_last_numbers': 2,
             'final_selection_mode': 'shape_balanced',
             'target_hits': 4,
@@ -753,11 +785,11 @@ def resolve_play_strategy(play_type: str, allow_reference: bool = False) -> Opti
             'is_validated': False,
         },
         'select_6': {
-            'strategy_id': 'select_6_ref_stable_shape_v2',
-            'feature_weights': {'frequency': 0.25, 'gap': 0.20, 'trend': 0.15, 'pair_cooccurrence': 0.05, 'position_residual': 0.15, 'position_residual_cross': 0.10, 'road_residual': 0.10, 'repeat': 0.0, 'odd_even': 0.0, 'big_small': 0.0},
+            'strategy_id': 'select_6_ref_transition_repeat_v3',
+            'feature_weights': {'frequency': 0.18, 'gap': 0.14, 'trend': 0.12, 'next_transition': 0.22, 'pair_cooccurrence': 0.04, 'position_residual': 0.11, 'position_residual_cross': 0.08, 'road_residual': 0.08, 'repeat': 0.03, 'odd_even': 0.0, 'big_small': 0.0},
             'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
             'window_size': 100,
-            'repeat_direction': 'neutral',
+            'repeat_direction': 'follow',
             'pool_max_last_numbers': 3,
             'final_selection_mode': 'shape_balanced',
             'target_hits': 5,
@@ -836,45 +868,10 @@ def resolve_play_strategy(play_type: str, allow_reference: bool = False) -> Opti
         result = deepcopy(REFERENCE_STRATEGY)
         result['strategy_id'] = f'{play_type}_reference_heuristic_v1'
 
-    # Unvalidated history heuristics have not beaten the fair random baseline
-    # in strict walk-forward tests.  Do not let hot/cold, gap, trend or pair
-    # co-occurrence silently drive the numbers shown on the public page.
-    # A deterministic per-issue uniform rank keeps the result reproducible;
-    # shape balancing and the portfolio layer only improve ticket coverage,
-    # not the claimed probability of an individual number.
-    result.update({
-        'strategy_id': f'{play_type}_fair_single_v1',
-        'feature_weights': {
-            'frequency': 0.0,
-            'gap': 0.0,
-            'trend': 0.0,
-            'pair_cooccurrence': 0.0,
-            'position_residual': 0.0,
-            'position_residual_cross': 0.0,
-            'road_residual': 0.0,
-            'repeat': 0.0,
-            'odd_even': 0.0,
-            'big_small': 0.0,
-            'seeded_random': 1.0,
-        },
-        'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
-        'window_size': 1,
-        'repeat_direction': 'neutral',
-        'pool_max_last_numbers': None,
-        # v9.6: 单注选5/选6已改为 shape_balanced（号码形态更均衡，避免全部挤在排名头部）；
-        #        其他玩法保留各自配置，不再强制统一。
-        'final_selection_mode': result.get('final_selection_mode', 'balanced'),
-        'prediction_mode': 'reference_unvalidated',
-        'is_validated': False,
-        'baseline_type': 'fair_deterministic_single',
-    })
-
-    # v10.0: 选5/选6不再用未通过FDR门槛的热号弱信号覆盖公平基线。
-    # 其验证均值1.2646/1.5077与随机期望1.25/1.50无显著差异，线上继续
-    # 作为“主推”只会制造虚假确定性。未验证时统一使用可复现的均匀单组选号，
-    # 不生成多注覆盖方案。
-    result.pop('final_max_last_numbers', None)
-    result.pop('final_min_last_numbers', None)
+    # 未验证阶段使用玩法专属的动态组合，而不是按期号生成的确定性随机排名。
+    # 各玩法窗口、特征权重和形态约束彼此独立，随新开奖更新；验证状态仍为
+    # reference_unvalidated，只有通过严格样本外门槛才会升级为 validated。
+    result['baseline_type'] = 'adaptive_pattern_reference'
     return result
 
 
@@ -2884,6 +2881,38 @@ class KL8Analyzer:
                     cooc_count += 1
             avg_cooccurrence[num] = cooc_sum / cooc_count if cooc_count > 0 else 0
 
+        # 跨期条件关联：历史按“较老一期 -> 紧接着的较新一期”统计。
+        # 对当前最新一期的20个触发号，估计每个候选号在下一期出现的概率。
+        # Beta(5, 15)收缩把小样本拉回公平基线0.25，避免偶然的1/1、2/2
+        # 被误判为强规律。这里与同期开奖的pair_cooccurrence含义不同。
+        transition_counts = defaultdict(Counter)
+        trigger_counts = Counter()
+        for older_idx in range(1, len(recent_data)):
+            source = set(recent_data[older_idx]['numbers'])
+            following = set(recent_data[older_idx - 1]['numbers'])
+            for trigger in source:
+                trigger_counts[trigger] += 1
+                for target in following:
+                    transition_counts[trigger][target] += 1
+
+        next_transition_probability = {}
+        next_transition_support = {}
+        for target in range(1, 81):
+            weighted_probability = 0.0
+            total_support = 0
+            for trigger in last_numbers:
+                support = trigger_counts.get(trigger, 0)
+                if support <= 0:
+                    continue
+                hits = transition_counts[trigger].get(target, 0)
+                posterior = (hits + 5.0) / (support + 20.0)
+                weighted_probability += posterior * support
+                total_support += support
+            next_transition_probability[target] = (
+                weighted_probability / total_support if total_support else 0.25
+            )
+            next_transition_support[target] = total_support
+
         adjacent_freq = {}
         for num in range(1, 81):
             adj_nums = [n for n in [num-1, num+1] if 1 <= n <= 80]
@@ -2895,6 +2924,8 @@ class KL8Analyzer:
             'trend': trend_freq,
             'pair_cooccurrence': pair_cooccurrence,
             'avg_cooccurrence': avg_cooccurrence,
+            'next_transition_probability': next_transition_probability,
+            'next_transition_support': next_transition_support,
             'adjacent_freq': adjacent_freq,
             'total_periods': recent,
             'expected_freq': recent * KL8_DRAW_COUNT / KL8_NUM_RANGE,
@@ -3071,6 +3102,13 @@ class KL8Analyzer:
         max_avg_cooc = max(stats.get('avg_cooccurrence', {}).values(), default=1)
         cooc_ratio = avg_cooc / max(max_avg_cooc, 0.01)
         scores['pair_cooccurrence'] = 0.50 + 0.30 * cooc_ratio
+
+        # 5.6 跨期带出(next_transition)：当前20个号码出现后，历史下一期中
+        # 候选号出现的收缩条件概率。0.25为中性，限制到[0.15, 0.85]，防止
+        # 稀疏关联压倒其余特征。重号A->A也自然包含在此统计中。
+        transition_prob = stats.get('next_transition_probability', {}).get(num, 0.25)
+        transition_lift = (transition_prob - 0.25) / 0.25
+        scores['next_transition'] = max(0.15, min(0.85, 0.50 + 0.35 * transition_lift))
 
         # 6. 和值特征 -- 停用
         scores['sum'] = 0.5

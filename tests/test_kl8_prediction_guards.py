@@ -31,11 +31,33 @@ def _record(issue: int):
 
 
 class KL8PredictionGuardTests(unittest.TestCase):
-    def test_unvalidated_numbers_are_hidden_by_default(self):
-        self.assertTrue(kl8_module.VERIFY_ONLY_MODE)
-        self.assertIsNone(resolve_play_strategy('select_5'))
-        self.assertIsNone(resolve_play_strategy('select_6'))
-        self.assertIsNone(resolve_play_strategy('fu_shi_7'))
+    def test_next_transition_uses_older_to_newer_draws_with_shrinkage(self):
+        analyzer = KL8Analyzer.__new__(KL8Analyzer)
+        analyzer.using_simulated_data = False
+        analyzer.history_data = []
+        for idx in range(60):
+            if idx % 2 == 0:
+                numbers = list(range(61, 81))  # follows the draw containing 1
+            else:
+                numbers = list(range(1, 21))
+            analyzer.history_data.append({'issue': str(206000 - idx), 'numbers': numbers})
+        analyzer.update_statistics()
+
+        probabilities = analyzer.statistics['next_transition_probability']
+        self.assertGreater(probabilities[1], probabilities[40])
+        self.assertGreater(probabilities[1], 0.25)
+        score = analyzer._calculate_feature_score(1)['next_transition']
+        self.assertGreater(score, 0.50)
+
+    def test_unvalidated_numbers_use_dynamic_reference_by_default(self):
+        self.assertFalse(kl8_module.VERIFY_ONLY_MODE)
+        select5 = resolve_play_strategy('select_5')
+        select6 = resolve_play_strategy('select_6')
+        self.assertEqual(select5['baseline_type'], 'adaptive_pattern_reference')
+        self.assertEqual(select6['baseline_type'], 'adaptive_pattern_reference')
+        self.assertNotEqual(select5['feature_weights'], {'seeded_random': 1.0})
+        self.assertGreater(select5['feature_weights']['trend'], 0)
+        self.assertGreater(select6['feature_weights']['road_residual'], 0)
 
     def test_multi_slip_coverage_accounts_for_identical_ticket_overlap(self):
         slips = [[1, 2, 3, 4, 5, 6]] * 8
@@ -52,13 +74,10 @@ class KL8PredictionGuardTests(unittest.TestCase):
             strategy = resolve_play_strategy(f'select_{pick}', allow_reference=True)
 
             self.assertEqual(strategy['final_selection_mode'], 'shape_balanced')
-            self.assertIsNone(strategy['pool_max_last_numbers'])
-            self.assertNotIn('final_min_last_numbers', strategy)
-            self.assertEqual(strategy['feature_weights']['seeded_random'], 1.0)
-            self.assertEqual(strategy['feature_weights']['frequency'], 0.0)
-            self.assertEqual(strategy['feature_weights']['pair_cooccurrence'], 0.0)
-            self.assertEqual(strategy['baseline_type'], 'fair_deterministic_single')
-            self.assertEqual(strategy['window_size'], 1)
+            self.assertGreater(strategy['feature_weights']['frequency'], 0.0)
+            self.assertGreater(strategy['feature_weights']['pair_cooccurrence'], 0.0)
+            self.assertEqual(strategy['baseline_type'], 'adaptive_pattern_reference')
+            self.assertEqual(strategy['window_size'], 100)
             self.assertFalse(strategy['is_validated'])
 
     def test_normalize_record_strips_issue_and_rejects_bad_numbers(self):
@@ -333,7 +352,7 @@ class KL8PredictionGuardTests(unittest.TestCase):
         )
         self.assertIn('pick count', result['error'])
 
-    def test_reference_plays_use_honest_coverage_selection(self):
+    def test_reference_plays_use_distinct_adaptive_strategies(self):
         original_verify_only = kl8_module.VERIFY_ONLY_MODE
         try:
             kl8_module.VERIFY_ONLY_MODE = False
@@ -346,9 +365,10 @@ class KL8PredictionGuardTests(unittest.TestCase):
         self.assertEqual(select5['final_selection_mode'], 'shape_balanced')
         self.assertEqual(select6['final_selection_mode'], 'shape_balanced')
         self.assertEqual(select10['final_selection_mode'], 'shape_balanced')
-        self.assertIn('fair_single', select5['strategy_id'])
-        self.assertIn('fair_single', select6['strategy_id'])
-        self.assertIn('fair_single', select10['strategy_id'])
+        self.assertEqual(select5['strategy_id'], 'select_5_ref_transition_repeat_v3')
+        self.assertEqual(select6['strategy_id'], 'select_6_ref_transition_repeat_v3')
+        self.assertEqual(select10['strategy_id'], 'select_10_ref_trend100_shape_balanced')
+        self.assertNotEqual(select5['feature_weights'], select6['feature_weights'])
         self.assertEqual(select5['target_hits'], 4)
         self.assertEqual(select6['target_hits'], 5)
 
@@ -392,10 +412,10 @@ class KL8PredictionGuardTests(unittest.TestCase):
             self.assertNotIn('multi_slips', result[f'select_{pick}'])
         self.assertEqual(
             result['select_5']['strategy_id'],
-            'select_5_fair_single_v1',
+            'select_5_ref_transition_repeat_v3',
         )
         self.assertEqual(result['select_5']['final_selection_mode'], 'shape_balanced')
-        self.assertEqual(result['select_5']['baseline_type'], 'fair_deterministic_single')
+        self.assertEqual(result['select_5']['baseline_type'], 'adaptive_pattern_reference')
 
         for pick in [8, 9, 10]:
             key = f'select_{pick}'
@@ -411,8 +431,8 @@ class KL8PredictionGuardTests(unittest.TestCase):
             )
             self.assertNotIn('variants', result[key])
 
-        self.assertIsNone(result['resolved_strategies']['select_5']['pool_max_last_numbers'])
-        self.assertIsNone(result['resolved_strategies']['select_6']['pool_max_last_numbers'])
+        self.assertEqual(result['resolved_strategies']['select_5']['pool_max_last_numbers'], 2)
+        self.assertEqual(result['resolved_strategies']['select_6']['pool_max_last_numbers'], 3)
         last_numbers = set(analyzer.history_data[0]['numbers'])
         self.assertIn('repeat_profile', result['select_5'])
         self.assertGreaterEqual(result['select_5']['repeat_profile']['sample_size'], 1)
@@ -441,7 +461,7 @@ class KL8PredictionGuardTests(unittest.TestCase):
         )
         self.assertNotIn('variants', result['fu_shi_7'])
         self.assertEqual(result['fu_shi_7']['prize_hit_thresholds'], ['>=4', '>=5'])
-        self.assertIsNone(result['resolved_strategies']['fu_shi_7']['pool_max_last_numbers'])
+        self.assertEqual(result['resolved_strategies']['fu_shi_7']['pool_max_last_numbers'], 4)
 
         self.assertIn('fu_shi_10_11', result)
         self.assertEqual(
