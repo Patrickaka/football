@@ -72,6 +72,18 @@ class WebProfessionalModalTests(unittest.TestCase):
         self.assertIn("欧赔 + 亚盘水位综合预测", html)
         self.assertIn("欧赔提供基础概率，亚盘升降盘与水位变化修正方向", html)
 
+    def test_football_list_uses_compact_joint_market_summary(self):
+        path = os.path.join(ROOT, 'web', 'index.html')
+        with open(path, encoding='utf-8') as handle:
+            html = handle.read()
+
+        self.assertIn('const compactFootballView = true;', html)
+        self.assertIn('class="football-compact-summary"', html)
+        self.assertIn("compactProbLine(standardPrediction.probs, ['胜','平','负'])", html)
+        self.assertIn("compactProbLine(handicapCard.prediction.probs, ['让胜','让平','让负'])", html)
+        self.assertIn('if (!compactFootballView && top.length)', html)
+        self.assertIn('if (!compactFootballView && htfProbs.length)', html)
+
 
 if __name__ == '__main__':
     unittest.main()
