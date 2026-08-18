@@ -1575,7 +1575,7 @@ class Handler(BaseHTTPRequestHandler):
         try:
             date = params.get('date', [None])[0]
             source = params.get('source', ['okooo'])[0]
-            bet_types = params.get('types', ['spf,zjq'])[0].split(',')
+            bet_types = params.get('types', ['spf,rqspf,zjq'])[0].split(',')
             
             self._log.info(f'北单推荐请求: date={date}, source={source}, types={bet_types}')
             

@@ -7,6 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import src.football as football
+from unittest.mock import patch
 
 
 def _mini_asian(hcap=0.75, hp=0.56):
@@ -49,6 +50,30 @@ def test_asian_supremacy_differs_from_handicap_line():
     """反推净胜球不应机械等于让球盘数值"""
     sup = football.asian_implied_supremacy(0.75, 0.62, 0.38, 2.5)
     assert abs(sup - 0.75) > 0.04, sup
+
+
+def test_quarter_handicap_half_win_counts_half_probability():
+    with patch.object(football, 'build_score_matrix', return_value={(1, 0): 1.0}):
+        cover = football._asian_cover_prob(1.5, 1.0, 0.75)
+    assert cover == 0.5, cover
+
+
+def test_predict_scores_does_not_apply_market_move_twice():
+    asian = _mini_asian()
+    asian['lambda_adjust'] = {'home': 9.0, 'away': -9.0}
+    total = _mini_total()
+    total['open_prob'] = {'over': 0.56, 'under': 0.44}
+    total['lambda_adjust'] = {'total': 9.0}
+    with patch.object(
+        football,
+        'fit_lambdas_from_markets',
+        return_value=(1.5, 1.0, 2.5, 0.0),
+    ):
+        _, lam_home, lam_away, _ = football.predict_scores(
+            asian, _mini_euro(), total
+        )
+    assert lam_home == 1.5
+    assert lam_away == 1.0
 
 
 def test_fit_lambdas_matches_euro_margins():

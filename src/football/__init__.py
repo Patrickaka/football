@@ -31,7 +31,7 @@ from ..common.paths import data_path
 
 log = setup_logger('football')
 
-FOOTBALL_PREDICTION_LOGIC_VERSION = '2026-08-12-joint-market-state-evidence-v22'
+FOOTBALL_PREDICTION_LOGIC_VERSION = '2026-08-18-single-market-move-weight-v23'
 LOTTERY_OFFICIAL_ODDS_WEIGHT = 0.40
 
 # ELO 评分系统（延迟导入）
@@ -3106,10 +3106,9 @@ def _asian_cover_prob(lam_home, lam_away, handicap, rho=0.0):
     cover = 0.0
     for (h, a), prob in matrix.items():
         pay = _asian_payout_home(h - a, handicap)
-        if pay > 0:
-            cover += prob
-        elif pay == 0.5:
-            cover += 0.5 * prob
+        # 四分盘的半赢只能计入一半概率。原先先判断 pay > 0，导致
+        # pay == 0.5 被当成全赢，使 ±0.25/±0.75 等盘口反推偏强。
+        cover += max(pay, 0.0) * prob
     return cover
 
 
@@ -5188,23 +5187,9 @@ def predict_scores(asian, euro, total, team_strength=None, league_profile=None,
             open_time=open_time, close_time=close_time,
         )
         
-        # ========== 新增：应用盘口变化调整 λ ==========
-        # 亚盘让球变化调整
-        asian_lambda_adjust = asian.get('lambda_adjust', {})
-        if asian_lambda_adjust:
-            lam_home += asian_lambda_adjust.get('home', 0)
-            lam_away += asian_lambda_adjust.get('away', 0)
-        
-        # 大小球变化调整（按比例分配）
-        total_lambda_adjust = total.get('lambda_adjust', {}).get('total', 0)
-        if total_lambda_adjust != 0:
-            # 根据当前 λ 比例分配调整
-            if lam_home + lam_away > 0:
-                lam_home += total_lambda_adjust * (lam_home / (lam_home + lam_away))
-                lam_away += total_lambda_adjust * (lam_away / (lam_home + lam_away))
-            else:
-                lam_home += total_lambda_adjust * 0.5
-                lam_away += total_lambda_adjust * 0.5
+        # fit_lambdas_from_markets 已经根据初终盘变化修正过主客队 λ。
+        # analyze_asian/analyze_total 里的 lambda_adjust 仅保留为解释元数据，
+        # 此处不再重复叠加同一个升降盘信号。
         
         # ========== 新增：应用博彩公司分歧指数调整 λ ==========
         bookmaker_consensus = asian.get('bookmaker_consensus')

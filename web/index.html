@@ -2260,10 +2260,13 @@ function renderFootballPredictions(results) {
           accuracyGate: accuracyGate.spf,
         });
       }
-      if (officialLotteryMatched && r.lottery?.rqspf_available && r.lottery?.handicap) {
+      if (r.lottery?.handicap) {
         const lotteryHandicap = r.lottery.handicap.handicap;
+        const officialRqspf = officialLotteryMatched && r.lottery?.rqspf_available;
         marketCards.push({
-          title: `🇨🇳 中国体彩 · 让球胜平负（主队 ${lotteryHandicap > 0 ? '+' : ''}${lotteryHandicap}，按胜平负主方向条件分析）`,
+          title: officialRqspf
+            ? `🇨🇳 中国体彩 · 让球胜平负（主队 ${lotteryHandicap > 0 ? '+' : ''}${lotteryHandicap}）`
+            : `🎯 让球胜平负（主队 ${lotteryHandicap > 0 ? '+' : ''}${lotteryHandicap}·修正后模型）`,
           prediction: {
             pred: linkedSelections?.handicapPredictions?.[0] || r.lottery.handicap.prediction,
             preds: linkedSelections?.handicapPredictions,
@@ -2279,7 +2282,7 @@ function renderFootballPredictions(results) {
             marketWeight: r.lottery.handicap.market_weight,
           },
           keys: ['让胜', '让平', '让负'],
-          odds: r.lottery?.rqspf_odds,
+          odds: officialRqspf ? r.lottery?.rqspf_odds : null,
           handicap: true,
           accuracyGate: accuracyGate.rqspf,
           explanation: getLotteryHandicapExplanation(r.lottery),
@@ -2332,6 +2335,11 @@ function renderFootballPredictions(results) {
         itemHtml += `<div style="margin-top:6px;padding:7px 9px;border:1px solid rgba(59,130,246,.35);background:rgba(59,130,246,.08);border-radius:7px;font-size:12px;color:#93c5fd">
           🔗 先看胜平负：<b>${esc(linkedSelections.primaryPrediction)} ⇒ 让球兼容 ${esc(compatibleText)} ⇒ 首选 ${esc(linkedSelections.handicapPredictions[0])}</b>
           <span style="color:var(--muted)">（让球百分比为该胜平负方向下的条件分析）</span>
+        </div>`;
+      }
+      if (r.model?.joint_market_state?.applied) {
+        itemHtml += `<div style="margin-top:6px;font-size:11px;color:#06b6d4">
+          📈 胜平负、让球胜平负和进球数已统一应用亚盘水位/大小球变化修正
         </div>`;
       }
       
@@ -2655,7 +2663,12 @@ let beidanSearchDebounceTimer = null;
 async function loadBeidan() {
   appBeidan.innerHTML = '<div class="status">加载中…</div>';
   try {
-    const q = new URLSearchParams({ source: beidanSource, date: beidanDate || '', _: Date.now().toString() });
+    const q = new URLSearchParams({
+      source: beidanSource,
+      date: beidanDate || '',
+      types: 'spf,rqspf,zjq',
+      _: Date.now().toString()
+    });
     const data = await fetchJson('/api/beidan?' + q);
     if (data.error) {
       const attempts = (data.attempts || []).map(a =>
@@ -2981,6 +2994,34 @@ function renderBeidan(result) {
           </div>
           ${bReportUrl ? `<div style="margin-left:10px;flex-shrink:0"><button class="bayes-report-btn" onclick="openBayesModal('${esc(bReportUrl)}', '${esc(m.home)} vs ${esc(m.away)}')">📊 深度报告</button></div>` : ''}
         </div>`;
+
+        const waterPrediction = m.water_market_prediction;
+        if (waterPrediction?.available) {
+          const waterSpf = waterPrediction.spf || {};
+          const waterRq = waterPrediction.rqspf || {};
+          const waterGoals = waterPrediction.goals || {};
+          const marketEvidence = waterPrediction.evidence || {};
+          const summaryLine = (probabilities, keys) => keys.map(key =>
+            `${key} ${(Number(probabilities?.[key] || 0) * 100).toFixed(1)}%`
+          ).join(' · ');
+          const rqHandicap = waterRq.handicap;
+          const rqLabel = rqHandicap === null || rqHandicap === undefined
+            ? '让球胜平负' : `让球胜平负（${Number(rqHandicap) > 0 ? '+' : ''}${rqHandicap}）`;
+          const goalText = (waterGoals.top3 || []).map(([goals, probability]) =>
+            `${esc(goals)}球 ${(Number(probability) * 100).toFixed(1)}%`
+          ).join(' · ') || '暂无';
+          html += `<div style="margin-top:8px;padding:10px;background:rgba(6,182,212,.08);border:1px solid rgba(6,182,212,.28);border-radius:8px">
+            <div style="font-size:12px;color:#06b6d4;font-weight:bold;margin-bottom:7px">📊 欧赔 + 亚盘水位综合预测${waterPrediction.asian_adjusted ? ' · 已修正' : ' · 盘口信号较弱'}</div>
+            <div style="font-size:11px;color:var(--muted);margin-bottom:6px">
+              欧赔基准：${esc(marketEvidence.euro_prediction || '-')} · 亚盘方向：${esc(marketEvidence.asian_direction || '未知')}
+              ${marketEvidence.conflict ? '<span style="color:var(--warn)"> · ⚠️ 欧亚方向冲突</span>' : '<span style="color:var(--accent2)"> · 方向一致</span>'}
+            </div>
+            <div style="font-size:13px"><span style="color:var(--muted)">胜平负：</span><b>${esc(waterSpf.prediction || '-')}</b> · ${summaryLine(waterSpf.probabilities, ['胜','平','负'])}</div>
+            ${waterRq.prediction ? `<div style="font-size:13px;margin-top:5px"><span style="color:var(--muted)">${esc(rqLabel)}：</span><b>${esc(waterRq.prediction)}</b> · ${summaryLine(waterRq.probabilities, ['让胜','让平','让负'])}</div>` : ''}
+            <div style="font-size:13px;margin-top:5px"><span style="color:var(--muted)">总进球：</span><b>${esc(waterGoals.prediction || '-')}球</b> · ${goalText}</div>
+            <div style="font-size:10px;color:var(--muted);margin-top:6px">欧赔提供基础概率，亚盘升降盘与水位变化修正方向；各市场由同一比分概率矩阵推导</div>
+          </div>`;
+        }
         
         if (m.spf && !m.spf.error) {
           html += '<div style="margin-top:8px;padding:8px;background:var(--bg2);border-radius:8px">';
@@ -3024,6 +3065,43 @@ function renderBeidan(result) {
         
         if (m.spf && m.spf.analysis) {
           html += renderAnalysisCard(m.spf.analysis, 'football');
+        }
+
+        if (m.rqspf && !m.rqspf.error) {
+          const rqHandicap = m.rqspf.handicap;
+          const rqHandicapText = rqHandicap === null || rqHandicap === undefined || rqHandicap === ''
+            ? '' : `（主队 ${Number(rqHandicap) > 0 ? '+' : ''}${esc(rqHandicap)}）`;
+          const admission = m.rqspf.market_admission || {};
+          html += '<div style="margin-top:8px;padding:8px;background:var(--bg2);border-radius:8px">';
+          html += `<div style="font-size:12px;color:var(--muted);margin-bottom:6px">🎯 让球胜平负${rqHandicapText}</div>`;
+          html += renderBeidanQuality(m.rqspf.quality);
+          html += '<div style="display:flex;gap:12px">';
+          [
+            { key: '让胜', color: '#ef4444' },
+            { key: '让平', color: '#f59e0b' },
+            { key: '让负', color: '#22c55e' },
+          ].forEach(item => {
+            const probability = Number(m.rqspf.probabilities?.[item.key] || 0);
+            const selected = admission.selected === false
+              ? false : m.rqspf.prediction === item.key;
+            html += `<div style="flex:1;text-align:center;padding:6px;border-radius:6px${selected ? `;background:${item.color}20;color:${item.color};font-weight:bold` : ''}">
+              <div>${item.key}</div>
+              <div style="font-size:11px;color:var(--muted)">${(probability * 100).toFixed(1)}%</div>
+            </div>`;
+          });
+          html += '</div>';
+          if (m.rqspf.asian_adjusted) {
+            html += '<div style="margin-top:6px;font-size:11px;color:#06b6d4">📈 已应用统一亚盘水位与大小球变化修正</div>';
+          }
+          if (admission.playable === false && admission.skip_reason) {
+            const skipReasons = {
+              market_history_insufficient: '盘口历史不足',
+              market_signal_weak: '盘口变化信号较弱',
+              market_conflicts_with_model: '盘口变化与模型方向冲突',
+            };
+            html += `<div style="margin-top:5px;font-size:11px;color:var(--warn)">⚠️ 暂不单推：${esc(skipReasons[admission.skip_reason] || admission.skip_reason)}</div>`;
+          }
+          html += '</div>';
         }
         
         if (m.zjq && !m.zjq.error) {
@@ -7827,35 +7905,23 @@ async function loadPredictions() {
         };
         const status = statusMap[record.sync_status] || statusMap['pending'];
         
-        // 精确比分单点概率天然集中在常见低比分，同时展示Top3和进球数分布，
-        // 避免把1-1这个众数误读为模型只分析了1-1。
-        const predictedScores = record.predicted_scores || {};
-        const rankedScores = Object.entries(predictedScores).sort((a, b) => b[1] - a[1]);
-        const topScore = rankedScores[0];
-        const topScoreStr = topScore ? `${topScore[0]} (${(topScore[1] * 100).toFixed(1)}%)` : '-';
-        const top3ScoreStr = rankedScores.slice(0, 3)
-          .map(([score, probability]) => `${esc(score)} ${(Number(probability) * 100).toFixed(1)}%`)
-          .join(' · ') || '-';
-        const goalDistribution = {};
-        rankedScores.forEach(([score, probability]) => {
-          const parts = String(score).split('-').map(Number);
-          if (parts.length !== 2 || parts.some(Number.isNaN)) return;
-          const goals = parts[0] + parts[1];
-          goalDistribution[goals] = (goalDistribution[goals] || 0) + Number(probability || 0);
-        });
-        const topGoals = Object.entries(goalDistribution).sort((a,b) => b[1] - a[1]).slice(0,3);
-        const topGoalsStr = topGoals.map(([goals, probability]) =>
-          `${goals}球 ${(Number(probability) * 100).toFixed(1)}%`
-        ).join(' · ') || '-';
-        const capturedGoalMass = Object.values(goalDistribution).reduce((sum, probability) => sum + Number(probability), 0);
-        const expectedGoalsRaw = Object.entries(goalDistribution).reduce(
-          (sum,[goals, probability]) => sum + Number(goals) * Number(probability), 0
-        );
-        const expectedGoals = capturedGoalMass > 0 ? expectedGoalsRaw / capturedGoalMass : 0;
-        const actualRank = record.actual_score
-          ? rankedScores.findIndex(([score]) => score === record.actual_score) + 1
-          : 0;
-        const actualProbability = record.actual_score ? Number(predictedScores[record.actual_score] || 0) : 0;
+        const spfLabels = { H: '胜', D: '平', A: '负', home: '胜', draw: '平', away: '负', '胜': '胜', '平': '平', '负': '负' };
+        const marketSummary = (probabilities, labels) => {
+          const ranked = Object.entries(probabilities || {}).sort((a, b) => Number(b[1]) - Number(a[1]));
+          if (!ranked.length) return { pick: '-', detail: '暂无预测' };
+          return {
+            pick: labels[ranked[0][0]] || ranked[0][0],
+            detail: ranked.map(([key, probability]) =>
+              `${esc(labels[key] || key)} ${(Number(probability) * 100).toFixed(1)}%`
+            ).join(' · '),
+          };
+        };
+        const spf = marketSummary(record.predicted_1x2, spfLabels);
+        const rqspf = marketSummary(record.predicted_rqspf, {});
+        const handicap = record.lottery_handicap;
+        const handicapText = handicap === null || handicap === undefined || handicap === ''
+          ? '' : `（${Number(handicap) > 0 ? '+' : ''}${esc(handicap)}）`;
+        const actualSpf = spfLabels[record.actual_result] || record.actual_result || '-';
         
         html += `<div class="card" style="${idx > 0 ? 'margin-top:8px' : ''}">
           <div style="display:flex;justify-content:space-between;align-items:center">
@@ -7871,16 +7937,13 @@ async function loadPredictions() {
         
         if (record.settled) {
           // 已结算
-          const hitTop1 = record.hit_top1 ? '✅' : '❌';
-          const hitTop3 = record.hit_top3 ? '✅' : '❌';
           html += `<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--line);font-size:13px">
-            <div><span style="color:var(--muted)">精确比分Top3：</span>${top3ScoreStr}</div>
-            <div style="margin-top:4px"><span style="color:var(--muted)">进球数Top3：</span>${topGoalsStr}${expectedGoals ? ` · 期望 ${expectedGoals.toFixed(2)}球` : ''}</div>
-            <div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:4px">
-            <div><span style="color:var(--muted)">实际：</span><b style="color:var(--accent2)">${esc(record.actual_score || '-')}</b></div>
-            <div><span style="color:var(--muted)">实际比分模型位置：</span>${actualRank > 0 ? `第${actualRank}位 / ${actualProbability > 0 ? (actualProbability * 100).toFixed(2) + '%' : '极低概率'}` : '未进入候选范围'}</div>
-            <div><span style="color:var(--muted)">Top1：</span>${hitTop1}</div>
-            <div><span style="color:var(--muted)">Top3：</span>${hitTop3}</div>
+            <div><span style="color:var(--muted)">胜平负预测：</span><b>${esc(spf.pick)}</b> · ${spf.detail} ${record.hit_1x2 === true ? '✅' : record.hit_1x2 === false ? '❌' : ''}</div>
+            <div style="margin-top:4px"><span style="color:var(--muted)">让球胜平负${handicapText}预测：</span><b>${esc(rqspf.pick)}</b> · ${rqspf.detail} ${record.hit_rqspf === true ? '✅' : record.hit_rqspf === false ? '❌' : ''}</div>
+            <div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:6px">
+            <div><span style="color:var(--muted)">赛后比分：</span><b style="color:var(--accent2)">${esc(record.actual_score || '-')}</b></div>
+            <div><span style="color:var(--muted)">实际胜平负：</span>${esc(actualSpf)}</div>
+            ${record.actual_rqspf ? `<div><span style="color:var(--muted)">实际让球赛果：</span>${esc(record.actual_rqspf)}</div>` : ''}
             </div>
           </div>`;
         } else if (record.sync_status === 'failed') {
@@ -7892,8 +7955,8 @@ async function loadPredictions() {
         } else {
           // 待同步
           html += `<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--line);font-size:12px">
-            <div><span style="color:var(--muted)">精确比分Top3：</span>${top3ScoreStr}</div>
-            <div style="margin-top:4px"><span style="color:var(--muted)">进球数Top3：</span>${topGoalsStr}${expectedGoals ? ` · 期望 ${expectedGoals.toFixed(2)}球` : ''}</div>
+            <div><span style="color:var(--muted)">胜平负预测：</span><b>${esc(spf.pick)}</b> · ${spf.detail}</div>
+            <div style="margin-top:4px"><span style="color:var(--muted)">让球胜平负${handicapText}预测：</span><b>${esc(rqspf.pick)}</b> · ${rqspf.detail}</div>
             ${record.next_sync_at ? `<div style="color:var(--muted);margin-top:2px">预计同步：${record.next_sync_at?.replace('T', ' ').slice(0, 16) || '-'}</div>` : ''}
           </div>`;
         }

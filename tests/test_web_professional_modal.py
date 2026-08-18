@@ -39,9 +39,9 @@ class WebProfessionalModalTests(unittest.TestCase):
         self.assertIn("📡 信息完整度", html)
         self.assertIn("预测可信度", html)
         self.assertIn("本场专业证据审计", html)
-        self.assertIn("精确比分Top3", html)
-        self.assertIn("进球数Top3", html)
-        self.assertIn("实际比分模型位置", html)
+        self.assertIn("胜平负预测", html)
+        self.assertIn("让球胜平负", html)
+        self.assertIn("赛后比分", html)
 
     def test_professional_status_falls_back_to_static_backtest(self):
         path = os.path.join(ROOT, 'web', 'index.html')
@@ -58,6 +58,19 @@ class WebProfessionalModalTests(unittest.TestCase):
         self.assertIn("生产预测闭环监控", html)
         self.assertIn("95%区间", html)
         self.assertIn("数据读取失败，不代表样本为0场", html)
+
+    def test_web_requests_and_renders_all_repaired_football_markets(self):
+        path = os.path.join(ROOT, 'web', 'index.html')
+        with open(path, encoding='utf-8') as handle:
+            html = handle.read()
+
+        self.assertIn("types: 'spf,rqspf,zjq'", html)
+        self.assertIn("if (m.rqspf && !m.rqspf.error)", html)
+        self.assertIn("🎯 让球胜平负", html)
+        self.assertIn("已应用统一亚盘水位与大小球变化修正", html)
+        self.assertIn("🎯 让球胜平负（主队", html)
+        self.assertIn("欧赔 + 亚盘水位综合预测", html)
+        self.assertIn("欧赔提供基础概率，亚盘升降盘与水位变化修正方向", html)
 
 
 if __name__ == '__main__':

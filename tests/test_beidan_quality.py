@@ -13,6 +13,7 @@ from src.beidan import (
     build_zjq_group_recommendation,
     apply_beidan_joint_market_state,
     build_beidan_joint_market_state,
+    build_water_market_prediction,
     enhance_scores_with_cs,
     generate_beidan_recommendations,
     parse_beidan_handicap,
@@ -23,6 +24,24 @@ from src.beidan import (
 
 
 class BeidanQualityTests(unittest.TestCase):
+    def test_water_market_prediction_uses_one_matrix_for_all_markets(self):
+        result = build_water_market_prediction({
+            'score_probs': [[2, 0, 0.40], [1, 0, 0.20], [1, 1, 0.25], [0, 1, 0.15]],
+            'raw_probabilities': {'胜': 0.50, '平': 0.25, '负': 0.25},
+            'joint_market_state': {'applied': True, 'direction_signal': 0.4},
+        }, -1)
+
+        self.assertTrue(result['available'])
+        self.assertTrue(result['asian_adjusted'])
+        self.assertEqual(result['spf']['prediction'], '胜')
+        self.assertEqual(result['rqspf']['prediction'], '让胜')
+        self.assertEqual(result['goals']['prediction'], '2')
+        self.assertEqual(result['evidence']['euro_prediction'], '胜')
+        self.assertEqual(result['evidence']['asian_direction'], '主队增强')
+        self.assertFalse(result['evidence']['conflict'])
+        self.assertAlmostEqual(sum(result['spf']['probabilities'].values()), 1.0)
+        self.assertAlmostEqual(sum(result['rqspf']['probabilities'].values()), 1.0)
+
     def test_joint_market_state_links_home_backing_and_over_move(self):
         asian = {'history': [
             {'handicap': 0.5, 'home_odds': 0.98, 'away_odds': 0.86},
@@ -99,6 +118,23 @@ class BeidanQualityTests(unittest.TestCase):
         self.assertIn('raw_probabilities', result)
         self.assertIn('score_consistency', result)
         self.assertIn('history_calibration', result)
+
+    def test_spf_market_history_is_applied_only_by_joint_matrix(self):
+        match = {
+            'id': 'm-single-weight', 'num': '001', 'home': 'A', 'away': 'B',
+            'league': '', 'time': '20:00', 'handicap': 0,
+        }
+        asian_data = {'history': [
+            {'handicap': 0, 'home_odds': 0.96, 'away_odds': 0.86},
+            {'handicap': 0.25, 'home_odds': 0.80, 'away_odds': 1.02},
+        ]}
+        with patch('src.beidan.fetch_ouzhi_odds', return_value={'home': 2.0, 'draw': 3.2, 'away': 3.6}), \
+             patch('src.beidan.adjust_probs_by_asian', side_effect=AssertionError('duplicate adjustment')):
+            result = analyze_spf(match, asian_data=asian_data)
+
+        self.assertNotIn('error', result)
+        self.assertTrue(result['joint_market_state']['applied'])
+        self.assertTrue(result['asian_adjusted'])
 
     def test_parse_beidan_handicap_accepts_parenthesized_values(self):
         self.assertEqual(parse_beidan_handicap('(-1)'), -1.0)

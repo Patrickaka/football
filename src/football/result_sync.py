@@ -2553,7 +2553,15 @@ def get_prediction_records(include_hidden: bool = False) -> List[Dict]:
             'next_sync_at': record.get('next_sync_at'),
             'hit_top1': None if is_future_settled else record.get('hit_top1'),
             'hit_top3': None if is_future_settled else record.get('hit_top3'),
-            'predicted_scores': record.get('predicted_scores'),
+            # 预测记录页以两个竞彩赛果市场为主。精确比分仍保留在存储和
+            # 完整导出中，列表只在赛后输出 actual_score。
+            'predicted_1x2': record.get('predicted_1x2'),
+            'predicted_rqspf': record.get('predicted_rqspf'),
+            'lottery_handicap': record.get('lottery_handicap'),
+            'actual_result': None if is_future_settled else record.get('actual_result'),
+            'actual_rqspf': None if is_future_settled else record.get('actual_rqspf'),
+            'hit_1x2': None if is_future_settled else record.get('hit_1x2'),
+            'hit_rqspf': None if is_future_settled else record.get('hit_rqspf'),
         })
     
     # 按比赛时间倒序排列
