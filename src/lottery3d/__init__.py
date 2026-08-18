@@ -191,7 +191,11 @@ ZU6_CANDIDATE_SIZE = 8
 # 组六四码只预测“数字是否进入开奖号集合”，不预测位置。滚动回测显示，
 # 用每期去重后的边际出现率比通用的分位/遗漏/马尔可夫混合分更稳定。
 # 两个相邻窗口等权融合，降低单一窗口偶然波动；较短窗口用于同分时破平。
-ZU6_PRESENCE_WINDOWS = (25, 40)
+# 逐期样本外验证（开发 611 个组六期、验证 667 个组六期）显示，单独使用
+# 最近 25 期的“数字是否出现”频率，比 25/40 双窗平均更稳定：验证命中
+# 9.15% vs 8.25%，且开发集同方向（8.67% vs 8.02%）。不叠加 40 期窗，
+# 避免较旧样本把近期边际频率信号稀释。
+ZU6_PRESENCE_WINDOWS = (25,)
 
 # 组六专用单码评分权重
 W_ZU6_HOT = 3.0
@@ -204,7 +208,7 @@ W_ZU6_BLEND = 1.5
 WINDOW_WEIGHTS_KV_KEY = "lottery3d_window_weights"
 
 # 预测版本号
-PREDICTOR_VERSION = "3d-v4.7-zu6-presence"
+PREDICTOR_VERSION = "3d-v4.8-zu6-presence25-compact"
 ML_MODEL_VERSION = "ml-v6"
 MIN_DATA_PERIODS_FOR_ML_FUSION = 300
 ML_CACHE_MAX_AGE_SECONDS = 36 * 3600
@@ -4255,6 +4259,17 @@ def run_prediction(data=None, force_refresh=False, enable_backtest=False, enable
             for d in sorted(range(10), key=lambda x: -zu6_score[x])
         ],
         "zu6_primary": build_zu6_primary(zu6_score, kill=None, numbers=numbers),
+        "zu6_strategy_evidence": {
+            "method": "chronological_holdout",
+            "window": 25,
+            "development_zu6_draws": 611,
+            "development_hit_rate": 0.0867,
+            "validation_zu6_draws": 667,
+            "validation_hit_rate": 0.0915,
+            "previous_validation_hit_rate": 0.0825,
+            "theoretical_conditional_hit_rate": 0.0833,
+            "statistically_validated": False,
+        },
         "zu6_four_variants": build_zu6_four_variants(zu6_score, kill=None, numbers=numbers),
         "zu6_coverage": build_zu6_coverage_tiers(zu6_score, kill=None, numbers=numbers),
         "zhixuan_top3": zhixuan_top3_detail,

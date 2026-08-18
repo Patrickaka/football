@@ -23,7 +23,13 @@ class Lottery3DZu6Tests(unittest.TestCase):
         self.assertEqual(pool, [0, 1, 2, 3])
 
     def test_predictor_version_marks_zu6_upgrade(self):
-        self.assertEqual(lottery3d.PREDICTOR_VERSION, "3d-v4.7-zu6-presence")
+        self.assertEqual(
+            lottery3d.PREDICTOR_VERSION,
+            "3d-v4.8-zu6-presence25-compact",
+        )
+
+    def test_primary_presence_model_uses_validated_25_period_window(self):
+        self.assertEqual(lottery3d.ZU6_PRESENCE_WINDOWS, (25,))
 
 
 if __name__ == "__main__":

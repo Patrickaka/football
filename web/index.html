@@ -4085,6 +4085,42 @@ function formProbBar(blend) {
   ).join('') + '</div>';
 }
 
+function renderLottery3dCompact(r) {
+  const primary = r.zu6_primary || r.zu6_four || {};
+  const evidence = r.zu6_strategy_evidence || {};
+  const online = r.online_stats || {};
+  const combos = Array.isArray(primary.combos) ? primary.combos : [];
+  const validationText = evidence.validation_zu6_draws
+    ? `${evidence.validation_zu6_draws}个组六样本 · 命中 ${pct(evidence.validation_hit_rate || 0)} · 旧策略 ${pct(evidence.previous_validation_hit_rate || 0)}`
+    : '等待更多结算样本';
+
+  let html = `<div class="highlight lottery3d-compact-primary" style="border-color:var(--accent2);padding:14px">
+    <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap">
+      <div>
+        <div style="font-size:13px;color:var(--muted)">基于 ${esc(r.period || '-')} 期 · 上期开奖 <b style="letter-spacing:3px;color:var(--text)">${esc(r.last_draw || '-')}</b></div>
+        <div style="font-size:12px;color:var(--muted);margin-top:3px">策略 ${esc(r.version || '')} · 最近25期数字出现频率</div>
+      </div>
+      <button id="refresh-3d" class="kl8-refresh-btn">↻ 刷新数据</button>
+    </div>
+    <div style="margin-top:15px;text-align:center">
+      <div style="font-size:13px;color:var(--muted);margin-bottom:5px">🎯 组六唯一主推 · ${primary.size || 5}码</div>
+      <div class="big" style="font-size:30px;letter-spacing:8px;color:#f85149">${esc(primary.digits_str || '')}</div>
+      <div class="sub">覆盖 ${primary.notes || combos.length} 注 · ${primary.cost || '-'} 元 · 理论单期命中 ${pct(primary.hit_rate || 0.06)}</div>
+    </div>
+    <div class="tags" style="justify-content:center;margin-top:10px">${combos.map(c => `<span class="tag">${esc(c)}</span>`).join('')}</div>
+    <div class="note" style="margin-top:12px;border-left:3px solid #06b6d4;padding-left:9px">
+      样本外验证：${esc(validationText)}。提升尚未通过统计显著性验证，不能保证中奖；本页不再用四码、六码和多策略制造“多组更准”的错觉。
+    </div>
+  </div>`;
+
+  if (Number(online.settled_count || 0) > 0) {
+    html += `<div class="note" style="margin-top:10px">实盘已结算 ${online.settled_count} 期 · 直选Top30命中 ${pct(online.hit_top30_rate || 0)}。实际记录优先于模型评分。</div>`;
+  }
+
+  app3d.innerHTML = html;
+  document.getElementById('refresh-3d').onclick = () => refreshLottery3d();
+}
+
 function renderLottery3d(r) {
   const f = r.form;
   const ss = r.sum_span;
@@ -4803,7 +4839,7 @@ async function loadLottery3d(force) {
     }
     
     lottery3dLoaded = true;
-    renderLottery3d(data.result);
+    renderLottery3dCompact(data.result);
   } catch (e) {
     console.error('3D数据加载失败:', e);
     app3d.innerHTML = `<div class="status error">加载失败：${esc(e.message)}</div>`;
