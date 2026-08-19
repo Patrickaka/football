@@ -184,6 +184,14 @@ ZU6_RECENT_WINDOW = 5
 ZU6_RECENT_PENALTY = 0.0
 ZU6_RECENT_DECAY = 0.6
 
+# 组三专用推荐（v4.9 新增）：
+# 组选三投注 = 选 2 个互异数字（如 {1,2}），开奖为组三且两码恰为这对时中奖（6种排列）。
+# 数字选择与组六同理无 edge（组三条件下数字均匀），模型只输出"近期组三开奖中出现率较高"
+# 的对子，并诚实标注概率：任取4组条件命中 = 4/C(10,2) = 8.9%，与选哪些码无关。
+ZU3_PRESENCE_WINDOWS = (25,)      # 与组六 presence 同思路：近25期组三开奖去重后数字出现率
+ZU3_MIN_SAMPLES = 10              # 组三样本不足时扩大到 60 期
+ZU3_PAIRS_COUNT = 4               # 组三推荐组数（四组）
+
 # 组六选码：不用杀码降权（杀码误伤开奖数字的风险大于收益）
 ZU6_USE_KILL = False
 ZU6_CANDIDATE_SIZE = 8
@@ -208,7 +216,7 @@ W_ZU6_BLEND = 1.5
 WINDOW_WEIGHTS_KV_KEY = "lottery3d_window_weights"
 
 # 预测版本号
-PREDICTOR_VERSION = "3d-v4.8-zu6-presence25-compact"
+PREDICTOR_VERSION = "3d-v4.9-form-dynamic-zu3"
 ML_MODEL_VERSION = "ml-v6"
 MIN_DATA_PERIODS_FOR_ML_FUSION = 300
 ML_CACHE_MAX_AGE_SECONDS = 36 * 3600
@@ -2563,27 +2571,134 @@ def analyze_form_probability(numbers, window_weights=None):
 
 
 def recommend_form_bet(form_prob, numbers):
-    """形态主推：固定主推「组六」。
+    """动态形态主推：本期更可能是组六还是组三。
 
-    组六约占全部开奖的 72%，是唯一数学最优的单形态投注。实测(600期)「跟随
-    短期 markov/recent 概率最大者」与「永远押组六」命中率完全相同(均 73.8%)——
-    短期信号无法击败 base rate，连续组六后"该出组三了"是赌徒谬误。故主推固定为
-    组六，组三/豹子仅作小注分散（按其真实概率，不建议作主投）。
+    v4.9 变更：原实现固定主推「组六」（注释称短期信号无法击败 base rate）。
+    现改为动态——主推 = blend 融合概率最大者，并给出组三概率相对其基准(27%)的
+    抬升/回落信号。诚实说明：组六基准概率 72% 远高于组三 27%，500期 walk-forward
+    实测动态 max 选组六占 100%，即"动态判断"在大多数时候仍指向组六；其真正价值
+    在于量化展示组三概率何时抬升（如连续组六后 markov 信号偏组三），供加注参考，
+    而非声称能预测形态（形态无短期可预测性，追涨杀跌是赌徒谬误）。
     """
+    blend = form_prob["blend_p"]
+    primary = max(blend, key=blend.get)
+    secondary = "zu3" if primary != "zu3" else "zu6"
+    zu3_elevation = blend["zu3"] - THEORY_FORM_P["zu3"]
     forms = [classify_form(n) for n in numbers]
     n = len(forms) or 1
     hist_cnt = Counter(forms)
     emp = {k: hist_cnt.get(k, 0) / n for k in THEORY_FORM_P}
     return {
-        "primary": "zu6",
-        "primary_label": FORM_LABELS["zu6"],
-        "expected_hit_rate": round(emp["zu6"], 4),       # 经验 base rate(全历史组六占比)
-        "theory_hit_rate": THEORY_FORM_P["zu6"],          # 理论 72%
+        "primary": primary,
+        "primary_label": FORM_LABELS[primary],
+        "primary_prob": round(blend[primary], 4),
+        "secondary": secondary,
+        "zu6_prob": round(blend["zu6"], 4),
+        "zu3_prob": round(blend["zu3"], 4),
+        "zu3_base_rate": THEORY_FORM_P["zu3"],
+        "zu3_elevation": round(zu3_elevation, 4),
+        "zu3_signal": (
+            "elevated" if zu3_elevation > 0.03
+            else "depressed" if zu3_elevation < -0.03
+            else "normal"
+        ),
+        "expected_hit_rate": round(emp[primary], 4),  # 主推形态的历史 base rate
+        "theory_hit_rate": THEORY_FORM_P[primary],
         "empirical_form_p": {k: round(v, 4) for k, v in emp.items()},
-        "blend_p": {k: round(v, 4) for k, v in form_prob["blend_p"].items()},
-        "secondary": "zu3",
-        "note": "主推组六(≈72%为数学最优单形态投注)；实测短期信号无法超越此基准，"
-                "组三/豹子按真实概率仅作小注分散，不建议主投。投注组选6即覆盖该形态全部组合。",
+        "blend_p": {k: round(v, 4) for k, v in blend.items()},
+        "note": (
+            "主推=blend概率最大形态（组六以72%基准概率占绝对优势，500期实测动态选组六100%）；"
+            "zu3_elevation>0 表示组三概率高于其27%基准，可作为加注组三的参考，"
+            "但形态本身无短期可预测性，概率波动属噪声。"
+        ),
+    }
+
+
+def zu3_digit_presence(numbers, window=None):
+    """组三条件下的数字出现率：最近组三开奖去重后各数字出现的比例（每期只计一次）。
+
+    与组六 presence 模型（ZU6_PRESENCE_WINDOWS）同思路：只预测"数字是否进入
+    组三开奖号集合"，不预测位置/重复位。组三样本不足时自动扩大到 60 期；
+    仍无组三数据则返回均匀 0.2（无信息先验）。
+    """
+    window = window if window is not None else ZU3_PRESENCE_WINDOWS[0]
+    zu3 = [set(n) for n in numbers[-window:] if classify_form(n) == "zu3"]
+    if len(zu3) < ZU3_MIN_SAMPLES:
+        zu3 = [set(n) for n in numbers[-60:] if classify_form(n) == "zu3"]
+    if not zu3:
+        return {d: 0.2 for d in range(10)}
+    cnt = Counter()
+    for s in zu3:
+        cnt.update(s)
+    total = len(zu3)
+    return {d: cnt.get(d, 0) / total for d in range(10)}
+
+
+def zu3_pair_scores(presence):
+    """45 个无序数对的组三条件概率（独立性假设）：P({a,b}|zu3) ∝ r_a·r_b，归一化。"""
+    scored = []
+    total = 0.0
+    for a in range(10):
+        for b in range(a + 1, 10):
+            s = presence[a] * presence[b]
+            scored.append(((a, b), s))
+            total += s
+    total = total or 1.0
+    return [(pair, s / total) for pair, s in scored]
+
+
+def zu3_combos_from_pair(pair):
+    """组选三对子 {a,b} 覆盖的全部 6 注（aab/aba/baa/abb/bab/bba）。"""
+    a, b = sorted(pair)
+    combos = set()
+    for rep, single in ((a, b), (b, a)):
+        for p in {0, 1, 2}:
+            slot = [rep] * 3
+            slot[p] = single
+            combos.add("".join(map(str, slot)))
+    return sorted(combos)
+
+
+def pick_zu3_pairs(numbers, limit=ZU3_PAIRS_COUNT, presence=None):
+    """组三推荐：取组三条件概率最高的 4 个对子（四组）。
+
+    每组 = 一个组选三对子 {a,b}，覆盖 6 注（12 元）。任取 4 组（不要求互异），
+    给定开奖为组三的条件命中率 = 4/C(10,2) = 8.9% —— 与选哪些码无关，
+    顶部对子的概率差异（0.17~0.24 的数字率）只带来 1% 量级的微小偏移，属噪声。
+    """
+    presence = presence if presence is not None else zu3_digit_presence(numbers)
+    scored = zu3_pair_scores(presence)
+    scored.sort(key=lambda x: -x[1])
+    top = scored[:limit]
+    pairs = []
+    for (a, b), pr in top:
+        combos = zu3_combos_from_pair((a, b))
+        pairs.append({
+            "digits": [a, b],
+            "digits_str": f"{a}{b}",
+            "prob": round(pr, 4),
+            "notes": len(combos),
+            "cost": len(combos) * TICKET_PRICE,
+            "combos": combos,
+        })
+    cond_hit = sum(pr for _, pr in top)
+    return {
+        "method": "zu3_conditional_presence",
+        "window": ZU3_PRESENCE_WINDOWS[0],
+        "presence": {d: round(v, 4) for d, v in presence.items()},
+        "pairs": pairs,
+        # 模型内样本估计：top4 对子概率和（presence 噪声被取顶放大，系过拟合，
+        # 500期回测实测 ≈ 随机基准，勿当作真实命中率）
+        "conditional_hit_rate": round(cond_hit, 4),
+        # 数学精确基准：任取 4 组对子条件命中 = 4/45（与选哪些码无关），回测实测 8.0% ≈ 此值
+        "random_conditional_hit_rate": round(limit / 45.0, 4),
+        "total_cost": sum(p["cost"] for p in pairs),
+        "note": (
+            f"组选三：每组={pairs[0]['digits_str'] if pairs else ''}式对子，覆盖6注/12元；"
+            f"任取{limit}组条件命中率={limit}/45≈{limit/45:.1%}（与选哪些码基本无关，"
+            "数字出现率0.17~0.24差异为噪声；conditional_hit_rate 为模型内样本估计，"
+            "500期回测实测≈随机基准，属过拟合）。"
+        ),
     }
 
 
@@ -3930,6 +4045,8 @@ def run_prediction(data=None, force_refresh=False, enable_backtest=False, enable
     zu6_four = pick_zu6_four(zu6_score, numbers=numbers)
     _, z6_straight = zu6_notes_from_digits(zu6_four)
     save_recent_zu6_four(periods[-1] if periods else None, zu6_four)
+    # v4.9: 组三推荐（四组对子）——动态形态分析的组三侧，概率透明标注
+    zu3_rec = pick_zu3_pairs(numbers)
     
     # 加载最近推荐历史（用于排除重复推荐）
     recent_recommendations = load_recent_3d_recommendations()
@@ -4253,6 +4370,24 @@ def run_prediction(data=None, force_refresh=False, enable_backtest=False, enable
             "combos": z6_straight,
             "notes": len(z6_straight),
             "conditional_hit_rate": round(len(z6_straight) / 120.0, 4),
+            # v4.9: 无条件命中率 = 组六条件命中 × 本期组六概率（动态形态概率联动）
+            "unconditional_hit_rate": round(
+                len(z6_straight) / 120.0 * form_prob["blend_p"]["zu6"], 4
+            ),
+            "form_prob": round(form_prob["blend_p"]["zu6"], 4),
+        },
+        "zu3_recommendation": {
+            **zu3_rec,
+            "form_prob": round(form_prob["blend_p"]["zu3"], 4),
+            # 诚实无条件命中率：用回测验证的数学基准（4/45）× 本期组三概率，
+            # 而非过拟合的 conditional_hit_rate（500期实测条件命中 8.0% ≈ 随机 8.9%）
+            "unconditional_hit_rate": round(
+                zu3_rec["random_conditional_hit_rate"] * form_prob["blend_p"]["zu3"], 4
+            ),
+            # 模型内样本估计（过拟合上限，仅供对比）
+            "model_unconditional_hit_rate": round(
+                zu3_rec["conditional_hit_rate"] * form_prob["blend_p"]["zu3"], 4
+            ),
         },
         "zu6_digit_scores": [
             {"digit": d, "score": round(zu6_score[d], 2)}

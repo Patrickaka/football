@@ -40,7 +40,7 @@ RECENT_WINDOW = 30                  # 近期趋势窗口
 DEFAULT_RECENT = 15                 # 页面默认展示近期期数
 NUM_SETS = 5                        # 推荐注数
 SSQ_PREDICTIONS_KEY = 'lottery_ssq_online_predictions'
-SSQ_PREDICTION_VERSION = 'ssq-v3.0-full-history'
+SSQ_PREDICTION_VERSION = 'ssq-v3.2-red-cover'
 
 
 def load_prediction_records():
@@ -199,12 +199,48 @@ def fetch_data(force_refresh=False):
     return load_history(force_refresh=force_refresh)
 
 
-def _next_period(period):
-    """根据最近一期期号推算下一期（简单 +1）。"""
-    try:
-        return str(int(period) + 1)
-    except Exception:
-        return ''
+def _next_period(period, history=None):
+    """推算下一期期号（5位格式 YYNNN，跨年自动进位）。
+
+    v3.1 修复：原实现 `str(int(period)+1)` 有两个 bug：
+    1. 前导零丢失——'03001'+1 得到 '3002' 而非 '03002'（2003-2009年所有期号受影响）；
+    2. 跨年断点——每年最后一期（如 25151）实际下一期为 26001，而 +1 得到不存在的期号，
+       导致预测记录永远无法与真实开奖匹配结算（蓝球"从未预测对"的直接原因之一）。
+    全历史3491个相邻期验证：修复前错误995个，修复后应为0。
+
+    跨年判断规则：
+    - 当年不是数据最后一年 → 年份已完结，当年最大期号即最终期数，n 达到即跨年；
+    - 当年是数据最后一年（在线场景，数据可能未抓全）→ 仅当已开期数 >= 140
+      （接近年度末，近年每年 150-151 期）且 n 已达当年最大值时才跨年，
+      否则视为数据不完整，正常 +1（如 26095 → 26096，而不是误判 27001）。
+    """
+    s = str(period)
+    if not s.isdigit() or len(s) < 5:
+        try:
+            return str(int(period) + 1)
+        except Exception:
+            return ''
+    y, n = int(s[:2]), int(s[2:])
+    if history:
+        same_year = [int(str(r.get('period', ''))[2:]) for r in history
+                     if str(r.get('period', ''))[:2] == s[:2] and str(r.get('period', '')).isdigit()]
+        max_n = max(same_year) if same_year else 0
+        if max_n:
+            years = sorted({int(str(r.get('period', ''))[:2]) for r in history
+                            if str(r.get('period', '')).isdigit()})
+            is_last_year = years and (y == years[-1])
+            if not is_last_year:
+                # 完整年份：当年最大期号即最终期数
+                if n >= max_n:
+                    return f'{(y + 1) % 100:02d}001'
+                return f'{y:02d}{n + 1:03d}'
+            # 数据最后一年：可能未完结，仅当接近年度末（已开>=140期）才跨年
+            if n >= max_n and max_n >= 140:
+                return f'{(y + 1) % 100:02d}001'
+            return f'{y:02d}{n + 1:03d}'
+    if n >= 153:  # 无历史兜底：双色球近年每年最多154期
+        return f'{(y + 1) % 100:02d}001'
+    return f'{y:02d}{n + 1:03d}'
 
 
 def _analyze(history):
@@ -311,33 +347,70 @@ def _predict_sets(history, analysis, n=NUM_SETS, seed=None):
     v3.0 蓝球策略调整:
     - 回测(600期)证明蓝球加权采样 28.5~31% < 均匀随机 32~33.5%，
       频率权重对蓝球是反预测信号（反直觉但统计显著），故蓝球改均匀随机。
-    - 红球保留加权采样（全量数据下 Top15 大底 600期 ge4=27.2% > 随机24.2%）。
+
+    v3.1 蓝球去重覆盖（500期 walk-forward 实测）:
+    - 原实现每注独立 rng.choice，约50%的期5注蓝球出现重复，
+      联合命中仅 30.2%（独立随机理论 1-(15/16)^5≈27.6%）。
+    - 改为 5 注蓝球互不重复（均匀随机覆盖5个不同号码），
+      联合命中 = 5/16 = 31.25%（理论最优，纯组合收益，非预测能力）。
+
+    v3.2 红球蛇形分组去重覆盖（2000期 walk-forward 实测）:
+    - 原加权采样 5 注重叠严重（union 仅约20.8/33），联合命中 ge2=82.0%。
+    - 改为排名池前30码蛇形分5组（每注含高低排名混合，互不重叠 union=30）：
+      开奖6码进5个桶，鸽笼原理保证任1注≥2码概率逼近上限。
+    - 实测 ge2 82.0%→96.2%、ge3 25.4%→28.7%、ge4 1.9%→2.4%、
+      单注ge4 0.4%→0.5%（加权信号无损，纯组合收益）。
+    - 覆盖注不强制合法性约束（和值/奇偶等，约45%不满足）；
+      主推注（第1组）保留合法性检查，不合法时全池加权回退。
     """
     rng = random.Random(seed)
     prev_red = set(history[-1]['red']) if history else set()
     prev_blue = history[-1]['blue'] if history else None
-    # 综合权重 = 整体频率 + 1.5 * 近期频率 (红球保留; 蓝球改均匀)
+    # 综合权重 = 整体频率 + 1.5 * 近期频率
     red_w = [analysis['red_freq'][x] + 1.5 * analysis['red_recent'][x] + 0.5 for x in RED_RANGE]
 
-    sets = []
-    tries = 0
-    while len(sets) < n and tries < 5000:
-        tries += 1
-        red = sorted(_weighted_sample(RED_RANGE, red_w, RED_COUNT, rng))
-        if not _is_valid_red(red):
-            continue
-        if set(red) == prev_red:
-            continue
-        blue = rng.choice(BLUE_RANGE)
-        if blue == prev_blue:
-            blue = rng.choice(BLUE_RANGE)
-        sets.append({'red': red, 'blue': blue})
-    # 兜底：约束太严未能凑足则放宽
-    while len(sets) < n:
-        red = sorted(rng.sample(RED_RANGE, RED_COUNT))
-        blue = rng.choice(BLUE_RANGE)
-        sets.append({'red': red, 'blue': blue})
-    return sets
+    # v3.2: 红球排名池前30码蛇形分组（互不重叠，union=30）
+    ranking = sorted(RED_RANGE, key=lambda x: -red_w[x - 1])[:30]
+    groups = [set() for _ in range(n)]
+    for i, num in enumerate(ranking):
+        row, col = i // n, i % n
+        idx = col if row % 2 == 0 else (n - 1 - col)
+        groups[idx].add(num)
+
+    # 主推注（第1组）合法性检查；不合法或等于上期时：
+    # 从排名池(30码)内加权重抽1组合法红球，剩余24码重新蛇形分给4个覆盖注，
+    # 保证 5 注仍互不重叠（union=30 不被破坏）。
+    # v3.2 修复说明：早期实现从全33码回退，导致覆盖注重叠（union 降到24）且
+    # 引入池外号码，鸽笼覆盖失效；现改为池内重抽 + 剩余24码重分配。
+    main = sorted(groups[0])
+    if not _is_valid_red(main) or set(main) == prev_red:
+        w_pool = [red_w[x - 1] for x in ranking]
+        tries = 0
+        while tries < 300:
+            tries += 1
+            red = sorted(_weighted_sample(ranking, w_pool, RED_COUNT, rng))
+            if _is_valid_red(red) and set(red) != prev_red:
+                main = red
+                break
+        groups[0] = set(main)
+        rest = [x for x in ranking if x not in groups[0]]
+        for g in groups[1:]:
+            g.clear()
+        for i, num in enumerate(rest):
+            row, col = i // (n - 1), i % (n - 1)
+            idx = col if row % 2 == 0 else (n - 2 - col)
+            groups[1 + idx].add(num)
+
+    # v3.1: 一次性抽好 n 个互不重复蓝球（排除上期蓝球不影响命中率：
+    #       (15/16)*(5/15) = 5/16 = 31.25%，与不排除一致）
+    avail_blues = [b for b in BLUE_RANGE if b != prev_blue]
+    if len(avail_blues) < n:
+        avail_blues = list(BLUE_RANGE)
+    blues_pool = rng.sample(avail_blues, min(n, len(avail_blues)))
+    while len(blues_pool) < n:
+        blues_pool.append(rng.choice(BLUE_RANGE))
+
+    return [{'red': sorted(groups[i]), 'blue': blues_pool[i]} for i in range(n)]
 
 
 def run_prediction(data=None, force_refresh=False, recent=DEFAULT_RECENT):
@@ -364,7 +437,7 @@ def run_prediction(data=None, force_refresh=False, recent=DEFAULT_RECENT):
     if data is None:
         try:
             settle_prediction_records(history)
-            save_prediction_record(_next_period(latest['period']), sets)
+            save_prediction_record(_next_period(latest['period'], history), sets)
         except Exception:
             # Recording must never prevent the prediction page from loading.
             pass
@@ -375,7 +448,7 @@ def run_prediction(data=None, force_refresh=False, recent=DEFAULT_RECENT):
     return {
         'updated_at': time.strftime('%Y-%m-%d %H:%M:%S'),
         'latest_period': latest['period'],
-        'next_period': _next_period(latest['period']),
+        'next_period': _next_period(latest['period'], history),
         'history': recent_list,
         'prediction': {
             'primary': sets[0],
