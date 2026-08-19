@@ -184,13 +184,16 @@ ZU6_RECENT_WINDOW = 5
 ZU6_RECENT_PENALTY = 0.0
 ZU6_RECENT_DECAY = 0.6
 
-# 组三专用推荐（v4.9 新增）：
-# 组选三投注 = 选 2 个互异数字（如 {1,2}），开奖为组三且两码恰为这对时中奖（6种排列）。
+# 组三专用推荐（v4.9 新增，v4.10 改高效口径）：
+# 福彩3D 规则：组选3 一注 = 3 码含一重复位 → 3 种排列（如 225 → 225/252/522），单注 2 元、奖金 346 元；
+# 单选 一注 = 1 种排列，2 元、奖金 1040 元。对子 {a,b} 的全部 6 种排列：
+#   组选三 2 注（"225"+"552"，4 元）即可完整覆盖，与 6 注单选（12 元）中奖概率完全相同（EV 相同）。
 # 数字选择与组六同理无 edge（组三条件下数字均匀），模型只输出"近期组三开奖中出现率较高"
-# 的对子，并诚实标注概率：任取4组条件命中 = 4/C(10,2) = 8.9%，与选哪些码无关。
+# 的对子，并诚实标注概率：任取 K 组条件命中 = K/C(10,2) = K/45，与选哪些码无关。
 ZU3_PRESENCE_WINDOWS = (25,)      # 与组六 presence 同思路：近25期组三开奖去重后数字出现率
 ZU3_MIN_SAMPLES = 10              # 组三样本不足时扩大到 60 期
 ZU3_PAIRS_COUNT = 4               # 组三推荐组数（四组）
+ZU3_TIER_SIZES = (4, 8, 12, 20)   # 组三覆盖档位：K 组对子 → 组选三 2K 注/4K 元，条件命中 K/45
 
 # 组六选码：不用杀码降权（杀码误伤开奖数字的风险大于收益）
 ZU6_USE_KILL = False
@@ -216,7 +219,7 @@ W_ZU6_BLEND = 1.5
 WINDOW_WEIGHTS_KV_KEY = "lottery3d_window_weights"
 
 # 预测版本号
-PREDICTOR_VERSION = "3d-v4.9-form-dynamic-zu3"
+PREDICTOR_VERSION = "3d-v4.10-zu3-efficient"
 ML_MODEL_VERSION = "ml-v6"
 MIN_DATA_PERIODS_FOR_ML_FUSION = 300
 ML_CACHE_MAX_AGE_SECONDS = 36 * 3600
@@ -2648,7 +2651,7 @@ def zu3_pair_scores(presence):
 
 
 def zu3_combos_from_pair(pair):
-    """组选三对子 {a,b} 覆盖的全部 6 注（aab/aba/baa/abb/bab/bba）。"""
+    """组选三对子 {a,b} 覆盖的全部 6 注单选（aab/aba/baa/abb/bab/bba）。"""
     a, b = sorted(pair)
     combos = set()
     for rep, single in ((a, b), (b, a)):
@@ -2659,12 +2662,24 @@ def zu3_combos_from_pair(pair):
     return sorted(combos)
 
 
+def zu3_zu_notes_from_pair(pair):
+    """对子 {a,b} 的组选三表达：2 注覆盖全部 6 种排列（4 元），与 6 注单选（12 元）等价。
+
+    福彩3D 规则：组选3 一注 = 3 码含一重复位 → 3 种排列（如 225 → 225/252/522）。
+    对子 {2,5} 有双号 2（225）与双号 5（552）两个方向，共 6 种排列 → 2 注组选三即可。
+    命中概率与 6 注单选完全相同（EV 相同），成本仅 1/3。
+    """
+    a, b = sorted(pair)
+    return sorted({f"{rep}{rep}{single}" for rep, single in ((a, b), (b, a))})
+
+
 def pick_zu3_pairs(numbers, limit=ZU3_PAIRS_COUNT, presence=None):
     """组三推荐：取组三条件概率最高的 4 个对子（四组）。
 
-    每组 = 一个组选三对子 {a,b}，覆盖 6 注（12 元）。任取 4 组（不要求互异），
-    给定开奖为组三的条件命中率 = 4/C(10,2) = 8.9% —— 与选哪些码无关，
-    顶部对子的概率差异（0.17~0.24 的数字率）只带来 1% 量级的微小偏移，属噪声。
+    每组 = 一个组选三对子 {a,b}：组选三 2 注（4 元）覆盖 6 种排列（v4.10 高效口径，
+    原 6 注单选 = 12 元仅作对比保留）。任取 K 组（不要求互异），给定开奖为组三的
+    条件命中率 = K/C(10,2) = K/45 —— 与选哪些码无关，顶部对子的概率差异
+    （0.17~0.24 的数字率）只带来 1% 量级的微小偏移，属噪声。
     """
     presence = presence if presence is not None else zu3_digit_presence(numbers)
     scored = zu3_pair_scores(presence)
@@ -2673,13 +2688,17 @@ def pick_zu3_pairs(numbers, limit=ZU3_PAIRS_COUNT, presence=None):
     pairs = []
     for (a, b), pr in top:
         combos = zu3_combos_from_pair((a, b))
+        zu_notes = zu3_zu_notes_from_pair((a, b))
         pairs.append({
             "digits": [a, b],
             "digits_str": f"{a}{b}",
             "prob": round(pr, 4),
-            "notes": len(combos),
-            "cost": len(combos) * TICKET_PRICE,
-            "combos": combos,
+            "notes": len(zu_notes),               # 组选三注数 = 2
+            "cost": len(zu_notes) * TICKET_PRICE,  # 组选三成本 = 4 元
+            "zu_notes": zu_notes,                 # 2 注组选三（高效口径，主推）
+            "combos": combos,                     # 6 注单选（直选口径，对比）
+            "direct_notes": len(combos),
+            "direct_cost": len(combos) * TICKET_PRICE,
         })
     cond_hit = sum(pr for _, pr in top)
     return {
@@ -2690,16 +2709,48 @@ def pick_zu3_pairs(numbers, limit=ZU3_PAIRS_COUNT, presence=None):
         # 模型内样本估计：top4 对子概率和（presence 噪声被取顶放大，系过拟合，
         # 500期回测实测 ≈ 随机基准，勿当作真实命中率）
         "conditional_hit_rate": round(cond_hit, 4),
-        # 数学精确基准：任取 4 组对子条件命中 = 4/45（与选哪些码无关），回测实测 8.0% ≈ 此值
+        # 数学精确基准：任取 K 组对子条件命中 = K/45（与选哪些码无关），回测实测 ≈ 此值
         "random_conditional_hit_rate": round(limit / 45.0, 4),
-        "total_cost": sum(p["cost"] for p in pairs),
+        "notes_total": sum(p["notes"] for p in pairs),          # 组选三 8 注
+        "total_cost": sum(p["cost"] for p in pairs),            # 组选三 16 元（v4.10 主口径）
+        "direct_notes_total": sum(p["direct_notes"] for p in pairs),  # 单选 24 注
+        "direct_total_cost": sum(p["direct_cost"] for p in pairs),    # 单选 48 元（v4.9 口径）
         "note": (
-            f"组选三：每组={pairs[0]['digits_str'] if pairs else ''}式对子，覆盖6注/12元；"
+            f"组选三：每组={pairs[0]['digits_str'] if pairs else ''}式对子 = 2 注组选三/4 元"
+            f"（覆盖 6 种排列，与 6 注单选 12 元等价，EV 相同）；"
             f"任取{limit}组条件命中率={limit}/45≈{limit/45:.1%}（与选哪些码基本无关，"
             "数字出现率0.17~0.24差异为噪声；conditional_hit_rate 为模型内样本估计，"
             "500期回测实测≈随机基准，属过拟合）。"
         ),
     }
+
+
+def zu3_coverage_tiers(numbers, sizes=ZU3_TIER_SIZES, presence=None):
+    """组三覆盖档位：K 组对子 → 组选三 2K 注/4K 元，条件命中率 K/45（线性）。
+
+    与组六 build_zu6_coverage_tiers 对称：K 组对子 = 排序后 top-K 前缀（复用同一
+    presence/评分），任取 K 组条件命中 = K/C(10,2)，与选哪些码无关（回测实测 ≈ K/45）。
+    直选口径（6K 注/12K 元）一并给出作对比：同样的 K 组覆盖，组选三成本仅 1/3。
+    """
+    presence = presence if presence is not None else zu3_digit_presence(numbers)
+    scored = zu3_pair_scores(presence)
+    scored.sort(key=lambda x: -x[1])
+    tiers = []
+    for k in sizes:
+        k = min(k, 45)
+        top = scored[:k]
+        pairs = [list(p) for p, _ in top]
+        tiers.append({
+            "size": k,
+            "pairs": pairs,
+            "pairs_str": " ".join(f"{a}{b}" for a, b in top),
+            "notes": k * 2,                # 组选三注数
+            "cost": k * 4,                 # 组选三成本（元）
+            "conditional_hit_rate": round(k / 45.0, 4),
+            "direct_notes": k * 6,         # 直选注数（对比）
+            "direct_cost": k * 12,         # 直选成本（对比）
+        })
+    return tiers
 
 
 def pick_dan_tuo_kill(score, enable_danma_random=True):
@@ -4045,8 +4096,14 @@ def run_prediction(data=None, force_refresh=False, enable_backtest=False, enable
     zu6_four = pick_zu6_four(zu6_score, numbers=numbers)
     _, z6_straight = zu6_notes_from_digits(zu6_four)
     save_recent_zu6_four(periods[-1] if periods else None, zu6_four)
-    # v4.9: 组三推荐（四组对子）——动态形态分析的组三侧，概率透明标注
+    # v4.9/v4.10: 组三推荐（四组对子）——动态形态分析的组三侧，概率透明标注
     zu3_rec = pick_zu3_pairs(numbers)
+    # v4.10: 组三覆盖档位（K 组对子 → K/45 线性），无条件命中率按本期组三概率联动
+    zu3_tiers = zu3_coverage_tiers(numbers)
+    for _t in zu3_tiers:
+        _t["unconditional_hit_rate"] = round(
+            _t["conditional_hit_rate"] * form_prob["blend_p"]["zu3"], 4
+        )
     
     # 加载最近推荐历史（用于排除重复推荐）
     recent_recommendations = load_recent_3d_recommendations()
@@ -4388,6 +4445,8 @@ def run_prediction(data=None, force_refresh=False, enable_backtest=False, enable
             "model_unconditional_hit_rate": round(
                 zu3_rec["conditional_hit_rate"] * form_prob["blend_p"]["zu3"], 4
             ),
+            # v4.10: 覆盖档位（K 组对子 → K/45 线性；组选三口径 4K 元 vs 直选 12K 元）
+            "tiers": zu3_tiers,
         },
         "zu6_digit_scores": [
             {"digit": d, "score": round(zu6_score[d], 2)}
