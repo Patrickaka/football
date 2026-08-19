@@ -7087,7 +7087,6 @@ function renderKL8RecordCard(rec) {
       html += `<div style="font-size:12px;line-height:1.7;margin-top:3px">
         <span style="color:var(--muted);display:inline-block;min-width:52px">第 ${esc(row.round)} 轮</span>
         <span style="${exhausted ? 'color:var(--warn)' : ''}">${numsText}</span>${hitText}
-        <div style="color:var(--muted);padding-left:52px">累计删除 ${(row.excluded_numbers || []).map(p2).join(' ') || '—'}</div>
       </div>`;
     }
   }
