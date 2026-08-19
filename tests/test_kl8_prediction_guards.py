@@ -31,6 +31,15 @@ def _record(issue: int):
 
 
 class KL8PredictionGuardTests(unittest.TestCase):
+    def setUp(self):
+        self._recalculation_tmp = tempfile.TemporaryDirectory()
+        self._original_recalculation_dir = kl8_module.KL8_RECALCULATION_DIR
+        kl8_module.KL8_RECALCULATION_DIR = self._recalculation_tmp.name
+
+    def tearDown(self):
+        kl8_module.KL8_RECALCULATION_DIR = self._original_recalculation_dir
+        self._recalculation_tmp.cleanup()
+
     def test_next_transition_uses_older_to_newer_draws_with_shrinkage(self):
         analyzer = KL8Analyzer.__new__(KL8Analyzer)
         analyzer.using_simulated_data = False
@@ -69,11 +78,12 @@ class KL8PredictionGuardTests(unittest.TestCase):
         self.assertEqual(profile['unique_number_count'], 6)
         self.assertEqual(profile['max_pair_overlap'], 6)
 
-    def test_reference_select_5_and_6_use_fair_coverage_baseline(self):
+    def test_reference_select_5_and_6_use_concentrated_ranking(self):
         for pick in (5, 6):
             strategy = resolve_play_strategy(f'select_{pick}', allow_reference=True)
 
-            self.assertEqual(strategy['final_selection_mode'], 'shape_balanced')
+            self.assertEqual(strategy['final_selection_mode'], 'concentrated')
+            self.assertFalse(strategy['pool_diversify'])
             self.assertGreater(strategy['feature_weights']['frequency'], 0.0)
             self.assertGreater(strategy['feature_weights']['pair_cooccurrence'], 0.0)
             self.assertEqual(strategy['baseline_type'], 'adaptive_pattern_reference')
@@ -205,6 +215,70 @@ class KL8PredictionGuardTests(unittest.TestCase):
         self.assertFalse(set(result['numbers']) & {1, 2, 3, 4, 5})
         self.assertEqual(result['excluded_numbers'], [1, 2, 3, 4, 5])
 
+    def test_select6_recalculation_rounds_are_persisted_and_deduplicated(self):
+        analyzer = KL8Analyzer.__new__(KL8Analyzer)
+        analyzer.history_data = [_record(i) for i in range(80, 0, -1)]
+        analyzer.using_simulated_data = False
+        analyzer.statistics = {'last_numbers': set(range(1, 21))}
+
+        original_build = KL8Analyzer.build_pool_by_strategy
+        original_dir = kl8_module.KL8_RECALCULATION_DIR
+        original_verify_only = kl8_module.VERIFY_ONLY_MODE
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                kl8_module.KL8_RECALCULATION_DIR = tmp
+                kl8_module.VERIFY_ONLY_MODE = False
+                KL8Analyzer.build_pool_by_strategy = lambda self, strategy, pool_size=20: {
+                    'selected': list(range(1, 51)),
+                    'candidates': [(n, float(100 - n)) for n in range(1, 51)],
+                    'votes': {},
+                }
+                first = analyzer.recalculate_play_excluding('select_6', [1, 2, 3, 4, 5, 6])
+                duplicate = analyzer.recalculate_play_excluding('select_6', [1, 2, 3, 4, 5, 6])
+                second = analyzer.recalculate_play_excluding(
+                    'select_6',
+                    [1, 2, 3, 4, 5, 6] + first['numbers'],
+                )
+                stored = kl8_module.list_exclude_recalculations()
+        finally:
+            KL8Analyzer.build_pool_by_strategy = original_build
+            kl8_module.KL8_RECALCULATION_DIR = original_dir
+            kl8_module.VERIFY_ONLY_MODE = original_verify_only
+
+        self.assertEqual(first['recalculation_record']['round'], 1)
+        self.assertEqual(duplicate['recalculation_record']['record_id'], first['recalculation_record']['record_id'])
+        self.assertEqual(second['recalculation_record']['round'], 2)
+        self.assertEqual(len(stored), 2)
+
+    def test_select6_recalculation_chain_runs_until_candidates_are_exhausted(self):
+        analyzer = KL8Analyzer.__new__(KL8Analyzer)
+        analyzer.history_data = [_record(i) for i in range(80, 0, -1)]
+        analyzer.using_simulated_data = False
+        analyzer.statistics = {'last_numbers': set()}
+        original_build = KL8Analyzer.build_pool_by_strategy
+        original_verify_only = kl8_module.VERIFY_ONLY_MODE
+        try:
+            kl8_module.VERIFY_ONLY_MODE = False
+            KL8Analyzer.build_pool_by_strategy = lambda self, strategy, pool_size=20: {
+                'selected': list(range(1, 19)),
+                'candidates': [(n, float(100 - n)) for n in range(1, 19)],
+                'votes': {},
+            }
+            chain = analyzer.generate_exclude_recalculation_chain(
+                'select_6',
+                [1, 2, 3, 4, 5, 6],
+            )
+            stored = kl8_module.list_exclude_recalculations()
+        finally:
+            KL8Analyzer.build_pool_by_strategy = original_build
+            kl8_module.VERIFY_ONLY_MODE = original_verify_only
+
+        self.assertEqual(chain['generated_rounds'], 2)
+        self.assertTrue(chain['exhausted'])
+        self.assertEqual(chain['terminal']['remaining_count'], 0)
+        self.assertEqual(len(stored), 3)
+        self.assertEqual([row['status'] for row in reversed(stored)], ['generated', 'generated', 'exhausted'])
+
     def test_recalculate_play_excluding_supports_select_10(self):
         analyzer = KL8Analyzer.__new__(KL8Analyzer)
         analyzer.history_data = [_record(i) for i in range(80, 0, -1)]
@@ -232,7 +306,9 @@ class KL8PredictionGuardTests(unittest.TestCase):
         self.assertFalse(set(result['numbers']) & set(range(1, 11)))
         self.assertEqual(result['excluded_numbers'], list(range(1, 11)))
         self.assertNotEqual(result['quality']['selection_mode'], 'low_repeat')
-        self.assertEqual(result['quality']['requested_selection_mode'], 'shape_balanced')
+        self.assertEqual(result['quality']['requested_selection_mode'], 'concentrated')
+        self.assertEqual(result['quality']['selection_mode'], 'concentrated')
+        self.assertEqual(result['numbers'], sorted(unsorted_candidates[:10]))
 
     def test_recalculate_play_excluding_respects_strategy_selection_mode(self):
         analyzer = KL8Analyzer.__new__(KL8Analyzer)
@@ -290,6 +366,29 @@ class KL8PredictionGuardTests(unittest.TestCase):
         self.assertEqual(result['raw_candidate_count'], 40)
         self.assertEqual(len(result['selected']), 7)
         self.assertLessEqual(sum(1 for n in result['selected'] if n <= 20), 3)
+
+    def test_multi_model_voting_raw_rank_primary_keeps_true_top_numbers(self):
+        analyzer = KL8Analyzer.__new__(KL8Analyzer)
+        analyzer.statistics = {'last_numbers': set(range(1, 21))}
+        original = KL8Analyzer._model_rank
+        ranked = [41, 42, 43, 44, 45] + list(range(1, 41))
+
+        try:
+            KL8Analyzer._model_rank = lambda self, top_n=20, **kwargs: ranked[:top_n]
+            result = analyzer.multi_model_voting(
+                pick_n=5,
+                top_n=20,
+                feature_weights={'frequency': 1.0},
+                model_weights={'rank': 1.0},
+                pool_diversify=False,
+                final_selection_mode='concentrated',
+            )
+        finally:
+            KL8Analyzer._model_rank = original
+
+        self.assertFalse(result['diversified'])
+        self.assertEqual(result['selected'], ranked[:5])
+        self.assertEqual([num for num, _ in result['candidates'][:5]], ranked[:5])
 
     def test_shape_balanced_candidate_pool_controls_zone_and_odd_even(self):
         candidates = [
@@ -362,9 +461,12 @@ class KL8PredictionGuardTests(unittest.TestCase):
         finally:
             kl8_module.VERIFY_ONLY_MODE = original_verify_only
 
-        self.assertEqual(select5['final_selection_mode'], 'shape_balanced')
-        self.assertEqual(select6['final_selection_mode'], 'shape_balanced')
-        self.assertEqual(select10['final_selection_mode'], 'shape_balanced')
+        self.assertEqual(select5['final_selection_mode'], 'concentrated')
+        self.assertEqual(select6['final_selection_mode'], 'concentrated')
+        self.assertEqual(select10['final_selection_mode'], 'concentrated')
+        self.assertFalse(select5['pool_diversify'])
+        self.assertFalse(select6['pool_diversify'])
+        self.assertFalse(select10['pool_diversify'])
         self.assertEqual(select5['strategy_id'], 'select_5_ref_transition_repeat_v3')
         self.assertEqual(select6['strategy_id'], 'select_6_ref_transition_repeat_v3')
         self.assertEqual(select10['strategy_id'], 'select_10_ref_trend100_shape_balanced')
@@ -414,7 +516,7 @@ class KL8PredictionGuardTests(unittest.TestCase):
             result['select_5']['strategy_id'],
             'select_5_ref_transition_repeat_v3',
         )
-        self.assertEqual(result['select_5']['final_selection_mode'], 'shape_balanced')
+        self.assertEqual(result['select_5']['final_selection_mode'], 'concentrated')
         self.assertEqual(result['select_5']['baseline_type'], 'adaptive_pattern_reference')
 
         for pick in [8, 9, 10]:
@@ -427,8 +529,9 @@ class KL8PredictionGuardTests(unittest.TestCase):
         for key in [f'select_{pick}' for pick in range(3, 11)]:
             self.assertEqual(
                 result['resolved_strategies'][key]['final_selection_mode'],
-                'shape_balanced',
+                'concentrated',
             )
+            self.assertFalse(result['resolved_strategies'][key]['pool_diversify'])
             self.assertNotIn('variants', result[key])
 
         self.assertEqual(result['resolved_strategies']['select_5']['pool_max_last_numbers'], 2)
@@ -447,17 +550,17 @@ class KL8PredictionGuardTests(unittest.TestCase):
         self.assertEqual(result['select_6']['accuracy_profile']['expected_hits_random'], 1.5)
         self.assertEqual(result['select_6']['accuracy_profile']['key_thresholds'], ['>=5', '>=4'])
         self.assertEqual(result['select_6']['accuracy_profile']['target_hits'], 5)
-        self.assertEqual(result['select_6']['accuracy_profile']['selected_mode'], 'shape_balanced')
+        self.assertEqual(result['select_6']['accuracy_profile']['selected_mode'], 'concentrated')
         self.assertNotIn('variants', result['select_6'])
         self.assertEqual(
             result['resolved_strategies']['select_10']['final_selection_mode'],
-            'shape_balanced',
+            'concentrated',
         )
         self.assertIsNone(result['resolved_strategies']['select_10']['pool_max_last_numbers'])
 
         self.assertEqual(
             result['resolved_strategies']['fu_shi_7']['final_selection_mode'],
-            'shape_balanced',
+            'concentrated',
         )
         self.assertNotIn('variants', result['fu_shi_7'])
         self.assertEqual(result['fu_shi_7']['prize_hit_thresholds'], ['>=4', '>=5'])
@@ -466,7 +569,7 @@ class KL8PredictionGuardTests(unittest.TestCase):
         self.assertIn('fu_shi_10_11', result)
         self.assertEqual(
             result['resolved_strategies']['fu_shi_10_11']['final_selection_mode'],
-            'shape_balanced',
+            'concentrated',
         )
         self.assertEqual(len(result['fu_shi_10_11']['top11_numbers']), 11)
         self.assertEqual(

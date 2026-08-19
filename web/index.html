@@ -7065,6 +7065,24 @@ function renderKL8RecordCard(rec) {
     html += `<div style="font-size:12px;color:#8b949e;margin:6px 0 2px">预测主推</div>${predHtml}`;
   }
 
+  const recalculations = Array.isArray(rec.exclude_recalculations) ? rec.exclude_recalculations : [];
+  const select6Rounds = recalculations.filter(row => row.play_type === 'select_6');
+  if (select6Rounds.length) {
+    html += `<div style="font-size:12px;color:#d29922;margin:10px 0 4px">选6 · 删除号码重算轨迹</div>`;
+    for (const row of select6Rounds) {
+      const exhausted = row.status === 'exhausted';
+      const hitText = row.hits === null || row.hits === undefined ? '' : ` · 命中 <b style="color:${row.hits >= 3 ? '#2ea043' : '#f85149'}">${esc(row.hits)}</b> 个`;
+      const numsText = exhausted
+        ? `候选剩余 ${esc(row.remaining_count ?? 0)} 个，不足 ${esc(row.required_count ?? 6)} 个，重算终止`
+        : (row.numbers || []).map(p2).join(' ');
+      html += `<div style="font-size:12px;line-height:1.7;margin-top:3px">
+        <span style="color:var(--muted);display:inline-block;min-width:52px">第 ${esc(row.round)} 轮</span>
+        <span style="${exhausted ? 'color:var(--warn)' : ''}">${numsText}</span>${hitText}
+        <div style="color:var(--muted);padding-left:52px">累计删除 ${(row.excluded_numbers || []).map(p2).join(' ') || '—'}</div>
+      </div>`;
+    }
+  }
+
   if (settled) {
     html += `<div style="font-size:12px;color:#8b949e;margin:10px 0 4px">开奖号码（第 ${esc(st.actual_issue || rec.target_issue)} 期）</div>`;
     html += `<div class="kl8-numbers-row">${renderKL8Balls(st.actual_numbers || [], 28)}</div>`;

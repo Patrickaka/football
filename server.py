@@ -34,6 +34,7 @@ from src.lottery.ml import predict_with_ml, clear_ml_cache
 from src.kl8 import (
     get_kl8_analyzer, run_prediction as kl8_run_prediction,
     clear_cache as kl8_clear_cache, list_prediction_snapshots as kl8_list_snapshots,
+    list_exclude_recalculations as kl8_list_recalculations,
     has_active_signal, is_prediction_ready as kl8_is_prediction_ready,
     KL8RollingBacktest, load_prize_table as kl8_load_prize_table,
     check_data_integrity as kl8_check_data_integrity,
@@ -2307,6 +2308,22 @@ class Handler(BaseHTTPRequestHandler):
             # 奖金表更新重算：旧版默认奖金表错误（如选5中2=5元、选6中3=10元），
             # 已生成的结算文件不会自动更新。读记录时校验并删除重算，确保金额正确。
             self._kl8_rebuild_stale_settlements(records)
+
+            # 删号重算记录按目标期并入正式预测历史；有开奖结果时即时计算每轮命中。
+            recalculations_by_issue = {}
+            for item in kl8_list_recalculations():
+                recalculations_by_issue.setdefault(str(item.get('target_issue') or ''), []).append(item)
+            for rec in records:
+                rounds = recalculations_by_issue.get(str(rec.get('target_issue') or ''), [])
+                actual = set((rec.get('settlement') or {}).get('actual_numbers') or [])
+                enriched = []
+                for item in rounds:
+                    row = dict(item)
+                    nums = row.get('numbers') or []
+                    row['hits'] = len(set(nums) & actual) if actual and nums else None
+                    enriched.append(row)
+                enriched.sort(key=lambda row: (str(row.get('play_type') or ''), int(row.get('round', 0))))
+                rec['exclude_recalculations'] = enriched
 
             # 去重：同一目标期只保留最新一条（调度器每轮可能对同期生成多次快照）
             seen_issues = {}

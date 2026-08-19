@@ -47,7 +47,7 @@ from src.common.logger import setup_logger
 
 log = setup_logger('kl8')
 
-KL8_PREDICTOR_VERSION = "kl8-v10.3-transition-repeat"
+KL8_PREDICTOR_VERSION = "kl8-v10.7-auto-recalculation-chain"
 
 # ─── v9.2: 只显示已验证策略模式 ───
 # 正式策略优先；尚未通过验证时继续输出玩法专属的动态参考策略，供持续
@@ -641,6 +641,7 @@ STRATEGY_TRIAL_RESULTS = []
 
 KL8_SNAPSHOT_DIR = data_path('kl8_snapshots')
 KL8_SETTLEMENT_DIR = data_path('kl8_settlements')
+KL8_RECALCULATION_DIR = data_path('kl8_recalculations')
 KL8_PRIZE_TABLE_FILE = data_path('kl8_prize_table.json')
 
 # ─── v9: 策略试验与激活持久化 ───
@@ -748,7 +749,8 @@ def resolve_play_strategy(play_type: str, allow_reference: bool = False) -> Opti
             'window_size': 100,
             'repeat_direction': 'neutral',
             'pool_max_last_numbers': 4,
-            'final_selection_mode': 'shape_balanced',
+            'pool_diversify': False,
+            'final_selection_mode': 'concentrated',
             'prediction_mode': 'reference_unvalidated',
             'is_validated': False,
         },
@@ -758,7 +760,8 @@ def resolve_play_strategy(play_type: str, allow_reference: bool = False) -> Opti
             'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
             'window_size': 50,
             'repeat_direction': 'neutral',
-            'final_selection_mode': 'shape_balanced',
+            'pool_diversify': False,
+            'final_selection_mode': 'concentrated',
             'prediction_mode': 'reference_unvalidated',
             'is_validated': False,
         },
@@ -768,7 +771,8 @@ def resolve_play_strategy(play_type: str, allow_reference: bool = False) -> Opti
             'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
             'window_size': 100,
             'repeat_direction': 'neutral',
-            'final_selection_mode': 'shape_balanced',
+            'pool_diversify': False,
+            'final_selection_mode': 'concentrated',
             'prediction_mode': 'reference_unvalidated',
             'is_validated': False,
         },
@@ -779,7 +783,8 @@ def resolve_play_strategy(play_type: str, allow_reference: bool = False) -> Opti
             'window_size': 100,
             'repeat_direction': 'follow',
             'pool_max_last_numbers': 2,
-            'final_selection_mode': 'shape_balanced',
+            'pool_diversify': False,
+            'final_selection_mode': 'concentrated',
             'target_hits': 4,
             'prediction_mode': 'reference_unvalidated',
             'is_validated': False,
@@ -791,7 +796,8 @@ def resolve_play_strategy(play_type: str, allow_reference: bool = False) -> Opti
             'window_size': 100,
             'repeat_direction': 'follow',
             'pool_max_last_numbers': 3,
-            'final_selection_mode': 'shape_balanced',
+            'pool_diversify': False,
+            'final_selection_mode': 'concentrated',
             'target_hits': 5,
             'prediction_mode': 'reference_unvalidated',
             'is_validated': False,
@@ -802,7 +808,8 @@ def resolve_play_strategy(play_type: str, allow_reference: bool = False) -> Opti
             'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
             'window_size': 100,
             'repeat_direction': 'neutral',
-            'final_selection_mode': 'shape_balanced',
+            'pool_diversify': False,
+            'final_selection_mode': 'concentrated',
             'prediction_mode': 'reference_unvalidated',
             'is_validated': False,
         },
@@ -812,7 +819,8 @@ def resolve_play_strategy(play_type: str, allow_reference: bool = False) -> Opti
             'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
             'window_size': 100,
             'repeat_direction': 'neutral',
-            'final_selection_mode': 'shape_balanced',
+            'pool_diversify': False,
+            'final_selection_mode': 'concentrated',
             'prediction_mode': 'reference_unvalidated',
             'is_validated': False,
         },
@@ -822,7 +830,8 @@ def resolve_play_strategy(play_type: str, allow_reference: bool = False) -> Opti
             'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
             'window_size': 100,
             'repeat_direction': 'neutral',
-            'final_selection_mode': 'shape_balanced',
+            'pool_diversify': False,
+            'final_selection_mode': 'concentrated',
             'prediction_mode': 'reference_unvalidated',
             'is_validated': False,
         },
@@ -832,7 +841,8 @@ def resolve_play_strategy(play_type: str, allow_reference: bool = False) -> Opti
             'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
             'window_size': 100,
             'repeat_direction': 'neutral',
-            'final_selection_mode': 'shape_balanced',
+            'pool_diversify': False,
+            'final_selection_mode': 'concentrated',
             'prediction_mode': 'reference_unvalidated',
             'is_validated': False,
         },
@@ -843,7 +853,8 @@ def resolve_play_strategy(play_type: str, allow_reference: bool = False) -> Opti
             'window_size': 100,
             'repeat_direction': 'neutral',
             'pool_max_last_numbers': 4,
-            'final_selection_mode': 'shape_balanced',
+            'pool_diversify': False,
+            'final_selection_mode': 'concentrated',
             'prediction_mode': 'reference_unvalidated',
             'is_validated': False,
         },
@@ -854,7 +865,8 @@ def resolve_play_strategy(play_type: str, allow_reference: bool = False) -> Opti
             'window_size': 100,
             'repeat_direction': 'neutral',
             'pool_max_last_numbers': 4,
-            'final_selection_mode': 'shape_balanced',
+            'pool_diversify': False,
+            'final_selection_mode': 'concentrated',
             'prediction_mode': 'reference_unvalidated',
             'is_validated': False,
         },
@@ -4109,13 +4121,15 @@ class KL8Analyzer:
                 if num not in excluded_set
             ]
             if len(candidates) < pick_n:
-                return {
+                result = {
                     'error': f'剔除后候选号码不足，{play_type} 至少需要 {pick_n} 个号码，当前仅剩 {len(candidates)} 个',
                     'play_type': play_type,
                     'excluded_numbers': excluded,
                     'remaining_count': len(candidates),
                     'required_count': pick_n,
                 }
+                self._save_exclude_recalculation(result, status='exhausted')
+                return result
             adaptive_cap = _adaptive_repeat_cap(self.history_data, pick_n)
             repeat_cap = (
                 max(0, min(pick_n, int(strategy.get('pool_max_last_numbers'))))
@@ -4129,7 +4143,7 @@ class KL8Analyzer:
                 strategy.get('final_selection_mode', 'best_variant'),
             )
             output_numbers = sorted(num for num, _ in final_pool)
-            return {
+            result = {
                 'play_type': play_type,
                 'numbers': output_numbers,
                 'excluded_numbers': excluded,
@@ -4141,6 +4155,8 @@ class KL8Analyzer:
                 'source': 'exclude_recalculate',
                 'version': KL8_PREDICTOR_VERSION,
             }
+            result['recalculation_record'] = self._save_exclude_recalculation(result)
+            return result
 
         if play_type in FUSHI_CONFIG:
             fushi_cfg = FUSHI_CONFIG[play_type]
@@ -4160,13 +4176,15 @@ class KL8Analyzer:
                 if num not in excluded_set
             ]
             if len(candidates) < pool_size:
-                return {
+                result = {
                     'error': f'剔除后候选号码不足，{play_type} 至少需要 {pool_size} 个号码，当前仅剩 {len(candidates)} 个',
                     'play_type': play_type,
                     'excluded_numbers': excluded,
                     'remaining_count': len(candidates),
                     'required_count': pool_size,
                 }
+                self._save_exclude_recalculation(result, status='exhausted')
+                return result
             adaptive_cap = _adaptive_repeat_cap(self.history_data, pool_size)
             repeat_cap = (
                 max(0, min(pool_size, int(strategy.get('pool_max_last_numbers'))))
@@ -4181,7 +4199,7 @@ class KL8Analyzer:
             )
             core_numbers = sorted(num for num, _ in final_pool)
             combo_list = [sorted(c) for c in combinations(core_numbers, base_pick)] if len(core_numbers) == pool_size else []
-            return {
+            result = {
                 'play_type': play_type,
                 fushi_cfg['numbers_field']: core_numbers,
                 'core_numbers': core_numbers,
@@ -4198,8 +4216,118 @@ class KL8Analyzer:
                 'source': 'exclude_recalculate',
                 'version': KL8_PREDICTOR_VERSION,
             }
+            result['recalculation_record'] = self._save_exclude_recalculation(result)
+            return result
 
         return {'error': f'无效玩法: {play_type}'}
+
+    def _save_exclude_recalculation(self, result: Dict, status: str = 'generated') -> Dict:
+        """Persist one exclude/recalculate round without mutating the formal snapshot."""
+        if not self.history_data:
+            return {}
+
+        play_type = str(result.get('play_type') or '')
+        excluded = sorted({int(n) for n in result.get('excluded_numbers', [])})
+        numbers = result.get('numbers') or result.get('core_numbers') or []
+        numbers = sorted({int(n) for n in numbers})
+        based_on_issue = str(self.history_data[0].get('issue') or '')
+        target_issue = str(_compute_next_issue(based_on_issue, self.history_data) or '')
+        directory = Path(KL8_RECALCULATION_DIR)
+        directory.mkdir(parents=True, exist_ok=True)
+
+        identity = hashlib.sha256(json.dumps({
+            'target_issue': target_issue,
+            'play_type': play_type,
+            'excluded_numbers': excluded,
+        }, sort_keys=True, separators=(',', ':')).encode()).hexdigest()[:20]
+        path = directory / f'recalculation_{identity}.json'
+
+        existing = []
+        for candidate in directory.glob('recalculation_*.json'):
+            try:
+                item = json.loads(candidate.read_text(encoding='utf-8'))
+                if (
+                    str(item.get('target_issue') or '') == target_issue
+                    and item.get('play_type') == play_type
+                ):
+                    existing.append(item)
+            except Exception:
+                continue
+
+        previous = next((item for item in existing if item.get('record_id') == identity), None)
+        if previous:
+            return previous
+
+        record = {
+            'record_id': identity,
+            'target_issue': target_issue,
+            'based_on_issue': based_on_issue,
+            'play_type': play_type,
+            'round': 1 + max((int(item.get('round', 0)) for item in existing), default=0),
+            'excluded_numbers': excluded,
+            'numbers': numbers,
+            'status': status,
+            'remaining_count': result.get('remaining_count'),
+            'required_count': result.get('required_count'),
+            'strategy_id': result.get('strategy_id', ''),
+            'selection_mode': (result.get('quality') or {}).get('selection_mode', ''),
+            'created_at': time.strftime('%Y-%m-%dT%H:%M:%S'),
+            'version': KL8_PREDICTOR_VERSION,
+        }
+        try:
+            with path.open('x', encoding='utf-8') as f:
+                json.dump(record, f, ensure_ascii=False, indent=2)
+            return record
+        except FileExistsError:
+            try:
+                return json.loads(path.read_text(encoding='utf-8'))
+            except Exception:
+                return record
+        except Exception as exc:
+            log.error(f'快乐8: 保存删号重算记录失败: {exc}')
+            return {}
+
+    def generate_exclude_recalculation_chain(
+        self,
+        play_type: str,
+        initial_numbers: List[int],
+        max_rounds: int = 20,
+    ) -> Dict:
+        """Automatically replay cumulative exclusions until no full pick remains."""
+        current = sorted({int(n) for n in (initial_numbers or []) if 1 <= int(n) <= KL8_NUM_RANGE})
+        if play_type in SELECT_PLAY_KEYS:
+            required = int(play_type.split('_')[1])
+        elif play_type in FUSHI_CONFIG:
+            required = int(FUSHI_CONFIG[play_type]['pool_size'])
+        else:
+            return {'error': f'无效玩法: {play_type}'}
+        if len(current) != required:
+            return {'error': f'{play_type} 初始号码必须为{required}个'}
+
+        excluded = set()
+        generated = []
+        exhausted = None
+        for _ in range(max(1, max_rounds)):
+            excluded.update(current)
+            result = self.recalculate_play_excluding(play_type, sorted(excluded))
+            if result.get('error'):
+                exhausted = {
+                    'excluded_numbers': result.get('excluded_numbers', sorted(excluded)),
+                    'remaining_count': result.get('remaining_count'),
+                    'required_count': result.get('required_count', required),
+                }
+                break
+            current = result.get('numbers') or result.get('core_numbers') or []
+            if len(current) != required:
+                break
+            generated.append(result.get('recalculation_record') or {})
+
+        return {
+            'play_type': play_type,
+            'generated_rounds': len(generated),
+            'exhausted': exhausted is not None,
+            'terminal': exhausted,
+        }
 
     def _candidate_variants(
         self,
@@ -4656,6 +4784,12 @@ class KL8Analyzer:
         snapshot_name = self._save_prediction_snapshot(results)
         if snapshot_name:
             results['snapshot_file'] = snapshot_name
+            select6_numbers = results.get('select_6', {}).get('numbers', [])
+            if len(select6_numbers) == 6:
+                results['select_6_recalculation_chain'] = self.generate_exclude_recalculation_chain(
+                    'select_6',
+                    select6_numbers,
+                )
 
         return results
 
@@ -5181,6 +5315,26 @@ def list_prediction_snapshots() -> List[Dict]:
             continue
 
     return snapshots
+
+
+def list_exclude_recalculations() -> List[Dict]:
+    directory = Path(KL8_RECALCULATION_DIR)
+    if not directory.exists():
+        return []
+    records = []
+    for path in directory.glob('recalculation_*.json'):
+        try:
+            record = json.loads(path.read_text(encoding='utf-8'))
+            if isinstance(record, dict):
+                records.append(record)
+        except Exception:
+            continue
+    records.sort(key=lambda item: (
+        str(item.get('target_issue') or ''),
+        str(item.get('play_type') or ''),
+        int(item.get('round', 0)),
+    ), reverse=True)
+    return records
 
 
 def _check_settlement_exists(snapshot_id: str) -> bool:
