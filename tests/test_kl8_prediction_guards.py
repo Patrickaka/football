@@ -279,6 +279,28 @@ class KL8PredictionGuardTests(unittest.TestCase):
         self.assertEqual(len(stored), 3)
         self.assertEqual([row['status'] for row in reversed(stored)], ['generated', 'generated', 'exhausted'])
 
+    def test_recalculation_identity_is_scoped_to_source_snapshot(self):
+        analyzer = KL8Analyzer.__new__(KL8Analyzer)
+        analyzer.history_data = [_record(i) for i in range(80, 0, -1)]
+        result = {
+            'play_type': 'select_6',
+            'excluded_numbers': [1, 2, 3, 4, 5, 6],
+            'numbers': [7, 8, 9, 10, 11, 12],
+        }
+
+        first = analyzer._save_exclude_recalculation(
+            result,
+            record_context={'source_snapshot_id': 'snapshot-a', 'initial_numbers': [1, 2, 3, 4, 5, 6]},
+        )
+        second = analyzer._save_exclude_recalculation(
+            result,
+            record_context={'source_snapshot_id': 'snapshot-b', 'initial_numbers': [2, 3, 4, 5, 6, 7]},
+        )
+
+        self.assertNotEqual(first['record_id'], second['record_id'])
+        self.assertEqual(first['source_snapshot_id'], 'snapshot-a')
+        self.assertEqual(second['source_snapshot_id'], 'snapshot-b')
+
     def test_recalculate_play_excluding_supports_select_10(self):
         analyzer = KL8Analyzer.__new__(KL8Analyzer)
         analyzer.history_data = [_record(i) for i in range(80, 0, -1)]

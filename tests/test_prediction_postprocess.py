@@ -122,6 +122,30 @@ class PredictionPostprocessTests(unittest.TestCase):
         self.assertAlmostEqual(handicap['probabilities']['让平'], 0.34)
         self.assertAlmostEqual(handicap['probabilities']['让负'], 0.28)
 
+    def test_spf_close_draw_is_exposed_as_cover_without_relabeling_top1(self):
+        markets = football.lottery_market_probabilities([
+            ((1, 0), 0.40),
+            ((1, 1), 0.31),
+            ((0, 1), 0.29),
+        ])
+
+        standard = markets['standard']
+        self.assertEqual(standard['prediction'], '胜')
+        self.assertEqual(standard['selections'], ['胜', '平'])
+        self.assertEqual(standard['selection_profile']['mode'], 'draw_cover')
+        self.assertFalse(standard['selection_profile']['is_single'])
+
+    def test_spf_clear_favorite_remains_single_selection(self):
+        markets = football.lottery_market_probabilities([
+            ((2, 0), 0.55),
+            ((1, 1), 0.22),
+            ((0, 1), 0.23),
+        ])
+
+        self.assertEqual(markets['standard']['prediction'], '胜')
+        self.assertEqual(markets['standard']['selections'], ['胜'])
+        self.assertTrue(markets['standard']['selection_profile']['is_single'])
+
     def test_lottery_linked_pick_anchors_on_highest_standard_result(self):
         markets = football.lottery_market_probabilities([
             ((1, 0), 0.25),  # 胜 + 让胜（主队 +1）

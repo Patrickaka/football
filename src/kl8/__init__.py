@@ -47,7 +47,7 @@ from src.common.logger import setup_logger
 
 log = setup_logger('kl8')
 
-KL8_PREDICTOR_VERSION = "kl8-v10.7-auto-recalculation-chain"
+KL8_PREDICTOR_VERSION = "kl8-v10.8-snapshot-bound-recalculation"
 
 # ─── v9.2: 只显示已验证策略模式 ───
 # 正式策略优先；尚未通过验证时继续输出玩法专属的动态参考策略，供持续
@@ -4089,7 +4089,12 @@ class KL8Analyzer:
         ]
         return best_pool, quality
 
-    def recalculate_play_excluding(self, play_type: str, exclude_numbers: List[int]) -> Dict:
+    def recalculate_play_excluding(
+        self,
+        play_type: str,
+        exclude_numbers: List[int],
+        record_context: Optional[Dict] = None,
+    ) -> Dict:
         """临时剔除指定号码后重算单个玩法，不写入正式快照/缓存。"""
         if not self.history_data or self.using_simulated_data:
             return {'error': '历史数据不足，无法重新计算'}
@@ -4128,7 +4133,7 @@ class KL8Analyzer:
                     'remaining_count': len(candidates),
                     'required_count': pick_n,
                 }
-                self._save_exclude_recalculation(result, status='exhausted')
+                self._save_exclude_recalculation(result, status='exhausted', record_context=record_context)
                 return result
             adaptive_cap = _adaptive_repeat_cap(self.history_data, pick_n)
             repeat_cap = (
@@ -4155,7 +4160,9 @@ class KL8Analyzer:
                 'source': 'exclude_recalculate',
                 'version': KL8_PREDICTOR_VERSION,
             }
-            result['recalculation_record'] = self._save_exclude_recalculation(result)
+            result['recalculation_record'] = self._save_exclude_recalculation(
+                result, record_context=record_context,
+            )
             return result
 
         if play_type in FUSHI_CONFIG:
@@ -4183,7 +4190,7 @@ class KL8Analyzer:
                     'remaining_count': len(candidates),
                     'required_count': pool_size,
                 }
-                self._save_exclude_recalculation(result, status='exhausted')
+                self._save_exclude_recalculation(result, status='exhausted', record_context=record_context)
                 return result
             adaptive_cap = _adaptive_repeat_cap(self.history_data, pool_size)
             repeat_cap = (
@@ -4216,12 +4223,19 @@ class KL8Analyzer:
                 'source': 'exclude_recalculate',
                 'version': KL8_PREDICTOR_VERSION,
             }
-            result['recalculation_record'] = self._save_exclude_recalculation(result)
+            result['recalculation_record'] = self._save_exclude_recalculation(
+                result, record_context=record_context,
+            )
             return result
 
         return {'error': f'无效玩法: {play_type}'}
 
-    def _save_exclude_recalculation(self, result: Dict, status: str = 'generated') -> Dict:
+    def _save_exclude_recalculation(
+        self,
+        result: Dict,
+        status: str = 'generated',
+        record_context: Optional[Dict] = None,
+    ) -> Dict:
         """Persist one exclude/recalculate round without mutating the formal snapshot."""
         if not self.history_data:
             return {}
@@ -4232,11 +4246,16 @@ class KL8Analyzer:
         numbers = sorted({int(n) for n in numbers})
         based_on_issue = str(self.history_data[0].get('issue') or '')
         target_issue = str(_compute_next_issue(based_on_issue, self.history_data) or '')
+        context = dict(record_context or {})
+        source_snapshot_id = str(context.get('source_snapshot_id') or '')
+        source_version = str(context.get('source_version') or KL8_PREDICTOR_VERSION)
+        initial_numbers = sorted({int(n) for n in context.get('initial_numbers', [])})
         directory = Path(KL8_RECALCULATION_DIR)
         directory.mkdir(parents=True, exist_ok=True)
 
         identity = hashlib.sha256(json.dumps({
             'target_issue': target_issue,
+            'source_snapshot_id': source_snapshot_id,
             'play_type': play_type,
             'excluded_numbers': excluded,
         }, sort_keys=True, separators=(',', ':')).encode()).hexdigest()[:20]
@@ -4248,6 +4267,7 @@ class KL8Analyzer:
                 item = json.loads(candidate.read_text(encoding='utf-8'))
                 if (
                     str(item.get('target_issue') or '') == target_issue
+                    and str(item.get('source_snapshot_id') or '') == source_snapshot_id
                     and item.get('play_type') == play_type
                 ):
                     existing.append(item)
@@ -4262,6 +4282,9 @@ class KL8Analyzer:
             'record_id': identity,
             'target_issue': target_issue,
             'based_on_issue': based_on_issue,
+            'source_snapshot_id': source_snapshot_id,
+            'source_version': source_version,
+            'initial_numbers': initial_numbers,
             'play_type': play_type,
             'round': 1 + max((int(item.get('round', 0)) for item in existing), default=0),
             'excluded_numbers': excluded,
@@ -4272,7 +4295,7 @@ class KL8Analyzer:
             'strategy_id': result.get('strategy_id', ''),
             'selection_mode': (result.get('quality') or {}).get('selection_mode', ''),
             'created_at': time.strftime('%Y-%m-%dT%H:%M:%S'),
-            'version': KL8_PREDICTOR_VERSION,
+            'version': source_version,
         }
         try:
             with path.open('x', encoding='utf-8') as f:
@@ -4292,6 +4315,8 @@ class KL8Analyzer:
         play_type: str,
         initial_numbers: List[int],
         max_rounds: int = 20,
+        source_snapshot_id: str = '',
+        source_version: str = '',
     ) -> Dict:
         """Automatically replay cumulative exclusions until no full pick remains."""
         current = sorted({int(n) for n in (initial_numbers or []) if 1 <= int(n) <= KL8_NUM_RANGE})
@@ -4305,11 +4330,20 @@ class KL8Analyzer:
             return {'error': f'{play_type} 初始号码必须为{required}个'}
 
         excluded = set()
+        record_context = {
+            'source_snapshot_id': source_snapshot_id,
+            'source_version': source_version or KL8_PREDICTOR_VERSION,
+            'initial_numbers': current,
+        }
         generated = []
         exhausted = None
         for _ in range(max(1, max_rounds)):
             excluded.update(current)
-            result = self.recalculate_play_excluding(play_type, sorted(excluded))
+            result = self.recalculate_play_excluding(
+                play_type,
+                sorted(excluded),
+                record_context=record_context,
+            )
             if result.get('error'):
                 exhausted = {
                     'excluded_numbers': result.get('excluded_numbers', sorted(excluded)),
@@ -4789,6 +4823,8 @@ class KL8Analyzer:
                 results['select_6_recalculation_chain'] = self.generate_exclude_recalculation_chain(
                     'select_6',
                     select6_numbers,
+                    source_snapshot_id=Path(snapshot_name).stem.replace('snapshot_', '', 1),
+                    source_version=KL8_PREDICTOR_VERSION,
                 )
 
         return results

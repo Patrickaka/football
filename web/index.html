@@ -2056,12 +2056,16 @@ function getFootballScoreSettlement(score, lotteryHandicap) {
 function getLotteryLinkedSelections(lottery) {
   const standardPrediction = lottery?.standard?.prediction;
   if (!standardPrediction) return null;
+  const standardSelections = Array.isArray(lottery?.standard?.selections)
+    && lottery.standard.selections.length
+    ? lottery.standard.selections
+    : [standardPrediction];
   const linked = lottery?.linked_recommendation;
   if (linked?.handicap_prediction) {
     return {
       primaryType: 'spf',
       primaryPrediction: linked.standard_prediction || standardPrediction,
-      standardPredictions: [linked.standard_prediction || standardPrediction],
+      standardPredictions: standardSelections,
       handicapPredictions: [linked.handicap_prediction],
       handicapConditionalProbabilities: linked.handicap_conditional_probabilities || {},
       compatibleHandicapPredictions: linked.compatible_handicap_predictions || [linked.handicap_prediction],
@@ -2077,7 +2081,7 @@ function getLotteryLinkedSelections(lottery) {
   return {
     primaryType: 'spf',
     primaryPrediction: standardPrediction,
-    standardPredictions: [standardPrediction],
+    standardPredictions: standardSelections,
     handicapPredictions: [handicapPrediction || lottery?.handicap?.prediction].filter(Boolean),
     compatibleHandicapPredictions: handicapPredictions,
   };
@@ -2247,6 +2251,7 @@ function renderFootballPredictions(results) {
             modelProbs: standardMarket.model_probabilities,
             marketProbs: standardMarket.market_probabilities,
             marketWeight: standardMarket.market_weight,
+            selectionProfile: standardMarket.selection_profile,
           }
         : getSPFPrediction(top);
       const marketCards = [];
@@ -2316,6 +2321,7 @@ function renderFootballPredictions(results) {
             ${r.model?.joint_market_state?.conflict ? '<span style="color:var(--warn)"> · ⚠️ 欧亚方向冲突</span>' : '<span style="color:var(--accent2)"> · 方向一致</span>'}
           </div>
           <div style="font-size:13px"><span style="color:var(--muted)">胜平负：</span><b>${esc(selectedStandard)}</b> · ${compactProbLine(standardPrediction.probs, ['胜','平','负'])}</div>
+          ${standardPrediction.selectionProfile?.mode === 'draw_cover' ? '<div style="font-size:11px;color:#f59e0b;margin-top:4px">⚠️ 单选仍按最高概率结算；平局概率接近，建议防平双选</div>' : ''}
           ${handicapCard ? `<div style="font-size:13px;margin-top:5px"><span style="color:var(--muted)">让球胜平负（${Number(lotteryHandicap) > 0 ? '+' : ''}${esc(lotteryHandicap)}）：</span><b>${esc(selectedHandicap)}</b> · ${compactProbLine(handicapCard.prediction.probs, ['让胜','让平','让负'])}</div>` : ''}
           <div style="font-size:13px;margin-top:5px"><span style="color:var(--muted)">总进球：</span><b>${compactGoals[0] ? esc(compactGoals[0].label || compactGoals[0].goals + '球') : '-'}</b> · ${compactGoalText}</div>
           <div style="font-size:10px;color:var(--muted);margin-top:7px">欧赔提供基础概率，亚盘升降盘与水位变化修正方向；胜平负、让球和进球数由同一比分概率矩阵推导</div>
@@ -2361,6 +2367,9 @@ function renderFootballPredictions(results) {
               </div>`;
         }
         itemHtml += '</div>';
+        if (!card.handicap && card.prediction.selectionProfile?.mode === 'draw_cover') {
+          itemHtml += `<div style="font-size:11px;color:#f59e0b;margin-top:6px">⚠️ 平局与首选概率差距较小：严格单选为 ${esc(card.prediction.pred)}，覆盖建议为 ${(card.prediction.preds || []).map(esc).join('/')}</div>`;
+        }
       });
       if (!compactFootballView && linkedSelections && marketCards.length > 1) {
         const compatibleText = linkedSelections.compatibleHandicapPredictions?.join('/')

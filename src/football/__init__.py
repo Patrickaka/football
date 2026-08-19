@@ -31,7 +31,7 @@ from ..common.paths import data_path
 
 log = setup_logger('football')
 
-FOOTBALL_PREDICTION_LOGIC_VERSION = '2026-08-18-single-market-move-weight-v23'
+FOOTBALL_PREDICTION_LOGIC_VERSION = '2026-08-19-joint-market-state-draw-cover-v24'
 LOTTERY_OFFICIAL_ODDS_WEIGHT = 0.40
 
 # ELO 评分系统（延迟导入）
@@ -387,6 +387,43 @@ def _blend_lottery_probabilities(model_probs, market_probs, market_weight=LOTTER
     return {key: value / total for key, value in blended.items()} if total > 0 else blended
 
 
+def _spf_selection_profile(probabilities):
+    """Keep top-1 honest while exposing a close draw as explicit cover."""
+    probs = {key: max(0.0, float((probabilities or {}).get(key, 0.0))) for key in ('胜', '平', '负')}
+    ranked = sorted(probs, key=lambda key: (-probs[key], key))
+    primary = ranked[0] if ranked and sum(probs.values()) > 0 else None
+    if not primary:
+        return {'primary': None, 'selections': [], 'mode': 'unavailable'}
+
+    runner_up = ranked[1]
+    gap = probs[primary] - probs[runner_up]
+    selections = [primary]
+    reason = 'top_probability'
+    mode = 'single'
+
+    if primary != '平':
+        draw_gap = probs[primary] - probs['平']
+        if probs['平'] >= 0.24 and draw_gap <= 0.12:
+            selections.append('平')
+            mode = 'draw_cover'
+            reason = 'draw_probability_close_to_primary'
+    elif probs[runner_up] >= 0.24 and gap <= 0.08:
+        selections.append(runner_up)
+        mode = 'draw_primary_cover'
+        reason = 'draw_primary_but_margin_is_small'
+
+    return {
+        'primary': primary,
+        'selections': selections,
+        'mode': mode,
+        'reason': reason,
+        'primary_probability': probs[primary],
+        'draw_probability': probs['平'],
+        'top_gap': gap,
+        'is_single': len(selections) == 1,
+    }
+
+
 def lottery_market_probabilities(candidates, lottery_handicap=None, spf_odds=None, rqspf_odds=None):
     """Build JCZQ probabilities from scores and independently priced official markets."""
     spf = {'胜': 0.0, '平': 0.0, '负': 0.0}
@@ -444,6 +481,7 @@ def lottery_market_probabilities(candidates, lottery_handicap=None, spf_odds=Non
     market_spf = _lottery_odds_probabilities(spf_odds, ('胜', '平', '负'))
     market_rqspf = _lottery_odds_probabilities(rqspf_odds, ('让胜', '让平', '让负')) if rqspf is not None else None
     spf = _blend_lottery_probabilities(model_spf, market_spf)
+    spf_selection = _spf_selection_profile(spf)
     if rqspf is not None:
         rqspf = _blend_lottery_probabilities(model_rqspf, market_rqspf)
     linked_recommendation = None
@@ -483,6 +521,8 @@ def lottery_market_probabilities(candidates, lottery_handicap=None, spf_odds=Non
             'market_probabilities': market_spf,
             'market_weight': LOTTERY_OFFICIAL_ODDS_WEIGHT if market_spf else 0.0,
             'prediction': max(spf, key=spf.get) if sum(spf.values()) > 0 else None,
+            'selections': spf_selection['selections'],
+            'selection_profile': spf_selection,
         },
         'handicap': ({
             'type': 'rqspf', 'name': '让球胜平负', 'handicap': handicap,

@@ -2217,7 +2217,26 @@ class Handler(BaseHTTPRequestHandler):
                 return {'error': 'numbers格式错误，应为逗号分隔的1-80整数'}
 
             analyzer = get_kl8_analyzer()
-            result = analyzer.recalculate_play_excluding(play_type, exclude_numbers)
+            current = _CACHE.get('kl8', {}).get('data') or {}
+            snapshot_file = str(current.get('snapshot_file') or '')
+            source_snapshot_id = Path(snapshot_file).stem.replace('snapshot_', '', 1) if snapshot_file else ''
+            current_play = current.get(play_type) or {}
+            initial_numbers = (
+                current_play.get('numbers')
+                or current_play.get('core_numbers')
+                or current_play.get('top8_numbers')
+                or current_play.get('top11_numbers')
+                or []
+            ) if isinstance(current_play, dict) else []
+            result = analyzer.recalculate_play_excluding(
+                play_type,
+                exclude_numbers,
+                record_context={
+                    'source_snapshot_id': source_snapshot_id,
+                    'source_version': current.get('statistics', {}).get('version') or current.get('version') or '',
+                    'initial_numbers': initial_numbers,
+                },
+            )
             return {'result': result}
         except Exception as e:
             self._log.error('快乐8剔除重算失败', exc_info=True)
@@ -2246,7 +2265,10 @@ class Handler(BaseHTTPRequestHandler):
             snapshots = kl8_list_snapshots()
             # 按目标期号降序（最新一期在前）
             snapshots.sort(
-                key=lambda s: str(s.get('target_issue') or ''),
+                key=lambda s: (
+                    str(s.get('target_issue') or ''),
+                    str(s.get('predicted_at') or ''),
+                ),
                 reverse=True,
             )
 
@@ -2309,12 +2331,14 @@ class Handler(BaseHTTPRequestHandler):
             # 已生成的结算文件不会自动更新。读记录时校验并删除重算，确保金额正确。
             self._kl8_rebuild_stale_settlements(records)
 
-            # 删号重算记录按目标期并入正式预测历史；有开奖结果时即时计算每轮命中。
-            recalculations_by_issue = {}
+            # 删号重算必须绑定来源快照，不能把同一期不同模型版本的轨迹串在一起。
+            recalculations_by_snapshot = {}
             for item in kl8_list_recalculations():
-                recalculations_by_issue.setdefault(str(item.get('target_issue') or ''), []).append(item)
+                source_id = str(item.get('source_snapshot_id') or '')
+                if source_id:
+                    recalculations_by_snapshot.setdefault(source_id, []).append(item)
             for rec in records:
-                rounds = recalculations_by_issue.get(str(rec.get('target_issue') or ''), [])
+                rounds = recalculations_by_snapshot.get(str(rec.get('snapshot_id') or ''), [])
                 actual = set((rec.get('settlement') or {}).get('actual_numbers') or [])
                 enriched = []
                 for item in rounds:
