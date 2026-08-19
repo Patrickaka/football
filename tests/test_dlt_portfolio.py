@@ -12,7 +12,7 @@ class DltPortfolioTests(unittest.TestCase):
         policy = result['portfolio_policy']
         recommendations = result['recommendations']
 
-        self.assertEqual(policy['name'], 'rank_core_rotating_primary_back_coverage')
+        self.assertEqual(policy['name'], 'portfolio_cover_v4.4')
         self.assertEqual(len(policy['front_anchors']), 2)
         self.assertEqual(len(policy['back_anchors']), 0)
         portfolio = [item for item in recommendations if not item['strategy'].startswith('picked')]
@@ -21,6 +21,12 @@ class DltPortfolioTests(unittest.TestCase):
             for item in portfolio
         }
         self.assertEqual(len(tickets), len(portfolio))
+        # v4.4 组合覆盖: 5注前区完全不重叠, union=25
+        front_union = set()
+        for item in portfolio:
+            front_union.update(item['front'])
+        self.assertEqual(len(front_union), 25)
+        self.assertEqual(policy['front_union'], 25)
         back_numbers = {
             number
             for item in recommendations
@@ -39,15 +45,23 @@ class DltPortfolioTests(unittest.TestCase):
             places=6,
         )
 
-    def test_rank_alternative_reuses_anchors_but_is_not_primary_clone(self):
+    def test_cover_tickets_do_not_overlap_primary_front(self):
+        """v4.4: 第2-5注前区与主推完全不重叠(覆盖策略核心)"""
         result = self.analyzer.generate_multi_strategy_recommendations()
         by_strategy = {item['strategy']: item for item in result['recommendations']}
         primary = by_strategy['primary_rank']
-        alternative = by_strategy['rank']
-        anchors = set(result['portfolio_policy']['front_anchors'])
-
-        self.assertTrue(anchors.issubset(alternative['front']))
-        self.assertNotEqual(primary['front'], alternative['front'])
+        primary_front = set(primary['front'])
+        for key in ('balanced', 'rank', 'hot', 'cold'):
+            other = set(by_strategy[key]['front'])
+            self.assertTrue(
+                primary_front.isdisjoint(other),
+                f"{key} 前区与主推重叠: {primary_front & other}",
+            )
+        # 且第2-5注彼此也不重叠
+        fronts = [set(by_strategy[k]['front']) for k in ('balanced', 'rank', 'hot', 'cold')]
+        for i in range(len(fronts)):
+            for j in range(i + 1, len(fronts)):
+                self.assertTrue(fronts[i].isdisjoint(fronts[j]))
 
     def test_primary_keeps_true_rank_cores_and_rotates_with_issue(self):
         front_ranked, back_ranked = self.analyzer.rank_model(top_n=20)
@@ -69,7 +83,7 @@ class DltPortfolioTests(unittest.TestCase):
         )
 
     def test_predictor_version_invalidates_old_cache(self):
-        self.assertEqual(LOTTERY_PREDICTOR_VERSION, 'dlt-v4.3-balanced-weights')
+        self.assertEqual(LOTTERY_PREDICTOR_VERSION, 'dlt-v4.4-portfolio-cover')
 
     def test_single_pick_designates_walk_forward_winner_without_fake_mix(self):
         result = self.analyzer.generate_multi_strategy_recommendations()

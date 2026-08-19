@@ -54,7 +54,7 @@ FEATURE_WEIGHTS = {
 # 时间衰减因子 (最近一期权重1.0，20期前≈0.19，50期前≈0.016)
 TIME_DECAY_FACTOR = 0.92
 MIN_REAL_HISTORY_FOR_RANKING = 80  # 降低阈值: 120期真实数据足够支撑统计模型
-LOTTERY_PREDICTOR_VERSION = "dlt-v4.3-balanced-weights"
+LOTTERY_PREDICTOR_VERSION = "dlt-v4.4-portfolio-cover"
 FULL_HISTORY_FETCH_COUNT = 100
 MIN_FULL_HISTORY_ISSUES = 500
 ROLLING_BACKTEST_TRIALS = 30
@@ -70,6 +70,13 @@ ML_BACKTEST_TRIALS = 10
 #   效果: 池ge4 11.8%持平(>随机9.33%), 池ge3 35.4%→37.0%, 分布熵4.794→4.839(更均匀)
 #   背景: 原 zone 权重给整个区间无差别加分(1-12/25-35各+0.133, 13-24仅+0.067),
 #   导致 Top15 大底长期锁死两端区间、中间号码被系统性忽略; 微调后边缘号码获得更多入场机会
+# v4.4: 组合覆盖(portfolio-cover) — 权重保持 v4.3, 改动在5注生成策略:
+#   实测(200期walk-forward, scripts/diagnose_dlt_v44_cover.py):
+#     - 第2-5注前区由"互斥保留锚点"改为"排名池[5:35]按期号步长分散取号, 5注前区完全不重叠(union=25)"
+#     - front_any_ge2(任1注前区≥2): 52.5%→64.0% (随机52.3%), 单注前区ge2率 14.3%→14.5% 不降
+#     - front_any_ge3: 8.5%→7.0%, joint(同注前≥2后≥1): 21.0%→23.5%, back_any_ge1: 99.5% 保持
+#   候选权重(freq0.08/trend0/sum0.12)经验证会损伤大底池(池ge4 12.0%→10.6~11.2%,
+#   最新100期窗口掉至7-8%低于随机9.3%), 属过拟合, 不予采用 — 权重保持 v4.3
 FEATURE_WEIGHTS.update({
     'frequency': 0.05,     # 消融: 关掉降2% → 微弱贡献, 保持v3.2
     'gap': 0.12,           # v4.3: 0.08→0.12, 均衡化后让出权重给遗漏回补
@@ -960,7 +967,8 @@ class LotteryAnalyzer:
             back_scores.append((num, total, features))
 
         front_ranked = sorted(front_scores, key=lambda x: -x[1])[:top_n]
-        back_ranked = sorted(back_scores, key=lambda x: -x[1])[:min(top_n, 6)]
+        # v4.4: 后区候选放宽到12个(原min(top_n,6)), 供组合覆盖5注10个后区位置使用
+        back_ranked = sorted(back_scores, key=lambda x: -x[1])[:min(top_n, 12)]
 
         return front_ranked, back_ranked
 
@@ -2068,16 +2076,20 @@ class LotteryAnalyzer:
         }
 
     def generate_multi_strategy_recommendations(self, voting_result: Dict = None) -> Dict:
-        """生成多策略推荐，组间互斥避免「多组完全重号」。
+        """生成多策略推荐 (v4.4: 组合覆盖, 5注前区完全不重叠)。
 
-        主推取排名 Top5/Top2；后续策略依次避开已用号码，保证每组前后区组合不同。
+        主推取排名核心Top2 + 按最新期号轮换3个高分候选；
+        第2-5注从排名池[5:35]按期号步长分散取号, 完全避开已用号码,
+        使5注前区 union=25(覆盖35个号码中的25个), 最大化"任意一注前区≥2码"概率。
+        后区五组优先覆盖10个不同号码(至少一组后区≥1 理论概率 98.5%)。
         """
         voting = voting_result or self.multi_model_voting(front_n=20, back_n=10)
         used_front = set()
         used_back = set()
         recommendations = []
 
-        front_ranked, back_ranked = self.rank_model(top_n=20)
+        # v4.4: top_n=35 取全前区排名(25个覆盖位置)与12个后区候选(10个覆盖位置)
+        front_ranked, back_ranked = self.rank_model(top_n=35)
         ranked_front_numbers = [n for n, _, _ in front_ranked]
         ranked_back_numbers = [n for n, _, _ in back_ranked]
         latest_issue = str((self.history_data[0] if self.history_data else {}).get('issue') or '0')
@@ -2131,14 +2143,16 @@ class LotteryAnalyzer:
         used_front.update(primary['front'])
         used_back.update(primary['back'])
 
-        # A portfolio should diversify combinations, not blindly discard every
-        # high-ranked number after the first ticket.  Keep two front anchors and
-        # one back anchor in play; diversify the remaining positions.  The old
-        # full-exclusion policy made later tickets progressively lower quality.
+        # v4.4: 组合覆盖(portfolio-cover) — 5注前区完全不重叠, union=25。
+        # 200期walk-forward实测: front_any_ge2 52.5%→64.0% (随机52.3%), 单注ge2率不降。
+        # 第2-5注从排名池[5:35]按期号步长分散取号; 主推保留排名核心(锚点)。
         front_anchors = set(primary_front_core)
-        # 后区只有12个号码。五组共10个后区位置时，重复锚点会直接浪费
-        # 组合覆盖；保留前区锚点，但后区优先使用尚未覆盖的号码。
         back_anchors = set()
+
+        cover_pool = ranked_front_numbers[5:35]
+        cover_step = 4
+        cover_cursor = issue_seed % cover_step
+        covered_front = set(primary['front'])
 
         strategies = [
             ('balanced', '均衡策略'),
@@ -2151,50 +2165,37 @@ class LotteryAnalyzer:
         }
 
         for key, name in strategies:
-            # 后区盘口小：若已用超过 8 个，只排除「曾整组出现过的后区组合」不够，
-            # 优先排除 used_back；不够 2 个可用时再放宽。
-            exclude_f = list(used_front - front_anchors)
-            exclude_b = list(used_back)
-            if len(BACK_NUMBERS) - len(used_back) < 2:
-                exclude_b = []
+            # v4.4: 分散覆盖 — 第2-5注前区从排名池[5:35]按期号步长分散取号,
+            # 完全避开主推号码, 使5注前区 union=25(35个号码覆盖25个)。
+            # 实测200期: front_any_ge2 52.5%→64.0%, 单注前区ge2率不降, joint 21.0%→23.5%。
+            front = []
+            while len(front) < 5 and cover_cursor < len(cover_pool):
+                num = cover_pool[cover_cursor]
+                cover_cursor += cover_step
+                if num not in covered_front and num not in front:
+                    front.append(num)
+            if len(front) < 5:  # 兜底: 从完整排名补足未用号码
+                for num in ranked_front_numbers:
+                    if num not in covered_front and num not in front:
+                        front.append(num)
+                    if len(front) >= 5:
+                        break
+            # 后区: 从未用号码中取最高分2个(组合覆盖), 保证5注覆盖10个不同号码
+            back = [n for n in ranked_back_numbers if n not in used_back][:2]
+            if len(back) < 2:
+                back = ranked_back_numbers[:2]
 
-            rec = self.generate_recommendation(
-                key,
-                exclude_front=exclude_f,
-                exclude_back=exclude_b,
-                voting_result=voting if key == 'balanced' else None,
-            )
-            ticket = (tuple(rec['front']), tuple(rec['back']))
-            if ticket in seen_tickets:
-                # 强制再避一次：前区排除已用，后区排除已用（必要时放宽前区保留后区差异）
-                rec = self.generate_recommendation(
-                    key,
-                    exclude_front=list(used_front - front_anchors),
-                    exclude_back=list(used_back) if len(BACK_NUMBERS) - len(used_back) >= 2 else [],
-                    voting_result=voting if key == 'balanced' else None,
-                )
-                ticket = (tuple(rec['front']), tuple(rec['back']))
-                # 若前区仍撞车，至少打散后区
-                if ticket in seen_tickets and len(BACK_NUMBERS) - len(used_back) >= 2:
-                    alt_back = self._score_based_select(
-                        [n for n in BACK_NUMBERS if n not in used_back],
-                        2, is_front=False,
-                        fallback_pool=BACK_NUMBERS,
-                        exclude=used_back,
-                    )
-                    rec = {**rec, 'front': rec['front'], 'back': alt_back}
-                    ticket = (tuple(rec['front']), tuple(rec['back']))
-
+            ticket = (tuple(sorted(front)), tuple(sorted(back)))
             item = {
-                'front': rec['front'],
-                'back': rec['back'],
+                'front': sorted(front),
+                'back': sorted(back),
                 'method': name,
                 'strategy': key,
             }
             recommendations.append(item)
             seen_tickets.add(ticket)
-            used_front.update(rec['front'])
-            used_back.update(rec['back'])
+            covered_front.update(front)
+            used_back.update(back)
 
         back_pairs = {
             tuple(sorted(item.get('back', [])))
@@ -2250,13 +2251,15 @@ class LotteryAnalyzer:
         return {
             'recommendations': recommendations,
             'portfolio_policy': {
-                'name': 'rank_core_rotating_primary_back_coverage',
+                'name': 'portfolio_cover_v4.4',
                 'front_anchors': sorted(front_anchors),
                 'back_anchors': sorted(back_anchors),
                 'primary_based_on_issue': latest_issue,
                 'primary_front_pool': ranked_front_numbers[:10],
                 'primary_back_pool': ranked_back_numbers[:6],
-                'note': '首注保留排名核心并按最新期号轮换高分候选；后区五组优先覆盖10个不同号码',
+                'front_union': len(covered_front),
+                'note': 'v4.4组合覆盖: 主推保留排名核心+按期号轮换; 第2-5注前区排名池步长分散且与主推不重叠(union=25); '
+                        '后区五组优先覆盖10个不同号码; front_any_ge2 实测 52.5%→64.0%(200期walk-forward)',
             },
             'back_coverage_profile': back_coverage_profile,
             'voting_front': [c['number'] for c in (voting.get('front_candidates') or [])[:12]],
