@@ -253,6 +253,8 @@ class BeidanQualityTests(unittest.TestCase):
         self.assertIn(risk['level'], {'medium', 'high'})
         self.assertEqual(risk['favorite'], '胜')
         self.assertAlmostEqual(risk['upset_prob'], 0.64, places=2)
+        self.assertEqual(risk['recommended_cover'], '平/负')
+        self.assertTrue(risk['signals'])
 
     def test_upset_risk_ignores_strong_favorite(self):
         # 强热门 → 不预警

@@ -2294,6 +2294,28 @@ def assess_upset_risk(probs_1x2):
     if confident:
         label = '热门稳胆'
 
+    reverse_labels = {
+        '胜': [('平', '防冷平'), ('负', '客胜冷门')],
+        '负': [('平', '防冷平'), ('胜', '主胜冷门')],
+        '平': [('胜', '主胜反向'), ('负', '客胜反向')],
+    }.get(favorite, [])
+    defensive_selections = [
+        {
+            'result': result_label,
+            'type': selection_type,
+            'probability': round(probs.get(result_label, 0.0), 6),
+        }
+        for result_label, selection_type in reverse_labels
+    ] if alert else []
+    defensive_selections.sort(key=lambda item: -item['probability'])
+    signals = []
+    if alert:
+        signals.append('热门强度不足' if fav_p >= UPSET_HIGH_FAV_MAX else '弱热门')
+        if gap <= UPSET_HIGH_GAP_MAX:
+            signals.append('三项概率胶着')
+        if upset_mass >= UPSET_HIGH_MASS_MIN:
+            signals.append('非热门合计概率偏高')
+
     return {
         'level': level,
         'label': label,
@@ -2303,6 +2325,11 @@ def assess_upset_risk(probs_1x2):
         'favorite_prob': round(fav_p, 6),
         'upset_prob': round(upset_mass, 6),
         'gap': round(gap, 6),
+        'signals': signals,
+        'defensive_selections': defensive_selections,
+        'recommended_cover': '/'.join(
+            item['result'] for item in defensive_selections
+        ) if defensive_selections else None,
     }
 
 

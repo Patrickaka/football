@@ -41,6 +41,8 @@ class WebProfessionalModalTests(unittest.TestCase):
         self.assertIn("胜平负预测", html)
         self.assertIn("让球胜平负", html)
         self.assertIn("赛后比分", html)
+        self.assertIn("setFootballQualityFilter('upset')", html)
+        self.assertIn("防冷方向：", html)
 
     def test_beidan_web_hides_rejected_markets_from_primary_recommendations(self):
         path = os.path.join(ROOT, 'web', 'index.html')
@@ -54,6 +56,8 @@ class WebProfessionalModalTests(unittest.TestCase):
         self.assertIn("大小球未通过跨赛季准确率门禁", html)
         self.assertIn("精确进球数仅作模型分布参考", html)
         self.assertIn("研究筛选模式", html)
+        self.assertIn("setBeidanQualityFilter('upset')", html)
+        self.assertIn("防冷预警兑现", html)
 
     def test_professional_status_falls_back_to_static_backtest(self):
         path = os.path.join(ROOT, 'web', 'index.html')
@@ -68,6 +72,8 @@ class WebProfessionalModalTests(unittest.TestCase):
         self.assertIn("bundled_audited_baseline", html)
         self.assertIn("距离专业生产系统的差距", html)
         self.assertIn("生产预测闭环监控", html)
+        self.assertIn("league_spf_validation", html)
+        self.assertIn("生产联赛门禁（数据库历史 · 时间后段冻结验证）", html)
         self.assertIn("95%区间", html)
         self.assertIn("数据读取失败，不代表样本为0场", html)
 

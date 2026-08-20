@@ -104,6 +104,31 @@ class FootballAccuracyGateTests(unittest.TestCase):
         self.assertFalse(result["spf"]["selected"])
         self.assertIn("欧赔与亚盘明显冲突", result["spf"]["reasons"])
 
+    def test_upset_alert_downgrades_chalk_and_exposes_defensive_watch(self):
+        result = build_accuracy_gate(
+            {
+                "standard": {
+                    "probabilities": {"胜": .76, "平": .14, "负": .10},
+                    "market_probabilities": {"胜": .72, "平": .17, "负": .11},
+                },
+                "handicap": {},
+            },
+            confidence={"score": 1.0},
+            upset={
+                "alert": True,
+                "level": "high",
+                "risk_score": .72,
+                "recommended_cover": "平/负",
+                "signals": ["热门降盘", "热门升水"],
+                "defensive_selections": [{"result": "平"}, {"result": "负"}],
+            },
+        )
+
+        self.assertFalse(result["spf"]["selected"])
+        self.assertIn("爆冷信号触发", result["spf"]["reasons"][-1])
+        self.assertTrue(result["upset"]["watch"])
+        self.assertEqual(result["upset"]["candidate"], "平/负")
+
     def test_d1_total_goals_gate_uses_frozen_high_precision_threshold(self):
         result = build_total_goals_gate({
             "close_line": 2.5,

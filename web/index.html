@@ -1693,8 +1693,15 @@ function renderFootballProfessionalStatus(status) {
   const monitoring = status.monitoring || {};
   const spfMonitoring = monitoring.spf || {};
   const rqspfMonitoring = monitoring.rqspf || {};
+  const upsetMonitoring = monitoring.upset || {};
   const drift = monitoring.drift || {};
   const marketTiming = monitoring.market_timing || {};
+  const leagueValidation = monitoring.league_spf_validation || {};
+  const leagueRows = Object.entries(leagueValidation)
+    .filter(([league]) => league !== 'error')
+    .sort((a, b) => Number(b[1]?.supported) - Number(a[1]?.supported) ||
+      Number(b[1]?.sample_count || 0) - Number(a[1]?.sample_count || 0))
+    .slice(0, 20);
   const ready = status.production_ready === true;
   const checkLabels = {
     model_beats_market_logloss: 'LogLoss跑赢市场',
@@ -1724,6 +1731,7 @@ function renderFootballProfessionalStatus(status) {
       <div class="pro-metrics" style="margin-top:8px">
         ${metric('胜平负独立样本', `${spfMonitoring.n || 0} 场`, '#93c5fd')}
         ${metric('让球独立样本', `${rqspfMonitoring.n || 0} 场`, Number(rqspfMonitoring.n) >= 100 ? '#4ade80' : '#fbbf24')}
+        ${metric('防冷预警兑现', upsetMonitoring.alert_precision == null ? `${upsetMonitoring.n || 0} 场待积累` : `${(Number(upsetMonitoring.alert_precision) * 100).toFixed(1)}% / ${upsetMonitoring.n}场`, upsetMonitoring.production_ready ? '#4ade80' : '#fbbf24')}
         ${metric('收盘赔率覆盖', `${(Number(marketTiming.closing_odds_coverage || 0) * 100).toFixed(1)}%`, marketTiming.clv_ready ? '#4ade80' : '#fca5a5')}
         ${metric('赔率时点覆盖', `${(Number(marketTiming.timed_snapshot_coverage || 0) * 100).toFixed(1)}%`, Number(marketTiming.timed_snapshot_coverage) >= .8 ? '#4ade80' : '#fbbf24')}
       </div>
@@ -1739,6 +1747,19 @@ function renderFootballProfessionalStatus(status) {
           <td>${(Number(bucket.observed_accuracy) * 100).toFixed(1)}%</td>
           <td>${(Number(bucket.ci95_low) * 100).toFixed(1)}%–${(Number(bucket.ci95_high) * 100).toFixed(1)}%</td>
         </tr>`).join('')}</tbody></table></div>` : '<div class="note">尚无足够结算样本生成概率桶。</div>'}
+      <div class="diag-title" style="margin-top:12px">生产联赛门禁（数据库历史 · 时间后段冻结验证）</div>
+      ${leagueValidation.error ? `<div class="note" style="color:var(--away)">联赛门禁读取失败：${esc(leagueValidation.error)}</div>` :
+        leagueRows.length ? `<div style="overflow:auto;margin-top:8px"><table style="width:100%;font-size:12px;border-collapse:collapse">
+          <thead><tr><th>联赛</th><th>状态</th><th>总样本</th><th>阈值</th><th>训练命中</th><th>后段命中</th><th>说明</th></tr></thead>
+          <tbody>${leagueRows.map(([league, policy]) => `<tr>
+            <td>${esc(league)}</td>
+            <td style="color:${policy.supported ? '#4ade80' : '#fbbf24'}">${policy.supported ? '✓ 已放行' : '观望'}</td>
+            <td>${Number(policy.sample_count || 0)}</td>
+            <td>${policy.minimum_probability == null ? '-' : `${(Number(policy.minimum_probability) * 100).toFixed(0)}%`}</td>
+            <td>${policy.training?.accuracy == null ? '-' : `${(Number(policy.training.accuracy) * 100).toFixed(1)}% / ${Number(policy.training.sample_count || 0)}场`}</td>
+            <td>${policy.holdout?.accuracy == null ? '-' : `${(Number(policy.holdout.accuracy) * 100).toFixed(1)}% / ${Number(policy.holdout.sample_count || 0)}场`}</td>
+            <td>${esc(policy.reason || '后段验证达标')}</td>
+          </tr>`).join('')}</tbody></table></div>` : '<div class="note">数据库尚无可审计的联赛门禁样本。</div>'}
     </details>` : ''}
     ${capabilities.length ? `<details style="margin-top:12px"><summary style="cursor:pointer;color:var(--accent2);font-weight:600">已具备的专业能力（${capabilities.length}项）</summary>
       <div class="note">${capabilities.map(item => `✓ ${esc(item)}`).join('<br>')}</div></details>` : ''}
@@ -2128,6 +2149,7 @@ function getFootballResultTier(item) {
 
 function footballMatchPassesFilter(item) {
   if (footballQualityFilter === 'all') return true;
+  if (footballQualityFilter === 'upset') return item?.result?.upset?.alert === true;
   return getFootballResultTier(item).tier === footballQualityFilter;
 }
 
@@ -2266,6 +2288,7 @@ function renderFootballPredictions(results) {
           <button onclick="setFootballQualityFilter('all')" class="tb-btn ${footballQualityFilter === 'all' ? 'tb-active' : ''}">全部</button>
           <button onclick="setFootballQualityFilter('selected')" class="tb-btn ${footballQualityFilter === 'selected' ? 'tb-active' : ''}">精选</button>
           <button onclick="setFootballQualityFilter('watch')" class="tb-btn ${footballQualityFilter === 'watch' ? 'tb-active' : ''}">观察</button>
+          <button onclick="setFootballQualityFilter('upset')" class="tb-btn ${footballQualityFilter === 'upset' ? 'tb-active' : ''}">防冷</button>
           <button onclick="setFootballQualityFilter('abstain')" class="tb-btn ${footballQualityFilter === 'abstain' ? 'tb-active' : ''}">观望</button>
         </div>
       </div>
@@ -2319,6 +2342,13 @@ function renderFootballPredictions(results) {
   html += `<div style="margin:0 0 12px;padding:9px 11px;background:rgba(59,130,246,.10);border-left:3px solid #3b82f6;border-radius:7px;font-size:12px;color:var(--muted)">
     Web 主推已接入准确率门禁：默认只显示经冻结跨赛季规则选中的玩法；观察/观望项不作单推。
   </div>`;
+  const footballUpsetCount = results.filter(item => item?.result?.upset?.alert === true).length;
+  if (footballUpsetCount) {
+    html += `<div style="margin:0 0 12px;padding:8px 10px;background:rgba(245,158,11,.10);border-left:3px solid #f59e0b;border-radius:7px;font-size:12px;color:var(--muted)">
+      🚨 已识别 ${footballUpsetCount} 场防冷信号；冷门方向属于独立观察层，不与正路精选混算。
+      <button class="tb-btn" style="margin-left:6px" onclick="setFootballQualityFilter('upset')">查看防冷场次</button>
+    </div>`;
+  }
   html += `<div class="status" style="padding:4px 0 12px;font-size:13px">共 ${results.length} 场比赛，筛选后 ${visibleResults.length} 场，第 ${footballPage}/${totalPages} 页</div>`;
 
   if (!visibleResults.length) {
@@ -2395,6 +2425,8 @@ function renderFootballPredictions(results) {
         itemHtml += `<div style="margin-top:8px;padding:7px 8px;background:var(--bg2);border-left:3px solid ${uColor};border-radius:6px;font-size:12px">
           <span style="color:${uColor};font-weight:bold">${esc(upset.label)}</span>
           <span style="color:var(--muted)"> · 热门${esc(upset.favorite)} ${((upset.favorite_prob || 0) * 100).toFixed(0)}%</span>
+          ${upset.recommended_cover ? `<div style="margin-top:4px;color:${uColor};font-weight:bold">防冷方向：${esc(upset.recommended_cover)}</div>` : ''}
+          ${upset.signals?.length ? `<div style="margin-top:3px;color:var(--muted)">依据：${upset.signals.slice(0, 4).map(esc).join('；')}</div>` : ''}
           ${renderScenario('真正爆冷', outrightCandidates, '#ef4444')}
           ${renderScenario('防冷平局', drawCandidates, '#f59e0b')}
         </div>`;
@@ -2974,6 +3006,8 @@ function renderBeidanUpsetInline(upset) {
     <div style="font-size:12px;font-weight:bold;color:${color}">${upset.level === 'high' ? '🔴 爆冷高风险' : '🟠 爆冷预警'}
       <span style="font-weight:normal;color:var(--muted)"> · 热门 ${esc(upset.favorite || '')} 仅 ${upset.favorite_prob != null ? (upset.favorite_prob * 100).toFixed(0) + '%' : '-'}，反向概率 ${upset.upset_prob != null ? (upset.upset_prob * 100).toFixed(0) + '%' : '-'}</span>
     </div>
+    ${upset.recommended_cover ? `<div style="margin-top:4px;font-size:12px;color:${color};font-weight:bold">防冷方向：${esc(upset.recommended_cover)}</div>` : ''}
+    ${upset.signals?.length ? `<div style="margin-top:3px;font-size:11px;color:var(--muted)">依据：${upset.signals.map(esc).join('；')}</div>` : ''}
     ${cands ? `<div style="margin-top:4px;font-size:12px;color:var(--muted)">爆冷比分候选：${cands}</div>` : ''}
   </div>`;
 }
@@ -3082,6 +3116,9 @@ function renderBeidanMarketStatus(state, prediction) {
 
 function beidanMatchPassesFilter(m) {
   if (beidanQualityFilter === 'all') return true;
+  if (beidanQualityFilter === 'upset') {
+    return m.bifen?.upset?.alert === true || m.spf?.upset?.alert === true;
+  }
   const states = [
     getBeidanMarketRecommendation(m.spf, 'spf').status,
     getBeidanMarketRecommendation(m.rqspf, 'rqspf').status,
@@ -3195,6 +3232,7 @@ function renderBeidan(result) {
           <button onclick="setBeidanQualityFilter('all')" class="tb-btn ${beidanQualityFilter === 'all' ? 'tb-active' : ''}">全部</button>
           <button onclick="setBeidanQualityFilter('selected')" class="tb-btn ${beidanQualityFilter === 'selected' ? 'tb-active' : ''}">精选</button>
           <button onclick="setBeidanQualityFilter('watch')" class="tb-btn ${beidanQualityFilter === 'watch' ? 'tb-active' : ''}">观察</button>
+          <button onclick="setBeidanQualityFilter('upset')" class="tb-btn ${beidanQualityFilter === 'upset' ? 'tb-active' : ''}">防冷</button>
           <button onclick="setBeidanQualityFilter('abstain')" class="tb-btn ${beidanQualityFilter === 'abstain' ? 'tb-active' : ''}">观望</button>
         </div>
       </div>
@@ -3213,6 +3251,13 @@ function renderBeidan(result) {
       ? '生产推荐模式：页面默认只展示通过决策门禁的精选。'
       : '研究筛选模式：精选代表已通过当前冻结规则，但全局生产门禁尚未放行；观察/观望不进入主推。'}
   </div>`;
+  const beidanUpsetCount = (result.upset_watch || []).length;
+  if (beidanUpsetCount) {
+    html += `<div style="margin:0 0 12px;padding:8px 10px;background:rgba(245,158,11,.10);border-left:3px solid #f59e0b;border-radius:7px;font-size:12px;color:var(--muted)">
+      🚨 北单识别出 ${beidanUpsetCount} 场防冷信号，已与正路精选分层。
+      <button class="tb-btn" style="margin-left:6px" onclick="setBeidanQualityFilter('upset')">查看防冷场次</button>
+    </div>`;
+  }
   
   if (!result.recommendations || !result.recommendations.length) {
     html += '<div class="status">暂无比赛数据</div>';

@@ -31,7 +31,7 @@ from ..common.paths import data_path
 
 log = setup_logger('football')
 
-FOOTBALL_PREDICTION_LOGIC_VERSION = '2026-08-20-league-total-validated-fair-price-joint-matrix-v31'
+FOOTBALL_PREDICTION_LOGIC_VERSION = '2026-08-20-audited-upset-production-league-gated-fair-price-joint-matrix-v33'
 # Official 1X2 prices are the strongest observable production signal.  Raising
 # their share from 40% to 80% improved the pooled high-confidence proxy from
 # 61.67% to 62.55%; the model retains 20% for team/Asian/context information.
@@ -5694,91 +5694,141 @@ def apply_market_change_prior(score_probs: Dict[str, float], asian: Dict, total:
         return score_probs, {'available': False, 'reason': str(e)}
 
 
+def _evaluate_upset_profile(asian, euro, team=None, total=None,
+                            anomaly=None, steam_result=None):
+    """Build a direction-neutral, auditable upset-risk profile."""
+    asian = asian or {}
+    euro = euro or {}
+    team = team or {}
+    total = total or {}
+    anomaly = anomaly or {}
+    steam_result = steam_result or {}
+    labels = {'home': '胜', 'draw': '平', 'away': '负'}
+    close = {
+        key: float((euro.get('close') or {}).get(key) or 0.0)
+        for key in labels
+    }
+    open_probs = {
+        key: float((euro.get('open') or {}).get(key) or 0.0)
+        for key in labels
+    }
+    favorite_key = max(close, key=close.get) if any(close.values()) else None
+    favorite = labels.get(favorite_key)
+    ranked = sorted(close.values(), reverse=True)
+    favorite_prob = ranked[0] if ranked else 0.0
+    gap = favorite_prob - (ranked[1] if len(ranked) > 1 else 0.0)
+    score = 0.0
+    signals = []
+
+    if favorite_prob and favorite_prob < 0.45:
+        score += 0.35
+        signals.append('热门概率不足45%，三项高度胶着')
+    elif favorite_prob and favorite_prob < 0.52:
+        score += 0.20
+        signals.append('热门强度有限')
+    if favorite_prob and gap < 0.08:
+        score += 0.15
+        signals.append('热门领先第二方向不足8%')
+    elif favorite_prob and gap < 0.15:
+        score += 0.08
+        signals.append('热门领先优势偏小')
+
+    if favorite_key and open_probs.get(favorite_key, 0) > 0:
+        delta = close[favorite_key] - open_probs[favorite_key]
+        if delta <= -0.03:
+            score += 0.20 if delta <= -0.05 else 0.12
+            signals.append(f"热门去水概率由{open_probs[favorite_key]:.1%}降至{close[favorite_key]:.1%}")
+        strongest_reverse = max(
+            (key for key in labels if key != favorite_key),
+            key=lambda key: close[key] - open_probs.get(key, 0.0),
+        )
+        reverse_delta = close[strongest_reverse] - open_probs.get(strongest_reverse, 0.0)
+        if reverse_delta >= 0.03:
+            score += 0.15
+            signals.append(f"反向{labels[strongest_reverse]}概率升高{reverse_delta:.1%}")
+
+    kelly = euro.get('kelly') or {}
+    if favorite_key and kelly.get('hardest') == favorite_key:
+        score += 0.15
+        signals.append('凯利指数将热门列为最难打出方向')
+    favored_key = kelly.get('favored')
+    if favorite_key and favored_key in labels and favored_key != favorite_key:
+        score += 0.10
+        signals.append(f"凯利指数相对支持反向{labels[favored_key]}")
+
+    home_form = float((team.get('home_recent') or {}).get('form_pts') or 0.0) / 3.0
+    away_form = float((team.get('away_recent') or {}).get('form_pts') or 0.0) / 3.0
+    if favorite_key == 'home' and away_form - home_form >= 0.20:
+        score += 0.15
+        signals.append('客队近期状态明显优于主队热门')
+    elif favorite_key == 'away' and home_form - away_form >= 0.20:
+        score += 0.15
+        signals.append('主队近期状态明显优于客队热门')
+
+    open_handicap = asian.get('open_handicap')
+    close_handicap = asian.get('handicap')
+    if open_handicap is not None and close_handicap is not None:
+        handicap_delta = float(close_handicap) - float(open_handicap)
+        favor = asian.get('favor')
+        favorite_weakened = (
+            favorite_key == 'home' and favor == 'home' and handicap_delta <= -0.25
+        ) or (
+            favorite_key == 'away' and favor == 'away' and handicap_delta >= 0.25
+        )
+        if favorite_weakened:
+            score += 0.18
+            signals.append(f"热门方向降盘{float(open_handicap):+.2f}→{float(close_handicap):+.2f}")
+
+    if favorite_key in {'home', 'away'}:
+        open_water = asian.get('open_water') or {}
+        close_water = asian.get('close_water') or {}
+        if favorite_key in open_water and favorite_key in close_water:
+            water_delta = float(close_water[favorite_key]) - float(open_water[favorite_key])
+            if water_delta >= 0.08:
+                score += 0.12
+                signals.append(f"热门方向升水{water_delta:+.2f}")
+
+    try:
+        total_delta = float(total.get('close_line')) - float(total.get('open_line'))
+    except (TypeError, ValueError):
+        total_delta = 0.0
+    if favorite_key in {'home', 'away'} and total_delta <= -0.25:
+        score += 0.08
+        signals.append('大小球降盘，热门穿透能力受压')
+
+    deviation = (anomaly.get('euro_asian_deviation') or {}).get('abs_deviation')
+    try:
+        deviation = float(deviation or 0.0)
+    except (TypeError, ValueError):
+        deviation = 0.0
+    if deviation >= 0.50:
+        score += 0.18
+        signals.append('欧赔与亚盘明显背离')
+    elif deviation >= 0.35:
+        score += 0.10
+        signals.append('欧赔与亚盘存在背离')
+
+    steam_summary = steam_result.get('summary') or {}
+    steam_text = str(steam_summary.get('recommendation') or '')
+    if steam_summary.get('dominant_signal') in {'steam_drop', 'trap'} or any(
+        word in steam_text for word in ('冷门', '反向')
+    ):
+        score += 0.15
+        signals.append('临场资金流向热门反方向')
+
+    return {
+        'risk_score': max(0.0, min(1.0, score)),
+        'signals': signals,
+        'favorite': favorite,
+        'favorite_key': favorite_key,
+        'favorite_prob': favorite_prob,
+        'gap': gap,
+    }
+
+
 def _evaluate_upset_risk(asian, euro, team=None):
-    """
-    动态评估爆冷可能性（0~1），基于盘口走势和球队状态分析
-    
-    评估因素：
-    1. 欧赔客胜概率变化：终盘 vs 初盘
-    2. 凯利指数：客胜凯利是否偏低（资金不看好热门方）
-    3. 球队状态差异：客队近期状态是否明显好于主队
-    4. 盘口走势：让球是否朝着不利于热门方的方向变化
-    """
-    risk_score = 0.0
-    factors = []
-    
-    # 1. 欧赔客胜概率变化
-    if euro.get('open') and euro.get('close'):
-        p_away_open = euro['open'].get('away', 0)
-        p_away_close = euro['close'].get('away', 0)
-        if p_away_open > 0 and p_away_close > 0:
-            # 客胜概率上升越多，爆冷风险越高
-            prob_change = (p_away_close - p_away_open) / max(p_away_open, 0.01)
-            if prob_change > 0.1:
-                risk_score += 0.15
-                factors.append(f"客胜概率上升 {prob_change*100:.0f}%")
-            elif prob_change < -0.1:
-                risk_score -= 0.1
-                factors.append(f"客胜概率下降 {abs(prob_change)*100:.0f}%")
-    
-    # 2. 凯利指数分析
-    kelly = euro.get('kelly')
-    if kelly:
-        # 客胜凯利偏低可能意味着资金不看好热门方（只有当不是中性时才进行判断）
-        kelly_hardest = kelly.get('hardest')
-        kelly_favored = kelly.get('favored')
-        
-        if kelly_hardest != 'neutral' and kelly_hardest == 'home':
-            risk_score += 0.15
-            factors.append("凯利提示主胜打出难度大")
-        if kelly_favored != 'neutral' and kelly_favored == 'away':
-            risk_score += 0.1
-            factors.append("凯利相对看好客胜")
-    
-    # 3. 球队状态差异
-    if team:
-        home_form = team.get('home_recent', {}).get('form_pts', 0) / 3.0 if team else 0.5
-        away_form = team.get('away_recent', {}).get('form_pts', 0) / 3.0 if team else 0.5
-        form_diff = away_form - home_form
-        if form_diff > 0.3:
-            risk_score += 0.15
-            factors.append(f"客队状态更佳（{away_form:.2f} vs {home_form:.2f}）")
-        elif form_diff < -0.3:
-            risk_score -= 0.1
-            factors.append(f"主队状态更佳")
-    
-    # 4. 盘口走势分析
-    if asian.get('open_handicap') is not None and asian.get('handicap') is not None:
-        open_hcap = asian['open_handicap']
-        close_hcap = asian['handicap']
-        favor = asian.get('favor', 'home')
-        
-        # 让球降低意味着热门方支持度下降
-        if favor == 'home':
-            hcap_change = close_hcap - open_hcap
-            if hcap_change < -0.25:
-                risk_score += 0.15
-                factors.append(f"让球下降 {open_hcap:+.2f}→{close_hcap:+.2f}")
-        else:
-            hcap_change = close_hcap - open_hcap
-            if hcap_change > 0.25:
-                risk_score += 0.15
-                factors.append(f"让球上升 {open_hcap:+.2f}→{close_hcap:+.2f}")
-    
-    # 5. 欧赔变化趋势
-    changes = euro.get('changes', [])
-    if changes:
-        if '客胜下调' in changes:
-            risk_score += 0.1
-            factors.append("欧赔客胜下调")
-        if '主胜上调' in changes:
-            risk_score += 0.1
-            factors.append("欧赔主胜上调")
-    
-    # 归一化到 0~1 范围
-    risk_score = max(0.0, min(1.0, risk_score))
-    
-    return risk_score
+    """Compatibility wrapper for callers that only consume a numeric score."""
+    return _evaluate_upset_profile(asian, euro, team)['risk_score']
 
 
 # ==================== 比分簇定义 ====================
@@ -7148,7 +7198,8 @@ def _is_lottery_cache_current(result: Dict, match: Dict) -> bool:
     return expected_handicap == cached_handicap
 
 
-def assess_football_upset(asian, euro, team, candidates):
+def assess_football_upset(asian, euro, team, candidates, total=None,
+                          anomaly=None, steam_result=None):
     """评估爆冷（热门被击败）风险，并挑出反向爆冷比分候选。
 
     对齐北单模块的爆冷识别能力：把足球模块内部已有的 ``_evaluate_upset_risk``
@@ -7157,7 +7208,11 @@ def assess_football_upset(asian, euro, team, candidates):
 
     返回结构与北单 ``analyze_bifen`` 的 ``result['upset']`` 兼容。
     """
-    risk_score = _evaluate_upset_risk(asian, euro, team)
+    profile = _evaluate_upset_profile(
+        asian, euro, team, total=total, anomaly=anomaly,
+        steam_result=steam_result,
+    )
+    risk_score = profile['risk_score']
     p_home = float(euro.get('close', {}).get('home', 0.0) or 0.0)
     p_draw = float(euro.get('close', {}).get('draw', 0.0) or 0.0)
     p_away = float(euro.get('close', {}).get('away', 0.0) or 0.0)
@@ -7216,6 +7271,20 @@ def assess_football_upset(asian, euro, team, candidates):
     label = {'high': '🔴高风险爆冷', 'medium': '🟠需警惕爆冷', 'low': '稳健'}.get(level, '稳健')
     if confident:
         label = '✅热门稳胆'
+    reverse_labels = {
+        '胜': [('平', '防冷平'), ('负', '客胜冷门')],
+        '负': [('平', '防冷平'), ('胜', '主胜冷门')],
+        '平': [('胜', '主胜反向'), ('负', '客胜反向')],
+    }.get(favorite, [])
+    defensive_selections = [
+        {
+            'result': result_label,
+            'type': selection_type,
+            'probability': probs.get(result_label, 0.0),
+        }
+        for result_label, selection_type in reverse_labels
+    ] if alert else []
+    defensive_selections.sort(key=lambda item: -item['probability'])
     return {
         'level': level,
         'label': label,
@@ -7226,6 +7295,11 @@ def assess_football_upset(asian, euro, team, candidates):
         'upset_prob': upset_p,
         'gap': gap,
         'risk_score': risk_score,
+        'signals': profile.get('signals') or [],
+        'defensive_selections': defensive_selections,
+        'recommended_cover': '/'.join(
+            item['result'] for item in defensive_selections
+        ) if defensive_selections else None,
         'candidates': picked,
         'outright_candidates': outright_picked[:2],
         'draw_candidates': draw_picked[:2],
@@ -8273,7 +8347,14 @@ def analyze_match(match, force_refresh=False):
 
     # ========== 爆冷识别（对齐北单：显式暴露爆冷风险 + 反向比分候选）==========
     try:
-        upset = assess_football_upset(asian, euro, team, candidates)
+        upset = assess_football_upset(
+            asian, euro, team, candidates, total=total,
+            anomaly={
+                'joint_water': joint_anomaly,
+                'euro_asian_deviation': euro_asian_dev,
+            },
+            steam_result=steam_result,
+        )
     except Exception as e:
         log.warning(f"爆冷识别失败: {e}")
         upset = None
@@ -8590,7 +8671,18 @@ def analyze_match(match, force_refresh=False):
         lottery['primary'] = lottery['standard']
     else:
         lottery['primary'] = None
-    from .accuracy_gate import build_accuracy_gate, build_total_goals_gate
+    from .accuracy_gate import (
+        build_accuracy_gate,
+        build_total_goals_gate,
+        has_static_spf_policy,
+    )
+    production_spf_policy = None
+    if not has_static_spf_policy(match.get('league')):
+        try:
+            from .production_league_gate import load_production_league_spf_policy
+            production_spf_policy = load_production_league_spf_policy(match.get('league'))
+        except Exception as e:
+            log.warning('生产联赛门禁读取失败，继续使用全局门禁规则: %s', e)
     lottery['accuracy_gate'] = build_accuracy_gate(
         lottery,
         confidence=confidence,
@@ -8598,7 +8690,9 @@ def analyze_match(match, force_refresh=False):
             'joint_water': joint_anomaly,
             'euro_asian_deviation': euro_asian_dev,
         },
+        upset=upset,
         league=match.get('league'),
+        production_spf_policy=production_spf_policy,
     )
     total_goals_gate = build_total_goals_gate(
         total,
@@ -8792,6 +8886,7 @@ def analyze_match(match, force_refresh=False):
                 'evidence': result.get('professional_evidence'),
                 'live_context_quality': result.get('live_context_quality'),
                 'accuracy_gate': (lottery or {}).get('accuracy_gate'),
+                'upset': result.get('upset'),
             },
         )
         prediction_saved = True

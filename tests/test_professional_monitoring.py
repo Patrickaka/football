@@ -3,6 +3,7 @@ import unittest
 from src.football.professional_monitoring import (
     build_professional_monitoring,
     calibration_report,
+    upset_alert_report,
     wilson_interval,
 )
 
@@ -46,6 +47,7 @@ class ProfessionalMonitoringTests(unittest.TestCase):
         self.assertEqual(report["market_timing"]["verified_closing_odds_samples"], 0)
         self.assertFalse(report["market_timing"]["clv_ready"])
         self.assertEqual(report["spf"]["n"], 2)
+        self.assertIn("league_spf_validation", report)
 
     def test_drift_detects_material_logloss_deterioration(self):
         records = []
@@ -67,6 +69,27 @@ class ProfessionalMonitoringTests(unittest.TestCase):
         report = build_professional_monitoring(records, recent_window=50, baseline_window=60)
         self.assertTrue(report["drift"]["detected"])
         self.assertIn("近期LogLoss显著恶化", report["drift"]["reasons"])
+
+    def test_upset_monitoring_uses_only_persisted_prematch_alert(self):
+        records = [{
+            "settled": True,
+            "actual_result": actual,
+            "professional_snapshot": {"upset": {
+                "alert": alert,
+                "level": "high" if alert else "low",
+                "favorite": "胜",
+                "defensive_selections": [
+                    {"result": "平"}, {"result": "负"},
+                ] if alert else [],
+            }},
+        } for actual, alert in (("A", True), ("H", True), ("D", False))]
+
+        report = upset_alert_report(records)
+
+        self.assertEqual(report["n"], 2)
+        self.assertEqual(report["realized_upsets"], 1)
+        self.assertEqual(report["alert_precision"], .5)
+        self.assertEqual(report["baseline_n"], 3)
 
 
 if __name__ == "__main__":

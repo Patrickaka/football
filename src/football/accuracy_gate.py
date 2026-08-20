@@ -112,11 +112,41 @@ def prediction_reliability(probability: float, information_completeness: float) 
     return baseline + (probability - baseline) * information_completeness
 
 
-def _spf_policy(league: Any) -> dict[str, Any]:
+def _static_spf_policy(league: Any) -> dict[str, Any] | None:
     text = str(league or "").strip().lower()
     for code, policy in SPF_LEAGUE_POLICIES.items():
         if text and any(text == str(alias).strip().lower() for alias in policy["aliases"]):
             return {"code": code, **policy}
+    return None
+
+
+def has_static_spf_policy(league: Any) -> bool:
+    return _static_spf_policy(league) is not None
+
+
+def _spf_policy(
+    league: Any,
+    production_policy: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    static = _static_spf_policy(league)
+    if static:
+        return static
+    production_policy = production_policy or {}
+    if production_policy.get("supported"):
+        league_label = str(production_policy.get("league") or league or "production")
+        return {
+            "code": f"production:{league_label}",
+            "minimum_probability": float(production_policy["minimum_probability"]),
+            "validation_status": "production_chronological_holdout_supported",
+            "validation": {
+                "training": production_policy.get("training"),
+                "holdout": production_policy.get("holdout"),
+                "sample_count": production_policy.get("sample_count"),
+                "target_accuracy": production_policy.get("target_accuracy"),
+                "selection_rule": production_policy.get("selection_rule"),
+                "source": "mysql_first_settled_prediction_history",
+            },
+        }
     return {
         "code": "global",
         "minimum_probability": SPF_MIN_PROBABILITY,
@@ -196,12 +226,15 @@ def build_accuracy_gate(
     *,
     confidence: Mapping[str, Any] | None = None,
     anomaly: Mapping[str, Any] | None = None,
+    upset: Mapping[str, Any] | None = None,
     league: Any = None,
+    production_spf_policy: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Return separate abstention decisions for SPF and RQSPF."""
 
     confidence = confidence or {}
     anomaly = anomaly or {}
+    upset = upset or {}
     euro_asian = anomaly.get("euro_asian_deviation") or {}
     conflict = abs(float(euro_asian.get("abs_deviation") or 0.0)) >= 0.50
     low_data_quality = confidence.get("level") == "low"
@@ -214,7 +247,7 @@ def build_accuracy_gate(
         "target_accuracy": TARGET_ACCURACY,
         "policy": "selective_prediction_with_abstention",
     }
-    spf_policy = _spf_policy(league)
+    spf_policy = _spf_policy(league, production_spf_policy)
     configs = (
         ("spf", lottery.get("standard"), spf_policy["minimum_probability"], True),
         ("rqspf", lottery.get("handicap"), RQSPF_MIN_PROBABILITY, False),
@@ -246,6 +279,8 @@ def build_accuracy_gate(
             reasons.append("基础数据置信度低")
         if conflict:
             reasons.append("欧赔与亚盘明显冲突")
+        if key == "spf" and upset.get("alert"):
+            reasons.append("爆冷信号触发，正路降为防冷观察")
 
         selected = not reasons
         decisions[key] = {
@@ -268,4 +303,19 @@ def build_accuracy_gate(
             ),
             "validation": spf_policy["validation"] if historically_supported else None,
         }
+    decisions["upset"] = {
+        "selected": False,
+        "watch": upset.get("alert") is True,
+        "decision": upset.get("recommended_cover") if upset.get("alert") else "无防冷信号",
+        "candidate": upset.get("recommended_cover"),
+        "level": upset.get("level"),
+        "risk_score": upset.get("risk_score"),
+        "signals": list(upset.get("signals") or []),
+        "defensive_selections": list(upset.get("defensive_selections") or []),
+        "validation_status": "persisted_prematch_audit_pending",
+        "reasons": (
+            ["防冷模型正在积累独立生产结算样本"]
+            if upset.get("alert") else []
+        ),
+    }
     return decisions

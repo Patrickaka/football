@@ -102,6 +102,61 @@ def _window_metrics(records: Sequence[Mapping[str, Any]]) -> Dict[str, Any]:
     return {key: report[key] for key in ("n", "accuracy", "logloss", "brier")}
 
 
+def upset_alert_report(records: Iterable[Mapping[str, Any]]) -> Dict[str, Any]:
+    """Measure pre-match upset alerts without reconstructing them after result."""
+    result_aliases = {"H": "胜", "D": "平", "A": "负"}
+    all_favorites = 0
+    all_failures = 0
+    alerts = []
+    levels = defaultdict(lambda: {"n": 0, "hits": 0})
+    for record in records:
+        actual = result_aliases.get(str(record.get("actual_result") or ""))
+        upset = ((record.get("professional_snapshot") or {}).get("upset") or {})
+        favorite = upset.get("favorite")
+        if actual not in {"胜", "平", "负"} or favorite not in {"胜", "平", "负"}:
+            continue
+        all_favorites += 1
+        favorite_failed = actual != favorite
+        all_failures += int(favorite_failed)
+        if not upset.get("alert"):
+            continue
+        defensive = {
+            item.get("result") for item in (upset.get("defensive_selections") or [])
+            if isinstance(item, Mapping)
+        }
+        level = str(upset.get("level") or "unknown")
+        alerts.append((favorite_failed, actual in defensive))
+        levels[level]["n"] += 1
+        levels[level]["hits"] += int(favorite_failed)
+
+    n = len(alerts)
+    hits = sum(int(hit) for hit, _ in alerts)
+    direction_hits = sum(int(hit) for _, hit in alerts)
+    low, high = wilson_interval(hits, n)
+    return {
+        "n": n,
+        "realized_upsets": hits,
+        "alert_precision": round(hits / n, 4) if n else None,
+        "ci95_low": round(low, 4),
+        "ci95_high": round(high, 4),
+        "defensive_direction_hit_rate": round(direction_hits / n, 4) if n else None,
+        "baseline_n": all_favorites,
+        "baseline_favorite_failure_rate": (
+            round(all_failures / all_favorites, 4) if all_favorites else None
+        ),
+        "levels": {
+            level: {
+                "n": values["n"],
+                "realized_upsets": values["hits"],
+                "alert_precision": round(values["hits"] / values["n"], 4),
+            }
+            for level, values in levels.items()
+        },
+        "production_ready": n >= 100 and low >= 0.50,
+        "source": "persisted_prematch_upset_snapshot",
+    }
+
+
 def build_professional_monitoring(
     records: Sequence[Mapping[str, Any]],
     recent_window: int = 50,
@@ -152,12 +207,19 @@ def build_professional_monitoring(
         rqspf_independent = {
             "market": "rqspf", "n": 0, "production_ready": False, "reason": str(exc),
         }
+    try:
+        from .production_league_gate import build_production_league_spf_policies
+        league_spf_validation = build_production_league_spf_policies(ordered)
+    except Exception as exc:
+        league_spf_validation = {"error": str(exc)}
     return {
         "schema_version": "football-professional-monitoring-v1",
         "settled_records": len(ordered),
         "spf": calibration_report(ordered, "spf"),
         "rqspf": calibration_report(ordered, "rqspf"),
+        "upset": upset_alert_report(ordered),
         "rqspf_independent_validation": rqspf_independent,
+        "league_spf_validation": league_spf_validation,
         "drift": {
             "detected": bool(drift_reasons),
             "reasons": drift_reasons,

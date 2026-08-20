@@ -33,6 +33,29 @@ class ScoreScenarioDiversityTests(unittest.TestCase):
         self.assertEqual(result['level'], 'medium')
         self.assertEqual(result['candidates'][0]['scenario'], 'draw_cover')
 
+    def test_away_favorite_weakening_generates_auditable_cold_cover(self):
+        candidates = [((0, 1), .18), ((1, 1), .15), ((1, 0), .10)]
+        result = assess_football_upset(
+            {
+                'favor': 'away', 'open_handicap': -.75, 'handicap': -.5,
+                'open_water': {'away': .86}, 'close_water': {'away': 1.01},
+            },
+            {
+                'open': {'home': .22, 'draw': .16, 'away': .62},
+                'close': {'home': .29, 'draw': .17, 'away': .54},
+                'kelly': {'hardest': 'away', 'favored': 'home'},
+            },
+            {}, candidates,
+            total={'open_line': 3.0, 'close_line': 2.5},
+            anomaly={'euro_asian_deviation': {'abs_deviation': .6}},
+        )
+
+        self.assertTrue(result['alert'])
+        self.assertEqual(result['favorite'], '负')
+        self.assertEqual(result['recommended_cover'], '胜/平')
+        self.assertIn('欧赔与亚盘明显背离', result['signals'])
+        self.assertIn('热门方向升水+0.15', result['signals'])
+
     def test_prediction_logic_version_invalidates_old_diversified_ranking_cache(self):
         self.assertIn('fair-price-joint-matrix', football.FOOTBALL_PREDICTION_LOGIC_VERSION)
 
