@@ -4392,15 +4392,15 @@ function renderLottery3dCompact(r) {
   const evidence = r.zu6_strategy_evidence || {};
   const online = r.online_stats || {};
   const combos = Array.isArray(primary.combos) ? primary.combos : [];
-  const validationText = evidence.validation_zu6_draws
-    ? `${evidence.validation_zu6_draws}个组六样本 · 命中 ${pct(evidence.validation_hit_rate || 0)} · 旧策略 ${pct(evidence.previous_validation_hit_rate || 0)}`
+  const validationText = evidence.recent_trials
+    ? `最近${evidence.recent_trials}期逐期验证 · ${evidence.pool_size || primary.size || 6}码完整覆盖 ${pct(evidence.validation_hit_rate || 0)} · 至少中2码 ${pct(evidence.validation_ge2_rate || 0)} · 5码完整覆盖 ${pct(evidence.previous_validation_hit_rate || 0)}`
     : '等待更多结算样本';
 
   let html = `<div class="highlight lottery3d-compact-primary" style="border-color:var(--accent2);padding:14px">
     <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap">
       <div>
         <div style="font-size:13px;color:var(--muted)">基于 ${esc(r.period || '-')} 期 · 上期开奖 <b style="letter-spacing:3px;color:var(--text)">${esc(r.last_draw || '-')}</b></div>
-        <div style="font-size:12px;color:var(--muted);margin-top:3px">策略 ${esc(r.version || '')} · 最近25期数字出现频率</div>
+        <div style="font-size:12px;color:var(--muted);margin-top:3px">策略 ${esc(r.version || '')} · 最近25期数字出现频率 · 最近百期逐期验证</div>
       </div>
       <button id="refresh-3d" class="kl8-refresh-btn">↻ 刷新数据</button>
     </div>
@@ -4411,7 +4411,7 @@ function renderLottery3dCompact(r) {
     </div>
     <div class="tags" style="justify-content:center;margin-top:10px">${combos.map(c => `<span class="tag">${esc(c)}</span>`).join('')}</div>
     <div class="note" style="margin-top:12px;border-left:3px solid #06b6d4;padding-left:9px">
-      样本外验证：${esc(validationText)}。提升尚未通过统计显著性验证，不能保证中奖；本页不再用四码、六码和多策略制造“多组更准”的错觉。
+      样本外验证：${esc(validationText)}。6码把组六条件下的理论完整覆盖由5码的8.33%提高到16.67%，代价是由10注增至20注；这是扩大覆盖，不是模型变得能预测随机开奖。
     </div>
   </div>`;
 
@@ -4465,7 +4465,7 @@ function renderLottery3d(r) {
       <span>豹子 ${pct(f.blend.baozi)}</span>
     </div>
     <div class="note" style="margin:8px 0;border-left:3px solid var(--accent2);padding-left:8px">
-      <b>v5.0 切合实开</b>：组六选码经分布校准+上期降权，推荐含上期码比例贴合随机水平（不再明显绑上期），主推五码；公平摇奖无法保证更高命中率，四码仍易长期不中。
+      <b>v4.11 快速覆盖</b>：普通刷新改为增量单次抓取并复用ML/权重缓存；组六主推改为六码，提高三个开奖号同时落入号码池的覆盖率。公平摇奖无法保证模型选号优于随机，提升来自增加覆盖注数。
     </div>
     <div class="row"><span class="k">组六主推${z6Primary.size || 5}码</span><span class="v" style="letter-spacing:3px;font-size:20px;font-weight:700;color:var(--accent2)">${esc(z6Primary.digits_str)}</span></div>
     <div class="row"><span class="k">覆盖组六</span><span class="v">${esc((z6Primary.combos || []).join(', '))} · ${z6Primary.notes || ''}注 · 组六期理论约 ${pct(z6Primary.conditional_hit_rate || 0.083)}</span></div>
@@ -4489,6 +4489,7 @@ function renderLottery3d(r) {
       low_weight: '权重为0',
       not_eligible: '未准入',
       no_recommendations: '无推荐',
+      deferred: '已延后训练',
     }[ms.status] || (ms.status || '-');
     html += `<div class="card model-health">
       <h3>数据质量 / ML 状态</h3>

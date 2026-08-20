@@ -25,11 +25,37 @@ class Lottery3DZu6Tests(unittest.TestCase):
     def test_predictor_version_marks_zu3_efficient(self):
         self.assertEqual(
             lottery3d.PREDICTOR_VERSION,
-            "3d-v4.10-zu3-efficient",
+            "3d-v4.11-fast-six-cover",
+        )
+
+    def test_primary_six_digit_pool_doubles_full_coverage_vs_five(self):
+        scores = {d: 10 - d for d in range(10)}
+        primary = lottery3d.build_zu6_primary(scores, numbers=[(1, 2, 3)] * 30)
+        self.assertEqual(primary["size"], 6)
+        self.assertEqual(primary["notes"], 20)
+        self.assertAlmostEqual(primary["conditional_hit_rate"], 20 / 120, places=4)
+
+    def test_recent_pool_validation_is_walk_forward_and_reports_theory(self):
+        history = [
+            (i % 10, (i + 3) % 10, (i + 7) % 10)
+            for i in range(140)
+        ]
+        result = lottery3d.evaluate_zu6_pool_recent(history, sizes=(5, 6), trials=100)
+        self.assertEqual(result["trials"], 100)
+        self.assertAlmostEqual(
+            result["tiers"]["5"]["theoretical_conditional_rate"], 10 / 120,
+            places=4,
+        )
+        self.assertAlmostEqual(
+            result["tiers"]["6"]["theoretical_conditional_rate"], 20 / 120,
+            places=4,
         )
 
     def test_primary_presence_model_uses_validated_25_period_window(self):
         self.assertEqual(lottery3d.ZU6_PRESENCE_WINDOWS, (25,))
+
+    def test_ml_backtest_version_matches_prediction_gate(self):
+        self.assertEqual(lottery3d.ML_MODEL_VERSION, "ml-v7")
 
 
 class Lottery3DZu3Tests(unittest.TestCase):

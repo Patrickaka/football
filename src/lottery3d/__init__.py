@@ -102,7 +102,7 @@ DANMA_RANDOM_RATE = 0.0  # 关闭随机选择胆码
 # 推荐注数（直选为带顺序的三位数）
 RECOMMEND_GROUPS = 30  # 推荐池扩大至 30 注
 ZHIXUAN_TOP3 = 3
-ZU6_POOL_SIZE = 5
+ZU6_POOL_SIZE = 6
 ZU6_FOUR_SIZE = 4
 
 # Top50 随机扰动：避免同分号长期霸榜
@@ -219,8 +219,8 @@ W_ZU6_BLEND = 1.5
 WINDOW_WEIGHTS_KV_KEY = "lottery3d_window_weights"
 
 # 预测版本号
-PREDICTOR_VERSION = "3d-v4.10-zu3-efficient"
-ML_MODEL_VERSION = "ml-v6"
+PREDICTOR_VERSION = "3d-v4.11-fast-six-cover"
+ML_MODEL_VERSION = "ml-v7"
 MIN_DATA_PERIODS_FOR_ML_FUSION = 300
 ML_CACHE_MAX_AGE_SECONDS = 36 * 3600
 
@@ -1497,9 +1497,11 @@ def is_ml_eligible_from_backtest(period):
             except:
                 pass
         
-        # 检查模型版本是否匹配（当前使用ml-v6）
-        if model_version != "ml-v6":
-            log.info(f"ML模型版本不匹配（记录: {model_version}, 当前: ml-v6）")
+        # 回测写入端和准入端必须使用同一版本；此前 v7 记录被 v6 硬编码全部拒绝。
+        if model_version != ML_MODEL_VERSION:
+            log.info(
+                f"ML模型版本不匹配（记录: {model_version}, 当前: {ML_MODEL_VERSION}）"
+            )
             return False
         
         # 检查命中率是否高于基准
@@ -2808,14 +2810,14 @@ def build_zu6_coverage_tiers(score, kill=None, sizes=(4, 5, 6, 7), numbers=None)
             "cost": notes * TICKET_PRICE,
             "hit_rate": round(notes * 6 / 1000.0, 4),  # 无条件命中率（含"开奖须为组六"）
             "conditional_hit_rate": round(notes / 120.0, 4),  # 给定开奖为组六时 = notes/C(10,3)
-            "is_primary": n == ZU6_POOL_SIZE,  # 默认主推档位（五码）
+            "is_primary": n == ZU6_POOL_SIZE,
             "combos": combo_strs,
         })
     return tiers
 
 
 def build_zu6_primary(score, kill=None, numbers=None, size=ZU6_POOL_SIZE):
-    """组六主推池：默认 5 码 → C(5,3)=10 注组六。
+    """组六主推池：默认 6 码 → C(6,3)=20 注组六。
 
     与 build_zu6_coverage_tiers 中同尺寸档位取号一致（同一 pick_zu6_pool），
     供前端 zu6_primary 直接渲染，避免退化回四码却仍标注五码。
@@ -2834,6 +2836,62 @@ def build_zu6_primary(score, kill=None, numbers=None, size=ZU6_POOL_SIZE):
         "is_primary": True,
         "combos": combo_strs,
     }
+
+
+def evaluate_zu6_pool_recent(numbers, sizes=(5, 6), trials=100):
+    """最近 N 期逐期样本外检验号码池，专门衡量“中几个数字”。
+
+    每一期只使用它之前的数据选码，避免把当期开奖泄漏进评分。完整命中只在
+    组六期统计；ge2_rate 则回答用户最直观的“至少覆盖两个不同开奖号”频率。
+    """
+    sizes = tuple(sorted({int(s) for s in sizes if 3 <= int(s) <= 10}))
+    minimum_train = max(ZU6_PRESENCE_WINDOWS) + 5
+    if len(numbers) <= minimum_train or not sizes:
+        return {"trials": 0, "zu6_draws": 0, "tiers": {}}
+    start = max(minimum_train, len(numbers) - max(1, int(trials)))
+    stats = {
+        size: {"full_hit": 0, "ge2_hit": 0, "overlap_sum": 0}
+        for size in sizes
+    }
+    zu6_draws = 0
+    evaluated = 0
+    for i in range(start, len(numbers)):
+        train = numbers[:i]
+        actual = numbers[i]
+        actual_set = set(actual)
+        is_zu6 = len(actual_set) == 3
+        zu6_draws += int(is_zu6)
+        evaluated += 1
+        scores = zu6_digit_scores(train)
+        for size in sizes:
+            pool = set(pick_zu6_pool(scores, pool_size=size, numbers=train))
+            overlap = len(actual_set & pool)
+            stats[size]["overlap_sum"] += overlap
+            stats[size]["ge2_hit"] += int(overlap >= 2)
+            stats[size]["full_hit"] += int(is_zu6 and actual_set <= pool)
+
+    tiers = {}
+    for size, item in stats.items():
+        notes = math.comb(size, 3)
+        tiers[str(size)] = {
+            "size": size,
+            "trials": evaluated,
+            "zu6_draws": zu6_draws,
+            "full_hit": item["full_hit"],
+            "conditional_full_rate": round(
+                item["full_hit"] / zu6_draws, 4
+            ) if zu6_draws else 0.0,
+            "unconditional_full_rate": round(
+                item["full_hit"] / evaluated, 4
+            ) if evaluated else 0.0,
+            "ge2_rate": round(item["ge2_hit"] / evaluated, 4) if evaluated else 0.0,
+            "avg_unique_overlap": round(
+                item["overlap_sum"] / evaluated, 3
+            ) if evaluated else 0.0,
+            "theoretical_conditional_rate": round(notes / 120.0, 4),
+            "theoretical_unconditional_rate": round(notes * 6 / 1000.0, 4),
+        }
+    return {"trials": evaluated, "zu6_draws": zu6_draws, "tiers": tiers}
 
 
 def _zu6_four_payload(label, digits):
@@ -4031,7 +4089,9 @@ def is_ml_prediction_cache_valid(cache, current_period):
     return True
 
 
-def run_prediction(data=None, force_refresh=False, enable_backtest=False, enable_permutation=False, compute_weights=False, use_prediction_cache=False):
+def run_prediction(data=None, force_refresh=False, enable_backtest=False,
+                   enable_permutation=False, compute_weights=False,
+                   use_prediction_cache=False, train_ml_if_stale=True):
     """运行预测，返回 JSON 可序列化 dict；data 为 None 时自动抓取。
     
     Args:
@@ -4041,6 +4101,7 @@ def run_prediction(data=None, force_refresh=False, enable_backtest=False, enable
         enable_permutation: 是否启用排列测试（默认 False，仅在 enable_backtest=True 时生效）
         compute_weights: 是否重新计算窗口权重（默认 False，使用缓存或默认权重，提升速度）
         use_prediction_cache: 是否使用预测结果缓存（默认 False，避免页面整天显示相同结果）
+        train_ml_if_stale: ML缓存失效时是否立即训练；普通刷新设 False，ML按钮再训练
     """
     global _prediction_cache, _cache_time
     
@@ -4165,6 +4226,7 @@ def run_prediction(data=None, force_refresh=False, enable_backtest=False, enable
     # 获取ML预测结果（带缓存，避免每次重新训练）
     ml_result = None
     ml_list = []
+    ml_deferred = False
     try:
         from .ml import predict_current, load_ml_cache, save_ml_cache, ML_CACHE_KEY
         # 尝试加载缓存
@@ -4178,6 +4240,11 @@ def run_prediction(data=None, force_refresh=False, enable_backtest=False, enable
             ml_result = ml_cache
             ml_list = ml_cache.get("recommendations", [])
             log.info(f"使用ML缓存（期号: {current_period}）")
+        elif not train_ml_if_stale:
+            ml_result = None
+            ml_list = []
+            ml_deferred = True
+            log.info("ML缓存不可用，快速刷新模式跳过重训")
         else:
             # 需要重新训练
             ml_result = predict_current(numbers, top_k=100)
@@ -4229,10 +4296,13 @@ def run_prediction(data=None, force_refresh=False, enable_backtest=False, enable
     ml_eligible_reason = ""
 
     if not ml_list:
-        ml_status = "no_recommendations"
-        ml_eligible_reason = "ML推荐列表为空"
+        ml_status = "deferred" if ml_deferred else "no_recommendations"
+        ml_eligible_reason = (
+            "快速刷新已跳过ML重训，可用‘运行ML预测’单独计算"
+            if ml_deferred else "ML推荐列表为空"
+        )
         fused = rule_only_detail
-        log.info("ML推荐列表为空，使用纯规则模型推荐")
+        log.info("ML未参与本次快速刷新，使用纯规则模型推荐")
     elif not data_quality.get("ml_fusion_allowed", False):
         ml_status = "insufficient_history"
         ml_eligible_reason = f"ML fusion requires at least {MIN_DATA_PERIODS_FOR_ML_FUSION} periods"
@@ -4367,6 +4437,13 @@ def run_prediction(data=None, force_refresh=False, enable_backtest=False, enable
         })
 
     sum_tails = [{"tail": t, "count": round(c, 2)} for t, c in meta_raw["sum_tail_freq"].most_common(5)]
+    zu6_recent_validation = evaluate_zu6_pool_recent(
+        numbers, sizes=(5, ZU6_POOL_SIZE), trials=100
+    )
+    primary_validation = (
+        zu6_recent_validation.get("tiers", {}).get(str(ZU6_POOL_SIZE), {})
+    )
+    budget_validation = zu6_recent_validation.get("tiers", {}).get("5", {})
 
     result = {
         "period": periods[-1],
@@ -4454,14 +4531,23 @@ def run_prediction(data=None, force_refresh=False, enable_backtest=False, enable
         ],
         "zu6_primary": build_zu6_primary(zu6_score, kill=None, numbers=numbers),
         "zu6_strategy_evidence": {
-            "method": "chronological_holdout",
+            "method": "recent_walk_forward",
             "window": 25,
-            "development_zu6_draws": 611,
-            "development_hit_rate": 0.0867,
-            "validation_zu6_draws": 667,
-            "validation_hit_rate": 0.0915,
-            "previous_validation_hit_rate": 0.0825,
-            "theoretical_conditional_hit_rate": 0.0833,
+            "recent_trials": zu6_recent_validation.get("trials", 0),
+            "validation_zu6_draws": zu6_recent_validation.get("zu6_draws", 0),
+            "validation_hit_rate": primary_validation.get("conditional_full_rate", 0.0),
+            "validation_ge2_rate": primary_validation.get("ge2_rate", 0.0),
+            "previous_validation_hit_rate": budget_validation.get("conditional_full_rate", 0.0),
+            "previous_validation_ge2_rate": budget_validation.get("ge2_rate", 0.0),
+            "theoretical_conditional_hit_rate": primary_validation.get(
+                "theoretical_conditional_rate", 0.0
+            ),
+            "theoretical_unconditional_hit_rate": primary_validation.get(
+                "theoretical_unconditional_rate", 0.0
+            ),
+            "pool_size": ZU6_POOL_SIZE,
+            "budget_pool_size": 5,
+            "tiers": zu6_recent_validation.get("tiers", {}),
             "statistically_validated": False,
         },
         "zu6_four_variants": build_zu6_four_variants(zu6_score, kill=None, numbers=numbers),

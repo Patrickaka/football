@@ -401,36 +401,41 @@ def _run_3d_refresh_job(job_id, enable_backtest=False):
         'message': '正在抓取福彩3D数据并计算',
     })
     try:
-        from src.lottery3d import clear_cache
-        from src.lottery3d.ml import clear_ml_cache, fetch_data as fetch_ml_data
-        from src.common.data_cache import clear_cache as clear_fetch_cache
-
-        clear_cache()
-        clear_ml_cache()
-        clear_fetch_cache('lottery3d')
-        clear_fetch_cache('lottery3d_ml')
-        for key in ('3d', '3d_ml', '3d_data'):
-            _CACHE[key]['data'] = None
-            _CACHE[key]['timestamp'] = 0
-
         started = time.time()
-        result = run_prediction(
-            force_refresh=True,
+        rule_module = _get_lottery3d_module()
+        # 单次强制抓取后把同一份历史同时交给规则和 ML，避免两个模块重复访问上游。
+        fresh_data = rule_module.fetch_data(force_refresh=True)
+        if not fresh_data:
+            raise RuntimeError('未获取到福彩3D数据')
+        latest_period = fresh_data[-1][0]
+        previous = _CACHE['3d'].get('data') or {}
+        period_changed = previous.get('period') != latest_period
+
+        result = rule_module.run_prediction(
+            data=fresh_data,
+            # 同一期可复用 ML 缓存；新期号只更新规则结果，ML 按钮再单独训练。
+            force_refresh=False,
             enable_backtest=bool(enable_backtest),
-            compute_weights=True,
+            # 普通刷新不再强制跑 100 轮窗口权重回测。
+            compute_weights=bool(enable_backtest),
+            train_ml_if_stale=False,
         )
         if result.get('error'):
             raise RuntimeError(result['error'])
-        ml_data = fetch_ml_data(force_refresh=True)
 
         _CACHE['3d']['data'] = result
         _CACHE['3d']['timestamp'] = time.time()
-        _CACHE['3d_data']['data'] = ml_data
+        _CACHE['3d_data']['data'] = fresh_data
         _CACHE['3d_data']['timestamp'] = time.time()
         _persist_cache('3d')
-        # ML training remains lazy; the normal single-flight endpoint owns it.
-        _CACHE['3d_ml']['data'] = None
-        _CACHE['3d_ml']['timestamp'] = 0
+        # 普通刷新不训练 ML；新期或旧模型仅使 ML 缓存失效，显式 ML 按钮/后台
+        # 预热再单飞训练，确保规则结果先快速返回。
+        if (
+            period_changed
+            or not _is_cache_payload_current('3d_ml', _CACHE['3d_ml']['data'])
+        ):
+            _CACHE['3d_ml']['data'] = None
+            _CACHE['3d_ml']['timestamp'] = 0
 
         _set_lottery_background_job(job_id, {
             'status': 'done',
@@ -438,7 +443,9 @@ def _run_3d_refresh_job(job_id, enable_backtest=False):
             'finished_at': time.time(),
             'elapsed': round(time.time() - started, 2),
             'data_count': result.get('total_periods', 0),
-            'ml_data_count': len(ml_data) if ml_data else 0,
+            'ml_data_count': len(fresh_data),
+            'period': latest_period,
+            'period_changed': period_changed,
             'message': '福彩3D刷新完成',
         })
     except Exception as exc:
@@ -567,6 +574,8 @@ def _is_cache_payload_current(key, data):
         return False
     if key == '3d':
         return data.get('version') == _get_lottery3d_module().PREDICTOR_VERSION
+    if key == '3d_ml':
+        return data.get('model_version') == _get_lottery3d_module().ML_MODEL_VERSION
     if key == 'ssq':
         import src.ssq as _ssq
         return data.get('version') == _ssq.SSQ_PREDICTION_VERSION
@@ -719,7 +728,9 @@ def _serve_cached(key, compute_fn, background_refresh=True):
 
 def _compute_3d():
     """规则模型（快速模式：关闭回测与权重计算）。"""
-    result = run_prediction(enable_backtest=False, compute_weights=False)
+    result = run_prediction(
+        enable_backtest=False, compute_weights=False, train_ml_if_stale=False
+    )
     if isinstance(result, dict) and 'error' in result:
         raise RuntimeError(result['error'])
     return result
@@ -737,9 +748,41 @@ def _compute_3d_ml():
         data_cache['timestamp'] = now
 
     numbers = [x[2] for x in data] if data else []
-    result = predict_current(numbers, model_type="ensemble")
+    current_period = data[-1][0] if data else None
+    rule_module = _get_lottery3d_module()
+    ml_module = _get_lottery3d_ml_module()
+    persisted = ml_module.load_ml_cache()
+    cache_reused = bool(
+        current_period
+        and rule_module.is_ml_prediction_cache_valid(persisted, current_period)
+    )
+    if cache_reused:
+        result = persisted
+    else:
+        result = predict_current(numbers, top_k=15, model_type="ensemble")
+        if not result.get('error') and current_period:
+            result['base_period'] = current_period
+            result['model_version'] = rule_module.ML_MODEL_VERSION
+            result['created_at'] = time.strftime("%Y-%m-%d %H:%M:%S")
+            ml_module.save_ml_cache(result)
     if 'error' in result:
         raise RuntimeError(result['error'])
+
+    selected = list(result.get('recommendations', []))[:15]
+    selected_total = sum(
+        float(r.get('model_score', r.get('probability', 0)) or 0)
+        for r in selected
+    ) or 1.0
+
+    def _ml_item(row):
+        model_score = float(row.get('model_score', row.get('probability', 0)))
+        share = model_score / selected_total
+        return {
+            'num': row['num'],
+            'model_score': model_score,
+            'topk_score_share': share,
+            'relative_prob': share,
+        }
 
     # 复用已缓存的规则模型结果，避免二次 run_prediction / 二次抓取
     rule_data, _ = _serve_cached('3d', _compute_3d)
@@ -753,29 +796,16 @@ def _compute_3d_ml():
         'total_samples': int(result.get('total_samples', 0)),
         'pos_samples': int(result.get('pos_samples', 0)),
         'neg_samples': int(result.get('neg_samples', 0)),
-        'recommendations': [
-            {
-                'num': r['num'],
-                'model_score': float(r.get('model_score', r.get('probability', 0))),
-                'topk_score_share': float(r.get('topk_score_share', r.get('relative_prob', 0))),
-                'relative_prob': float(r.get('relative_prob', r.get('topk_score_share', 0))),
-            }
-            for r in result.get('recommendations', [])
-        ],
-        'top3': [
-            {
-                'num': r['num'],
-                'model_score': float(r.get('model_score', r.get('probability', 0))),
-                'topk_score_share': float(r.get('topk_score_share', r.get('relative_prob', 0))),
-                'relative_prob': float(r.get('relative_prob', r.get('topk_score_share', 0))),
-            }
-            for r in result.get('top3', [])
-        ],
+        'recommendations': [_ml_item(r) for r in selected],
+        'top3': [_ml_item(r) for r in selected[:3]],
         'rule_recommendations': [
             {'num': r['num'], 'score': float(r.get('score', 0))}
             for r in rule_recommendations
         ],
         'feature_importance': result.get('feature_importance', []),
+        'cache_reused': cache_reused,
+        'base_period': current_period,
+        'model_version': rule_module.ML_MODEL_VERSION,
     }
 
 
