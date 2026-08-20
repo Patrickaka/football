@@ -18,7 +18,7 @@ from ..common import kv_store
 
 log = setup_logger('beidan')
 
-BEIDAN_VERSION = '2026-08-20-walkforward-market-anchor-v6'
+BEIDAN_VERSION = '2026-08-20-professional-rqspf-audit-joint-matrix-v10'
 BEIDAN_HISTORY_KEY = 'beidan_prediction_history'
 BEIDAN_HISTORY_LIMIT = 500
 
@@ -250,13 +250,13 @@ FACTOR_MAX = 1.15
 STRENGTH_SPLIT = SCORE_SPLIT  # = 0.45
 
 # 2024/25 -> 2025/26 walk-forward validation on 3,504 five-league matches.
-# A 60% top probability with a 10-point lead produced 72.34% / 72.43%
-# single-pick accuracy at 27.85% / 24.43% coverage.  The previous 52% gate
-# admitted roughly twice as many matches but only reached about 66% accuracy.
-BEIDAN_STRONG_MIN_PROBABILITY = 0.60
+# A 65% top probability produced 76.86% / 77.82% single-pick accuracy at
+# 19.98% / 15.70% coverage.  The 60% gate remains as a double-pick watch tier
+# (72.34% / 72.43% top-1 accuracy) instead of diluting the strong-pick list.
+BEIDAN_STRONG_MIN_PROBABILITY = 0.65
 BEIDAN_STRONG_MIN_LEAD = 0.10
-BEIDAN_MEDIUM_MIN_PROBABILITY = 0.54
-BEIDAN_MEDIUM_MIN_LEAD = 0.08
+BEIDAN_MEDIUM_MIN_PROBABILITY = 0.60
+BEIDAN_MEDIUM_MIN_LEAD = 0.10
 BEIDAN_HIGH_PRECISION_MIN_PROBABILITY = 0.70
 SCORE_OUTCOME_ANCHOR_STRENGTH = 0.75
 
@@ -703,6 +703,9 @@ def fetch_okooo_schedule(date=None):
             spf_sp = float(odds_pattern[0]) if len(odds_pattern) >= 1 else None
             spf_s = float(odds_pattern[1]) if len(odds_pattern) >= 2 else None
             spf_f = float(odds_pattern[2]) if len(odds_pattern) >= 3 else None
+            rqspf_sp = float(odds_pattern[3]) if len(odds_pattern) >= 6 else None
+            rqspf_s = float(odds_pattern[4]) if len(odds_pattern) >= 6 else None
+            rqspf_f = float(odds_pattern[5]) if len(odds_pattern) >= 6 else None
             
             if mtime_match:
                 match_time = mtime_match.group(1)
@@ -734,9 +737,14 @@ def fetch_okooo_schedule(date=None):
                 'spf_sp': spf_sp,
                 'spf_s': spf_s,
                 'spf_f': spf_f,
-                'rqspf_sp': None,
-                'rqspf_s': None,
-                'rqspf_f': None,
+                'rqspf_sp': rqspf_sp,
+                'rqspf_s': rqspf_s,
+                'rqspf_f': rqspf_f,
+                'rqspf_odds': (
+                    {'让胜': rqspf_sp, '让平': rqspf_s, '让负': rqspf_f}
+                    if all(value and value > 1.0 for value in (rqspf_sp, rqspf_s, rqspf_f))
+                    else None
+                ),
                 'handicap': handicap_info,
                 'status': status,
                 'source': 'okooo',
@@ -1179,39 +1187,122 @@ def build_beidan_joint_market_state(asian_data=None, goals_data=None):
 
 
 def apply_beidan_joint_market_state(score_probs, asian_data=None, goals_data=None):
-    """Apply the shared market state to the score matrix used by all markets."""
+    """Fit the shared score matrix to fair Asian and O/U closing prices.
+
+    Open-to-close movement controls reliability/conflict; it is not counted as
+    a second independent prediction after the closing price has already
+    absorbed that information.
+    """
     if not score_probs:
         return score_probs, {'applied': False, 'reason': 'empty_distribution'}
     state = build_beidan_joint_market_state(asian_data, goals_data)
-    direction = state['direction_signal']
-    tempo = state['tempo_signal']
-    if abs(direction) < 0.08 and abs(tempo) < 0.10:
-        return score_probs, {**state, 'applied': False, 'reason': 'weak_joint_signal'}
-
-    adjusted = {}
-    before_goals = before_home = 0.0
-    for (home, away), probability in score_probs.items():
-        probability = max(0.0, float(probability))
-        goals = home + away
-        margin = max(-2.5, min(2.5, home - away))
-        exponent = 0.20 * direction * margin + 0.10 * tempo * (goals - 2.5)
-        if direction * margin > 0:
-            exponent += 0.04 * abs(direction) * tempo * (goals - 2.5)
-        if home == away and abs(direction) >= 0.35:
-            exponent -= 0.08 * abs(direction)
-        adjusted[(home, away)] = probability * math.exp(max(-0.7, min(0.7, exponent)))
-        before_goals += goals * probability
-        if home > away:
-            before_home += probability
-    total = sum(adjusted.values())
+    matrix = {}
+    for score, probability in score_probs.items():
+        try:
+            parsed = int(score[0]), int(score[1])
+            matrix[parsed] = matrix.get(parsed, 0.0) + max(0.0, float(probability))
+        except (TypeError, ValueError, IndexError):
+            continue
+    total = sum(matrix.values())
     if total <= 0:
-        return score_probs, {**state, 'applied': False, 'reason': 'zero_adjusted_mass'}
-    adjusted = {score: probability / total for score, probability in adjusted.items()}
+        return score_probs, {**state, 'applied': False, 'reason': 'zero_raw_mass'}
+    matrix = {score: probability / total for score, probability in matrix.items()}
+    before = dict(matrix)
+
+    def constrain(source, feature, strength):
+        values = {score: feature(score) for score in source}
+        buckets = defaultdict(float)
+        for score, probability in source.items():
+            buckets[round(values[score], 12)] += probability
+
+        def expectation(theta):
+            weighted = [
+                (value, probability * math.exp(max(-20.0, min(20.0, theta * value))))
+                for value, probability in buckets.items()
+            ]
+            denominator = sum(probability for _, probability in weighted)
+            return sum(value * probability for value, probability in weighted) / denominator
+
+        lo, hi = -12.0, 12.0
+        if expectation(lo) > 0 or expectation(hi) < 0:
+            return source, {'applied': False, 'reason': 'target_outside_support'}
+        expected_before = expectation(0.0)
+        for _ in range(40):
+            mid = (lo + hi) / 2.0
+            if expectation(mid) < 0:
+                lo = mid
+            else:
+                hi = mid
+        theta = strength * (lo + hi) / 2.0
+        adjusted = {
+            score: probability * math.exp(max(-20.0, min(20.0, theta * values[score])))
+            for score, probability in source.items()
+        }
+        denominator = sum(adjusted.values())
+        adjusted = {score: probability / denominator for score, probability in adjusted.items()}
+        return adjusted, {
+            'applied': True,
+            'theta': round(theta, 5),
+            'fair_profit_before': round(expected_before, 5),
+            'fair_profit_after': round(
+                sum(adjusted[score] * values[score] for score in adjusted), 5
+            ),
+        }
+
+    asian_market = None
+    for entry in reversed((asian_data or {}).get('history') or []):
+        if entry.get('home_odds') and entry.get('away_odds'):
+            asian_market = entry
+            break
+    total_line, over_odds, under_odds = _latest_ou_market(goals_data)
+    reliability = 0.40 if state.get('conflict') else 1.0
+    pass_strength = 0.35 * reliability / 3.0
+    asian_meta = {'applied': False, 'reason': 'missing_price_or_line'}
+    total_meta = {'applied': False, 'reason': 'missing_price_or_line'}
+
+    for _ in range(3):
+        if asian_market:
+            home_odds = _to_euro_odds(asian_market.get('home_odds'))
+            away_odds = _to_euro_odds(asian_market.get('away_odds'))
+            if home_odds and away_odds:
+                inverse_home, inverse_away = 1.0 / home_odds, 1.0 / away_odds
+                fair_home_odds = (inverse_home + inverse_away) / inverse_home
+                # Some fallback feeds omit the line while retaining two-way
+                # prices. Treat those rare records as a PK market instead of
+                # discarding the only directional price evidence.
+                line = float(asian_market.get('handicap') or 0.0)
+                matrix, asian_meta = constrain(
+                    matrix,
+                    lambda score, line=line, odds=fair_home_odds: _asian_over_profit(
+                        score[0] - score[1], line, odds
+                    ),
+                    pass_strength,
+                )
+        over_decimal, under_decimal = _to_euro_odds(over_odds), _to_euro_odds(under_odds)
+        if over_decimal and under_decimal:
+            inverse_over, inverse_under = 1.0 / over_decimal, 1.0 / under_decimal
+            fair_over_odds = (inverse_over + inverse_under) / inverse_over
+            matrix, total_meta = constrain(
+                matrix,
+                lambda score, line=total_line, odds=fair_over_odds: _asian_over_profit(
+                    score[0] + score[1], line, odds
+                ),
+                pass_strength,
+            )
+
+    if not asian_meta.get('applied') and not total_meta.get('applied'):
+        return score_probs, {**state, 'applied': False, 'reason': 'missing_closing_market_prices'}
+
+    adjusted = matrix
     state.update({
         'applied': True,
-        'expected_goals_before': before_goals,
+        'method': 'maximum_entropy_fair_price_constraint',
+        'constraint_strength': round(0.35 * reliability, 3),
+        'asian_constraint': asian_meta,
+        'total_constraint': total_meta,
+        'expected_goals_before': sum(sum(score) * p for score, p in before.items()),
         'expected_goals_after': sum(sum(score) * p for score, p in adjusted.items()),
-        'home_win_before': before_home,
+        'home_win_before': sum(p for (h, a), p in before.items() if h > a),
         'home_win_after': sum(p for (h, a), p in adjusted.items() if h > a),
     })
     return adjusted, state
@@ -1331,6 +1422,8 @@ def _beidan_market_snapshot(match):
         'ts': datetime.now().isoformat(timespec='seconds'),
         'asian': {k: asian.get(k) for k in ('handicap', 'home_odds', 'away_odds')},
         'total': {k: goals.get(k) for k in ('line', 'over_odds', 'under_odds')},
+        'spf_odds': dict((match.get('spf') or {}).get('odds') or {}),
+        'rqspf_odds': dict((match.get('rqspf') or {}).get('odds') or {}),
         'rqspf_admission': (match.get('rqspf') or {}).get('market_admission'),
         'zjq_admission': (match.get('zjq') or {}).get('market_admission'),
     }
@@ -2337,9 +2430,9 @@ def _load_beidan_history():
 
 def _save_beidan_history(records):
     records = sorted(records, key=lambda r: r.get('created_at', ''), reverse=True)
-    kv_store.save(BEIDAN_HISTORY_KEY, records[:BEIDAN_HISTORY_LIMIT])
+    return kv_store.save(BEIDAN_HISTORY_KEY, records[:BEIDAN_HISTORY_LIMIT])
 
-def _compact_beidan_record(match, source):
+def _compact_beidan_record(match, source, professional_snapshot=None):
     spf = match.get('spf') or {}
     zjq = match.get('zjq') or {}
     rqspf = match.get('rqspf') or {}
@@ -2357,12 +2450,14 @@ def _compact_beidan_record(match, source):
         'created_at': datetime.now().isoformat(timespec='seconds'),
         'updated_at': datetime.now().isoformat(timespec='seconds'),
         'settled': False,
+        'professional_snapshot': professional_snapshot,
         'spf': {
             'prediction': spf.get('prediction'),
             'confidence': spf.get('confidence'),
             'quality': spf.get('quality'),
             'probabilities': spf.get('probabilities'),
             'score_consistency': spf.get('score_consistency'),
+            'odds': dict(spf.get('odds') or {}),
         },
         'zjq': {
             'prediction': zjq.get('prediction'),
@@ -2378,6 +2473,7 @@ def _compact_beidan_record(match, source):
             'quality': rqspf.get('quality'),
             'probabilities': rqspf.get('probabilities'),
             'market_admission': rqspf.get('market_admission'),
+            'odds': dict(rqspf.get('odds') or {}),
         },
         'market_snapshot': _beidan_market_snapshot(match),
     }
@@ -2388,12 +2484,19 @@ def save_beidan_prediction_snapshot(result):
 
     records = _load_beidan_history()
     by_key = {r.get('key'): r for r in records if r.get('key')}
+    professional_snapshot = {
+        'decision_gate': result.get('decision_gate'),
+        'validation': result.get('professional_validation'),
+        'gap_assessment': result.get('professional_gap_assessment'),
+    }
     saved = 0
     for match in result.get('recommendations') or []:
         key = _beidan_record_key(match)
         if not key.strip('|'):
             continue
-        compact = _compact_beidan_record(match, result.get('source'))
+        compact = _compact_beidan_record(
+            match, result.get('source'), professional_snapshot=professional_snapshot,
+        )
         if key in by_key and by_key[key].get('settled'):
             compact['settled'] = True
             compact['actual'] = by_key[key].get('actual')
@@ -2403,7 +2506,12 @@ def save_beidan_prediction_snapshot(result):
         layers = list(previous.get('market_layers') or [])
         snapshot = compact.pop('market_snapshot')
         signature = json.dumps(
-            {'asian': snapshot.get('asian'), 'total': snapshot.get('total')},
+            {
+                'asian': snapshot.get('asian'),
+                'total': snapshot.get('total'),
+                'spf_odds': snapshot.get('spf_odds'),
+                'rqspf_odds': snapshot.get('rqspf_odds'),
+            },
             sort_keys=True, ensure_ascii=False,
         )
         previous_signature = layers[-1].get('signature') if layers else None
@@ -2413,8 +2521,12 @@ def save_beidan_prediction_snapshot(result):
         by_key[key] = {**previous, **compact}
         saved += 1
 
-    _save_beidan_history(list(by_key.values()))
-    return {'saved': saved, 'total': len(by_key)}
+    persistence_backend = _save_beidan_history(list(by_key.values()))
+    return {
+        'saved': saved,
+        'total': len(by_key),
+        'persistence_backend': persistence_backend or 'unknown',
+    }
 
 def summarize_beidan_history(limit=200):
     records = _load_beidan_history()
@@ -2448,6 +2560,29 @@ def summarize_beidan_history(limit=200):
     for stats in market_accuracy.values():
         if stats['total']:
             stats['accuracy'] = round(stats['correct'] / stats['total'], 4)
+    try:
+        from ..football.professional_validation import evaluate_rqspf_records
+        rqspf_rows = []
+        for record in settled:
+            actual = record.get('actual') if isinstance(record.get('actual'), dict) else {}
+            settlement = record.get('settlement') if isinstance(record.get('settlement'), dict) else {}
+            rqspf_rows.append({
+                'actual_score': (
+                    record.get('actual_score') or actual.get('score')
+                    or actual.get('actual_score') or settlement.get('score')
+                    or settlement.get('actual_score')
+                ),
+                'lottery_handicap': parse_beidan_handicap(record.get('handicap')),
+                'predicted_rqspf': (record.get('rqspf') or {}).get('probabilities'),
+                'rqspf_odds': (record.get('rqspf') or {}).get('odds'),
+            })
+        rqspf_professional = evaluate_rqspf_records(
+            rqspf_rows, min_probability=0.65, min_edge=0.03,
+        )
+    except Exception as exc:
+        rqspf_professional = {
+            'market': 'rqspf', 'n': 0, 'production_ready': False, 'reason': str(exc),
+        }
     return {
         'total_records': len(records),
         'recent_records': len(recent),
@@ -2455,6 +2590,7 @@ def summarize_beidan_history(limit=200):
         'pending_records': len(recent) - len(settled),
         'quality_levels': levels,
         'market_accuracy': market_accuracy,
+        'rqspf_professional_validation': rqspf_professional,
         'latest': recent[:30],
     }
 
@@ -2913,7 +3049,16 @@ def analyze_rqspf(match, asian_data=None, goals_data=None):
     result['history_calibration'] = calibration_meta
 
     result['spf_odds'] = odds
-    result['odds'] = {}
+    official_rqspf_odds = match.get('rqspf_odds') or match.get('lottery_rqspf_odds')
+    if not official_rqspf_odds:
+        try:
+            prices = [float(match.get(key) or 0.0) for key in ('rqspf_sp', 'rqspf_s', 'rqspf_f')]
+            if all(price > 1.0 for price in prices):
+                official_rqspf_odds = dict(zip(('让胜', '让平', '让负'), prices))
+        except (TypeError, ValueError):
+            official_rqspf_odds = None
+    result['odds'] = official_rqspf_odds or {}
+    result['official_odds_available'] = bool(official_rqspf_odds)
     result['raw_spf_probabilities'] = probs
     result['probabilities'] = rq_probs
     result['prediction'] = max(rq_probs, key=rq_probs.get)
@@ -3389,6 +3534,7 @@ def generate_beidan_recommendations(date=None, bet_types=None, source='okooo', s
             'home': match['home'],
             'away': match['away'],
             'handicap': match['handicap'],
+            'rqspf_odds': match.get('rqspf_odds') or match.get('lottery_rqspf_odds'),
         }
         
         asian_data = asian_cache.get(match['id'])
@@ -3511,6 +3657,39 @@ def generate_beidan_recommendations(date=None, bet_types=None, source='okooo', s
     upset_watch.sort(key=lambda x: (0 if x['level'] == 'high' else 1,
                                     -(x.get('upset_prob') or 0)))
     result['upset_watch'] = upset_watch
+
+    # Beidan currently lacks an independently priced RQSPF walk-forward set.
+    # Expose that limitation in the API instead of presenting strong research
+    # picks as professionally validated betting instructions.
+    try:
+        from ..football.bayes_report import load_professional_validation_summary
+        from ..football.professional_readiness import (
+            build_professional_decision_gate,
+            build_system_gap_assessment,
+        )
+        professional_validation = load_professional_validation_summary()
+        result['professional_validation'] = professional_validation
+        result['professional_gap_assessment'] = build_system_gap_assessment({
+            'model_metrics': professional_validation.get('model') or {},
+            'market_baseline_metrics': professional_validation.get('market') or {},
+            'strategy': professional_validation.get('strategy') or {},
+        })
+        result['decision_gate'] = build_professional_decision_gate(
+            professional_validation,
+        )
+        if '北单让球胜平负尚缺独立赔率样本外验证' not in result['decision_gate']['reasons']:
+            result['decision_gate']['reasons'].append('北单让球胜平负尚缺独立赔率样本外验证')
+        result['decision_gate']['official_bet_allowed'] = False
+        result['decision_gate']['mode'] = 'research_only'
+    except Exception as e:
+        result['professional_validation'] = {
+            'available': False, 'production_ready': False, 'reason': str(e),
+        }
+        result['decision_gate'] = {
+            'official_bet_allowed': False,
+            'mode': 'research_only',
+            'reasons': ['专业决策闸门不可用，按失败关闭处理'],
+        }
 
     if save_history:
         result['history_save'] = save_beidan_prediction_snapshot(result)

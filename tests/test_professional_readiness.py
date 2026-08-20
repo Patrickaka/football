@@ -2,6 +2,7 @@ import unittest
 
 from src.football.professional_readiness import (
     build_match_evidence_profile,
+    build_professional_decision_gate,
     build_system_gap_assessment,
 )
 
@@ -85,6 +86,36 @@ class ProfessionalReadinessTests(unittest.TestCase):
         self.assertIn("模型尚未跑赢市场概率", p0_names)
         self.assertIn("样本外ROI尚未转正", p0_names)
         self.assertIn("平均CLV尚未转正", p0_names)
+
+    def test_system_gaps_reject_positive_roi_from_tiny_bet_sample(self):
+        assessment = build_system_gap_assessment({
+            "model_metrics": {"logloss": .97},
+            "market_baseline_metrics": {"logloss": .98},
+            "strategy": {"bets": 16, "roi": .15, "mean_clv": .01},
+        })
+        p0_names = [item["name"] for item in assessment["gaps"] if item["priority"] == "P0"]
+        self.assertIn("独立策略下注样本不足100笔", p0_names)
+
+    def test_professional_gate_requires_system_match_and_supported_market(self):
+        gate = build_professional_decision_gate(
+            {"production_ready": True},
+            {"coverage_score": .82},
+            {"official_bet_allowed": True},
+            {"spf": {"selected": True, "validation_status": "chronological_holdout_near_target"}},
+        )
+        self.assertTrue(gate["official_bet_allowed"])
+        self.assertEqual(gate["supported_markets"], ["spf"])
+
+    def test_professional_gate_fails_closed_for_unprofitable_validation(self):
+        gate = build_professional_decision_gate(
+            {"production_ready": False},
+            {"coverage_score": .90},
+            {"official_bet_allowed": True},
+            {"spf": {"selected": True, "validation_status": "chronological_holdout_near_target"}},
+        )
+        self.assertFalse(gate["official_bet_allowed"])
+        self.assertEqual(gate["mode"], "research_only")
+        self.assertTrue(any("样本外验证" in reason for reason in gate["reasons"]))
 
 
 if __name__ == "__main__":

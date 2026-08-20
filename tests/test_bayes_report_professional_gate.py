@@ -1,9 +1,33 @@
 import unittest
+from unittest.mock import patch
 
+import src.football.bayes_report as bayes_report
 from src.football.bayes_report import REPORT_SCHEMA_VERSION, render_html
 
 
 class BayesReportProfessionalGateTests(unittest.TestCase):
+    def test_professional_validation_can_be_loaded_from_production_database(self):
+        database_report = {
+            'generated_at': '2026-08-20T12:00:00+08:00',
+            'out_of_sample_n': 1804,
+            'model_metrics': {'logloss': .97},
+            'market_baseline_metrics': {'logloss': .98},
+            'strategy': {'bets': 16, 'roi': .15, 'mean_clv': .01},
+        }
+        bayes_report._PRO_VALIDATION_CACHE.update(
+            {'mtime': None, 'value': {}, 'checked_at': 0.0},
+        )
+        with patch('src.football.bayes_report.os.path.exists', return_value=False), \
+                patch(
+                    'src.common.kv_store.load_with_backend',
+                    return_value=(database_report, 'mysql'),
+                ):
+            summary = bayes_report.load_professional_validation_summary()
+
+        self.assertEqual(summary['source'], 'database_kv_store')
+        self.assertFalse(summary['checks']['enough_strategy_bets'])
+        self.assertFalse(summary['production_ready'])
+
     def test_report_visibly_blocks_unvalidated_betting(self):
         report = {
             'match': {'league': '英超', 'home': 'A', 'away': 'B', 'time': '20:00', 'num': '001'},

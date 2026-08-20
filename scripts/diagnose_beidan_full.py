@@ -163,8 +163,8 @@ def main():
     best = None
     for sp in (0.52, 0.56, 0.60, 0.65, 0.70):
         for slead in (0.08, 0.10, 0.12):
-            for mp in (0.50, 0.52, 0.54):
-                for mlead in (0.06, 0.08, 0.10):
+            for mp in (0.56, 0.58, 0.60):
+                for mlead in (0.08, 0.10, 0.12):
                     sh = sn = mh = mn = 0
                     for rec in spf_records:
                         probs = rec['probs']
@@ -186,11 +186,11 @@ def main():
                     m_acc = 100*mh/mn if mn else 0
                     s_cov = 100*sn/len(spf_records)
                     m_cov = 100*mn/len(spf_records)
-                    if best is None or (s_acc > best[0] and s_cov >= 20):
+                    if best is None or (s_acc > best[0] and s_cov >= 15):
                         best = (s_acc, sp, slead, s_cov, m_acc, mp, mlead, m_cov)
-                    if sp == 0.60 and slead == 0.10 and mp == 0.54 and mlead == 0.08:
+                    if sp == 0.65 and slead == 0.10 and mp == 0.60 and mlead == 0.10:
                         print(f"{sp:>8.2f}{slead:>12.2f}{s_acc:>7.2f}%{s_cov:>7.1f}%{mp:>8.2f}{mlead:>10.3f}{m_acc:>7.2f}%{m_cov:>7.1f}%  (当前)")
-                    if (sp, slead) in ((0.56, 0.10), (0.65, 0.10), (0.70, 0.10)) and mp == 0.54 and mlead == 0.08:
+                    if (sp, slead) in ((0.60, 0.10), (0.70, 0.10)) and mp == 0.60 and mlead == 0.10:
                         print(f"{sp:>8.2f}{slead:>12.2f}{s_acc:>7.2f}%{s_cov:>7.1f}%{mp:>8.2f}{mlead:>10.3f}{m_acc:>7.2f}%{m_cov:>7.1f}%")
     print(f"\n经验最优候选: strong(p>={best[1]}, lead>={best[2]}) acc={best[0]:.2f}% cov={best[3]:.1f}% | med acc={best[4]:.2f}% cov={best[7]:.1f}%")
 

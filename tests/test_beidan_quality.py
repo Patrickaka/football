@@ -46,7 +46,7 @@ class BeidanQualityTests(unittest.TestCase):
 
     def test_medium_quality_is_not_single_pick(self):
         quality = assess_recommendation_quality(
-            {'胜': 0.56, '平': 0.25, '负': 0.19}, '胜'
+            {'胜': 0.62, '平': 0.23, '负': 0.15}, '胜'
         )
 
         self.assertEqual(quality['level'], 'medium')
@@ -441,6 +441,8 @@ class BeidanQualityTests(unittest.TestCase):
         self.assertEqual(result['source'], 'okooo')
         self.assertTrue(result['match_fetch']['source_fallback'])
         self.assertEqual(result['total_matches'], 1)
+        self.assertFalse(result['decision_gate']['official_bet_allowed'])
+        self.assertEqual(result['decision_gate']['mode'], 'research_only')
 
     def test_generate_recommendations_tries_next_dates_for_default_date(self):
         fallback_match = {

@@ -12,6 +12,7 @@ import csv
 import json
 import os
 import sys
+from datetime import datetime
 
 import numpy as np
 
@@ -112,6 +113,10 @@ def main():
     parser.add_argument('--fold-size', type=int, default=250)
     parser.add_argument('--threshold-train', type=int, default=500)
     parser.add_argument('--out', default=os.path.join(ROOT, 'reports', 'professional_football_backtest.json'))
+    parser.add_argument(
+        '--persist-db', action='store_true',
+        help='also persist the audited report to MySQL kv_store for production readers',
+    )
     args = parser.parse_args()
 
     samples = load_samples()
@@ -128,16 +133,31 @@ def main():
     report['audit'] = {
         'model_split': 'expanding chronological window',
         'threshold_split': 'earlier out-of-sample predictions only',
+        'market_residual_guard': (
+            'residual weight selected on earlier OOS predictions only; '
+            'fallback to market probabilities when residual improvement is unproven'
+        ),
         'offered_price_columns': ['AvgH', 'AvgD', 'AvgA'],
         'closing_price_columns': ['AvgCH', 'AvgCD', 'AvgCA'],
         'raw_samples': len(samples),
         'model_oos_samples': len(oos),
     }
+    report['generated_at'] = datetime.now().astimezone().isoformat(timespec='seconds')
     os.makedirs(os.path.dirname(args.out), exist_ok=True)
     with open(args.out, 'w', encoding='utf-8') as handle:
         json.dump(report, handle, ensure_ascii=False, indent=2)
-    print(json.dumps({'model': report['model_metrics'], 'market': report['market_baseline_metrics'],
-                      'strategy': report['strategy'], 'out': args.out}, ensure_ascii=False, indent=2))
+    if args.persist_db:
+        from src.common import kv_store
+        kv_store.save(
+            'football_professional_validation', report, require_mysql=True,
+        )
+    print(json.dumps({
+        'raw_model': report['raw_model_metrics'],
+        'guarded_model': report['model_metrics'],
+        'market': report['market_baseline_metrics'],
+        'strategy': report['strategy'],
+        'out': args.out,
+    }, ensure_ascii=False, indent=2))
 
 
 if __name__ == '__main__':

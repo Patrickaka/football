@@ -92,21 +92,31 @@ def _today():
 
 def load(key, default=None):
     """读取普通项，反序列化 JSON；不存在返回 default。"""
+    value, _backend = load_with_backend(key, default)
+    return value
+
+
+def load_with_backend(key, default=None):
+    """读取普通项并返回 ``(value, backend)``，便于生产审计数据确认来源。"""
     try:
         row = db.query_one("SELECT json_value FROM kv_store WHERE k=%s", (key,))
         if row is None or row['json_value'] is None:
-            return default
-        return json.loads(row['json_value'])
+            return default, 'mysql'
+        return json.loads(row['json_value']), 'mysql'
     except Exception:
-        return _fallback_load(key, default)
+        return _fallback_load(key, default), 'fallback'
 
 
-def save(key, obj):
-    """写入普通项（UPSERT）。"""
+def save(key, obj, require_mysql=False):
+    """写入普通项（UPSERT）；关键审计数据可禁止静默本地降级。"""
     try:
         db.execute(_UPSERT, (key, json.dumps(obj, ensure_ascii=False), None, _now()))
+        return 'mysql'
     except Exception:
+        if require_mysql:
+            raise
         _fallback_save(key, obj)
+        return 'fallback'
 
 
 def exists(key):

@@ -43,6 +43,8 @@ class ProfessionalMonitoringTests(unittest.TestCase):
         report = build_professional_monitoring(records)
         self.assertEqual(report["market_timing"]["timed_snapshot_samples"], 1)
         self.assertEqual(report["market_timing"]["closing_odds_samples"], 1)
+        self.assertEqual(report["market_timing"]["verified_closing_odds_samples"], 0)
+        self.assertFalse(report["market_timing"]["clv_ready"])
         self.assertEqual(report["spf"]["n"], 2)
 
     def test_drift_detects_material_logloss_deterioration(self):

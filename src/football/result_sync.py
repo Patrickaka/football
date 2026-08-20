@@ -63,14 +63,14 @@ from ..common import repositories
 
 log = logging.getLogger('football')
 
-PRODUCTION_MODEL_VERSION = 'football-v2026.08.20-walkforward-03'
-# 3,504-match chronological validation (2024/25 -> 2025/26): the 0.60 gate
-# held 72.34% -> 72.43% accuracy at 27.85% -> 24.43% coverage.  Margin 0.10
-# remains explicit for auditability; at a normalized 60% top probability the
+PRODUCTION_MODEL_VERSION = 'football-v2026.08.20-professional-residual-gated-07'
+# 3,504-match chronological validation (2024/25 -> 2025/26): the 0.65 gate
+# held 76.86% -> 77.82% accuracy at 19.98% -> 15.70% coverage.  Margin 0.10
+# remains explicit for auditability; at a normalized 65% top probability the
 # probability threshold is normally the binding constraint.
-ACTIONABLE_MIN_PROBABILITY = 0.60
+ACTIONABLE_MIN_PROBABILITY = 0.65
 ACTIONABLE_MIN_MARGIN = 0.10
-ACTIONABLE_POLICY_VERSION = 'selective-1x2-v3-walkforward'
+ACTIONABLE_POLICY_VERSION = 'selective-1x2-v4-accuracy-first'
 
 
 def _prediction_decision_snapshot(predicted_1x2: Dict[str, float]) -> Dict:
@@ -418,7 +418,8 @@ def time_layer_weight(time_layer: str) -> float:
 
 
 def _prediction_content_sig(predicted_scores, predicted_1x2, asian, total_line,
-                            odds_data, predicted_half_full, model_version):
+                            odds_data, predicted_half_full, model_version,
+                            professional_snapshot=None):
     """预测的「有意义内容」签名，用于跳过无变化的重复写入。
 
     只覆盖影响预测结果的字段，刻意排除 updated_at 等时间戳——否则缓存命中时
@@ -427,13 +428,67 @@ def _prediction_content_sig(predicted_scores, predicted_1x2, asian, total_line,
     try:
         payload = json.dumps(
             [predicted_scores, predicted_1x2, asian, total_line,
-             odds_data, predicted_half_full, model_version],
+             odds_data, predicted_half_full, model_version, professional_snapshot],
             ensure_ascii=False, sort_keys=True, default=str,
         )
     except Exception:
         # 任意不可序列化内容都视作「已变化」，从而照常写入，绝不吞掉真实更新。
         return None
     return hashlib.md5(payload.encode('utf-8')).hexdigest()
+
+
+def _append_market_timeline(
+    timeline,
+    *,
+    match_time,
+    layer,
+    odds_data,
+    predicted_1x2,
+    predicted_rqspf,
+    model_version,
+    professional_snapshot=None,
+    limit=80,
+):
+    """Append an immutable, timestamped market/prediction snapshot if changed."""
+    rows = list(timeline or [])
+    captured_at = datetime.now()
+    match_dt = _parse_match_datetime(match_time)
+    seconds_to_kickoff = (
+        int((match_dt - captured_at).total_seconds()) if match_dt else None
+    )
+    is_prematch = seconds_to_kickoff is None or seconds_to_kickoff >= 0
+    try:
+        payload = json.loads(json.dumps({
+            'odds': odds_data,
+            'predicted_1x2': predicted_1x2,
+            'predicted_rqspf': predicted_rqspf,
+            'professional_snapshot': professional_snapshot,
+        }, ensure_ascii=False, sort_keys=True, default=str))
+    except Exception:
+        payload = {
+            'odds': odds_data,
+            'predicted_1x2': predicted_1x2,
+            'predicted_rqspf': predicted_rqspf,
+            'professional_snapshot': professional_snapshot,
+        }
+    signature_source = json.dumps(
+        [layer, payload, model_version],
+        ensure_ascii=False, sort_keys=True, default=str,
+    )
+    signature = hashlib.sha256(signature_source.encode('utf-8')).hexdigest()
+    if rows and rows[-1].get('signature') == signature:
+        return rows, None
+    snapshot = {
+        'captured_at': captured_at.isoformat(timespec='seconds'),
+        'layer': layer,
+        'seconds_to_kickoff': seconds_to_kickoff,
+        'is_prematch': is_prematch,
+        'model_version': model_version,
+        **payload,
+        'signature': signature,
+    }
+    rows.append(snapshot)
+    return rows[-limit:], snapshot
 
 
 class PredictionHistory:
@@ -466,9 +521,16 @@ class PredictionHistory:
     def _save_record(self, record):
         """仅 UPSERT 单条记录，把每请求写入量从 O(表行数) 降到 O(1)。"""
         try:
-            repositories.football_prediction_upsert(record)
+            backend = repositories.football_prediction_upsert(record)
+            if backend == 'fallback':
+                log.warning(
+                    "MySQL预测记录写入失败，已降级本地存储: match_id=%s",
+                    record.get('match_id'),
+                )
+            return backend
         except Exception as e:
             log.error(f"保存预测记录失败: {e}")
+            return 'failed'
     
     def add_prediction(self, match_id: str, league: str, home: str, away: str,
                        match_time: str, predicted_scores: Dict[str, float],
@@ -484,6 +546,7 @@ class PredictionHistory:
                        lottery_handicap: int = None,
                        predicted_rqspf: Dict[str, float] = None,
                        goal_count: Dict = None,
+                       professional_snapshot: Dict = None,
                        model_version: str = PRODUCTION_MODEL_VERSION):
         """
         添加预测记录
@@ -516,6 +579,7 @@ class PredictionHistory:
                 new_sig = _prediction_content_sig(
                     predicted_scores, predicted_1x2, asian, total_line,
                     odds_data, predicted_half_full, model_version,
+                    professional_snapshot,
                 )
                 existing_layers = record.get('time_layers') or {}
                 if (
@@ -524,7 +588,7 @@ class PredictionHistory:
                     and existing_layers.get(layer) is not None
                     and not record.get('settled')
                 ):
-                    return
+                    return {'saved': False, 'persistence_backend': 'unchanged'}
 
                 # 更新现有记录
                 update_data = {
@@ -536,6 +600,7 @@ class PredictionHistory:
                     'odds_snapshot': odds_data,
                     'model_version': model_version,
                     'decision_snapshot': _prediction_decision_snapshot(predicted_1x2),
+                    'professional_snapshot': professional_snapshot,
                     '_pred_sig': new_sig,
                 }
                 if predicted_half_full:
@@ -570,8 +635,25 @@ class PredictionHistory:
                 record['odds_layers'][layer] = odds_data
                 record['odds_layers']['final'] = odds_data
 
-                self._save_record(record)
-                return
+                record['market_timeline'], market_snapshot = _append_market_timeline(
+                    record.get('market_timeline'),
+                    match_time=match_time,
+                    layer=layer,
+                    odds_data=odds_data,
+                    predicted_1x2=predicted_1x2,
+                    predicted_rqspf=predicted_rqspf,
+                    model_version=model_version,
+                    professional_snapshot=professional_snapshot,
+                )
+                if market_snapshot and market_snapshot.get('is_prematch'):
+                    record['last_prematch_odds_snapshot'] = odds_data
+                    record['last_prematch_snapshot_at'] = market_snapshot['captured_at']
+                    if layer in {'T-15min', 'final'}:
+                        record['closing_odds_snapshot'] = odds_data
+                        record['closing_odds_source'] = 'last_observed_prematch_proxy'
+
+                backend = self._save_record(record)
+                return {'saved': True, 'persistence_backend': backend}
         
         # 新增记录
         # 时间分层预测记录
@@ -598,6 +680,16 @@ class PredictionHistory:
             'final': odds_data,
         }
         odds_layers[layer] = odds_data
+        market_timeline, market_snapshot = _append_market_timeline(
+            [],
+            match_time=match_time,
+            layer=layer,
+            odds_data=odds_data,
+            predicted_1x2=predicted_1x2,
+            predicted_rqspf=predicted_rqspf,
+            model_version=model_version,
+            professional_snapshot=professional_snapshot,
+        )
         
         record_data = {
             'match_id': match_id,
@@ -611,12 +703,29 @@ class PredictionHistory:
             'predicted_1x2': predicted_1x2,
             'model_version': model_version,
             'decision_snapshot': _prediction_decision_snapshot(predicted_1x2),
+            'professional_snapshot': professional_snapshot,
             'lottery_handicap': lottery_handicap,
             'predicted_rqspf': predicted_rqspf,
             'goal_count': goal_count,
             'predicted_half_full': predicted_half_full,  # 新增：半全场预测
             'time_layers': time_layers,  # 新增：时间分层预测记录
             'odds_layers': odds_layers,  # 新增：赔率分层记录
+            'market_timeline': market_timeline,
+            'last_prematch_odds_snapshot': (
+                odds_data if market_snapshot and market_snapshot.get('is_prematch') else None
+            ),
+            'last_prematch_snapshot_at': (
+                market_snapshot.get('captured_at') if market_snapshot and market_snapshot.get('is_prematch') else None
+            ),
+            'closing_odds_snapshot': (
+                odds_data if market_snapshot and market_snapshot.get('is_prematch')
+                and layer in {'T-15min', 'final'} else None
+            ),
+            'closing_odds_source': (
+                'last_observed_prematch_proxy'
+                if market_snapshot and market_snapshot.get('is_prematch')
+                and layer in {'T-15min', 'final'} else None
+            ),
             # 影子预测字段
             'base_1x2': base_1x2,
             'ml_1x2': ml_1x2,
@@ -643,11 +752,13 @@ class PredictionHistory:
             '_pred_sig': _prediction_content_sig(
                 predicted_scores, predicted_1x2, asian, total_line,
                 odds_data, predicted_half_full, model_version,
+                professional_snapshot,
             ),
         }
         self.records.append(record_data)
-        self._save_record(record_data)
+        backend = self._save_record(record_data)
         log.info(f"添加预测记录: {home} vs {away} (match_id={match_id})")
+        return {'saved': True, 'persistence_backend': backend}
     
     def get_record(self, match_id: str) -> Optional[Dict]:
         """按比赛ID获取单条记录，无则返回 None"""
@@ -1984,17 +2095,17 @@ def check_ml_fusion_eligibility(ml_stats: Dict, test_set_samples: int = 0) -> Di
     
     conditions = {
         'test_set_samples': {
-            'passed': test_set_samples >= 45,
+            'passed': test_set_samples >= 200,
             'actual': test_set_samples,
-            'required': 45,
-            'reason': '测试集样本 >= 45 场',
+            'required': 200,
+            'reason': '严格样本外测试集 >= 200 场',
             'required_for_fusion': True,
         },
         'shadow_samples': {
-            'passed': shadow_samples >= 45,
+            'passed': shadow_samples >= 100,
             'actual': shadow_samples,
-            'required': 45,
-            'reason': '影子实盘样本 >= 45 场',
+            'required': 100,
+            'reason': '影子实盘样本 >= 100 场',
             'required_for_fusion': True,
         },
         'ml_logloss_better': {
@@ -2016,18 +2127,19 @@ def check_ml_fusion_eligibility(ml_stats: Dict, test_set_samples: int = 0) -> Di
             'actual': None,
             'required': None,
             'reason': '5% ML 融合后的 LogLoss < 基础模型 LogLoss',
-            'required_for_fusion': False,
+            'required_for_fusion': True,
         },
         'fused_5pct_brier_not_worse': {
             'passed': False,
             'actual': None,
             'required': None,
             'reason': '5% ML 融合后的 Brier Score 不变差',
-            'required_for_fusion': False,
+            'required_for_fusion': True,
         },
     }
     
-    # 检查 LogLoss 和 Brier 条件（仅供参考，不阻断融合）
+    # Raw-ML metrics remain diagnostic, but even the initial 5% blend must
+    # improve LogLoss without worsening Brier before production participation.
     base_logloss = overall.get('base_1x2_logloss')
     base_brier = overall.get('base_1x2_brier')
     ml_logloss = overall.get('ml_1x2_logloss')
@@ -2051,16 +2163,14 @@ def check_ml_fusion_eligibility(ml_stats: Dict, test_set_samples: int = 0) -> Di
         conditions['fused_5pct_brier_not_worse']['passed'] = fused_5pct_brier <= base_brier
         conditions['fused_5pct_brier_not_worse']['actual'] = f"{fused_5pct_brier:.4f} vs {base_brier:.4f}"
     
-    # 仅样本数达标即可参与融合；指标条件仅作参考
     eligible = all(
         cond['passed']
         for cond in conditions.values()
         if cond.get('required_for_fusion')
     )
-    metrics_passed = all(
-        cond['passed']
-        for cond in conditions.values()
-        if not cond.get('required_for_fusion')
+    metrics_passed = (
+        conditions['fused_5pct_logloss_better']['passed']
+        and conditions['fused_5pct_brier_not_worse']['passed']
     )
     
     return {
@@ -2125,6 +2235,7 @@ def save_prediction(match_id: str, league: str, home: str, away: str,
                    lottery_handicap: int = None,
                    predicted_rqspf: Dict[str, float] = None,
                    goal_count: Dict = None,
+                   professional_snapshot: Dict = None,
                    model_version: str = PRODUCTION_MODEL_VERSION):
     """保存预测记录"""
     return _global_history.add_prediction(
@@ -2139,6 +2250,7 @@ def save_prediction(match_id: str, league: str, home: str, away: str,
         lottery_handicap=lottery_handicap,
         predicted_rqspf=predicted_rqspf,
         goal_count=goal_count,
+        professional_snapshot=professional_snapshot,
         model_version=model_version,
     )
 
@@ -2580,7 +2692,10 @@ def get_prediction_export() -> Dict:
         'prediction_logic_version', 'asian', 'total_line',
         'predicted_scores', 'predicted_1x2', 'predicted_rqspf', 'goal_count',
         'lottery_handicap', 'predicted_half_full',
-        'time_layers', 'odds_layers', 'odds_snapshot',
+        'time_layers', 'odds_layers', 'odds_snapshot', 'market_timeline',
+        'last_prematch_odds_snapshot', 'last_prematch_snapshot_at',
+        'closing_odds_snapshot', 'closing_odds_source',
+        'professional_snapshot',
         'base_1x2', 'ml_1x2', 'ml_model_version', 'ml_available',
         'ml_feature_snapshot', 'actual_score', 'actual_result',
         'actual_half_score', 'actual_half_result', 'actual_half_full',
@@ -2594,7 +2709,7 @@ def get_prediction_export() -> Dict:
     ]
     records.sort(key=lambda item: item.get('match_time', ''))
     return {
-        'schema_version': 'football-prediction-export-v1',
+        'schema_version': 'football-prediction-export-v2',
         'exported_at': datetime.now().astimezone().isoformat(),
         'record_count': len(records),
         'settled_count': sum(

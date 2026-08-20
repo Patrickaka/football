@@ -44,7 +44,7 @@ MANIFEST_PATH = os.path.join(DEFAULT_REPORTS_DIR, "football_bayes_manifest.json"
 # 防止并发请求同时生成同一报告
 REPORT_GEN_LOCK = Lock()
 REPORT_SCHEMA_VERSION = "8"
-_PRO_VALIDATION_CACHE = {"mtime": None, "value": {}}
+_PRO_VALIDATION_CACHE = {"mtime": None, "value": {}, "checked_at": 0.0}
 
 
 # ===================== 通用工具 =====================
@@ -65,8 +65,14 @@ def load_professional_validation_summary() -> dict:
     path = os.path.join(DEFAULT_REPORTS_DIR, "professional_football_backtest.json")
     try:
         report_exists = os.path.exists(path)
-        mtime = os.path.getmtime(path) if report_exists else "bundled"
-        if _PRO_VALIDATION_CACHE["mtime"] == mtime:
+        if (
+            not report_exists
+            and _PRO_VALIDATION_CACHE["value"]
+            and time.time() - _PRO_VALIDATION_CACHE["checked_at"] < 60
+        ):
+            return dict(_PRO_VALIDATION_CACHE["value"])
+        mtime = os.path.getmtime(path) if report_exists else None
+        if _PRO_VALIDATION_CACHE["value"] and _PRO_VALIDATION_CACHE["mtime"] == mtime:
             return dict(_PRO_VALIDATION_CACHE["value"])
         if report_exists:
             with open(path, "r", encoding="utf-8") as handle:
@@ -74,9 +80,23 @@ def load_professional_validation_summary() -> dict:
             generated_at = datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M")
             source = "runtime_report"
         else:
-            report = bundled_professional_baseline()
-            generated_at = BASELINE_GENERATED_AT
-            source = "bundled_audited_baseline"
+            from ..common import kv_store
+            database_report, database_backend = kv_store.load_with_backend(
+                "football_professional_validation",
+            )
+            if isinstance(database_report, dict) and database_report.get("model_metrics"):
+                report = database_report
+                generated_at = report.get("generated_at") or "database"
+                source = (
+                    "database_kv_store" if database_backend == "mysql"
+                    else "local_kv_fallback"
+                )
+                mtime = f"{database_backend}:{generated_at}"
+            else:
+                report = bundled_professional_baseline()
+                generated_at = BASELINE_GENERATED_AT
+                source = "bundled_audited_baseline"
+                mtime = "bundled"
         model = report.get("model_metrics") or {}
         market = report.get("market_baseline_metrics") or {}
         strategy = report.get("strategy") or {}
@@ -87,6 +107,7 @@ def load_professional_validation_summary() -> dict:
             "positive_roi": float(strategy.get("roi", 0) or 0) > 0,
             "positive_clv": float(strategy.get("mean_clv", 0) or 0) > 0,
             "enough_samples": int(report.get("out_of_sample_n", 0) or 0) >= 1000,
+            "enough_strategy_bets": int(strategy.get("bets", 0) or 0) >= 100,
         }
         value = {
             "available": True,
@@ -100,7 +121,9 @@ def load_professional_validation_summary() -> dict:
             "source": source,
             "baseline_version": BASELINE_VERSION,
         }
-        _PRO_VALIDATION_CACHE.update({"mtime": mtime, "value": value})
+        _PRO_VALIDATION_CACHE.update({
+            "mtime": mtime, "value": value, "checked_at": time.time(),
+        })
         return dict(value)
     except Exception as exc:
         return {"available": False, "production_ready": False, "reason": str(exc)}

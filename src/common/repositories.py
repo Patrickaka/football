@@ -36,7 +36,7 @@ def football_prediction_save(records):
 
 def football_prediction_upsert(record):
     """单行 UPSERT 一条预测记录，避免整表重写（每请求级热点写入）。"""
-    doc_store.upsert_one(
+    return doc_store.upsert_one(
         'football_prediction',
         _FOOTBALL_PREDICTION_COLS,
         _football_prediction_row(record),

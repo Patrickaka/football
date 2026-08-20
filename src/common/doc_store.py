@@ -110,12 +110,14 @@ def upsert_one(table, columns, row_values, key_cols):
         conn = db.get_connection()
     except Exception:
         _fallback_upsert_one(table, columns, row_values, key_cols)
-        return
+        return 'fallback'
     try:
         with conn.cursor() as cur:
             cur.execute(sql, row_values)
+        return 'mysql'
     except Exception:
         _fallback_upsert_one(table, columns, row_values, key_cols)
+        return 'fallback'
 
 
 def replace_all(table, columns, rows_values):

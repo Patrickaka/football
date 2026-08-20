@@ -181,6 +181,12 @@ def build_system_gap_assessment(validation: Mapping[str, Any]) -> Dict[str, Any]
         gaps.append({"priority": "P0", "name": "样本外ROI尚未转正", "action": "保持观望门控，禁止用命中率替代盈利验证"})
     if float(strategy.get("mean_clv", 0) or 0) <= 0:
         gaps.append({"priority": "P0", "name": "平均CLV尚未转正", "action": "持续保存开盘、推荐时点和收盘赔率"})
+    if int(strategy.get("bets", 0) or 0) < 100:
+        gaps.append({
+            "priority": "P0",
+            "name": "独立策略下注样本不足100笔",
+            "action": "继续按冻结阈值影子运行，禁止用小样本ROI放行生产",
+        })
     gaps.extend([
         {"priority": "P1", "name": "确认首发、伤停和停赛覆盖不足", "action": "接入可靠实时数据源并记录来源与时间戳"},
         {"priority": "P1", "name": "让球胜平负独立历史验证不足", "action": "单独沉淀体彩让球赔率、预测和赛果，禁止沿用胜平负代理指标"},
@@ -188,3 +194,56 @@ def build_system_gap_assessment(validation: Mapping[str, Any]) -> Dict[str, Any]
         {"priority": "P2", "name": "联赛/赛季漂移监控仍需加强", "action": "按联赛、月份、概率桶监控校准误差与覆盖率"},
     ])
     return {"capabilities": capabilities, "gaps": gaps}
+
+
+def build_professional_decision_gate(
+    validation: Mapping[str, Any] | None,
+    evidence: Mapping[str, Any] | None = None,
+    live_quality: Mapping[str, Any] | None = None,
+    accuracy_gate: Mapping[str, Any] | None = None,
+) -> Dict[str, Any]:
+    """Fail closed until both system-level and match-level evidence pass.
+
+    A high single-match probability is not sufficient for professional use.
+    The underlying model must first pass strict out-of-sample validation, and
+    the particular match must have auditable evidence and current team news.
+    """
+    validation = validation or {}
+    evidence = evidence or {}
+    live_quality = live_quality or {}
+    accuracy_gate = accuracy_gate or {}
+
+    validation_passed = validation.get("production_ready") is True
+    evidence_passed = float(evidence.get("coverage_score", 0.0) or 0.0) >= 0.70
+    live_context_passed = live_quality.get("official_bet_allowed") is True
+    supported_markets = []
+    for market in ("spf", "rqspf"):
+        decision = accuracy_gate.get(market) or {}
+        if decision.get("selected") and not str(
+            decision.get("validation_status") or ""
+        ).startswith("pending"):
+            supported_markets.append(market)
+    market_gate_passed = bool(supported_markets)
+
+    reasons = []
+    if not validation_passed:
+        reasons.append("严格样本外验证尚未同时跑赢市场、ROI和CLV门槛")
+    if not evidence_passed:
+        reasons.append("本场专业证据覆盖不足70%")
+    if not live_context_passed:
+        reasons.append("本场缺少通过质量审计的伤停/首发信息")
+    if not market_gate_passed:
+        reasons.append("本场没有通过独立验证的高精度玩法")
+
+    allowed = not reasons
+    return {
+        "schema_version": "football-professional-decision-gate-v1",
+        "official_bet_allowed": allowed,
+        "mode": "production" if allowed else "research_only",
+        "validation_passed": validation_passed,
+        "evidence_passed": evidence_passed,
+        "live_context_passed": live_context_passed,
+        "market_gate_passed": market_gate_passed,
+        "supported_markets": supported_markets,
+        "reasons": reasons,
+    }

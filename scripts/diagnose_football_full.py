@@ -95,11 +95,11 @@ def main():
                     pn += 1
                     if dec['primary'] == rec['actual']:
                         ph += 1
-            if ms == 0.60 and mm == 0.10:
+            if ms == 0.65 and mm == 0.10:
                 print(f"{ms:>11.2f}{mm:>11.2f}{100*sh/sn:>11.2f}%{100*sn/len(recs):>11.1f}%{100*ph/pn:>13.2f}%{100*pn/len(recs):>13.1f}%  <-- 当前线上")
             else:
                 print(f"{ms:>11.2f}{mm:>11.2f}{100*sh/sn:>11.2f}%{100*sn/len(recs):>11.1f}%{100*ph/pn:>13.2f}%{100*pn/len(recs):>13.1f}%")
-    print(f"\n当前线上 build_match_analysis 用 min_single=0.60, min_margin=0.10。")
+    print(f"\n当前线上 build_match_analysis 用 min_single=0.65, min_margin=0.10。")
 
 
 if __name__ == '__main__':

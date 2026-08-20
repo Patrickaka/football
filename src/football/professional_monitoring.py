@@ -136,13 +136,28 @@ def build_professional_monitoring(
             or layers.get("T-15min")
         )
 
+    def has_verified_closing_snapshot(record):
+        return bool(
+            record.get("closing_odds_snapshot")
+            and record.get("closing_odds_source") == "official_close"
+        )
+
     closing_samples = sum(has_closing_snapshot(record) for record in ordered)
+    verified_closing_samples = sum(has_verified_closing_snapshot(record) for record in ordered)
     timed_snapshot_samples = sum(has_timed_snapshot(record) for record in ordered)
+    try:
+        from .professional_validation import evaluate_rqspf_records
+        rqspf_independent = evaluate_rqspf_records(ordered, min_probability=0.65, min_edge=0.03)
+    except Exception as exc:
+        rqspf_independent = {
+            "market": "rqspf", "n": 0, "production_ready": False, "reason": str(exc),
+        }
     return {
         "schema_version": "football-professional-monitoring-v1",
         "settled_records": len(ordered),
         "spf": calibration_report(ordered, "spf"),
         "rqspf": calibration_report(ordered, "rqspf"),
+        "rqspf_independent_validation": rqspf_independent,
         "drift": {
             "detected": bool(drift_reasons),
             "reasons": drift_reasons,
@@ -152,8 +167,12 @@ def build_professional_monitoring(
         "market_timing": {
             "closing_odds_samples": closing_samples,
             "closing_odds_coverage": round(closing_samples / len(ordered), 4) if ordered else 0.0,
+            "verified_closing_odds_samples": verified_closing_samples,
+            "verified_closing_odds_coverage": (
+                round(verified_closing_samples / len(ordered), 4) if ordered else 0.0
+            ),
             "timed_snapshot_samples": timed_snapshot_samples,
             "timed_snapshot_coverage": round(timed_snapshot_samples / len(ordered), 4) if ordered else 0.0,
-            "clv_ready": closing_samples >= 100,
+            "clv_ready": verified_closing_samples >= 100,
         },
     }

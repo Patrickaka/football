@@ -31,13 +31,13 @@ from ..common.paths import data_path
 
 log = setup_logger('football')
 
-FOOTBALL_PREDICTION_LOGIC_VERSION = '2026-08-20-joint-market-state-walkforward-v25'
+FOOTBALL_PREDICTION_LOGIC_VERSION = '2026-08-20-professional-residual-gated-fair-price-joint-matrix-v29'
 # Official 1X2 prices are the strongest observable production signal.  Raising
 # their share from 40% to 80% improved the pooled high-confidence proxy from
 # 61.67% to 62.55%; the model retains 20% for team/Asian/context information.
 LOTTERY_OFFICIAL_ODDS_WEIGHT = 0.80
 SCORE_1X2_MARKET_ANCHOR_STRENGTH = 0.75
-ACTIONABLE_1X2_MIN_PROBABILITY = 0.60
+ACTIONABLE_1X2_MIN_PROBABILITY = 0.65
 ACTIONABLE_1X2_MIN_MARGIN = 0.10
 
 # ELO 评分系统（延迟导入）
@@ -6001,47 +6001,149 @@ def _joint_market_state(asian: Dict, euro: Dict, total: Dict) -> Dict:
 
 
 def _apply_joint_market_state(candidates, asian: Dict, euro: Dict, total: Dict):
-    """Jointly tilt result direction and goal tempo without inventing new mass."""
+    """Softly fit one score matrix to the closing Asian and O/U prices.
+
+    Closing prices already contain the information accumulated during the
+    open-to-close move.  The movement state is therefore used as a reliability
+    control (especially when markets conflict), not as another independent
+    vote.  A 0.35 constraint was selected on a 2024/25 -> 2025/26 walk-forward
+    because it improved exact-score, goal and 1X2 log loss without allowing a
+    single market to dominate the prior.
+    """
     rows = list(candidates or [])
     if not rows:
         return rows, {'applied': False, 'reason': 'empty_distribution'}
     state = _joint_market_state(asian, euro, total)
-    direction = state['direction_signal']
-    tempo = state['tempo_signal']
-    if abs(direction) < 0.08 and abs(tempo) < 0.12:
-        state.update({'applied': False, 'reason': 'weak_joint_signal'})
+
+    matrix = {}
+    for item in rows:
+        try:
+            if len(item) == 2 and isinstance(item[0], tuple):
+                score, probability = item
+            else:
+                score, probability = (item[0], item[1]), item[2]
+            score = int(score[0]), int(score[1])
+            matrix[score] = matrix.get(score, 0.0) + max(0.0, float(probability))
+        except (TypeError, ValueError, IndexError):
+            continue
+    raw_total = sum(matrix.values())
+    if raw_total <= 0:
+        return rows, {'applied': False, 'reason': 'zero_raw_mass', **state}
+    matrix = {score: probability / raw_total for score, probability in matrix.items()}
+    before_matrix = dict(matrix)
+
+    def line_parts(line):
+        line = round(float(line) * 4.0) / 4.0
+        lower = math.floor(line * 2.0) / 2.0
+        if abs(line - lower) < 1e-8:
+            return (lower,)
+        return (lower, lower + 0.5)
+
+    def settlement_profit(value, line, fair_decimal):
+        profits = []
+        for settlement_line in line_parts(line):
+            if value > settlement_line + 1e-8:
+                profits.append(fair_decimal - 1.0)
+            elif value < settlement_line - 1e-8:
+                profits.append(-1.0)
+            else:
+                profits.append(0.0)
+        return sum(profits) / len(profits)
+
+    def constrain(source, feature, strength):
+        values = {score: feature(score) for score in source}
+        buckets = {}
+        for score, probability in source.items():
+            value = round(values[score], 12)
+            buckets[value] = buckets.get(value, 0.0) + probability
+
+        def expectation(theta):
+            weighted = [
+                (value, probability * math.exp(max(-20.0, min(20.0, theta * value))))
+                for value, probability in buckets.items()
+            ]
+            denominator = sum(probability for _, probability in weighted)
+            return sum(value * probability for value, probability in weighted) / denominator
+
+        lo, hi = -12.0, 12.0
+        if expectation(lo) > 0 or expectation(hi) < 0:
+            return source, {'applied': False, 'reason': 'target_outside_support'}
+        expected_before = expectation(0.0)
+        for _ in range(40):
+            mid = (lo + hi) / 2.0
+            if expectation(mid) < 0:
+                lo = mid
+            else:
+                hi = mid
+        theta = strength * (lo + hi) / 2.0
+        adjusted = {
+            score: probability * math.exp(max(-20.0, min(20.0, theta * values[score])))
+            for score, probability in source.items()
+        }
+        denominator = sum(adjusted.values())
+        adjusted = {score: probability / denominator for score, probability in adjusted.items()}
+        expected_after = sum(adjusted[score] * values[score] for score in adjusted)
+        return adjusted, {
+            'applied': True,
+            'theta': round(theta, 5),
+            'fair_profit_before': round(expected_before, 5),
+            'fair_profit_after': round(expected_after, 5),
+        }
+
+    close_asian = asian.get('close_prob') or {}
+    home_probability = next((close_asian.get(key) for key in
+                             ('home_give', 'home_recv', 'home')
+                             if close_asian.get(key) is not None), None)
+    over_probability = (total.get('close_prob') or {}).get('over')
+    handicap = asian.get('handicap')
+    total_line = total.get('close_line')
+    reliability = 0.40 if state.get('conflict') else 1.0
+    pass_strength = 0.35 * reliability / 3.0
+    asian_meta = {'applied': False, 'reason': 'missing_price_or_line'}
+    total_meta = {'applied': False, 'reason': 'missing_price_or_line'}
+    for _ in range(3):
+        try:
+            if handicap is not None and home_probability and 0 < float(home_probability) < 1:
+                fair_decimal = 1.0 / float(home_probability)
+                matrix, asian_meta = constrain(
+                    matrix,
+                    lambda score, line=float(handicap), odds=fair_decimal: settlement_profit(
+                        score[0] - score[1], line, odds
+                    ),
+                    pass_strength,
+                )
+        except (TypeError, ValueError, ZeroDivisionError):
+            asian_meta = {'applied': False, 'reason': 'invalid_price_or_line'}
+        try:
+            if total_line is not None and over_probability and 0 < float(over_probability) < 1:
+                fair_decimal = 1.0 / float(over_probability)
+                matrix, total_meta = constrain(
+                    matrix,
+                    lambda score, line=float(total_line), odds=fair_decimal: settlement_profit(
+                        score[0] + score[1], line, odds
+                    ),
+                    pass_strength,
+                )
+        except (TypeError, ValueError, ZeroDivisionError):
+            total_meta = {'applied': False, 'reason': 'invalid_price_or_line'}
+
+    if not asian_meta.get('applied') and not total_meta.get('applied'):
+        state.update({'applied': False, 'reason': 'missing_closing_market_prices'})
         return rows, state
 
-    line = state['tempo'].get('line') or 2.5
-    adjusted = []
-    expected_before = 0.0
-    home_mass_before = 0.0
-    for (home, away), probability in rows:
-        probability = max(0.0, float(probability))
-        goals = home + away
-        margin = max(-2.5, min(2.5, home - away))
-        exponent = 0.20 * direction * margin
-        exponent += 0.08 * tempo * max(-3.0, min(3.0, goals - line))
-        # Agreement between stronger-side and over signals favors decisive,
-        # higher-scoring wins; the reverse combination favors narrow wins.
-        if direction * margin > 0:
-            exponent += 0.045 * abs(direction) * tempo * max(-1.5, min(2.0, goals - line))
-        if home == away and abs(direction) >= 0.35:
-            exponent -= 0.08 * abs(direction)
-        adjusted.append(((home, away), probability * math.exp(exponent)))
-        expected_before += goals * probability
-        if home > away:
-            home_mass_before += probability
-
-    total_prob = sum(probability for _, probability in adjusted)
-    if total_prob <= 0:
-        return rows, {'applied': False, 'reason': 'zero_adjusted_mass', **state}
-    adjusted = [(score, probability / total_prob) for score, probability in adjusted]
-    adjusted.sort(key=lambda item: -item[1])
+    adjusted = sorted(matrix.items(), key=lambda item: -item[1])
+    expected_before = sum(sum(score) * probability for score, probability in before_matrix.items())
+    home_mass_before = sum(
+        probability for (home, away), probability in before_matrix.items() if home > away
+    )
     expected_after = sum(sum(score) * probability for score, probability in adjusted)
     home_mass_after = sum(probability for (home, away), probability in adjusted if home > away)
     state.update({
         'applied': True,
+        'method': 'maximum_entropy_fair_price_constraint',
+        'constraint_strength': round(0.35 * reliability, 3),
+        'asian_constraint': asian_meta,
+        'total_constraint': total_meta,
         'expected_goals_before': expected_before,
         'expected_goals_after': expected_after,
         'home_win_before': home_mass_before,
@@ -7439,7 +7541,7 @@ def analyze_match(match, force_refresh=False):
                     rqspf_odds=match.get('lottery_rqspf_odds'),
                 )
                 
-                save_prediction(
+                persistence_result = save_prediction(
                     match_id=mid,
                     league=match.get('league', ''),
                     home=home,
@@ -7462,10 +7564,20 @@ def analyze_match(match, force_refresh=False):
                         or (cached_lottery.get('handicap') or {}).get('probabilities')
                     ),
                     goal_count=model.get('goal_count'),
+                    professional_snapshot={
+                        'decision_gate': cached_result.get('decision_gate'),
+                        'validation': cached_result.get('professional_validation'),
+                        'evidence': cached_result.get('professional_evidence'),
+                        'live_context_quality': cached_result.get('live_context_quality'),
+                        'accuracy_gate': (cached_lottery or {}).get('accuracy_gate'),
+                    },
                 )
                 log.info(f"缓存结果的预测记录已保存: {home} vs {away}")
                 if 'model_status' in cached_result:
                     cached_result['model_status']['prediction_saved'] = True
+                    cached_result['model_status']['persistence_backend'] = (
+                        (persistence_result or {}).get('persistence_backend')
+                    )
                     log.info(f"更新缓存结果的 model_status['prediction_saved'] 为 True")
                     # 将更新后的缓存重新保存
                     set_cache('match_analysis', cache_key, cached_result, match_time)
@@ -7922,15 +8034,6 @@ def analyze_match(match, force_refresh=False):
         meta['production_history_calibration'] = {'applied': False, 'reason': str(e)}
         log.warning(f"production history calibration failed: {e}")
 
-    try:
-        candidates, joint_market_adjustment = _apply_joint_market_state(
-            candidates, asian, euro, total
-        )
-        meta['joint_market_state'] = joint_market_adjustment
-    except Exception as e:
-        meta['joint_market_state'] = {'applied': False, 'reason': str(e)}
-        log.warning(f"joint market adjustment failed: {e}")
-
     # Multi-stage score corrections can unintentionally move aggregate H/D/A
     # mass away from the efficient closing market.  Re-anchor those marginals
     # before the final goal-mean repair; the latter preserves 1X2 by design.
@@ -7961,6 +8064,19 @@ def analyze_match(match, force_refresh=False):
     except Exception as e:
         meta['final_score_goal_anchor'] = {'applied': False, 'reason': str(e)}
         log.warning(f"final score goal mean anchor failed: {e}")
+
+    # The final distribution is a single market-consistent state: closing 1X2
+    # sets the outcome marginal above, the O/U line sets the goal mean, and the
+    # fair Asian/O-U prices now apply the validated soft settlement constraint.
+    # All downstream SPF/RQSPF/score/goal outputs are derived from this matrix.
+    try:
+        candidates, joint_market_adjustment = _apply_joint_market_state(
+            candidates, asian, euro, total
+        )
+        meta['joint_market_state'] = joint_market_adjustment
+    except Exception as e:
+        meta['joint_market_state'] = {'applied': False, 'reason': str(e)}
+        log.warning(f"joint market constraint failed: {e}")
 
     dixon_coles_result = None
     try:
@@ -8562,6 +8678,36 @@ def analyze_match(match, force_refresh=False):
         log.warning(f"专业证据覆盖评估失败: {e}")
         result['professional_evidence'] = None
 
+    try:
+        from .bayes_report import load_professional_validation_summary
+        from .professional_readiness import (
+            build_professional_decision_gate,
+            build_system_gap_assessment,
+        )
+        professional_validation = load_professional_validation_summary()
+        result['professional_validation'] = professional_validation
+        result['professional_gap_assessment'] = build_system_gap_assessment({
+            'model_metrics': professional_validation.get('model') or {},
+            'market_baseline_metrics': professional_validation.get('market') or {},
+            'strategy': professional_validation.get('strategy') or {},
+        })
+        result['decision_gate'] = build_professional_decision_gate(
+            professional_validation,
+            evidence=result.get('professional_evidence'),
+            live_quality=result.get('live_context_quality'),
+            accuracy_gate=(result.get('lottery') or {}).get('accuracy_gate'),
+        )
+    except Exception as e:
+        log.warning(f"专业决策闸门构建失败: {e}")
+        result['professional_validation'] = {
+            'available': False, 'production_ready': False, 'reason': str(e),
+        }
+        result['decision_gate'] = {
+            'official_bet_allowed': False,
+            'mode': 'research_only',
+            'reasons': ['专业决策闸门不可用，按失败关闭处理'],
+        }
+
     # ========== 元宝式赛果分析（胜负倾向→比分区间→进球数方向→理由，三者同源自洽）==========
     try:
         result['analysis'] = build_match_analysis(result)
@@ -8602,7 +8748,7 @@ def analyze_match(match, force_refresh=False):
         predicted_half_full = _half_full_probs_to_dict(model.get('half_full_time'))
         base_1x2 = predicted_1x2.copy()
 
-        save_prediction(
+        persistence_result = save_prediction(
             match_id=mid,
             league=match.get('league', ''),
             home=home,
@@ -8631,12 +8777,22 @@ def analyze_match(match, force_refresh=False):
                 or (lottery.get('handicap') or {}).get('probabilities')
             ),
             goal_count=goal_count_result,
+            professional_snapshot={
+                'decision_gate': result.get('decision_gate'),
+                'validation': result.get('professional_validation'),
+                'evidence': result.get('professional_evidence'),
+                'live_context_quality': result.get('live_context_quality'),
+                'accuracy_gate': (lottery or {}).get('accuracy_gate'),
+            },
         )
         prediction_saved = True
         log.info(f"预测记录已保存: {home} vs {away}")
         # 更新模型状态中的保存状态
         if 'model_status' in result:
             result['model_status']['prediction_saved'] = True
+            result['model_status']['persistence_backend'] = (
+                (persistence_result or {}).get('persistence_backend')
+            )
             log.info(f"更新 model_status['prediction_saved'] 为 True")
             # 更新缓存以包含最新的 prediction_saved 状态
             if CACHE_AVAILABLE:

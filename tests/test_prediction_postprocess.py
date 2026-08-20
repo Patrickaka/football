@@ -322,13 +322,19 @@ class PredictionPostprocessTests(unittest.TestCase):
         ]
         adjusted, meta = football._apply_joint_market_state(
             candidates,
-            {'handicap_change': .5, 'prob_change': {'home': .06}},
+            {
+                'handicap': .5,
+                'handicap_change': .5,
+                'prob_change': {'home': .06},
+                'close_prob': {'home_give': .60, 'away_recv': .40},
+            },
             {'momentum': {'shift_supremacy': .18}},
             {'open_line': 2.5, 'close_line': 3.0,
              'open_prob': {'over': .48}, 'close_prob': {'over': .57}},
         )
 
         self.assertTrue(meta['applied'])
+        self.assertEqual(meta['method'], 'maximum_entropy_fair_price_constraint')
         self.assertGreater(meta['home_win_after'], meta['home_win_before'])
         self.assertGreater(meta['expected_goals_after'], meta['expected_goals_before'])
         self.assertAlmostEqual(sum(prob for _, prob in adjusted), 1.0)

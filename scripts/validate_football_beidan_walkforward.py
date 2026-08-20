@@ -74,6 +74,9 @@ def load_rows():
                         "ou_line": 2.5,
                         "over_odds": _number(raw, "AvgC>2.5") or _number(raw, "Avg>2.5"),
                         "under_odds": _number(raw, "AvgC<2.5") or _number(raw, "Avg<2.5"),
+                        "asian_line": _number(raw, "AHCh"),
+                        "asian_home_odds": _number(raw, "AvgCAHH") or _number(raw, "AvgAHH"),
+                        "asian_away_odds": _number(raw, "AvgCAHA") or _number(raw, "AvgAHA"),
                     })
     return rows
 
@@ -111,41 +114,162 @@ def _implied_total(over_odds, under_odds, line=2.5):
     return (lo + hi) / 2.0
 
 
-def _score_distribution(row, anchor_strength=0.0, use_ou=True):
+def _fair_decimal_odds(side_odds, other_odds):
+    """Remove the two-way overround and return fair decimal odds for one side."""
+    if side_odds <= 1.0 or other_odds <= 1.0:
+        return None
+    side_inverse = 1.0 / side_odds
+    fair_probability = side_inverse / (side_inverse + 1.0 / other_odds)
+    return 1.0 / fair_probability
+
+
+def _quarter_line_parts(line):
+    """Split Asian quarter lines into their two settlement lines."""
+    doubled = round(float(line) * 2.0) / 2.0
+    if abs(float(line) - doubled) < 1e-8:
+        return (doubled,)
+    lower = math.floor(float(line) * 2.0) / 2.0
+    return (lower, lower + 0.5)
+
+
+def _settlement_profit(value, line, fair_decimal, over=True):
+    profit = 0.0
+    parts = _quarter_line_parts(line)
+    for settlement_line in parts:
+        distance = value - settlement_line if over else settlement_line - value
+        if distance > 1e-8:
+            profit += fair_decimal - 1.0
+        elif distance < -1e-8:
+            profit -= 1.0
+    return profit / len(parts)
+
+
+def _exponential_tilt(matrix, feature, theta):
+    adjusted = {
+        score: probability * math.exp(max(-20.0, min(20.0, theta * feature(score))))
+        for score, probability in matrix.items()
+    }
+    total = sum(adjusted.values())
+    return {score: probability / total for score, probability in adjusted.items()}
+
+
+def _constrain_fair_market(matrix, feature, strength=1.0):
+    """Maximum-entropy tilt until the selected market side has zero fair profit."""
+    if strength <= 0:
+        return matrix
+
+    feature_values = {score: feature(score) for score in matrix}
+    buckets = defaultdict(float)
+    for score, probability in matrix.items():
+        buckets[round(feature_values[score], 12)] += probability
+
+    def expected_profit(theta):
+        weighted = [
+            (value, probability * math.exp(max(-20.0, min(20.0, theta * value))))
+            for value, probability in buckets.items()
+        ]
+        total = sum(probability for _, probability in weighted)
+        return sum(value * probability for value, probability in weighted) / total
+
+    lo, hi = -12.0, 12.0
+    lo_value, hi_value = expected_profit(lo), expected_profit(hi)
+    if lo_value > 0 or hi_value < 0:
+        return matrix
+    for _ in range(40):
+        mid = (lo + hi) / 2.0
+        if expected_profit(mid) < 0:
+            lo = mid
+        else:
+            hi = mid
+    theta = strength * (lo + hi) / 2.0
+    adjusted = {
+        score: probability * math.exp(
+            max(-20.0, min(20.0, theta * feature_values[score]))
+        )
+        for score, probability in matrix.items()
+    }
+    total = sum(adjusted.values())
+    return {score: probability / total for score, probability in adjusted.items()}
+
+
+def _anchor_outcomes(matrix, probabilities, strength):
+    if strength <= 0:
+        return matrix
+    current = {"H": 0.0, "D": 0.0, "A": 0.0}
+    for (home, away), value in matrix.items():
+        current["H" if home > away else "D" if home == away else "A"] += value
+    adjusted = {}
+    for (home, away), value in matrix.items():
+        key = "H" if home > away else "D" if home == away else "A"
+        adjusted[(home, away)] = value * (
+            probabilities[key] / max(current[key], 1e-12)
+        ) ** strength
+    total = sum(adjusted.values())
+    return {score: value / total for score, value in adjusted.items()}
+
+
+def _score_distribution(row, anchor_strength=0.0, use_ou=True,
+                        strength_split=0.45, ou_blend=0.60,
+                        asian_constraint=0.0, ou_constraint=0.0):
     probs = row["probabilities"]
     target_total = LEAGUE_GOALS[row["league"]]
     if use_ou:
         market_total = _implied_total(row["over_odds"], row["under_odds"], row["ou_line"])
         if market_total:
-            target_total = 0.6 * market_total + 0.4 * target_total
+            target_total = ou_blend * market_total + (1.0 - ou_blend) * target_total
     supremacy = probs["H"] - probs["A"]
-    home_mean = max(0.01, target_total * (0.5 + 0.45 * supremacy))
-    away_mean = max(0.01, target_total * (0.5 - 0.45 * supremacy))
+    home_mean = max(0.01, target_total * (0.5 + strength_split * supremacy))
+    away_mean = max(0.01, target_total * (0.5 - strength_split * supremacy))
     matrix = {
         (home, away): _poisson_probability(home, home_mean) * _poisson_probability(away, away_mean)
         for home in range(8) for away in range(8)
     }
     total = sum(matrix.values())
     matrix = {score: value / total for score, value in matrix.items()}
-    if anchor_strength > 0:
-        current = {"H": 0.0, "D": 0.0, "A": 0.0}
-        for (home, away), value in matrix.items():
-            current["H" if home > away else "D" if home == away else "A"] += value
-        adjusted = {}
-        for (home, away), value in matrix.items():
-            key = "H" if home > away else "D" if home == away else "A"
-            factor = (probs[key] / max(current[key], 1e-12)) ** anchor_strength
-            adjusted[(home, away)] = value * factor
-        total = sum(adjusted.values())
-        matrix = {score: value / total for score, value in adjusted.items()}
+    asian_fair = _fair_decimal_odds(row["asian_home_odds"], row["asian_away_odds"])
+    over_fair = _fair_decimal_odds(row["over_odds"], row["under_odds"])
+    matrix = _anchor_outcomes(matrix, probs, anchor_strength)
+    # Alternate the handicap and total constraints because changing one
+    # marginal also moves the other. Damping prevents a noisy market from
+    # overwhelming the 1X2/league prior.
+    for _ in range(3):
+        if asian_fair:
+            line = row["asian_line"]
+            matrix = _constrain_fair_market(
+                matrix,
+                lambda score, line=line, odds=asian_fair: _settlement_profit(
+                    score[0] - score[1], -line, odds, over=True
+                ),
+                asian_constraint / 3.0,
+            )
+        if over_fair:
+            line = row["ou_line"]
+            matrix = _constrain_fair_market(
+                matrix,
+                lambda score, line=line, odds=over_fair: _settlement_profit(
+                    score[0] + score[1], line, odds, over=True
+                ),
+                ou_constraint / 3.0,
+            )
     return matrix
 
 
-def evaluate_scores(rows, anchor_strength=0.0, use_ou=True):
+def evaluate_scores(rows, anchor_strength=0.0, use_ou=True,
+                    strength_split=0.45, ou_blend=0.60,
+                    asian_constraint=0.0, ou_constraint=0.0):
     score_top1 = score_top3 = goal_top1 = goal_top2 = 0
-    score_loss = goal_loss = 0.0
+    outcome_hits = 0
+    score_loss = goal_loss = outcome_loss = 0.0
     for row in rows:
-        matrix = _score_distribution(row, anchor_strength=anchor_strength, use_ou=use_ou)
+        matrix = _score_distribution(
+            row,
+            anchor_strength=anchor_strength,
+            use_ou=use_ou,
+            strength_split=strength_split,
+            ou_blend=ou_blend,
+            asian_constraint=asian_constraint,
+            ou_constraint=ou_constraint,
+        )
         actual_score = row["home_goals"], row["away_goals"]
         ranked = sorted(matrix, key=matrix.get, reverse=True)
         score_top1 += actual_score == ranked[0]
@@ -159,14 +283,21 @@ def evaluate_scores(rows, anchor_strength=0.0, use_ou=True):
         goal_top1 += actual_goals == goal_ranked[0]
         goal_top2 += actual_goals in goal_ranked[:2]
         goal_loss -= math.log(max(goals.get(actual_goals, 0.0), 1e-12))
+        outcomes = {"H": 0.0, "D": 0.0, "A": 0.0}
+        for (home, away), probability in matrix.items():
+            outcomes["H" if home > away else "D" if home == away else "A"] += probability
+        outcome_hits += max(outcomes, key=outcomes.get) == row["actual"]
+        outcome_loss -= math.log(max(outcomes[row["actual"]], 1e-12))
     count = len(rows) or 1
     return {
         "score_top1": score_top1 / count,
         "score_top3": score_top3 / count,
         "goal_top1": goal_top1 / count,
         "goal_top2": goal_top2 / count,
+        "outcome_accuracy": outcome_hits / count,
         "score_logloss": score_loss / count,
         "goal_logloss": goal_loss / count,
+        "outcome_logloss": outcome_loss / count,
     }
 
 
@@ -238,6 +369,81 @@ def main():
             f"anchor={strength:>4.2f} score T1/T3={metrics['score_top1']:6.2%}/{metrics['score_top3']:6.2%} "
             f"goals T1/T2={metrics['goal_top1']:6.2%}/{metrics['goal_top2']:6.2%} "
             f"LL={metrics['score_logloss']:.4f}/{metrics['goal_logloss']:.4f}"
+        )
+
+    print("\nchronological score strength split (anchor=.75):")
+    for split in (0.35, 0.40, 0.45, 0.50, 0.55, 0.60):
+        train = evaluate_scores(grouped["2425"], anchor_strength=0.75, strength_split=split)
+        test = evaluate_scores(grouped["2526"], anchor_strength=0.75, strength_split=split)
+        print(
+            f"split={split:.2f} "
+            f"T1={train['score_top1']:6.2%}/{test['score_top1']:6.2%} "
+            f"T3={train['score_top3']:6.2%}/{test['score_top3']:6.2%} "
+            f"LL={train['score_logloss']:.4f}/{test['score_logloss']:.4f}"
+        )
+
+    print("\nchronological O/U blend (anchor=.75, split=.45):")
+    for blend in (0.30, 0.40, 0.50, 0.60, 0.70, 0.80, 0.90):
+        train = evaluate_scores(grouped["2425"], anchor_strength=0.75, ou_blend=blend)
+        test = evaluate_scores(grouped["2526"], anchor_strength=0.75, ou_blend=blend)
+        print(
+            f"ou={blend:.2f} goals T1={train['goal_top1']:6.2%}/{test['goal_top1']:6.2%} "
+            f"T2={train['goal_top2']:6.2%}/{test['goal_top2']:6.2%} "
+            f"score T1={train['score_top1']:6.2%}/{test['score_top1']:6.2%} "
+            f"LL={train['goal_logloss']:.4f}/{test['goal_logloss']:.4f}"
+        )
+
+    print("\nmaximum-entropy joint market constraints (current O/U mean prior retained):")
+    print("strength      score T1 train/test   score LL train/test   goals LL train/test   1X2 train/test")
+    for strength in (0.0, 0.20, 0.35, 0.50, 0.75, 1.0):
+        train = evaluate_scores(
+            grouped["2425"], anchor_strength=0.75,
+            asian_constraint=strength, ou_constraint=strength,
+        )
+        test = evaluate_scores(
+            grouped["2526"], anchor_strength=0.75,
+            asian_constraint=strength, ou_constraint=strength,
+        )
+        print(
+            f"joint={strength:>4.2f}    "
+            f"{train['score_top1']:6.2%}/{test['score_top1']:6.2%}       "
+            f"{train['score_logloss']:.4f}/{test['score_logloss']:.4f}       "
+            f"{train['goal_logloss']:.4f}/{test['goal_logloss']:.4f}       "
+            f"{train['outcome_accuracy']:6.2%}/{test['outcome_accuracy']:6.2%}"
+        )
+
+    print("\nAsian-only constraint isolation (avoids reusing the O/U price twice):")
+    for strength in (0.20, 0.35, 0.50, 0.75, 1.0):
+        train = evaluate_scores(
+            grouped["2425"], anchor_strength=0.75,
+            asian_constraint=strength,
+        )
+        test = evaluate_scores(
+            grouped["2526"], anchor_strength=0.75,
+            asian_constraint=strength,
+        )
+        print(
+            f"asian={strength:>4.2f} score T1={train['score_top1']:6.2%}/{test['score_top1']:6.2%} "
+            f"T3={train['score_top3']:6.2%}/{test['score_top3']:6.2%} "
+            f"LL={train['score_logloss']:.4f}/{test['score_logloss']:.4f} "
+            f"goalsLL={train['goal_logloss']:.4f}/{test['goal_logloss']:.4f}"
+        )
+
+    print("\nO/U-only constraint isolation:")
+    for strength in (0.20, 0.35, 0.50, 0.75, 1.0):
+        train = evaluate_scores(
+            grouped["2425"], anchor_strength=0.75,
+            ou_constraint=strength,
+        )
+        test = evaluate_scores(
+            grouped["2526"], anchor_strength=0.75,
+            ou_constraint=strength,
+        )
+        print(
+            f"ou-fair={strength:>4.2f} score T1={train['score_top1']:6.2%}/{test['score_top1']:6.2%} "
+            f"T3={train['score_top3']:6.2%}/{test['score_top3']:6.2%} "
+            f"LL={train['score_logloss']:.4f}/{test['score_logloss']:.4f} "
+            f"goalsLL={train['goal_logloss']:.4f}/{test['goal_logloss']:.4f}"
         )
 
 
