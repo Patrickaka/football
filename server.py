@@ -2234,6 +2234,7 @@ class Handler(BaseHTTPRequestHandler):
                 record_context={
                     'source_snapshot_id': source_snapshot_id,
                     'source_version': current.get('statistics', {}).get('version') or current.get('version') or '',
+                    'generation_mode': 'manual',
                     'initial_numbers': initial_numbers,
                 },
             )

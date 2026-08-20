@@ -78,16 +78,21 @@ class KL8PredictionGuardTests(unittest.TestCase):
         self.assertEqual(profile['unique_number_count'], 6)
         self.assertEqual(profile['max_pair_overlap'], 6)
 
-    def test_reference_select_5_and_6_use_concentrated_ranking(self):
-        for pick in (5, 6):
-            strategy = resolve_play_strategy(f'select_{pick}', allow_reference=True)
+    def test_reference_select_5_and_6_use_play_specific_ranking(self):
+        select5 = resolve_play_strategy('select_5', allow_reference=True)
+        select6 = resolve_play_strategy('select_6', allow_reference=True)
 
-            self.assertEqual(strategy['final_selection_mode'], 'concentrated')
+        self.assertEqual(select5['final_selection_mode'], 'concentrated')
+        self.assertEqual(select5['window_size'], 100)
+        self.assertEqual(select6['final_selection_mode'], 'shape_balanced')
+        self.assertEqual(select6['window_size'], 150)
+        self.assertEqual(select6['chain_objective'], 'primary_then_cumulative_exclusion')
+        self.assertEqual(select6['chain_audit_rounds'], 5)
+        for strategy in (select5, select6):
             self.assertFalse(strategy['pool_diversify'])
             self.assertGreater(strategy['feature_weights']['frequency'], 0.0)
             self.assertGreater(strategy['feature_weights']['pair_cooccurrence'], 0.0)
             self.assertEqual(strategy['baseline_type'], 'adaptive_pattern_reference')
-            self.assertEqual(strategy['window_size'], 100)
             self.assertFalse(strategy['is_validated'])
 
     def test_normalize_record_strips_issue_and_rejects_bad_numbers(self):
@@ -278,6 +283,111 @@ class KL8PredictionGuardTests(unittest.TestCase):
         self.assertEqual(chain['terminal']['remaining_count'], 0)
         self.assertEqual(len(stored), 3)
         self.assertEqual([row['status'] for row in reversed(stored)], ['generated', 'generated', 'exhausted'])
+
+    def test_automatic_select6_chain_matches_manual_click_sequence(self):
+        analyzer = KL8Analyzer.__new__(KL8Analyzer)
+        analyzer.history_data = [_record(i) for i in range(80, 0, -1)]
+        analyzer.using_simulated_data = False
+        analyzer.statistics = {'last_numbers': set()}
+        initial = [1, 2, 3, 4, 5, 6]
+        candidates = [(n, float(100 - n)) for n in range(1, 31)]
+
+        original_build = KL8Analyzer.build_pool_by_strategy
+        original_dir = kl8_module.KL8_RECALCULATION_DIR
+        original_verify_only = kl8_module.VERIFY_ONLY_MODE
+        try:
+            kl8_module.VERIFY_ONLY_MODE = False
+            KL8Analyzer.build_pool_by_strategy = lambda self, strategy, pool_size=20: {
+                'selected': [n for n, _ in candidates],
+                'candidates': candidates,
+                'votes': {},
+            }
+            with tempfile.TemporaryDirectory() as automatic_dir:
+                kl8_module.KL8_RECALCULATION_DIR = automatic_dir
+                chain = analyzer.generate_exclude_recalculation_chain(
+                    'select_6',
+                    initial,
+                    source_snapshot_id='same-snapshot',
+                    source_version='same-version',
+                )
+                automatic_numbers = [row['numbers'] for row in chain['records']]
+                self.assertTrue(all(
+                    row['generation_mode'] == 'automatic'
+                    for row in chain['records']
+                ))
+
+            with tempfile.TemporaryDirectory() as manual_dir:
+                kl8_module.KL8_RECALCULATION_DIR = manual_dir
+                excluded = set(initial)
+                manual_numbers = []
+                current = initial
+                while current:
+                    result = analyzer.recalculate_play_excluding(
+                        'select_6',
+                        sorted(excluded),
+                        record_context={
+                            'source_snapshot_id': 'same-snapshot',
+                            'source_version': 'same-version',
+                            'generation_mode': 'manual',
+                            'initial_numbers': initial,
+                        },
+                    )
+                    if result.get('error'):
+                        break
+                    current = result['numbers']
+                    manual_numbers.append(current)
+                    excluded.update(current)
+        finally:
+            KL8Analyzer.build_pool_by_strategy = original_build
+            kl8_module.KL8_RECALCULATION_DIR = original_dir
+            kl8_module.VERIFY_ONLY_MODE = original_verify_only
+
+        self.assertEqual(automatic_numbers, manual_numbers)
+
+    def test_manual_replay_reuses_automatic_record_without_duplication(self):
+        analyzer = KL8Analyzer.__new__(KL8Analyzer)
+        analyzer.history_data = [_record(i) for i in range(80, 0, -1)]
+        analyzer.using_simulated_data = False
+        analyzer.statistics = {'last_numbers': set()}
+        candidates = [(n, float(100 - n)) for n in range(1, 41)]
+
+        original_build = KL8Analyzer.build_pool_by_strategy
+        original_dir = kl8_module.KL8_RECALCULATION_DIR
+        original_verify_only = kl8_module.VERIFY_ONLY_MODE
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                kl8_module.KL8_RECALCULATION_DIR = tmp
+                kl8_module.VERIFY_ONLY_MODE = False
+                KL8Analyzer.build_pool_by_strategy = lambda self, strategy, pool_size=20: {
+                    'selected': [n for n, _ in candidates],
+                    'candidates': candidates,
+                    'votes': {},
+                }
+                automatic = analyzer.generate_exclude_recalculation_chain(
+                    'select_6',
+                    [1, 2, 3, 4, 5, 6],
+                    max_rounds=1,
+                    source_snapshot_id='dedupe-snapshot',
+                )['records'][0]
+                manual = analyzer.recalculate_play_excluding(
+                    'select_6',
+                    [1, 2, 3, 4, 5, 6],
+                    record_context={
+                        'source_snapshot_id': 'dedupe-snapshot',
+                        'generation_mode': 'manual',
+                        'initial_numbers': [1, 2, 3, 4, 5, 6],
+                    },
+                )['recalculation_record']
+                stored = kl8_module.list_exclude_recalculations()
+        finally:
+            KL8Analyzer.build_pool_by_strategy = original_build
+            kl8_module.KL8_RECALCULATION_DIR = original_dir
+            kl8_module.VERIFY_ONLY_MODE = original_verify_only
+
+        self.assertEqual(automatic['record_id'], manual['record_id'])
+        self.assertEqual(automatic['numbers'], manual['numbers'])
+        self.assertEqual(len(stored), 1)
+        self.assertEqual(stored[0]['generation_mode'], 'automatic')
 
     def test_recalculation_identity_is_scoped_to_source_snapshot(self):
         analyzer = KL8Analyzer.__new__(KL8Analyzer)
@@ -484,13 +594,13 @@ class KL8PredictionGuardTests(unittest.TestCase):
             kl8_module.VERIFY_ONLY_MODE = original_verify_only
 
         self.assertEqual(select5['final_selection_mode'], 'concentrated')
-        self.assertEqual(select6['final_selection_mode'], 'concentrated')
+        self.assertEqual(select6['final_selection_mode'], 'shape_balanced')
         self.assertEqual(select10['final_selection_mode'], 'concentrated')
         self.assertFalse(select5['pool_diversify'])
         self.assertFalse(select6['pool_diversify'])
         self.assertFalse(select10['pool_diversify'])
         self.assertEqual(select5['strategy_id'], 'select_5_ref_transition_repeat_v3')
-        self.assertEqual(select6['strategy_id'], 'select_6_ref_transition_repeat_v3')
+        self.assertEqual(select6['strategy_id'], 'select_6_ref_transition_chain_v4')
         self.assertEqual(select10['strategy_id'], 'select_10_ref_trend100_shape_balanced')
         self.assertNotEqual(select5['feature_weights'], select6['feature_weights'])
         self.assertEqual(select5['target_hits'], 4)
@@ -549,15 +659,21 @@ class KL8PredictionGuardTests(unittest.TestCase):
             self.assertEqual(result[key]['numbers'], sorted(result[key]['numbers']))
 
         for key in [f'select_{pick}' for pick in range(3, 11)]:
+            expected_mode = 'shape_balanced' if key == 'select_6' else 'concentrated'
             self.assertEqual(
                 result['resolved_strategies'][key]['final_selection_mode'],
-                'concentrated',
+                expected_mode,
             )
             self.assertFalse(result['resolved_strategies'][key]['pool_diversify'])
             self.assertNotIn('variants', result[key])
 
         self.assertEqual(result['resolved_strategies']['select_5']['pool_max_last_numbers'], 2)
-        self.assertEqual(result['resolved_strategies']['select_6']['pool_max_last_numbers'], 3)
+        self.assertEqual(result['resolved_strategies']['select_6']['pool_max_last_numbers'], 4)
+        self.assertEqual(
+            result['resolved_strategies']['select_6']['chain_objective'],
+            'primary_then_cumulative_exclusion',
+        )
+        self.assertEqual(result['resolved_strategies']['select_6']['chain_audit_rounds'], 5)
         last_numbers = set(analyzer.history_data[0]['numbers'])
         self.assertIn('repeat_profile', result['select_5'])
         self.assertGreaterEqual(result['select_5']['repeat_profile']['sample_size'], 1)
@@ -572,7 +688,7 @@ class KL8PredictionGuardTests(unittest.TestCase):
         self.assertEqual(result['select_6']['accuracy_profile']['expected_hits_random'], 1.5)
         self.assertEqual(result['select_6']['accuracy_profile']['key_thresholds'], ['>=5', '>=4'])
         self.assertEqual(result['select_6']['accuracy_profile']['target_hits'], 5)
-        self.assertEqual(result['select_6']['accuracy_profile']['selected_mode'], 'concentrated')
+        self.assertEqual(result['select_6']['accuracy_profile']['selected_mode'], 'shape_balanced')
         self.assertNotIn('variants', result['select_6'])
         self.assertEqual(
             result['resolved_strategies']['select_10']['final_selection_mode'],
@@ -601,6 +717,51 @@ class KL8PredictionGuardTests(unittest.TestCase):
         self.assertEqual(result['fu_shi_10_11']['combo_pick'], 10)
         self.assertEqual(result['fu_shi_10_11']['pool_size'], 11)
         self.assertEqual(result['fu_shi_10_11']['total_combinations'], 11)
+
+    def test_predict_all_automatically_generates_and_returns_select6_chain(self):
+        analyzer = KL8Analyzer.__new__(KL8Analyzer)
+        analyzer.history_data = [_record(i) for i in range(80, 0, -1)]
+        analyzer.using_simulated_data = False
+        analyzer.history_file = ''
+        analyzer._data_mtime = 0
+        analyzer.statistics = {}
+        analyzer.update_statistics()
+        captured = {}
+
+        original_save = KL8Analyzer._save_prediction_snapshot
+        original_chain = KL8Analyzer.generate_exclude_recalculation_chain
+        original_verify_only = kl8_module.VERIFY_ONLY_MODE
+        try:
+            kl8_module.VERIFY_ONLY_MODE = False
+            KL8Analyzer._save_prediction_snapshot = (
+                lambda self, prediction_result: 'snapshot_auto-chain-id.json'
+            )
+
+            def fake_chain(self, play_type, initial_numbers, **kwargs):
+                captured['play_type'] = play_type
+                captured['initial_numbers'] = list(initial_numbers)
+                captured.update(kwargs)
+                return {
+                    'play_type': play_type,
+                    'generation_mode': 'automatic',
+                    'generated_rounds': 12,
+                }
+
+            KL8Analyzer.generate_exclude_recalculation_chain = fake_chain
+            result = analyzer.predict_all()
+        finally:
+            KL8Analyzer._save_prediction_snapshot = original_save
+            KL8Analyzer.generate_exclude_recalculation_chain = original_chain
+            kl8_module.VERIFY_ONLY_MODE = original_verify_only
+
+        self.assertEqual(captured['play_type'], 'select_6')
+        self.assertEqual(captured['initial_numbers'], result['select_6']['numbers'])
+        self.assertEqual(captured['source_snapshot_id'], 'auto-chain-id')
+        self.assertEqual(captured['source_version'], kl8_module.KL8_PREDICTOR_VERSION)
+        self.assertEqual(
+            result['select_6_recalculation_chain']['generation_mode'],
+            'automatic',
+        )
 
     def test_backtest_passes_repeat_configuration_to_voting(self):
         analyzer = KL8Analyzer.__new__(KL8Analyzer)

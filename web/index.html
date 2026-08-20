@@ -7370,7 +7370,7 @@ function renderKL8RecordCard(rec) {
   const recalculations = Array.isArray(rec.exclude_recalculations) ? rec.exclude_recalculations : [];
   const select6Rounds = recalculations.filter(row => row.play_type === 'select_6');
   if (select6Rounds.length) {
-    html += `<div style="font-size:12px;color:#d29922;margin:10px 0 4px">选6 · 删除号码重算轨迹</div>`;
+    html += `<div style="font-size:12px;color:#d29922;margin:10px 0 4px">选6 · 主推为第0轮 → 累计排除后自动重算并保存</div>`;
     for (const row of select6Rounds) {
       const exhausted = row.status === 'exhausted';
       const hitText = row.hits === null || row.hits === undefined ? '' : ` · 命中 <b style="color:${row.hits >= 3 ? '#2ea043' : '#f85149'}">${esc(row.hits)}</b> 个`;

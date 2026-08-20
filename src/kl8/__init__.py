@@ -47,7 +47,7 @@ from src.common.logger import setup_logger
 
 log = setup_logger('kl8')
 
-KL8_PREDICTOR_VERSION = "kl8-v10.8-snapshot-bound-recalculation"
+KL8_PREDICTOR_VERSION = "kl8-v10.9-select6-chain-walk-forward"
 
 # ─── v9.2: 只显示已验证策略模式 ───
 # 正式策略优先；尚未通过验证时继续输出玩法专属的动态参考策略，供持续
@@ -790,14 +790,16 @@ def resolve_play_strategy(play_type: str, allow_reference: bool = False) -> Opti
             'is_validated': False,
         },
         'select_6': {
-            'strategy_id': 'select_6_ref_transition_repeat_v3',
-            'feature_weights': {'frequency': 0.18, 'gap': 0.14, 'trend': 0.12, 'next_transition': 0.22, 'pair_cooccurrence': 0.04, 'position_residual': 0.11, 'position_residual_cross': 0.08, 'road_residual': 0.08, 'repeat': 0.03, 'odd_even': 0.0, 'big_small': 0.0},
+            'strategy_id': 'select_6_ref_transition_chain_v4',
+            'feature_weights': {'frequency': 0.20, 'gap': 0.10, 'trend': 0.10, 'next_transition': 0.35, 'pair_cooccurrence': 0.05, 'position_residual': 0.10, 'position_residual_cross': 0.0, 'road_residual': 0.05, 'repeat': 0.05, 'odd_even': 0.0, 'big_small': 0.0},
             'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
-            'window_size': 100,
+            'window_size': 150,
             'repeat_direction': 'follow',
-            'pool_max_last_numbers': 3,
+            'pool_max_last_numbers': 4,
             'pool_diversify': False,
-            'final_selection_mode': 'concentrated',
+            'final_selection_mode': 'shape_balanced',
+            'chain_objective': 'primary_then_cumulative_exclusion',
+            'chain_audit_rounds': 5,
             'target_hits': 5,
             'prediction_mode': 'reference_unvalidated',
             'is_validated': False,
@@ -4249,6 +4251,7 @@ class KL8Analyzer:
         context = dict(record_context or {})
         source_snapshot_id = str(context.get('source_snapshot_id') or '')
         source_version = str(context.get('source_version') or KL8_PREDICTOR_VERSION)
+        generation_mode = str(context.get('generation_mode') or 'manual')
         initial_numbers = sorted({int(n) for n in context.get('initial_numbers', [])})
         directory = Path(KL8_RECALCULATION_DIR)
         directory.mkdir(parents=True, exist_ok=True)
@@ -4284,6 +4287,7 @@ class KL8Analyzer:
             'based_on_issue': based_on_issue,
             'source_snapshot_id': source_snapshot_id,
             'source_version': source_version,
+            'generation_mode': generation_mode,
             'initial_numbers': initial_numbers,
             'play_type': play_type,
             'round': 1 + max((int(item.get('round', 0)) for item in existing), default=0),
@@ -4333,6 +4337,7 @@ class KL8Analyzer:
         record_context = {
             'source_snapshot_id': source_snapshot_id,
             'source_version': source_version or KL8_PREDICTOR_VERSION,
+            'generation_mode': 'automatic',
             'initial_numbers': current,
         }
         generated = []
@@ -4359,6 +4364,8 @@ class KL8Analyzer:
         return {
             'play_type': play_type,
             'generated_rounds': len(generated),
+            'generation_mode': 'automatic',
+            'records': generated,
             'exhausted': exhausted is not None,
             'terminal': exhausted,
         }
@@ -4515,6 +4522,8 @@ class KL8Analyzer:
                 'final_min_last_numbers': strategy.get('final_min_last_numbers', 0),
                 'frequency_mode': strategy.get('frequency_mode', 'mean_reversion'),
                 'final_selection_mode': strategy.get('final_selection_mode', 'balanced'),
+                'chain_objective': strategy.get('chain_objective'),
+                'chain_audit_rounds': strategy.get('chain_audit_rounds'),
                 'target_hits': strategy.get('target_hits'),
                 'prediction_mode': strategy['prediction_mode'],
                 'is_validated': strategy['is_validated'],
@@ -4592,6 +4601,8 @@ class KL8Analyzer:
                 'prize_hit_thresholds': _prize_tier_thresholds(s_key),
                 'hit_rate_priority_thresholds': _hit_rate_priority_thresholds(s_key),
                 'target_hits': strategy.get('target_hits'),
+                'chain_objective': strategy.get('chain_objective'),
+                'chain_audit_rounds': strategy.get('chain_audit_rounds'),
                 'strategy_id': strategy['strategy_id'],
                 'prediction_mode': strategy['prediction_mode'],
                 'is_validated': strategy['is_validated'],
