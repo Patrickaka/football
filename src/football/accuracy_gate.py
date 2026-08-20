@@ -14,12 +14,12 @@ TARGET_ACCURACY = 0.80
 SPF_MIN_PROBABILITY = 0.70
 RQSPF_MIN_PROBABILITY = 0.80
 MIN_TOP2_MARGIN = 0.18
-MIN_PREDICTION_RELIABILITY = 0.80
+MIN_PREDICTION_RELIABILITY = 0.60
 SPF_HISTORICAL_PROXY = {
-    "accuracy": 0.8027,
-    "sample_count": 375,
-    "coverage": 0.1070,
-    "basis": "historical_market_implied_probability_gte_70pct",
+    "accuracy": 0.7988,
+    "sample_count": 164,
+    "coverage": 0.0936,
+    "basis": "2025/26_chronological_holdout_closing_market_probability_gte_70pct",
 }
 
 
@@ -112,7 +112,7 @@ def build_accuracy_gate(
             "minimum_reliability": MIN_PREDICTION_RELIABILITY,
             "reasons": reasons,
             "validation_status": (
-                "historical_proxy_supported" if historically_supported
+                "chronological_holdout_near_target" if historically_supported
                 else "pending_independent_rqspf_validation"
             ),
             "validation": SPF_HISTORICAL_PROXY if historically_supported else None,

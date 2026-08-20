@@ -18,7 +18,7 @@ from ..common import kv_store
 
 log = setup_logger('beidan')
 
-BEIDAN_VERSION = '2026-08-12-timed-market-accuracy-v5'
+BEIDAN_VERSION = '2026-08-20-walkforward-market-anchor-v6'
 BEIDAN_HISTORY_KEY = 'beidan_prediction_history'
 BEIDAN_HISTORY_LIMIT = 500
 
@@ -169,7 +169,8 @@ def calibrate_draw_probability(p_home, p_draw, p_away, handicap,
     return p_home / total_new, p_draw / total_new, p_away / total_new
 
 def predict_scores_by_poisson(home_prob, draw_prob, away_prob, league='', handicap=0,
-                              total_over_odds=None, total_under_odds=None, use_dc=True):
+                              total_over_odds=None, total_under_odds=None, use_dc=True,
+                              total_line=2.5):
     league_profile = LEAGUE_PROFILES.get(league, {'avg_goals': 2.6, 'draw_rate': 0.27})
     avg_goals = league_profile['avg_goals']
     
@@ -183,6 +184,7 @@ def predict_scores_by_poisson(home_prob, draw_prob, away_prob, league='', handic
         league=league,
         total_over_odds=total_over_odds,
         total_under_odds=total_under_odds,
+        total_line=total_line,
     )
     
     lam_home, lam_away = match_lambdas(p_home, p_draw, p_away, target_total)
@@ -198,6 +200,11 @@ def predict_scores_by_poisson(home_prob, draw_prob, away_prob, league='', handic
                     score_probs[(h, a)] = prob
         total_prob = sum(score_probs.values()) + 1e-9
         score_probs = {k: v / total_prob for k, v in score_probs.items()}
+
+    score_probs, outcome_anchor = anchor_score_outcomes(
+        score_probs,
+        {'胜': p_home, '平': p_draw, '负': p_away},
+    )
     
     sorted_scores = sorted(score_probs.items(), key=lambda x: -x[1])
     
@@ -217,6 +224,7 @@ def predict_scores_by_poisson(home_prob, draw_prob, away_prob, league='', handic
         'lambda_away': lam_away,
         'target_total': target_total,
         '1x2_prob': {'H': p_home, 'D': p_draw, 'A': p_away},
+        'outcome_anchor': outcome_anchor,
     }
 
 # Dixon-Coles 低比分相关系数。
@@ -241,6 +249,17 @@ FACTOR_MAX = 1.15
 # 主客 λ 强度分配系数（与比分预测保持一致，原 zjq 的 0.05 过弱）
 STRENGTH_SPLIT = SCORE_SPLIT  # = 0.45
 
+# 2024/25 -> 2025/26 walk-forward validation on 3,504 five-league matches.
+# A 60% top probability with a 10-point lead produced 72.34% / 72.43%
+# single-pick accuracy at 27.85% / 24.43% coverage.  The previous 52% gate
+# admitted roughly twice as many matches but only reached about 66% accuracy.
+BEIDAN_STRONG_MIN_PROBABILITY = 0.60
+BEIDAN_STRONG_MIN_LEAD = 0.10
+BEIDAN_MEDIUM_MIN_PROBABILITY = 0.54
+BEIDAN_MEDIUM_MIN_LEAD = 0.08
+BEIDAN_HIGH_PRECISION_MIN_PROBABILITY = 0.70
+SCORE_OUTCOME_ANCHOR_STRENGTH = 0.75
+
 
 def _to_euro_odds(x):
     """亚洲盘贴水(water)转欧赔。
@@ -262,7 +281,41 @@ def _to_euro_odds(x):
     return x
 
 
-def implied_total_from_ou(over_odds, under_odds):
+def _parse_total_line_value(value, default=2.5):
+    """Parse whole, half and split Asian total lines (for example ``2.5/3``)."""
+    if isinstance(value, (int, float)):
+        return float(value)
+    numbers = re.findall(r'\d+(?:\.\d+)?', str(value or ''))
+    if not numbers:
+        return default
+    parsed = [float(number) for number in numbers[:2]]
+    return sum(parsed) / len(parsed)
+
+
+def _asian_line_parts(line):
+    """Return the one or two settlement lines represented by an Asian line."""
+    line = round(float(line) * 4.0) / 4.0
+    fraction = round(line - math.floor(line), 2)
+    if fraction == 0.25:
+        return (math.floor(line), math.floor(line) + 0.5)
+    if fraction == 0.75:
+        return (math.floor(line) + 0.5, math.floor(line) + 1.0)
+    return (line,)
+
+
+def _asian_over_profit(goals, line, decimal_odds):
+    profits = []
+    for settlement_line in _asian_line_parts(line):
+        if goals > settlement_line:
+            profits.append(decimal_odds - 1.0)
+        elif goals == settlement_line:
+            profits.append(0.0)
+        else:
+            profits.append(-1.0)
+    return sum(profits) / len(profits)
+
+
+def implied_total_from_ou(over_odds, under_odds, line=2.5):
     """由大小球盘口反推隐含总进球数 λ_total（Poisson 假设）。
 
     兼容两种格式：
@@ -284,11 +337,20 @@ def implied_total_from_ou(over_odds, under_odds):
     if tot <= 0:
         return None
     p_over = po / tot
+    fair_over_odds = 1.0 / max(p_over, 1e-9)
+    total_line = _parse_total_line_value(line)
+
+    def expected_over_profit(mean):
+        # 15+ goals has negligible mass inside the guarded search interval.
+        return sum(
+            poisson_pmf(goals, mean) * _asian_over_profit(goals, total_line, fair_over_odds)
+            for goals in range(16)
+        )
+
     lo, hi = 0.5, 9.0
     for _ in range(60):
         mid = (lo + hi) / 2
-        p_le2 = math.exp(-mid) * (1 + mid + mid * mid / 2.0)
-        if (1.0 - p_le2) < p_over:
+        if expected_over_profit(mid) < 0:
             lo = mid
         else:
             hi = mid
@@ -332,8 +394,72 @@ def aggregate_goals_from_scores(score_dist):
     return dict(goal)
 
 
+def anchor_score_outcomes(score_dist, target_probabilities,
+                          strength=SCORE_OUTCOME_ANCHOR_STRENGTH):
+    """Partially anchor score-matrix 1X2 mass to the closing market."""
+    if not score_dist or not target_probabilities:
+        return score_dist, {'applied': False, 'reason': 'missing_distribution_or_target'}
+
+    aliases = {
+        '胜': ('胜', 'H', 'home'),
+        '平': ('平', 'D', 'draw'),
+        '负': ('负', 'A', 'away'),
+    }
+    target = {}
+    for label, keys in aliases.items():
+        value = next((target_probabilities.get(key) for key in keys
+                      if target_probabilities.get(key) is not None), 0.0)
+        try:
+            target[label] = max(0.0, float(value))
+        except (TypeError, ValueError):
+            target[label] = 0.0
+    target_total = sum(target.values())
+    if target_total <= 0:
+        return score_dist, {'applied': False, 'reason': 'invalid_target'}
+    target = {key: value / target_total for key, value in target.items()}
+
+    current = {'胜': 0.0, '平': 0.0, '负': 0.0}
+    normalized = {}
+    for score, probability in score_dist.items():
+        try:
+            home, away = int(score[0]), int(score[1])
+            probability = max(0.0, float(probability))
+        except (TypeError, ValueError, IndexError):
+            continue
+        label = '胜' if home > away else ('负' if home < away else '平')
+        normalized[(home, away)] = normalized.get((home, away), 0.0) + probability
+        current[label] += probability
+    raw_total = sum(current.values())
+    if raw_total <= 0 or any(current[key] <= 0 or target[key] <= 0 for key in current):
+        return score_dist, {'applied': False, 'reason': 'incomplete_outcome_mass'}
+    current = {key: value / raw_total for key, value in current.items()}
+
+    weight = max(0.0, min(1.0, float(strength)))
+    adjusted = {}
+    for (home, away), probability in normalized.items():
+        label = '胜' if home > away else ('负' if home < away else '平')
+        factor = (target[label] / current[label]) ** weight
+        adjusted[(home, away)] = probability * factor
+    adjusted_total = sum(adjusted.values())
+    if adjusted_total <= 0:
+        return score_dist, {'applied': False, 'reason': 'zero_adjusted_total'}
+    adjusted = {score: value / adjusted_total for score, value in adjusted.items()}
+    after = {
+        label: sum(value for (home, away), value in adjusted.items()
+                   if ('胜' if home > away else ('负' if home < away else '平')) == label)
+        for label in ('胜', '平', '负')
+    }
+    return adjusted, {
+        'applied': True,
+        'strength': weight,
+        'before': {key: round(value, 6) for key, value in current.items()},
+        'target': {key: round(value, 6) for key, value in target.items()},
+        'after': {key: round(value, 6) for key, value in after.items()},
+    }
+
+
 def match_target_total(league='', total_over_odds=None, total_under_odds=None,
-                       asian_factor=1.0, goals_factor=1.0):
+                       asian_factor=1.0, goals_factor=1.0, total_line=2.5):
     """计算比赛目标总进球：大小球隐含总进球与联赛均值融合，再叠加盘口趋势因子。
 
     关键修正：
@@ -343,7 +469,7 @@ def match_target_total(league='', total_over_odds=None, total_under_odds=None,
     """
     league_profile = LEAGUE_PROFILES.get(league, {'avg_goals': 2.6, 'draw_rate': 0.27})
     avg_goals = league_profile['avg_goals']
-    ou_total = implied_total_from_ou(total_over_odds, total_under_odds)
+    ou_total = implied_total_from_ou(total_over_odds, total_under_odds, total_line)
     if ou_total:
         target = OU_TOTAL_BLEND * ou_total + (1 - OU_TOTAL_BLEND) * avg_goals
     else:
@@ -1961,10 +2087,14 @@ def assess_recommendation_quality(probabilities, prediction=None, context=None):
     if score_consistency.get('conflict'):
         conflict = True
 
-    if top_prob >= 0.52 and lead >= 0.08 and not conflict:
-        level, label, advice = 'strong', '强推荐', f'主推 {top_key}'
-    elif top_prob >= 0.43 and lead >= 0.045 and not conflict:
-        level, label, advice = 'medium', '可参考', f'主推 {top_key}'
+    if (top_prob >= BEIDAN_STRONG_MIN_PROBABILITY
+            and lead >= BEIDAN_STRONG_MIN_LEAD and not conflict):
+        level, label, advice = 'strong', '强推荐', f'单选 {top_key}'
+    elif (top_prob >= BEIDAN_MEDIUM_MIN_PROBABILITY
+          and lead >= BEIDAN_MEDIUM_MIN_LEAD and not conflict):
+        level, label = 'medium', '可参考'
+        combo = '/'.join(item['option'] for item in top2)
+        advice = f'建议双选 {combo}' if len(top2) >= 2 else f'谨慎 {top_key}'
     elif lead < 0.035 or conflict:
         level, label = 'split', '分歧较大'
         combo = '/'.join(item['option'] for item in top2)
@@ -1980,7 +2110,18 @@ def assess_recommendation_quality(probabilities, prediction=None, context=None):
         'lead': round(lead, 6),
         'top2': top2,
         'advice': advice,
-        'avoid_single': level in ('low', 'split', 'unknown'),
+        'avoid_single': level != 'strong',
+        'single_allowed': level == 'strong',
+        'high_precision': (
+            level == 'strong' and top_prob >= BEIDAN_HIGH_PRECISION_MIN_PROBABILITY
+        ),
+        'thresholds': {
+            'strong_probability': BEIDAN_STRONG_MIN_PROBABILITY,
+            'strong_lead': BEIDAN_STRONG_MIN_LEAD,
+            'medium_probability': BEIDAN_MEDIUM_MIN_PROBABILITY,
+            'medium_lead': BEIDAN_MEDIUM_MIN_LEAD,
+            'high_precision_probability': BEIDAN_HIGH_PRECISION_MIN_PROBABILITY,
+        },
         'conflict': conflict,
         'score_consistency': score_consistency,
     }
@@ -2521,7 +2662,9 @@ def build_beidan_match_analysis(spf_result):
         confidence_level = 'low' if quality_level in ('low', 'split') else quality_level
         decision = build_decision(
             pprobs, confidence=confidence_level,
-            upset_alert=bool(upset.get('alert')), min_single=0.48, min_margin=0.08,
+            upset_alert=bool(upset.get('alert')),
+            min_single=BEIDAN_STRONG_MIN_PROBABILITY,
+            min_margin=BEIDAN_STRONG_MIN_LEAD,
         )
         score_strategy = build_score_strategy(
             cands, confidence=confidence_level,
@@ -2584,7 +2727,7 @@ def analyze_spf(match, asian_data=None, cs_data=None, goals_data=None):
         
         if probs:
             result['odds'] = odds
-            result['margin'] = sum(probs.values()) - 1.0
+            result['margin'] = sum(1.0 / value for value in odds.values()) - 1.0
             
             home_win_prob = probs.get('胜', 0.33)
             draw_prob = probs.get('平', 0.33)
@@ -2611,7 +2754,7 @@ def analyze_spf(match, asian_data=None, cs_data=None, goals_data=None):
             result['prediction'] = max(model_probs, key=model_probs.get)
             result['confidence'] = model_probs[result['prediction']]
             
-            total_over, total_under = _latest_ou_odds(goals_data)
+            total_line, total_over, total_under = _latest_ou_market(goals_data)
             score_prediction = predict_scores_by_poisson(
                 model_probs.get('胜', home_win_prob),
                 model_probs.get('平', draw_prob),
@@ -2620,6 +2763,7 @@ def analyze_spf(match, asian_data=None, cs_data=None, goals_data=None):
                 handicap=match.get('handicap', 0),
                 total_over_odds=total_over,
                 total_under_odds=total_under,
+                total_line=total_line,
             )
             joint_scores, joint_meta = apply_beidan_joint_market_state(
                 score_prediction.get('score_probs'), asian_data, goals_data
@@ -2653,6 +2797,9 @@ def analyze_spf(match, asian_data=None, cs_data=None, goals_data=None):
             ]
             result['lambda_home'] = score_prediction['lambda_home']
             result['lambda_away'] = score_prediction['lambda_away']
+            result['target_total'] = score_prediction.get('target_total')
+            result['total_line'] = total_line
+            result['outcome_anchor'] = score_prediction.get('outcome_anchor')
 
             # 爆冷识别：基于校准后 1X2 概率判定风险，并从比分分布挑反向爆冷比分
             upset = assess_upset_risk(model_probs)
@@ -2733,7 +2880,7 @@ def analyze_rqspf(match, asian_data=None, goals_data=None):
     draw_prob = probs.get('平', 0.33)
     away_win_prob = probs.get('负', 0.34)
 
-    total_over, total_under = _latest_ou_odds(goals_data)
+    total_line, total_over, total_under = _latest_ou_market(goals_data)
     score_prediction = predict_scores_by_poisson(
         home_win_prob,
         draw_prob,
@@ -2742,6 +2889,7 @@ def analyze_rqspf(match, asian_data=None, goals_data=None):
         handicap=handicap_value,
         total_over_odds=total_over,
         total_under_odds=total_under,
+        total_line=total_line,
     )
     score_prediction['score_probs'], result['joint_market_state'] = apply_beidan_joint_market_state(
         score_prediction['score_probs'], asian_data, goals_data
@@ -2772,6 +2920,9 @@ def analyze_rqspf(match, asian_data=None, goals_data=None):
     result['confidence'] = rq_probs[result['prediction']]
     result['lambda_home'] = score_prediction['lambda_home']
     result['lambda_away'] = score_prediction['lambda_away']
+    result['target_total'] = score_prediction.get('target_total')
+    result['total_line'] = total_line
+    result['outcome_anchor'] = score_prediction.get('outcome_anchor')
     result['rqspf_meta'] = rq_meta
     if asian_data and asian_data.get('history'):
         result['asian_trend'] = analyze_asian_trend(asian_data['history'])
@@ -2801,16 +2952,22 @@ def analyze_rqspf(match, asian_data=None, goals_data=None):
     
     return result
 
-def _latest_ou_odds(goals_data):
-    """从总进球盘口历史取最新一条的大小球赔率"""
+def _latest_ou_market(goals_data):
+    """Return the latest total line together with over/under prices."""
     if not goals_data or not goals_data.get('history'):
-        return None, None
+        return 2.5, None, None
     for entry in reversed(goals_data['history']):
         o = entry.get('over_odds')
         u = entry.get('under_odds')
         if o and u:
-            return o, u
-    return None, None
+            return _parse_total_line_value(entry.get('line'), default=2.5), o, u
+    return 2.5, None, None
+
+
+def _latest_ou_odds(goals_data):
+    """Backward-compatible two-value view used by older callers/tests."""
+    _, over_odds, under_odds = _latest_ou_market(goals_data)
+    return over_odds, under_odds
 
 
 def analyze_bifen(match, bifen_odds=None, asian_data=None, goals_data=None):
@@ -2847,12 +3004,18 @@ def analyze_bifen(match, bifen_odds=None, asian_data=None, goals_data=None):
     )
 
     # 2. 大小球隐含总进球 + 盘口趋势因子
-    total_over, total_under = _latest_ou_odds(goals_data)
+    total_line, total_over, total_under = _latest_ou_market(goals_data)
     asian_factor = calculate_asian_goal_factor(asian_data['history']) if asian_data and asian_data.get('history') else 1.0
     goals_factor = calculate_goals_factor(goals_data['history']) if goals_data and goals_data.get('history') else 1.0
-    target_total = match_target_total(match['league'], total_over, total_under, asian_factor, goals_factor)
+    target_total = match_target_total(
+        match['league'], total_over, total_under, asian_factor, goals_factor,
+        total_line=total_line,
+    )
     lam_home, lam_away = match_lambdas(p_home, p_draw, p_away, target_total)
     model_matrix = build_dixon_coles_matrix(lam_home, lam_away)
+    model_matrix, result['outcome_anchor'] = anchor_score_outcomes(
+        model_matrix, {'胜': p_home, '平': p_draw, '负': p_away}
+    )
 
     # 3. 市场比分赔率融合（若有）
     market_probs = None
@@ -2946,12 +3109,19 @@ def analyze_zjq(match, zjq_odds=None, asian_data=None, goals_data=None):
     
     # 统一管线：大小球隐含总进球 + 强度感知 λ + Dixon-Coles 低比分修正
     # 与比分预测共用同一组 λ，保证 总进球分布 == 比分分布之和（一致性）
-    total_over, total_under = _latest_ou_odds(goals_data)
+    total_line, total_over, total_under = _latest_ou_market(goals_data)
     asian_factor = calculate_asian_goal_factor(asian_data['history']) if asian_data and asian_data.get('history') else 1.0
     goals_factor = calculate_goals_factor(goals_data['history']) if goals_data and goals_data.get('history') else 1.0
-    target_total = match_target_total(match.get('league'), total_over, total_under, asian_factor, goals_factor)
+    target_total = match_target_total(
+        match.get('league'), total_over, total_under, asian_factor, goals_factor,
+        total_line=total_line,
+    )
     lam_home, lam_away = match_lambdas(home_prob_norm, draw_prob_norm, away_prob_norm, target_total)
     dc_matrix = build_dixon_coles_matrix(lam_home, lam_away)
+    dc_matrix, result['outcome_anchor'] = anchor_score_outcomes(
+        dc_matrix,
+        {'胜': home_prob_norm, '平': draw_prob_norm, '负': away_prob_norm},
+    )
     dc_matrix, result['joint_market_state'] = apply_beidan_joint_market_state(
         dc_matrix, asian_data, goals_data
     )
@@ -3273,9 +3443,10 @@ def generate_beidan_recommendations(date=None, bet_types=None, source='okooo', s
         'match_fetch': match_meta,
         'history_summary': summarize_beidan_history(limit=200),
     }
-    # 高置信单推聚合：只把 strong/medium 的场次单推拎出来，
-    # 让"预测结果"聚焦高命中率场次（split/low 不进单推，由前端决定双选/跳过）。
+    # 高置信单推聚合：只有 walk-forward 验证通过的 strong 才进入单推。
+    # medium 保留在观察清单中，但明确按双选/观望处理，避免稀释推荐准确率。
     top_picks = []
+    watch_picks = []
     pick_levels = {'strong': 0, 'medium': 0, 'split': 0, 'low': 0, 'unknown': 0}
     for rec in recommendations:
         for bet_type in ('spf', 'rqspf', 'zjq', 'bifen', 'bqc'):
@@ -3287,19 +3458,24 @@ def generate_beidan_recommendations(date=None, bet_types=None, source='okooo', s
             pick_levels[level] = pick_levels.get(level, 0) + 1
             admission = sec.get('market_admission') or {}
             market_required = bet_type in ('rqspf', 'zjq')
-            if level in ('strong', 'medium') and (not market_required or admission.get('official')):
-                top_picks.append({
-                    'num': rec.get('num'),
-                    'league': rec.get('league'),
-                    'home': rec.get('home'),
-                    'away': rec.get('away'),
-                    'bet_type': bet_type,
-                    'prediction': sec.get('prediction'),
-                    'confidence': sec.get('confidence'),
-                    'level': level,
-                    'advice': q.get('advice'),
-                })
+            pick = {
+                'num': rec.get('num'),
+                'league': rec.get('league'),
+                'home': rec.get('home'),
+                'away': rec.get('away'),
+                'bet_type': bet_type,
+                'prediction': sec.get('prediction'),
+                'confidence': sec.get('confidence'),
+                'level': level,
+                'advice': q.get('advice'),
+                'high_precision': bool(q.get('high_precision')),
+            }
+            if level == 'strong' and (not market_required or admission.get('official')):
+                top_picks.append(pick)
+            elif level == 'medium' and (not market_required or admission.get('official')):
+                watch_picks.append(pick)
     result['top_picks'] = top_picks
+    result['watch_picks'] = watch_picks
     result['pick_levels'] = pick_levels
 
     # 爆冷预警聚合：从各场比分分析里拎出 high/medium 爆冷风险场次，

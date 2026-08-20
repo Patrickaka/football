@@ -19,17 +19,17 @@ class FootballAccuracyGateTests(unittest.TestCase):
         self.assertAlmostEqual(reliability, 0.6736, places=4)
         self.assertLess(reliability, 0.80)
 
-    def test_information_complete_but_reliability_below_80_abstains(self):
+    def test_validated_market_threshold_is_not_blocked_by_impossible_reliability_gate(self):
         result = build_accuracy_gate({
             "standard": {
                 "probabilities": {"胜": 0.72, "平": 0.19, "负": 0.09},
                 "market_probabilities": {"胜": 0.70, "平": 0.20, "负": 0.10},
             },
         }, confidence={"score": 0.88})
-        self.assertFalse(result["spf"]["selected"])
+        self.assertTrue(result["spf"]["selected"])
         self.assertAlmostEqual(result["spf"]["information_completeness"], 0.88)
         self.assertAlmostEqual(result["spf"]["prediction_reliability"], 0.6736)
-        self.assertIn("预测可信度低于80%", result["spf"]["reasons"])
+        self.assertNotIn("预测可信度低于60%", result["spf"]["reasons"])
 
     def test_spf_abstains_below_threshold(self):
         result = build_accuracy_gate({

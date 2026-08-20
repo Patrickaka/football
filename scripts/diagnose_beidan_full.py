@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 北单全管线离线回测 + 选门限诊断
-- 用真实 analyze_spf / analyze_bifen / analyze_zjq 跑 2744 场历史
+- 用真实 analyze_spf / analyze_bifen / analyze_zjq 跑五大联赛双赛季历史
 - 测量 SPF 全量/强推荐/中+ 命中率与覆盖率
 - 扫描 assess_recommendation_quality 的 strong/medium 阈值，找经验最优
 用法: python3 scripts/diagnose_beidan_full.py
@@ -39,9 +39,9 @@ fake_ouzhi._store = {}
 def load_matches():
     rows = []
     for fn in sorted(os.listdir(CSV_DIR)):
-        if not (fn.endswith('.csv') and fn[:2] in DIV_LEAGUE):
+        div = fn.split('_', 1)[0]
+        if not (fn.endswith('.csv') and div in DIV_LEAGUE):
             continue
-        div = fn[:2]
         league = DIV_LEAGUE[div]
         with open(os.path.join(CSV_DIR, fn), encoding='utf-8-sig') as f:
             for r in csv.DictReader(f):
@@ -132,7 +132,7 @@ def main():
             s_n += 1
 
     print("\n" + "=" * 70)
-    print("北单全管线离线回测（2744 场五大联赛）")
+    print("北单全管线离线回测（五大联赛双赛季）")
     print("=" * 70)
     print(f"SPF  全量预测数: {len(spf_records)}")
     print(f"比分 bifen : LogLoss={s_ll/s_n:.4f}  Brier={s_brier/s_n:.4f}  Top1={100*s_top1/s_n:.2f}%  Top3={100*s_top3/s_n:.2f}%")
@@ -161,10 +161,10 @@ def main():
     print("\n[SPF 选门限扫描 — 经验最优 strong 阈值]")
     print(f"{'strong_p':>8}{'strong_lead':>12}{'acc':>8}{'cov':>8}{'med_p':>8}{'med_lead':>10}{'m_acc':>8}{'m_cov':>8}")
     best = None
-    for sp in (0.48, 0.50, 0.52, 0.54):
-        for slead in (0.06, 0.08, 0.10):
-            for mp in (0.42, 0.43, 0.45):
-                for mlead in (0.04, 0.045, 0.05):
+    for sp in (0.52, 0.56, 0.60, 0.65, 0.70):
+        for slead in (0.08, 0.10, 0.12):
+            for mp in (0.50, 0.52, 0.54):
+                for mlead in (0.06, 0.08, 0.10):
                     sh = sn = mh = mn = 0
                     for rec in spf_records:
                         probs = rec['probs']
@@ -186,13 +186,13 @@ def main():
                     m_acc = 100*mh/mn if mn else 0
                     s_cov = 100*sn/len(spf_records)
                     m_cov = 100*mn/len(spf_records)
-                    if best is None or (s_acc > best[0] and s_cov >= 40):
+                    if best is None or (s_acc > best[0] and s_cov >= 20):
                         best = (s_acc, sp, slead, s_cov, m_acc, mp, mlead, m_cov)
-                    if sp == 0.50 and slead == 0.08 and mp == 0.43 and mlead == 0.045:
+                    if sp == 0.60 and slead == 0.10 and mp == 0.54 and mlead == 0.08:
                         print(f"{sp:>8.2f}{slead:>12.2f}{s_acc:>7.2f}%{s_cov:>7.1f}%{mp:>8.2f}{mlead:>10.3f}{m_acc:>7.2f}%{m_cov:>7.1f}%  (当前)")
-                    if (sp, slead) in ((0.52, 0.08), (0.54, 0.08), (0.54, 0.06)) and mp == 0.43 and mlead == 0.045:
+                    if (sp, slead) in ((0.56, 0.10), (0.65, 0.10), (0.70, 0.10)) and mp == 0.54 and mlead == 0.08:
                         print(f"{sp:>8.2f}{slead:>12.2f}{s_acc:>7.2f}%{s_cov:>7.1f}%{mp:>8.2f}{mlead:>10.3f}{m_acc:>7.2f}%{m_cov:>7.1f}%")
-    print(f"\n经验最优候选: strong(p>={best[1]}, lead>={best[2]}) acc={best[0]:.2f}% cov={best[3]:.1f}% | med acc={best[4]:.2f}% cov={best[5]:.1f}%")
+    print(f"\n经验最优候选: strong(p>={best[1]}, lead>={best[2]}) acc={best[0]:.2f}% cov={best[3]:.1f}% | med acc={best[4]:.2f}% cov={best[7]:.1f}%")
 
 
 if __name__ == '__main__':

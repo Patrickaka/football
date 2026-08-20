@@ -9,14 +9,14 @@ from src.football.result_sync import (
 
 class FootballAccuracyPolicyTests(unittest.TestCase):
     def test_actionable_rule_is_frozen_from_prematch_probabilities(self):
-        strong = _prediction_decision_snapshot({'H': 0.58, 'D': 0.25, 'A': 0.17})
+        strong = _prediction_decision_snapshot({'H': 0.62, 'D': 0.23, 'A': 0.15})
         weak = _prediction_decision_snapshot({'H': 0.43, 'D': 0.32, 'A': 0.25})
 
         self.assertTrue(strong['eligible'])
         self.assertEqual(strong['prediction'], 'H')
         self.assertFalse(weak['eligible'])
-        self.assertEqual(strong['policy_version'], 'selective-1x2-v2')
-        self.assertEqual(strong['min_probability'], 0.56)
+        self.assertEqual(strong['policy_version'], 'selective-1x2-v3-walkforward')
+        self.assertEqual(strong['min_probability'], 0.60)
 
     def test_stats_separate_all_predictions_from_actionable_coverage(self):
         history = PredictionHistory.__new__(PredictionHistory)

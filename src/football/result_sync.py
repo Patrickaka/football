@@ -63,11 +63,14 @@ from ..common import repositories
 
 log = logging.getLogger('football')
 
-PRODUCTION_MODEL_VERSION = 'football-v2026.07.20-accuracy-02'
-# 3504-match five-league backtest: raising the official-pick gate from 0.50
-# to 0.56 improved accuracy from 63.64% to 68.65%, with 34.05% coverage.
-ACTIONABLE_MIN_PROBABILITY = 0.56
-ACTIONABLE_MIN_MARGIN = 0.15
+PRODUCTION_MODEL_VERSION = 'football-v2026.08.20-walkforward-03'
+# 3,504-match chronological validation (2024/25 -> 2025/26): the 0.60 gate
+# held 72.34% -> 72.43% accuracy at 27.85% -> 24.43% coverage.  Margin 0.10
+# remains explicit for auditability; at a normalized 60% top probability the
+# probability threshold is normally the binding constraint.
+ACTIONABLE_MIN_PROBABILITY = 0.60
+ACTIONABLE_MIN_MARGIN = 0.10
+ACTIONABLE_POLICY_VERSION = 'selective-1x2-v3-walkforward'
 
 
 def _prediction_decision_snapshot(predicted_1x2: Dict[str, float]) -> Dict:
@@ -77,7 +80,7 @@ def _prediction_decision_snapshot(predicted_1x2: Dict[str, float]) -> Dict:
     top_probability = ranked[0][1] if ranked else 0.0
     margin = top_probability - ranked[1][1] if len(ranked) > 1 else 0.0
     return {
-        'policy_version': 'selective-1x2-v2',
+        'policy_version': ACTIONABLE_POLICY_VERSION,
         'eligible': top_probability >= ACTIONABLE_MIN_PROBABILITY and margin >= ACTIONABLE_MIN_MARGIN,
         'prediction': ranked[0][0] if ranked else None,
         'top_probability': round(top_probability, 6),
@@ -1747,7 +1750,7 @@ class PredictionHistory:
             'valid_score_predictions': valid_score_predictions,
             'valid_1x2_predictions': valid_1x2_predictions,
             'actionable_1x2': {
-                'policy_version': 'selective-1x2-v2',
+                'policy_version': ACTIONABLE_POLICY_VERSION,
                 'total': actionable_total,
                 'correct': actionable_correct,
                 'hit_rate': actionable_correct / actionable_total if actionable_total else 0.0,

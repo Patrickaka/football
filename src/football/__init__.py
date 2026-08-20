@@ -31,8 +31,14 @@ from ..common.paths import data_path
 
 log = setup_logger('football')
 
-FOOTBALL_PREDICTION_LOGIC_VERSION = '2026-08-19-joint-market-state-draw-cover-v24'
-LOTTERY_OFFICIAL_ODDS_WEIGHT = 0.40
+FOOTBALL_PREDICTION_LOGIC_VERSION = '2026-08-20-joint-market-state-walkforward-v25'
+# Official 1X2 prices are the strongest observable production signal.  Raising
+# their share from 40% to 80% improved the pooled high-confidence proxy from
+# 61.67% to 62.55%; the model retains 20% for team/Asian/context information.
+LOTTERY_OFFICIAL_ODDS_WEIGHT = 0.80
+SCORE_1X2_MARKET_ANCHOR_STRENGTH = 0.75
+ACTIONABLE_1X2_MIN_PROBABILITY = 0.60
+ACTIONABLE_1X2_MIN_MARGIN = 0.10
 
 # ELO 评分系统（延迟导入）
 try:
@@ -6124,6 +6130,71 @@ def _adjust_score_probs_with_total_movement(score_probs: Dict[str, float], total
     }
 
 
+def _anchor_score_candidates_to_1x2(candidates, euro,
+                                    strength=SCORE_1X2_MARKET_ANCHOR_STRENGTH):
+    """Partially anchor final score marginals to de-vigged closing 1X2 odds.
+
+    Every upstream score transform is free to improve the within-outcome score
+    shape.  This guard only limits aggregate H/D/A drift; a 0.75 geometric
+    anchor leaves 25% of the team, Asian-market and context signal intact.
+    """
+    rows = []
+    current = {'home': 0.0, 'draw': 0.0, 'away': 0.0}
+    for score, probability in candidates or []:
+        try:
+            home_goals, away_goals = int(score[0]), int(score[1])
+            probability = max(0.0, float(probability))
+        except (TypeError, ValueError, IndexError):
+            continue
+        outcome = 'home' if home_goals > away_goals else ('away' if home_goals < away_goals else 'draw')
+        rows.append(((home_goals, away_goals), probability, outcome))
+        current[outcome] += probability
+    total = sum(current.values())
+    if total <= 0 or any(value <= 0 for value in current.values()):
+        return candidates, {'applied': False, 'reason': 'incomplete_score_distribution'}
+    current = {key: value / total for key, value in current.items()}
+
+    close = (euro or {}).get('close') or {}
+    try:
+        target = {
+            key: max(0.0, float(close.get(key, 0.0)))
+            for key in ('home', 'draw', 'away')
+        }
+    except (TypeError, ValueError):
+        return candidates, {'applied': False, 'reason': 'invalid_market_probabilities'}
+    target_total = sum(target.values())
+    if target_total <= 0 or any(value <= 0 for value in target.values()):
+        return candidates, {'applied': False, 'reason': 'missing_market_probabilities'}
+    target = {key: value / target_total for key, value in target.items()}
+
+    weight = max(0.0, min(1.0, float(strength)))
+    adjusted = [
+        (score, probability * (target[outcome] / current[outcome]) ** weight, outcome)
+        for score, probability, outcome in rows
+    ]
+    adjusted_total = sum(probability for _, probability, _ in adjusted)
+    if adjusted_total <= 0:
+        return candidates, {'applied': False, 'reason': 'zero_adjusted_total'}
+    result = sorted(
+        ((score, probability / adjusted_total) for score, probability, _ in adjusted),
+        key=lambda item: -item[1],
+    )
+    after = {
+        key: sum(probability for (home_goals, away_goals), probability in result
+                 if ('home' if home_goals > away_goals else
+                     ('away' if home_goals < away_goals else 'draw')) == key)
+        for key in ('home', 'draw', 'away')
+    }
+    return result, {
+        'applied': True,
+        'strength': weight,
+        'before': {key: round(value, 6) for key, value in current.items()},
+        'target': {key: round(value, 6) for key, value in target.items()},
+        'after': {key: round(value, 6) for key, value in after.items()},
+        'source': 'closing_euro_market',
+    }
+
+
 def _anchor_score_candidates_to_goal_mean(candidates, total, max_shift=0.60):
     """Anchor score expected goals to the O/U target while preserving 1X2 mass."""
     rows = []
@@ -7276,7 +7347,8 @@ def build_match_analysis(result):
             conf_level = 'high' if conf_score >= 0.68 else ('medium' if conf_score >= 0.55 else 'low')
         decision = build_decision(
             probs, confidence=conf_level, upset_alert=bool(upset.get('alert')),
-            min_single=0.54, min_margin=0.10,
+            min_single=ACTIONABLE_1X2_MIN_PROBABILITY,
+            min_margin=ACTIONABLE_1X2_MIN_MARGIN,
         )
         score_strategy = build_score_strategy(
             candidates, confidence=conf_level, upset_alert=bool(upset.get('alert')),
@@ -7858,6 +7930,18 @@ def analyze_match(match, force_refresh=False):
     except Exception as e:
         meta['joint_market_state'] = {'applied': False, 'reason': str(e)}
         log.warning(f"joint market adjustment failed: {e}")
+
+    # Multi-stage score corrections can unintentionally move aggregate H/D/A
+    # mass away from the efficient closing market.  Re-anchor those marginals
+    # before the final goal-mean repair; the latter preserves 1X2 by design.
+    try:
+        candidates, outcome_market_anchor = _anchor_score_candidates_to_1x2(
+            candidates, euro
+        )
+        meta['outcome_market_anchor'] = outcome_market_anchor
+    except Exception as e:
+        meta['outcome_market_anchor'] = {'applied': False, 'reason': str(e)}
+        log.warning(f"score 1X2 market anchor failed: {e}")
 
     # History calibration is useful for residual bias, but it must not undo the
     # current O/U market's total-goal signal.  Make the market anchor the final

@@ -29,9 +29,10 @@ fake_ouzhi._store = {}
 def load_matches():
     rows = []
     for fn in sorted(os.listdir(CSV_DIR)):
-        if not (fn.endswith('.csv') and fn[:2] in DIV_LEAGUE):
+        div = fn.split('_', 1)[0]
+        if not (fn.endswith('.csv') and div in DIV_LEAGUE):
             continue
-        div = fn[:2]; league = DIV_LEAGUE[div]
+        league = DIV_LEAGUE[div]
         with open(os.path.join(CSV_DIR, fn), encoding='utf-8-sig') as f:
             for r in csv.DictReader(f):
                 hg = safe_float(r.get('FTHG')); ag = safe_float(r.get('FTAG'))

@@ -12,11 +12,13 @@ from src.beidan import (
     assess_upset_risk,
     build_zjq_group_recommendation,
     apply_beidan_joint_market_state,
+    anchor_score_outcomes,
     build_beidan_joint_market_state,
     build_water_market_prediction,
     enhance_scores_with_cs,
     generate_beidan_recommendations,
     parse_beidan_handicap,
+    implied_total_from_ou,
     pick_upset_scores,
     rqspf_probs_from_score_probs,
     save_beidan_prediction_snapshot,
@@ -24,6 +26,32 @@ from src.beidan import (
 
 
 class BeidanQualityTests(unittest.TestCase):
+    def test_total_line_changes_implied_goal_mean(self):
+        at_two_half = implied_total_from_ou(1.90, 1.90, line=2.5)
+        at_three = implied_total_from_ou(1.90, 1.90, line=3.0)
+
+        self.assertGreater(at_three, at_two_half + 0.4)
+
+    def test_score_outcome_anchor_reduces_market_drift(self):
+        matrix = {(1, 0): 0.25, (2, 0): 0.10, (1, 1): 0.40,
+                  (0, 1): 0.20, (0, 2): 0.05}
+        anchored, meta = anchor_score_outcomes(
+            matrix, {'胜': 0.60, '平': 0.24, '负': 0.16}
+        )
+        home_mass = sum(p for (home, away), p in anchored.items() if home > away)
+
+        self.assertTrue(meta['applied'])
+        self.assertGreater(home_mass, 0.35)
+        self.assertAlmostEqual(sum(anchored.values()), 1.0)
+
+    def test_medium_quality_is_not_single_pick(self):
+        quality = assess_recommendation_quality(
+            {'胜': 0.56, '平': 0.25, '负': 0.19}, '胜'
+        )
+
+        self.assertEqual(quality['level'], 'medium')
+        self.assertTrue(quality['avoid_single'])
+
     def test_water_market_prediction_uses_one_matrix_for_all_markets(self):
         result = build_water_market_prediction({
             'score_probs': [[2, 0, 0.40], [1, 0, 0.20], [1, 1, 0.25], [0, 1, 0.15]],

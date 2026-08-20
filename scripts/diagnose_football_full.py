@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-足球 SPF 单选门限诊断（离线，2744 场）
+足球 SPF 单选门限诊断（离线，五大联赛双赛季）
 用与足球同源的 Dixon-Coles 构造 candidates，边际化得 1X2，
 扫描 build_decision 的 min_single/min_margin，测量「单选」命中率与覆盖率。
 """
@@ -26,9 +26,10 @@ def safe_float(v, default=None):
 def load_matches():
     rows = []
     for fn in sorted(os.listdir(CSV_DIR)):
-        if not (fn.endswith('.csv') and fn[:2] in DIV_LEAGUE):
+        div = fn.split('_', 1)[0]
+        if not (fn.endswith('.csv') and div in DIV_LEAGUE):
             continue
-        div = fn[:2]; league = DIV_LEAGUE[div]
+        league = DIV_LEAGUE[div]
         with open(os.path.join(CSV_DIR, fn), encoding='utf-8-sig') as f:
             for r in csv.DictReader(f):
                 hg = safe_float(r.get('FTHG')); ag = safe_float(r.get('FTAG'))
@@ -81,7 +82,7 @@ def main():
     print(f"样本: {len(recs)} 场\n")
 
     print(f"{'min_single':>11}{'min_margin':>11}{'single_acc':>12}{'single_cov':>12}{'playable_acc':>14}{'playable_cov':>14}")
-    for ms in (0.48, 0.50, 0.52, 0.54, 0.56):
+    for ms in (0.52, 0.56, 0.60, 0.65, 0.70):
         for mm in (0.08, 0.10, 0.12):
             sh = sn = ph = pn = 0
             for rec in recs:
@@ -94,11 +95,11 @@ def main():
                     pn += 1
                     if dec['primary'] == rec['actual']:
                         ph += 1
-            if ms == 0.48 and mm == 0.08:
+            if ms == 0.60 and mm == 0.10:
                 print(f"{ms:>11.2f}{mm:>11.2f}{100*sh/sn:>11.2f}%{100*sn/len(recs):>11.1f}%{100*ph/pn:>13.2f}%{100*pn/len(recs):>13.1f}%  <-- 当前线上")
             else:
                 print(f"{ms:>11.2f}{mm:>11.2f}{100*sh/sn:>11.2f}%{100*sn/len(recs):>11.1f}%{100*ph/pn:>13.2f}%{100*pn/len(recs):>13.1f}%")
-    print(f"\n当前线上 build_match_analysis 用 min_single=0.48, min_margin=0.08。")
+    print(f"\n当前线上 build_match_analysis 用 min_single=0.60, min_margin=0.10。")
 
 
 if __name__ == '__main__':

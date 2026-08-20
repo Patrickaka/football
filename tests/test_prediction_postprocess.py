@@ -6,6 +6,23 @@ from src.football.okooo_lottery import enrich_with_okooo_lottery, parse_okooo_jc
 
 
 class PredictionPostprocessTests(unittest.TestCase):
+    def test_score_outcome_anchor_moves_marginals_toward_closing_market(self):
+        candidates = [
+            ((1, 0), 0.30), ((2, 0), 0.10),
+            ((1, 1), 0.35), ((0, 1), 0.20), ((0, 2), 0.05),
+        ]
+        anchored, meta = football._anchor_score_candidates_to_1x2(
+            candidates,
+            {'close': {'home': 0.60, 'draw': 0.24, 'away': 0.16}},
+        )
+        after_home = sum(prob for (home, away), prob in anchored if home > away)
+        after_draw = sum(prob for (home, away), prob in anchored if home == away)
+
+        self.assertTrue(meta['applied'])
+        self.assertGreater(after_home, 0.40)
+        self.assertLess(after_draw, 0.35)
+        self.assertAlmostEqual(sum(prob for _, prob in anchored), 1.0)
+
     def test_okooo_jczq_offer_enriches_500_analysis_match(self):
         html = '''
         <table><tr>
@@ -117,10 +134,10 @@ class PredictionPostprocessTests(unittest.TestCase):
         handicap = markets['handicap']
         self.assertAlmostEqual(handicap['model_probabilities']['让胜'], 0.30)
         self.assertAlmostEqual(handicap['market_probabilities']['让胜'], 0.50)
-        self.assertAlmostEqual(handicap['market_weight'], 0.40)
-        self.assertAlmostEqual(handicap['probabilities']['让胜'], 0.38)
-        self.assertAlmostEqual(handicap['probabilities']['让平'], 0.34)
-        self.assertAlmostEqual(handicap['probabilities']['让负'], 0.28)
+        self.assertAlmostEqual(handicap['market_weight'], 0.80)
+        self.assertAlmostEqual(handicap['probabilities']['让胜'], 0.46)
+        self.assertAlmostEqual(handicap['probabilities']['让平'], 0.28)
+        self.assertAlmostEqual(handicap['probabilities']['让负'], 0.26)
 
     def test_spf_close_draw_is_exposed_as_cover_without_relabeling_top1(self):
         markets = football.lottery_market_probabilities([
