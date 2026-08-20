@@ -25,6 +25,26 @@ class BeidanMarketTimelineTests(unittest.TestCase):
         self.assertFalse(result["official"])
         self.assertEqual(result["skip_reason"], "market_conflicts_with_model")
 
+    def test_beidan_total_gate_uses_hk_water_and_validated_league(self):
+        section = {"probabilities": {"2": .20, "3": .45, "4": .35}}
+        goals = {"history": [{
+            "line": 2.5, "over_odds": .15, "under_odds": 1.20,
+        }]}
+        result = beidan.build_beidan_total_goals_accuracy_gate(section, goals, "德甲")
+
+        self.assertTrue(result["selected"])
+        self.assertEqual(result["decision"], "over")
+        self.assertGreaterEqual(result["probability"], .65)
+
+    def test_beidan_total_gate_rejects_unvalidated_league(self):
+        section = {"probabilities": {"2": .20, "3": .45, "4": .35}}
+        goals = {"history": [{
+            "line": 2.5, "over_odds": .15, "under_odds": 1.20,
+        }]}
+        result = beidan.build_beidan_total_goals_accuracy_gate(section, goals, "意甲")
+
+        self.assertFalse(result["selected"])
+
     def test_repeated_save_appends_only_changed_market_layers(self):
         stored = []
         match = {

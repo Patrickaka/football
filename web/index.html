@@ -1255,6 +1255,8 @@ const pageTitle = document.getElementById('page-title');
 const pageDesc = document.getElementById('page-desc');
 let allMatches = [];
 let allPredictions = [];
+let footballAnalysisProgress = null;
+let footballAnalysisFailures = [];
 let predictionExportData = null;
 let listFilter = '';
 let groupMode = 'league';
@@ -1476,9 +1478,9 @@ function apiPrefix() {
   return '';
 }
 
-async function fetchJson(path) {
+async function fetchJson(path, options = {}) {
   const url = apiPrefix() + path;
-  const r = await fetch(url, { cache: 'no-store' });
+  const r = await fetch(url, { cache: 'no-store', ...options });
   const text = await r.text();
   if (!r.ok) {
     const htmlTitle = text.match(/<h1[^>]*>(.*?)<\/h1>/i) || text.match(/<title[^>]*>(.*?)<\/title>/i);
@@ -1489,6 +1491,19 @@ async function fetchJson(path) {
     return JSON.parse(text);
   } catch {
     throw new Error('响应不是 JSON: ' + text.slice(0, 60));
+  }
+}
+
+async function fetchJsonWithTimeout(path, timeoutMs = 30000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetchJson(path, { signal: controller.signal });
+  } catch (error) {
+    if (error?.name === 'AbortError') throw new Error(`单场分析超时（${Math.round(timeoutMs / 1000)}秒）`);
+    throw error;
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -1863,7 +1878,7 @@ document.addEventListener('keydown', event => {
   }
 });
 
-let footballQualityFilter = 'all';
+let footballQualityFilter = 'selected';
 let footballSort = 'time';
 let footballPage = 1;
 let footballPageSize = 12;
@@ -1898,11 +1913,20 @@ function setFootballSort(sort) {
 
 async function loadAllPredictions() {
   loading('正在分析比赛数据…');
+  allPredictions = [];
+  footballAnalysisFailures = [];
   try {
     const results = [];
     for (let i = 0; i < allMatches.length; i++) {
       const m = allMatches[i];
-      loading(`正在分析 ${m.home} vs ${m.away} (${i + 1}/${allMatches.length})…`);
+      footballAnalysisProgress = {
+        active: true,
+        completed: i,
+        total: allMatches.length,
+        current: `${m.home} vs ${m.away}`,
+      };
+      if (results.length) renderFootballPredictions([...results]);
+      else loading(`正在分析 ${m.home} vs ${m.away} (${i + 1}/${allMatches.length})…`);
       const q = new URLSearchParams({
         match_id: m.match_id, home: m.home, away: m.away,
         league: m.league || '', time: m.time || '', num: m.num || '',
@@ -1921,16 +1945,23 @@ async function loadAllPredictions() {
         analysis_source_id_available: String(m.analysis_source_id_available !== false)
       });
       try {
-        const data = await fetchJson('/api/predict?' + q);
+        const data = await fetchJsonWithTimeout('/api/predict?' + q, 30000);
         if (!data.error && data.result) {
           results.push({ match: m, result: data.result });
+        } else {
+          footballAnalysisFailures.push({ match: m, reason: data.error || '未返回预测结果' });
         }
       } catch (e) {
+        footballAnalysisFailures.push({ match: m, reason: e.message || '分析失败' });
         console.warn(`预测 ${m.home} vs ${m.away} 失败:`, e);
       }
+      footballAnalysisProgress.completed = i + 1;
+      renderFootballPredictions([...results]);
     }
+    footballAnalysisProgress = null;
     renderFootballPredictions(results);
   } catch (e) {
+    footballAnalysisProgress = null;
     showError('预测分析失败：' + e.message);
   }
 }
@@ -1946,6 +1977,63 @@ function calculateFootballPredictionReliability(probability, informationComplete
   const info = Math.max(0, Math.min(1, Number(informationCompleteness) || 0));
   const threeWayBaseline = 1 / 3;
   return Math.max(0, Math.min(1, threeWayBaseline + (p - threeWayBaseline) * info));
+}
+
+function accuracyGateReasonText(reason) {
+  const reasons = {
+    market_history_insufficient: '盘口历史不足',
+    market_signal_weak: '盘口变化信号较弱',
+    market_conflicts_with_model: '盘口变化与模型方向冲突',
+    total_accuracy_gate_rejected: '大小球未通过跨赛季准确率门禁',
+  };
+  return reasons[reason] || String(reason || '');
+}
+
+function formatAccuracyGateValidation(gate) {
+  if (!gate?.validation) return '';
+  const holdout = gate.validation.holdout || gate.validation.seasons?.['2025/26'];
+  const accuracy = Number(holdout?.accuracy);
+  const count = Number(holdout?.sample_count);
+  if (!Number.isFinite(accuracy)) return '';
+  return `样本外 ${(accuracy * 100).toFixed(1)}%${Number.isFinite(count) ? ` / ${count}场` : ''}`;
+}
+
+function getAccuracyGatePresentation(gate, candidate, options = {}) {
+  const hasGate = Boolean(gate && typeof gate === 'object' && 'selected' in gate);
+  const independent = options.requireIndependent !== true
+    || !String(gate?.validation_status || '').includes('pending');
+  const selected = hasGate && gate.selected === true && independent;
+  const pending = hasGate && gate.selected === true && !independent;
+  const official = selected && options.officialBetAllowed === true;
+  const pick = gate?.candidate || gate?.decision || candidate || '-';
+  const reasons = (gate?.reasons || []).map(accuracyGateReasonText);
+  return {
+    status: selected ? 'selected' : pending || !hasGate ? 'watch' : 'abstain',
+    label: selected ? (official ? '正式精选' : '研究精选') : pending || !hasGate ? '观察' : '观望',
+    pick,
+    probability: Number(gate?.market_probability || gate?.probability || 0),
+    reasons,
+    validation: formatAccuracyGateValidation(gate),
+  };
+}
+
+function renderWebMarketRecommendation(label, state, pick, probabilityText = '') {
+  const colors = { selected: '#22c55e', watch: '#f59e0b', abstain: '#94a3b8' };
+  const color = colors[state?.status] || colors.abstain;
+  const isAbstain = state?.status === 'abstain';
+  const decision = isAbstain ? '不推荐' : (pick || state?.pick || '-');
+  const candidate = isAbstain && (pick || state?.pick)
+    ? ` <span style="color:var(--muted)">(模型候选 ${esc(pick || state.pick)})</span>` : '';
+  const reason = state?.reasons?.length
+    ? `<div style="font-size:10px;color:var(--muted);margin:2px 0 0 58px">${esc(state.reasons.slice(0, 2).join('、'))}</div>` : '';
+  const validation = state?.validation
+    ? `<span style="font-size:10px;color:var(--muted)"> · ${esc(state.validation)}</span>` : '';
+  return `<div style="font-size:13px;margin-top:5px">
+    <span style="color:var(--muted)">${esc(label)}：</span>
+    <span style="color:${color};font-weight:bold">[${esc(state?.label || '观望')}] ${esc(decision)}</span>${candidate}
+    ${probabilityText ? `<span style="color:var(--muted)"> · ${probabilityText}</span>` : ''}${validation}
+    ${reason}
+  </div>`;
 }
 
 function getFootballResultTier(item) {
@@ -1988,12 +2076,37 @@ function getFootballResultTier(item) {
   const predictionReliability = calculateFootballPredictionReliability(
     probability, informationCompleteness
   );
-  let tier = predictionReliability >= 0.80 ? 'ultra'
-    : predictionReliability >= 0.60 ? 'high'
-    : predictionReliability >= 0.50 ? 'cautious'
-    : 'cover';
+  const accuracyGate = r.lottery?.accuracy_gate || {};
+  const officialBetAllowed = r.decision_gate?.official_bet_allowed === true;
+  const spfState = getAccuracyGatePresentation(accuracyGate.spf, prediction, {
+    officialBetAllowed,
+  });
+  const totalGate = accuracyGate.total_goals;
+  const totalCandidate = totalGate?.candidate === 'over' ? '大2.5'
+    : totalGate?.candidate === 'under' ? '小2.5' : '-';
+  const totalState = getAccuracyGatePresentation(totalGate, totalCandidate, {
+    officialBetAllowed,
+  });
+  const rqspfState = getAccuracyGatePresentation(
+    accuracyGate.rqspf,
+    accuracyGate.rqspf?.candidate,
+    { officialBetAllowed, requireIndependent: true },
+  );
+  let primary = null;
+  if (spfState.status === 'selected') {
+    primary = { ...spfState, market: '胜平负', prediction: spfState.pick };
+  } else if (totalState.status === 'selected') {
+    primary = { ...totalState, market: '大小球', prediction: totalCandidate };
+  } else if (spfState.status === 'watch') {
+    primary = { ...spfState, market: '胜平负', prediction: spfState.pick };
+  } else if (totalState.status === 'watch' && totalCandidate !== '-') {
+    primary = { ...totalState, market: '大小球', prediction: totalCandidate };
+  } else if (rqspfState.status === 'watch' && rqspfState.pick !== '-') {
+    primary = { ...rqspfState, market: '让球胜平负', prediction: rqspfState.pick };
+  }
+  let tier = primary?.status || 'abstain';
 
-  const downgradeReasons = [];
+  const downgradeReasons = primary?.reasons ? [...primary.reasons] : [];
   if (r.upset?.alert) downgradeReasons.push('爆冷预警');
   if (r.risk_level?.level === 'high') downgradeReasons.push('综合风险高');
   if (r.confidence?.level === 'low') downgradeReasons.push('数据置信度低');
@@ -2001,26 +2114,21 @@ function getFootballResultTier(item) {
     downgradeReasons.push('欧赔与亚盘分歧');
   }
   if (downgradeReasons.length) {
-    const order = ['ultra', 'high', 'cautious', 'cover'];
-    tier = order[Math.min(order.indexOf(tier) + 1, order.length - 1)];
+    if (tier === 'selected') tier = 'watch';
   }
-  const labels = {
-    ultra: '超强单选', high: '高置信单选',
-    cautious: '谨慎/双选', cover: '双选/观望',
-  };
+  const labels = { selected: primary?.label || '研究精选', watch: '观察', abstain: '观望' };
   return {
-    tier, label: labels[tier], prediction, probability,
+    tier, label: labels[tier], prediction: primary?.prediction || prediction,
+    market: primary?.market || '胜平负',
+    probability: primary?.probability || probability,
     informationCompleteness, predictionReliability, downgradeReasons,
+    markets: { spf: spfState, rqspf: rqspfState, total_goals: totalState },
   };
 }
 
 function footballMatchPassesFilter(item) {
   if (footballQualityFilter === 'all') return true;
-  const reliability = getFootballResultTier(item).predictionReliability;
-  if (footballQualityFilter === 'ultra') return reliability >= 0.80;
-  if (footballQualityFilter === 'high') return reliability >= 0.60 && reliability < 0.80;
-  if (footballQualityFilter === 'cautious') return reliability >= 0.50 && reliability < 0.60;
-  return reliability < 0.50;
+  return getFootballResultTier(item).tier === footballQualityFilter;
 }
 
 function getLotteryHandicapExplanation(lottery) {
@@ -2051,6 +2159,52 @@ function getFootballScoreSettlement(score, lotteryHandicap) {
   const adjustedMargin = margin + handicap;
   const rqspf = adjustedMargin > 0 ? '让胜' : adjustedMargin < 0 ? '让负' : '让平';
   return `${standard} · ${rqspf}`;
+}
+
+function getFootballTopScoreReferences(result, limit = 3) {
+  const model = result?.model || {};
+  const topScores = Array.isArray(model.top_scores) ? model.top_scores : [];
+  if (topScores.length) {
+    return topScores.slice(0, limit).map(item => ({
+      score: item.score || (
+        item.home != null && item.away != null ? `${item.home}-${item.away}` : '-'
+      ),
+      probability: Number(item.prob || item.probability || 0),
+    }));
+  }
+  const candidates = Array.isArray(model.candidates) ? model.candidates : [];
+  return candidates.slice(0, limit).map(item => {
+    const pair = Array.isArray(item?.[0]) ? item[0] : [];
+    return {
+      score: pair.length >= 2 ? `${pair[0]}-${pair[1]}` : '-',
+      probability: Number(item?.[1] || 0),
+    };
+  }).filter(item => item.score !== '-');
+}
+
+function renderFootballScoreReferencePanel(results) {
+  const rows = (results || []).map(item => {
+    const match = item.match || item.result?.match || {};
+    const handicap = item.result?.lottery?.handicap?.handicap;
+    const scores = getFootballTopScoreReferences(item.result, 3);
+    if (!scores.length) return '';
+    const scoreHtml = scores.map((scoreItem, index) => {
+      const settlement = getFootballScoreSettlement(scoreItem.score, handicap);
+      return `<span style="display:inline-block;margin:2px 5px 2px 0;padding:4px 7px;border-radius:5px;background:${index === 0 ? 'rgba(59,130,246,.14)' : 'var(--bg)'};color:${index === 0 ? '#3b82f6' : 'var(--text)'}">
+        <b>${esc(scoreItem.score)}</b> <span style="font-size:10px;color:var(--muted)">${(scoreItem.probability * 100).toFixed(1)}%${settlement ? ` · ${esc(settlement)}` : ''}</span>
+      </span>`;
+    }).join('');
+    return `<div style="padding:7px 0;border-bottom:1px solid var(--line)">
+      <div style="font-size:12px;margin-bottom:3px"><b>${esc(match.home || '')} vs ${esc(match.away || '')}</b><span style="color:var(--muted)"> · ${esc(match.league || '')}</span></div>
+      <div>${scoreHtml}</div>
+    </div>`;
+  }).filter(Boolean).join('');
+  if (!rows) return '';
+  return `<div class="football-score-reference-panel" style="margin:10px 0 14px;padding:10px 12px;background:var(--card);border:1px solid var(--line);border-radius:9px">
+    <div style="font-size:13px;color:#3b82f6;font-weight:bold">⚽ 全部场次比分参考 Top3</div>
+    <div style="font-size:10px;color:var(--muted);margin:2px 0 5px">独立于精选门禁展示，不作主推；括号外为比分概率，后缀为胜平负/让球结算。</div>
+    ${rows}
+  </div>`;
 }
 
 function getLotteryLinkedSelections(lottery) {
@@ -2110,10 +2264,9 @@ function renderFootballPredictions(results) {
         <span class="toolbar-label">筛选</span>
         <div class="toolbar-buttons">
           <button onclick="setFootballQualityFilter('all')" class="tb-btn ${footballQualityFilter === 'all' ? 'tb-active' : ''}">全部</button>
-          <button onclick="setFootballQualityFilter('ultra')" class="tb-btn ${footballQualityFilter === 'ultra' ? 'tb-active' : ''}">超强可信≥80%</button>
-          <button onclick="setFootballQualityFilter('high')" class="tb-btn ${footballQualityFilter === 'high' ? 'tb-active' : ''}">高可信60%–80%</button>
-          <button onclick="setFootballQualityFilter('cautious')" class="tb-btn ${footballQualityFilter === 'cautious' ? 'tb-active' : ''}">谨慎50%–60%</button>
-          <button onclick="setFootballQualityFilter('cover')" class="tb-btn ${footballQualityFilter === 'cover' ? 'tb-active' : ''}">双选/观望</button>
+          <button onclick="setFootballQualityFilter('selected')" class="tb-btn ${footballQualityFilter === 'selected' ? 'tb-active' : ''}">精选</button>
+          <button onclick="setFootballQualityFilter('watch')" class="tb-btn ${footballQualityFilter === 'watch' ? 'tb-active' : ''}">观察</button>
+          <button onclick="setFootballQualityFilter('abstain')" class="tb-btn ${footballQualityFilter === 'abstain' ? 'tb-active' : ''}">观望</button>
         </div>
       </div>
       <div class="toolbar-divider"></div>
@@ -2131,6 +2284,18 @@ function renderFootballPredictions(results) {
       </div>
     </div>
   </div>`;
+
+  if (footballAnalysisProgress?.active) {
+    const progress = footballAnalysisProgress;
+    html += `<div class="status" style="padding:8px 0 12px;font-size:12px;color:#3b82f6">
+      <span class="spinner"></span>正在继续分析 ${esc(progress.current || '')}（${progress.completed}/${progress.total}）；已完成结果先行展示。
+    </div>`;
+  }
+  if (footballAnalysisFailures.length) {
+    html += `<div class="status" style="padding:4px 0 10px;font-size:11px;color:var(--warn)">
+      已隔离 ${footballAnalysisFailures.length} 场超时/失败分析，不影响其他场次推荐。
+    </div>`;
+  }
   
   if (!results.length) {
     html += '<div class="status">暂无预测数据</div>';
@@ -2151,10 +2316,14 @@ function renderFootballPredictions(results) {
   const pageStart = (footballPage - 1) * footballPageSize;
   const pageResults = visibleResults.slice(pageStart, pageStart + footballPageSize);
 
+  html += `<div style="margin:0 0 12px;padding:9px 11px;background:rgba(59,130,246,.10);border-left:3px solid #3b82f6;border-radius:7px;font-size:12px;color:var(--muted)">
+    Web 主推已接入准确率门禁：默认只显示经冻结跨赛季规则选中的玩法；观察/观望项不作单推。
+  </div>`;
   html += `<div class="status" style="padding:4px 0 12px;font-size:13px">共 ${results.length} 场比赛，筛选后 ${visibleResults.length} 场，第 ${footballPage}/${totalPages} 页</div>`;
 
   if (!visibleResults.length) {
-    html += `<div class="status">${kw ? '没有匹配的比赛' : '当前筛选下暂无推荐'}</div>`;
+    html += `<div class="status">${kw ? '没有匹配的比赛' : '当前筛选下暂无主推，下方仍提供比分参考'}</div>`;
+    if (!kw) html += renderFootballScoreReferencePanel(results);
     app.innerHTML = html;
     attachFootballSearchListeners();
     return;
@@ -2168,7 +2337,7 @@ function renderFootballPredictions(results) {
     const lotteryHandicap = r.lottery?.handicap?.handicap;
     const cf = r.confidence;
     const resultTier = getFootballResultTier(item);
-    const tierColor = { ultra: '#22c55e', high: '#3b82f6', cautious: '#f59e0b', cover: '#94a3b8' }[resultTier.tier];
+    const tierColor = { selected: '#22c55e', watch: '#f59e0b', abstain: '#94a3b8' }[resultTier.tier];
     const reportUrl = m.bayes_report_url ? apiPrefix() + m.bayes_report_url : '';
 
     let itemHtml = `<div class="match" style="display:block;padding:12px">
@@ -2184,8 +2353,7 @@ function renderFootballPredictions(results) {
             📡 信息完整度 ${(cf.score * 100).toFixed(0)}%
           </div>` : ''}
           <div style="font-size:12px;color:${tierColor};margin-top:3px;font-weight:600">
-            ${esc(resultTier.label)} · ${esc(resultTier.prediction)} ${(resultTier.probability * 100).toFixed(0)}%
-            · 预测可信度 ${(resultTier.predictionReliability * 100).toFixed(0)}%
+            ${esc(resultTier.label)} · ${esc(resultTier.market)} ${esc(resultTier.prediction)} ${(resultTier.probability * 100).toFixed(0)}%
             ${resultTier.downgradeReasons.length ? `<span style="font-weight:normal;color:var(--muted)">（已降级：${esc(resultTier.downgradeReasons.join('、'))}）</span>` : ''}
           </div>
         </div>
@@ -2306,6 +2474,15 @@ function renderFootballPredictions(results) {
         const compactGoalText = compactGoals.map(goal =>
           `${esc(goal.label || goal.goals + '球')} ${(Number(goal.probability || 0) * 100).toFixed(1)}%`
         ).join(' · ') || '暂无';
+        const compactScoreHtml = getFootballTopScoreReferences(r, 3).map((scoreItem, index) => {
+          const score = scoreItem.score;
+          const probability = scoreItem.probability;
+          const settlement = getFootballScoreSettlement(score, lotteryHandicap);
+          return `<div style="flex:1;min-width:82px;text-align:center;padding:6px 5px;border-radius:6px;background:${index === 0 ? 'rgba(59,130,246,.12)' : 'var(--bg)'}">
+            <div style="font-size:14px;font-weight:${index === 0 ? 'bold' : 'normal'};color:${index === 0 ? '#3b82f6' : 'var(--text)'}">${esc(score)}</div>
+            <div style="font-size:10px;color:var(--muted)">${(probability * 100).toFixed(1)}%${settlement ? ` · ${esc(settlement)}` : ''}</div>
+          </div>`;
+        }).join('');
         const asian = r.asian || r.odds_layers?.['T-24h']?.asian || {};
         const asianDirection = asian.favor_desc || asian.handicap_trend || asian.water_trend || '方向稳定';
         const euroPrediction = standardMarket?.prediction || standardPrediction.pred || '-';
@@ -2313,18 +2490,27 @@ function renderFootballPredictions(results) {
         const selectedHandicap = handicapCard
           ? (linkedSelections?.handicapPredictions?.join('/') || handicapCard.prediction.pred || '-')
           : '';
+        const spfGateState = resultTier.markets.spf;
+        const rqspfGateState = resultTier.markets.rqspf;
+        const totalGateState = resultTier.markets.total_goals;
+        const totalDirection = accuracyGate.total_goals?.candidate === 'over' ? '大2.5'
+          : accuracyGate.total_goals?.candidate === 'under' ? '小2.5' : '-';
         const correctionLabel = r.model?.joint_market_state?.applied ? ' · 已修正' : ' · 联合分析';
         itemHtml += `<div class="football-compact-summary" style="margin-top:10px;padding:11px 12px;background:rgba(6,182,212,.08);border:1px solid rgba(6,182,212,.35);border-radius:8px">
-          <div style="font-size:12px;color:#06b6d4;font-weight:bold;margin-bottom:7px">📊 欧赔 + 亚盘水位综合预测${correctionLabel}</div>
+          <div style="font-size:12px;color:#06b6d4;font-weight:bold;margin-bottom:7px">📊 Web 门禁推荐 · 欧赔 + 亚盘水位${correctionLabel}</div>
           <div style="font-size:11px;color:var(--muted);margin-bottom:7px">
             欧赔基准：${esc(euroPrediction)} · 亚盘方向：${esc(asianDirection)}
             ${r.model?.joint_market_state?.conflict ? '<span style="color:var(--warn)"> · ⚠️ 欧亚方向冲突</span>' : '<span style="color:var(--accent2)"> · 方向一致</span>'}
           </div>
-          <div style="font-size:13px"><span style="color:var(--muted)">胜平负：</span><b>${esc(selectedStandard)}</b> · ${compactProbLine(standardPrediction.probs, ['胜','平','负'])}</div>
-          ${standardPrediction.selectionProfile?.mode === 'draw_cover' ? '<div style="font-size:11px;color:#f59e0b;margin-top:4px">⚠️ 单选仍按最高概率结算；平局概率接近，建议防平双选</div>' : ''}
-          ${handicapCard ? `<div style="font-size:13px;margin-top:5px"><span style="color:var(--muted)">让球胜平负（${Number(lotteryHandicap) > 0 ? '+' : ''}${esc(lotteryHandicap)}）：</span><b>${esc(selectedHandicap)}</b> · ${compactProbLine(handicapCard.prediction.probs, ['让胜','让平','让负'])}</div>` : ''}
-          <div style="font-size:13px;margin-top:5px"><span style="color:var(--muted)">总进球：</span><b>${compactGoals[0] ? esc(compactGoals[0].label || compactGoals[0].goals + '球') : '-'}</b> · ${compactGoalText}</div>
-          <div style="font-size:10px;color:var(--muted);margin-top:7px">欧赔提供基础概率，亚盘升降盘与水位变化修正方向；胜平负、让球和进球数由同一比分概率矩阵推导</div>
+          ${renderWebMarketRecommendation('胜平负', spfGateState, spfGateState.pick || selectedStandard, compactProbLine(standardPrediction.probs, ['胜','平','负']))}
+          ${standardPrediction.selectionProfile?.mode === 'draw_cover' && spfGateState.status !== 'abstain' ? '<div style="font-size:11px;color:#f59e0b;margin-top:4px">⚠️ 模型分布提示防平，仅作辅助参考</div>' : ''}
+          ${handicapCard ? renderWebMarketRecommendation(`让球胜平负（${Number(lotteryHandicap) > 0 ? '+' : ''}${lotteryHandicap}）`, rqspfGateState, rqspfGateState.pick || selectedHandicap, compactProbLine(handicapCard.prediction.probs, ['让胜','让平','让负'])) : ''}
+          ${renderWebMarketRecommendation('大小球', totalGateState, totalDirection, `比分矩阵进球数分布：${compactGoalText}`)}
+          <div class="football-score-reference" style="margin-top:9px;padding-top:8px;border-top:1px solid rgba(6,182,212,.22)">
+            <div style="font-size:11px;color:var(--muted);margin-bottom:5px">⚽ 比分参考 Top3（非主推）</div>
+            <div style="display:flex;gap:7px;flex-wrap:wrap">${compactScoreHtml || '<span style="font-size:11px;color:var(--muted)">暂无比分分布</span>'}</div>
+          </div>
+          <div style="font-size:10px;color:var(--muted);margin-top:7px">只有标记为“精选”的玩法进入 Web 主推；观察项尚缺独立验证，观望项已被门禁拒绝。</div>
         </div>`;
       }
       if (!compactFootballView) marketCards.forEach(card => {
@@ -2695,7 +2881,7 @@ function getGoalsPrediction(topScores) {
 
 let beidanSource = 'okooo';
 let beidanDate = '';
-let beidanQualityFilter = 'all';
+let beidanQualityFilter = 'selected';
 let beidanSearchFilter = '';
 let beidanPage = 1;
 let beidanPageSize = 12;
@@ -2849,17 +3035,59 @@ function renderBeidanHistorySummary(summary) {
   </div>`;
 }
 
+function getBeidanMarketRecommendation(section, betType) {
+  const quality = section?.quality || {};
+  const admission = section?.market_admission || {};
+  const gate = section?.accuracy_gate;
+  if (!section || section.error) return { status: 'abstain', label: '观望', reasons: ['缺少有效数据'] };
+  if (betType === 'spf') {
+    if (quality.level === 'strong' && quality.high_precision === true) {
+      return { status: 'selected', label: '研究精选', reasons: [] };
+    }
+    if (quality.level === 'strong' || quality.level === 'medium') {
+      return { status: 'watch', label: '观察', reasons: [quality.advice || '未达高精度单推标准'] };
+    }
+    return { status: 'abstain', label: '观望', reasons: [quality.advice || '置信度不足'] };
+  }
+  if (betType === 'zjq') {
+    const gateState = getAccuracyGatePresentation(gate, section.prediction);
+    const playable = admission.playable === true && admission.official === true;
+    if (gateState.status === 'selected' && playable) return gateState;
+    return {
+      ...gateState,
+      status: 'abstain',
+      label: '观望',
+      reasons: gateState.reasons.length ? gateState.reasons
+        : [accuracyGateReasonText(admission.skip_reason || '未通过大小球门禁')],
+    };
+  }
+  if (betType === 'rqspf') {
+    return admission.playable === true
+      ? { status: 'watch', label: '观察', reasons: ['让球胜平负尚缺独立样本外验证'] }
+      : { status: 'abstain', label: '观望', reasons: [accuracyGateReasonText(admission.skip_reason || '未通过盘口准入')] };
+  }
+  return { status: 'abstain', label: '观望', reasons: [] };
+}
+
+function renderBeidanMarketStatus(state, prediction) {
+  const colors = { selected: '#22c55e', watch: '#f59e0b', abstain: '#94a3b8' };
+  const decision = state.status === 'abstain' ? '不推荐' : prediction || '-';
+  const candidate = state.status === 'abstain' && prediction
+    ? ` · 模型候选 ${esc(prediction)}` : '';
+  const reasons = state.reasons?.length ? ` · ${esc(state.reasons.slice(0, 2).join('、'))}` : '';
+  return `<div style="margin:5px 0;font-size:11px;color:${colors[state.status] || colors.abstain};font-weight:bold">
+    [${esc(state.label)}] ${esc(decision)}<span style="font-weight:normal;color:var(--muted)">${candidate}${reasons}</span>
+  </div>`;
+}
+
 function beidanMatchPassesFilter(m) {
   if (beidanQualityFilter === 'all') return true;
-  const levels = [m.spf?.quality?.level, m.zjq?.quality?.level].filter(Boolean);
-  if (!levels.length) return beidanQualityFilter !== 'quality';
-  if (beidanQualityFilter === 'quality') {
-    return levels.some(level => level === 'strong' || level === 'medium');
-  }
-  if (beidanQualityFilter === 'hide_low') {
-    return levels.some(level => level !== 'low' && level !== 'unknown');
-  }
-  return true;
+  const states = [
+    getBeidanMarketRecommendation(m.spf, 'spf').status,
+    getBeidanMarketRecommendation(m.rqspf, 'rqspf').status,
+    getBeidanMarketRecommendation(m.zjq, 'zjq').status,
+  ];
+  return states.includes(beidanQualityFilter);
 }
 
 function beidanMatchPassesSearch(m) {
@@ -2965,8 +3193,9 @@ function renderBeidan(result) {
         <span class="toolbar-label">筛选</span>
         <div class="toolbar-buttons">
           <button onclick="setBeidanQualityFilter('all')" class="tb-btn ${beidanQualityFilter === 'all' ? 'tb-active' : ''}">全部</button>
-          <button onclick="setBeidanQualityFilter('quality')" class="tb-btn ${beidanQualityFilter === 'quality' ? 'tb-active' : ''}">强推荐+可参考</button>
-          <button onclick="setBeidanQualityFilter('hide_low')" class="tb-btn ${beidanQualityFilter === 'hide_low' ? 'tb-active' : ''}">隐藏低置信</button>
+          <button onclick="setBeidanQualityFilter('selected')" class="tb-btn ${beidanQualityFilter === 'selected' ? 'tb-active' : ''}">精选</button>
+          <button onclick="setBeidanQualityFilter('watch')" class="tb-btn ${beidanQualityFilter === 'watch' ? 'tb-active' : ''}">观察</button>
+          <button onclick="setBeidanQualityFilter('abstain')" class="tb-btn ${beidanQualityFilter === 'abstain' ? 'tb-active' : ''}">观望</button>
         </div>
       </div>
     </div>
@@ -2977,6 +3206,13 @@ function renderBeidan(result) {
       当前条件无未开赛场次，已自动切换到 ${esc(result.match_fetch.source)} / ${esc(result.match_fetch.date)}
     </div>`;
   }
+
+  const officialBetAllowed = result.decision_gate?.official_bet_allowed === true;
+  html += `<div style="margin:0 0 12px;padding:9px 11px;background:${officialBetAllowed ? 'rgba(34,197,94,.10)' : 'rgba(245,158,11,.10)'};border-left:3px solid ${officialBetAllowed ? '#22c55e' : '#f59e0b'};border-radius:7px;font-size:12px;color:var(--muted)">
+    ${officialBetAllowed
+      ? '生产推荐模式：页面默认只展示通过决策门禁的精选。'
+      : '研究筛选模式：精选代表已通过当前冻结规则，但全局生产门禁尚未放行；观察/观望不进入主推。'}
+  </div>`;
   
   if (!result.recommendations || !result.recommendations.length) {
     html += '<div class="status">暂无比赛数据</div>';
@@ -3053,7 +3289,7 @@ function renderBeidan(result) {
             `${esc(goals)}球 ${(Number(probability) * 100).toFixed(1)}%`
           ).join(' · ') || '暂无';
           html += `<div style="margin-top:8px;padding:10px;background:rgba(6,182,212,.08);border:1px solid rgba(6,182,212,.28);border-radius:8px">
-            <div style="font-size:12px;color:#06b6d4;font-weight:bold;margin-bottom:7px">📊 欧赔 + 亚盘水位综合预测${waterPrediction.asian_adjusted ? ' · 已修正' : ' · 盘口信号较弱'}</div>
+            <div style="font-size:12px;color:#06b6d4;font-weight:bold;margin-bottom:7px">📊 欧赔 + 亚盘水位模型证据（不作独立主推）${waterPrediction.asian_adjusted ? ' · 已修正' : ' · 盘口信号较弱'}</div>
             <div style="font-size:11px;color:var(--muted);margin-bottom:6px">
               欧赔基准：${esc(marketEvidence.euro_prediction || '-')} · 亚盘方向：${esc(marketEvidence.asian_direction || '未知')}
               ${marketEvidence.conflict ? '<span style="color:var(--warn)"> · ⚠️ 欧亚方向冲突</span>' : '<span style="color:var(--accent2)"> · 方向一致</span>'}
@@ -3066,15 +3302,17 @@ function renderBeidan(result) {
         }
         
         if (m.spf && !m.spf.error) {
+          const spfState = getBeidanMarketRecommendation(m.spf, 'spf');
           html += '<div style="margin-top:8px;padding:8px;background:var(--bg2);border-radius:8px">';
           html += '<div style="font-size:12px;color:var(--muted);margin-bottom:6px">🎯 胜平负</div>';
+          html += renderBeidanMarketStatus(spfState, m.spf.prediction);
           html += renderBeidanQuality(m.spf.quality);
           if (m.spf.odds) {
             html += '<div style="display:flex;gap:12px">';
             const items = [
-              { key: '胜', color: '#ef4444', pred: m.spf.prediction === '胜' },
-              { key: '平', color: '#f59e0b', pred: m.spf.prediction === '平' },
-              { key: '负', color: '#22c55e', pred: m.spf.prediction === '负' },
+              { key: '胜', color: '#ef4444', pred: spfState.status === 'selected' && m.spf.prediction === '胜' },
+              { key: '平', color: '#f59e0b', pred: spfState.status === 'selected' && m.spf.prediction === '平' },
+              { key: '负', color: '#22c55e', pred: spfState.status === 'selected' && m.spf.prediction === '负' },
             ];
             items.forEach(item => {
               const prob = m.spf.probabilities?.[item.key] || 0;
@@ -3114,8 +3352,10 @@ function renderBeidan(result) {
           const rqHandicapText = rqHandicap === null || rqHandicap === undefined || rqHandicap === ''
             ? '' : `（主队 ${Number(rqHandicap) > 0 ? '+' : ''}${esc(rqHandicap)}）`;
           const admission = m.rqspf.market_admission || {};
+          const rqspfState = getBeidanMarketRecommendation(m.rqspf, 'rqspf');
           html += '<div style="margin-top:8px;padding:8px;background:var(--bg2);border-radius:8px">';
           html += `<div style="font-size:12px;color:var(--muted);margin-bottom:6px">🎯 让球胜平负${rqHandicapText}</div>`;
+          html += renderBeidanMarketStatus(rqspfState, m.rqspf.prediction);
           html += renderBeidanQuality(m.rqspf.quality);
           html += '<div style="display:flex;gap:12px">';
           [
@@ -3124,8 +3364,8 @@ function renderBeidan(result) {
             { key: '让负', color: '#22c55e' },
           ].forEach(item => {
             const probability = Number(m.rqspf.probabilities?.[item.key] || 0);
-            const selected = admission.selected === false
-              ? false : m.rqspf.prediction === item.key;
+            const selected = officialBetAllowed && rqspfState.status === 'selected'
+              && admission.playable === true && m.rqspf.prediction === item.key;
             html += `<div style="flex:1;text-align:center;padding:6px;border-radius:6px${selected ? `;background:${item.color}20;color:${item.color};font-weight:bold` : ''}">
               <div>${item.key}</div>
               <div style="font-size:11px;color:var(--muted)">${(probability * 100).toFixed(1)}%</div>
@@ -3140,6 +3380,7 @@ function renderBeidan(result) {
               market_history_insufficient: '盘口历史不足',
               market_signal_weak: '盘口变化信号较弱',
               market_conflicts_with_model: '盘口变化与模型方向冲突',
+              total_accuracy_gate_rejected: '大小球未通过跨赛季准确率门禁',
             };
             html += `<div style="margin-top:5px;font-size:11px;color:var(--warn)">⚠️ 暂不单推：${esc(skipReasons[admission.skip_reason] || admission.skip_reason)}</div>`;
           }
@@ -3147,10 +3388,15 @@ function renderBeidan(result) {
         }
         
         if (m.zjq && !m.zjq.error) {
+          const zjqState = getBeidanMarketRecommendation(m.zjq, 'zjq');
+          const zjqGatePick = m.zjq.accuracy_gate?.candidate === 'over' ? '大2.5'
+            : m.zjq.accuracy_gate?.candidate === 'under' ? '小2.5' : m.zjq.prediction;
           html += '<div style="margin-top:8px;padding:8px;background:var(--bg2);border-radius:8px">';
-          html += '<div style="font-size:12px;color:var(--muted);margin-bottom:6px">⚽ 总进球</div>';
+          html += '<div style="font-size:12px;color:var(--muted);margin-bottom:6px">⚽ 大小球 / 总进球</div>';
+          html += renderBeidanMarketStatus(zjqState, zjqGatePick);
           html += renderBeidanQuality(m.zjq.quality);
           if (m.zjq.top3) {
+            html += '<div style="font-size:11px;color:var(--muted);margin:5px 0 4px">精确进球数仅作模型分布参考</div>';
             html += '<div style="display:flex;gap:8px">';
             m.zjq.top3.slice(0, 3).forEach(([count, prob]) => {
               html += `<div style="padding:4px 8px;background:var(--bg);border-radius:4px;font-size:13px">
@@ -3161,8 +3407,8 @@ function renderBeidan(result) {
           }
           if (m.zjq.goal_groups && m.zjq.goal_groups.primary) {
             const primary = m.zjq.goal_groups.primary;
-            html += `<div style="margin-top:6px;font-size:12px;color:var(--accent2)">
-              分组建议：<b>${esc(primary.advice || primary.label || '')}</b>
+            html += `<div style="margin-top:6px;font-size:12px;color:var(--muted)">
+              分组参考：<b>${esc(primary.advice || primary.label || '')}</b>
               <span style="color:var(--muted)"> ${(primary.probability * 100).toFixed(1)}%</span>
             </div>`;
             if (m.zjq.goal_groups.groups && m.zjq.goal_groups.groups.length) {
@@ -3176,9 +3422,11 @@ function renderBeidan(result) {
             }
           }
           if (m.zjq.over25_prob !== undefined) {
+            const overSelected = zjqState.status === 'selected' && m.zjq.accuracy_gate?.candidate === 'over';
+            const underSelected = zjqState.status === 'selected' && m.zjq.accuracy_gate?.candidate === 'under';
             html += `<div style="margin-top:6px;font-size:12px">
-              大球(>2.5): <b>${(m.zjq.over25_prob * 100).toFixed(1)}%</b> · 
-              小球(<2.5): <b>${(m.zjq.under25_prob * 100).toFixed(1)}%</b>
+              大球(&gt;2.5): <b style="color:${overSelected ? '#22c55e' : 'inherit'}">${(m.zjq.over25_prob * 100).toFixed(1)}%</b> ·
+              小球(&lt;2.5): <b style="color:${underSelected ? '#22c55e' : 'inherit'}">${(m.zjq.under25_prob * 100).toFixed(1)}%</b>
             </div>`;
           }
           html += '</div>';

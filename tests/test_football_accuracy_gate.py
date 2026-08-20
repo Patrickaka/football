@@ -1,6 +1,10 @@
 import unittest
 
-from src.football.accuracy_gate import build_accuracy_gate, prediction_reliability
+from src.football.accuracy_gate import (
+    build_accuracy_gate,
+    build_total_goals_gate,
+    prediction_reliability,
+)
 
 
 class FootballAccuracyGateTests(unittest.TestCase):
@@ -99,6 +103,35 @@ class FootballAccuracyGateTests(unittest.TestCase):
         )
         self.assertFalse(result["spf"]["selected"])
         self.assertIn("欧赔与亚盘明显冲突", result["spf"]["reasons"])
+
+    def test_d1_total_goals_gate_uses_frozen_high_precision_threshold(self):
+        result = build_total_goals_gate({
+            "close_line": 2.5,
+            "close_prob": {"over": .66, "under": .34},
+        }, league="德甲")
+
+        self.assertTrue(result["selected"])
+        self.assertEqual(result["decision"], "over")
+        self.assertEqual(result["minimum_probability"], .65)
+        self.assertAlmostEqual(result["validation"]["holdout"]["accuracy"], .7927)
+
+    def test_total_goals_gate_rejects_unvalidated_league(self):
+        result = build_total_goals_gate({
+            "close_line": 2.5,
+            "close_prob": {"over": .70, "under": .30},
+        }, league="意甲")
+
+        self.assertFalse(result["selected"])
+        self.assertIn("该联赛大小球规则未通过冻结跨赛季验证", result["reasons"])
+
+    def test_total_goals_gate_does_not_extrapolate_beyond_two_point_five(self):
+        result = build_total_goals_gate({
+            "close_line": 2.75,
+            "close_prob": {"over": .70, "under": .30},
+        }, league="德甲")
+
+        self.assertFalse(result["selected"])
+        self.assertIn("当前验证仅覆盖2.5球盘口", result["reasons"])
 
 
 if __name__ == "__main__":

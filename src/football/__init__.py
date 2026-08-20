@@ -31,7 +31,7 @@ from ..common.paths import data_path
 
 log = setup_logger('football')
 
-FOOTBALL_PREDICTION_LOGIC_VERSION = '2026-08-20-league-validated-professional-fair-price-joint-matrix-v30'
+FOOTBALL_PREDICTION_LOGIC_VERSION = '2026-08-20-league-total-validated-fair-price-joint-matrix-v31'
 # Official 1X2 prices are the strongest observable production signal.  Raising
 # their share from 40% to 80% improved the pooled high-confidence proxy from
 # 61.67% to 62.55%; the model retains 20% for team/Asian/context information.
@@ -8590,7 +8590,7 @@ def analyze_match(match, force_refresh=False):
         lottery['primary'] = lottery['standard']
     else:
         lottery['primary'] = None
-    from .accuracy_gate import build_accuracy_gate
+    from .accuracy_gate import build_accuracy_gate, build_total_goals_gate
     lottery['accuracy_gate'] = build_accuracy_gate(
         lottery,
         confidence=confidence,
@@ -8600,6 +8600,14 @@ def analyze_match(match, force_refresh=False):
         },
         league=match.get('league'),
     )
+    total_goals_gate = build_total_goals_gate(
+        total,
+        league=match.get('league'),
+        goal_count=goal_count_result,
+    )
+    lottery['accuracy_gate']['total_goals'] = total_goals_gate
+    if goal_count_result is not None:
+        goal_count_result['accuracy_gate'] = total_goals_gate
 
     result = {
         'match': {k: match.get(k) for k in (

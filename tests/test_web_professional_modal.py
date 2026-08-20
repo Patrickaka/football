@@ -21,27 +21,39 @@ class WebProfessionalModalTests(unittest.TestCase):
         self.assertIn("🔎 证据审计", html)
         self.assertIn("deriveFootballEvidence", html)
 
-    def test_filter_uses_prediction_reliability_not_information_completeness(self):
+    def test_web_recommendations_use_accuracy_gates(self):
         path = os.path.join(ROOT, 'web', 'index.html')
         with open(path, encoding='utf-8') as handle:
             html = handle.read()
-        self.assertIn(
-            'calculateFootballPredictionReliability(probability, informationCompleteness)',
-            html,
-        )
-        self.assertIn("reliability >= 0.80", html)
-        self.assertIn(
-            "reliability >= 0.60 && reliability < 0.80",
-            html,
-        )
-        self.assertIn("超强可信≥80%", html)
-        self.assertIn("高可信60%–80%", html)
+        self.assertIn("let footballQualityFilter = 'selected';", html)
+        self.assertIn("getAccuracyGatePresentation", html)
+        self.assertIn("return getFootballResultTier(item).tier === footballQualityFilter", html)
+        self.assertIn("研究精选", html)
+        self.assertIn("观察", html)
+        self.assertIn("观望", html)
+        self.assertIn("只有标记为“精选”的玩法进入 Web 主推", html)
+        self.assertIn("fetchJsonWithTimeout('/api/predict?' + q, 30000)", html)
+        self.assertIn("已完成结果先行展示", html)
+        self.assertIn("已隔离 ${footballAnalysisFailures.length} 场超时/失败分析", html)
         self.assertIn("📡 信息完整度", html)
         self.assertIn("预测可信度", html)
         self.assertIn("本场专业证据审计", html)
         self.assertIn("胜平负预测", html)
         self.assertIn("让球胜平负", html)
         self.assertIn("赛后比分", html)
+
+    def test_beidan_web_hides_rejected_markets_from_primary_recommendations(self):
+        path = os.path.join(ROOT, 'web', 'index.html')
+        with open(path, encoding='utf-8') as handle:
+            html = handle.read()
+
+        self.assertIn("let beidanQualityFilter = 'selected';", html)
+        self.assertIn("getBeidanMarketRecommendation", html)
+        self.assertIn("admission.playable === true", html)
+        self.assertIn("让球胜平负尚缺独立样本外验证", html)
+        self.assertIn("大小球未通过跨赛季准确率门禁", html)
+        self.assertIn("精确进球数仅作模型分布参考", html)
+        self.assertIn("研究筛选模式", html)
 
     def test_professional_status_falls_back_to_static_backtest(self):
         path = os.path.join(ROOT, 'web', 'index.html')
@@ -69,7 +81,7 @@ class WebProfessionalModalTests(unittest.TestCase):
         self.assertIn("🎯 让球胜平负", html)
         self.assertIn("已应用统一亚盘水位与大小球变化修正", html)
         self.assertIn("🎯 让球胜平负（主队", html)
-        self.assertIn("欧赔 + 亚盘水位综合预测", html)
+        self.assertIn("欧赔 + 亚盘水位模型证据（不作独立主推）", html)
         self.assertIn("欧赔提供基础概率，亚盘升降盘与水位变化修正方向", html)
 
     def test_football_list_uses_compact_joint_market_summary(self):
@@ -81,6 +93,12 @@ class WebProfessionalModalTests(unittest.TestCase):
         self.assertIn('class="football-compact-summary"', html)
         self.assertIn("compactProbLine(standardPrediction.probs, ['胜','平','负'])", html)
         self.assertIn("compactProbLine(handicapCard.prediction.probs, ['让胜','让平','让负'])", html)
+        self.assertIn('class="football-score-reference"', html)
+        self.assertIn("比分参考 Top3（非主推）", html)
+        self.assertIn("getFootballScoreSettlement(score, lotteryHandicap)", html)
+        self.assertIn('class="football-score-reference-panel"', html)
+        self.assertIn("全部场次比分参考 Top3", html)
+        self.assertIn("当前筛选下暂无主推，下方仍提供比分参考", html)
         self.assertIn('if (!compactFootballView && top.length)', html)
         self.assertIn('if (!compactFootballView && htfProbs.length)', html)
 

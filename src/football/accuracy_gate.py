@@ -63,6 +63,27 @@ SPF_LEAGUE_POLICIES = {
 }
 MIN_MARKET_MARGIN = 0.10
 
+TOTAL_GOALS_LEAGUE_POLICIES = {
+    "SP1": {
+        "aliases": ("SP1", "西甲", "西班牙甲级联赛", "La Liga"),
+        "minimum_probability": 0.65,
+        "training": {"accuracy": 0.7126, "sample_count": 87},
+        "holdout": {"accuracy": 0.6757, "sample_count": 74},
+    },
+    "D1": {
+        "aliases": ("D1", "德甲", "德国甲级联赛", "Bundesliga"),
+        "minimum_probability": 0.65,
+        "training": {"accuracy": 0.7778, "sample_count": 72},
+        "holdout": {"accuracy": 0.7927, "sample_count": 82},
+    },
+    "F1": {
+        "aliases": ("F1", "法甲", "法国甲级联赛", "Ligue 1"),
+        "minimum_probability": 0.62,
+        "training": {"accuracy": 0.7167, "sample_count": 60},
+        "holdout": {"accuracy": 0.7037, "sample_count": 54},
+    },
+}
+
 
 def _top_pick(probabilities: Mapping[str, Any] | None) -> tuple[str | None, float, float]:
     values = []
@@ -101,6 +122,72 @@ def _spf_policy(league: Any) -> dict[str, Any]:
         "minimum_probability": SPF_MIN_PROBABILITY,
         "validation_status": "chronological_holdout_near_target",
         "validation": SPF_HISTORICAL_PROXY,
+    }
+
+
+def _league_policy(league: Any, policies: Mapping[str, Any]) -> tuple[str | None, dict]:
+    text = str(league or "").strip().lower()
+    for code, policy in policies.items():
+        if text and any(text == str(alias).strip().lower() for alias in policy["aliases"]):
+            return code, policy
+    return None, {}
+
+
+def build_total_goals_gate(
+    total: Mapping[str, Any] | None,
+    *,
+    league: Any = None,
+    goal_count: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Selective O/U 2.5 gate validated by frozen cross-season league rules."""
+    total = total or {}
+    code, policy = _league_policy(league, TOTAL_GOALS_LEAGUE_POLICIES)
+    try:
+        line = float(total.get("close_line"))
+    except (TypeError, ValueError):
+        line = None
+    market_probabilities = total.get("close_prob") or {}
+    direction, probability, margin = _top_pick(market_probabilities)
+    threshold = float(policy.get("minimum_probability", 1.0))
+    reasons = []
+    if not code:
+        reasons.append("该联赛大小球规则未通过冻结跨赛季验证")
+    if line is None or abs(line - 2.5) > 1e-9:
+        reasons.append("当前验证仅覆盖2.5球盘口")
+    if direction not in {"over", "under"}:
+        reasons.append("缺少有效大小球去水概率")
+    if probability < threshold:
+        reasons.append(f"大小球去水概率低于{threshold:.0%}")
+
+    model_over_under = (goal_count or {}).get("over_under") or {}
+    model_direction, model_probability, _ = _top_pick({
+        key: model_over_under.get(key) for key in ("over", "under")
+    })
+    selected = not reasons
+    return {
+        "selected": selected,
+        "decision": direction if selected else "观望",
+        "candidate": direction,
+        "line": line,
+        "probability": probability,
+        "margin": margin,
+        "minimum_probability": threshold if code else None,
+        "threshold_scope": code,
+        "model_direction": model_direction,
+        "model_probability": model_probability,
+        "reasons": reasons,
+        "validation_status": (
+            "dual_season_market_proxy_supported" if code
+            else "pending_league_validation"
+        ),
+        "validation": ({
+            "training_season": "2024/25",
+            "holdout_season": "2025/26",
+            "training": policy.get("training"),
+            "holdout": policy.get("holdout"),
+            "selection_rule": "maximize training accuracy with n>=40, then freeze threshold",
+            "market": "bookmaker_average_closing_over_under_2_5",
+        } if code else None),
     }
 
 

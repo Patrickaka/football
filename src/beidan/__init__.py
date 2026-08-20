@@ -18,7 +18,7 @@ from ..common import kv_store
 
 log = setup_logger('beidan')
 
-BEIDAN_VERSION = '2026-08-20-professional-rqspf-audit-joint-matrix-v10'
+BEIDAN_VERSION = '2026-08-20-web-gated-picks-rqspf-audit-joint-matrix-v12'
 BEIDAN_HISTORY_KEY = 'beidan_prediction_history'
 BEIDAN_HISTORY_LIMIT = 500
 
@@ -2466,6 +2466,7 @@ def _compact_beidan_record(match, source, professional_snapshot=None):
             'goal_groups': zjq.get('goal_groups'),
             'probabilities': zjq.get('probabilities'),
             'market_admission': zjq.get('market_admission'),
+            'accuracy_gate': zjq.get('accuracy_gate'),
         },
         'rqspf': {
             'prediction': rqspf.get('prediction'),
@@ -3115,6 +3116,41 @@ def _latest_ou_odds(goals_data):
     return over_odds, under_odds
 
 
+def build_beidan_total_goals_accuracy_gate(section, goals_data, league):
+    """Map Beidan HK-water O/U data into the frozen league O/U 2.5 gate."""
+    line, over_water, under_water = _latest_ou_market(goals_data)
+    probabilities = {}
+    try:
+        over_decimal = 1.0 + float(over_water)
+        under_decimal = 1.0 + float(under_water)
+        inverse = {"over": 1.0 / over_decimal, "under": 1.0 / under_decimal}
+        total_inverse = sum(inverse.values())
+        if over_decimal > 1.0 and under_decimal > 1.0 and total_inverse > 0:
+            probabilities = {key: value / total_inverse for key, value in inverse.items()}
+    except (TypeError, ValueError, ZeroDivisionError):
+        probabilities = {}
+
+    zjq_probabilities = (section or {}).get("probabilities") or {}
+    model_over = model_under = 0.0
+    for key, value in zjq_probabilities.items():
+        try:
+            goals = 7 if str(key) == "7+" else int(key)
+            probability = float(value)
+        except (TypeError, ValueError):
+            continue
+        if goals >= 3:
+            model_over += probability
+        else:
+            model_under += probability
+
+    from ..football.accuracy_gate import build_total_goals_gate
+    return build_total_goals_gate(
+        {"close_line": line, "close_prob": probabilities},
+        league=league,
+        goal_count={"over_under": {"over": model_over, "under": model_under}},
+    )
+
+
 def analyze_bifen(match, bifen_odds=None, asian_data=None, goals_data=None):
     result = {
         'match_id': match['id'],
@@ -3568,6 +3604,13 @@ def generate_beidan_recommendations(date=None, bet_types=None, source='okooo', s
             rec['zjq']['market_admission'] = build_beidan_market_admission(
                 rec['zjq'], 'zjq', asian_data, goals_data
             )
+            rec['zjq']['accuracy_gate'] = build_beidan_total_goals_accuracy_gate(
+                rec['zjq'], goals_data, match.get('league'),
+            )
+            if not rec['zjq']['accuracy_gate']['selected']:
+                rec['zjq']['market_admission']['official'] = False
+                rec['zjq']['market_admission']['playable'] = False
+                rec['zjq']['market_admission']['skip_reason'] = 'total_accuracy_gate_rejected'
 
         if rec.get('spf') and not rec['spf'].get('error'):
             rec['water_market_prediction'] = build_water_market_prediction(
@@ -3589,8 +3632,9 @@ def generate_beidan_recommendations(date=None, bet_types=None, source='okooo', s
         'match_fetch': match_meta,
         'history_summary': summarize_beidan_history(limit=200),
     }
-    # 高置信单推聚合：只有 walk-forward 验证通过的 strong 才进入单推。
-    # medium 保留在观察清单中，但明确按双选/观望处理，避免稀释推荐准确率。
+    # Web/API 主推聚合：以“已验证的可投市场”为单位，而不是把所有
+    # 模型 Top1 都当成推荐。SPF 只收 70% 高精度层；大小球按已冻结的 O/U 2.5
+    # 跨赛季门禁收录；RQSPF 因尚缺独立样本外验证，即使盘口可玩也只进观察。
     top_picks = []
     watch_picks = []
     pick_levels = {'strong': 0, 'medium': 0, 'split': 0, 'low': 0, 'unknown': 0}
@@ -3616,9 +3660,40 @@ def generate_beidan_recommendations(date=None, bet_types=None, source='okooo', s
                 'advice': q.get('advice'),
                 'high_precision': bool(q.get('high_precision')),
             }
-            if level == 'strong' and (not market_required or admission.get('official')):
-                top_picks.append(pick)
-            elif level == 'medium' and (not market_required or admission.get('official')):
+            if bet_type == 'zjq':
+                gate = sec.get('accuracy_gate') or {}
+                playable = bool(admission.get('official') and admission.get('playable'))
+                if gate.get('selected') and playable:
+                    direction = gate.get('candidate')
+                    pick.update({
+                        'prediction': (
+                            '大2.5' if direction == 'over'
+                            else '小2.5' if direction == 'under'
+                            else direction
+                        ),
+                        'confidence': gate.get('probability'),
+                        'level': 'validated_gate',
+                        'high_precision': True,
+                        'selection_basis': 'dual_season_ou_2_5_accuracy_gate',
+                        'validation': gate.get('validation'),
+                    })
+                    top_picks.append(pick)
+                continue
+            if bet_type == 'rqspf':
+                if admission.get('official') and level in ('strong', 'medium'):
+                    pick['selection_basis'] = 'pending_independent_rqspf_validation'
+                    watch_picks.append(pick)
+                continue
+            if bet_type == 'spf':
+                if level == 'strong' and q.get('high_precision'):
+                    pick['selection_basis'] = 'walk_forward_spf_probability_gte_70pct'
+                    top_picks.append(pick)
+                elif level in ('strong', 'medium'):
+                    pick['selection_basis'] = 'below_high_precision_spf_gate'
+                    watch_picks.append(pick)
+                continue
+            if level in ('strong', 'medium') and not market_required:
+                pick['selection_basis'] = 'model_watch_only'
                 watch_picks.append(pick)
     result['top_picks'] = top_picks
     result['watch_picks'] = watch_picks
