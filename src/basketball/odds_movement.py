@@ -11,18 +11,21 @@
 2. 走势计算：从快照序列（或澳客 rf_trend / dx_trend / ml bundle）算出两路
    movement —— 哪一侧被资金追捧（home/away/over/under/flat）、强度、是否
    steam（急单）、是否 stale（长时间无变化）。
-3. 信号映射：把 movement 映射成 okooo.analyze_line_trend 的 trend 字典，
-   复用 adjust_two_way_by_trend 微调双边概率；并对「聪明钱确认本方推荐」
-   的场次打 sharp_confirmed 标、提升置信度。
+3. 水位反推：分别识别水位和盘口的指向，在信号新鲜、样本充分且不冲突时，
+   允许走势改变弱模型的原始方向；强模型与走势冲突时仍然放弃而不是硬翻。
 
 设计原则：
-- 赔率走势只做「增强/排序」，绝不推翻模型方向；模型与走势矛盾时降权而非反转。
+- 让分使用「主队加分值」约定：-3.5 -> -5.5 是主队让深，指向主队；
+  大小分升盘指向大分、降盘指向小分。
+- 只有至少两个有效快照、未过期、强度达标且盘口/水位不冲突，才允许反推。
 - 所有网络抓取都有降级：澳客 WAF / 无历史时 movement=None，推荐回退到原逻辑。
 - 默认 source=500 时若尚未累积历史，movement=None，零回归。
 """
 from __future__ import annotations
 
 import logging
+import threading
+import time
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 
@@ -39,6 +42,8 @@ STEAM_STRENGTH = 0.45
 STALE_MINUTES = 240
 # 微调概率的最大幅度（防止走势喧宾夺主）
 MAX_ADJUST_FACTOR = 0.10
+INFERENCE_MIN_STRENGTH = 0.25
+_scheduler_started = False
 
 
 def _parse_ts(ts) -> Optional[datetime]:
@@ -94,8 +99,8 @@ def track_basketball_odds(date: str = None) -> int:
         if seq and all(seq[-1].get(k) == snap.get(k) for k in (
                 'spf_home', 'spf_away', 'rqspf_home', 'rqspf_away',
                 'dx_over', 'dx_under', 'handicap', 'total_line')):
-            # 仅更新 ts，便于 staleness 判定
-            seq[-1]['ts'] = now_iso
+            # 保留真正发生变化的 ts；否则每次轮询都会把旧信号伪装成新信号。
+            seq[-1]['observed_ts'] = now_iso
         else:
             seq.append(snap)
             if len(seq) > HISTORY_CAP:
@@ -106,6 +111,29 @@ def track_basketball_odds(date: str = None) -> int:
     if now:
         log.info(f"篮球赔率追踪完成: {count} 场, 当前 {now.strftime('%H:%M')}")
     return count
+
+
+def start_basketball_odds_scheduler(interval_minutes: int = 15) -> bool:
+    """后台自动累积篮球盘口快照；重复调用不会启动多个线程。"""
+    global _scheduler_started
+    if _scheduler_started:
+        return False
+    _scheduler_started = True
+    interval_seconds = max(300, int(interval_minutes) * 60)
+
+    def _loop():
+        while True:
+            try:
+                track_basketball_odds(datetime.now().strftime('%Y-%m-%d'))
+            except Exception as exc:
+                log.warning(f"篮球赔率自动追踪失败: {exc}")
+            time.sleep(interval_seconds)
+
+    threading.Thread(
+        target=_loop, daemon=True, name='BasketballOddsTracker'
+    ).start()
+    log.info(f"篮球赔率自动追踪已启动: 每 {interval_seconds // 60} 分钟")
+    return True
 
 
 def _movement_from_snapshots(snaps: List[Dict], hk: str, ak: str,
@@ -130,21 +158,46 @@ def _movement_from_snapshots(snaps: List[Dict], hk: str, ak: str,
         line_move = float(current_line) - float(opening_line)
     except (TypeError, ValueError):
         line_move = 0.0
-    raw_strength = abs(hm) + abs(am) + min(abs(line_move), 5.0) * 0.02
+    line_weight = 0.06 if kind in ('ah', 'ou') else 0.0
+    raw_strength = abs(hm) + abs(am) + min(abs(line_move), 5.0) * line_weight
 
+    first_side = 'over' if kind == 'ou' else 'home'
+    second_side = 'under' if kind == 'ou' else 'away'
+    water_side = 'flat'
     if hm < -0.02 and am > 0.01:
-        side = 'over' if kind == 'ou' else 'home'
+        water_side = first_side
     elif am < -0.02 and hm > 0.01:
-        side = 'under' if kind == 'ou' else 'away'
-    elif abs(line_move) >= 0.5:
+        water_side = second_side
+    elif hm < -0.04 and am >= -0.005:
+        water_side = first_side
+    elif am < -0.04 and hm >= -0.005:
+        water_side = second_side
+
+    line_side = 'flat'
+    if abs(line_move) >= 0.5:
         if kind == 'ou':
-            side = 'over' if line_move > 0 else 'under'
+            line_side = 'over' if line_move > 0 else 'under'
         elif kind == 'ah':
-            side = 'home' if line_move > 0 else 'away'
-        else:
-            side = 'flat'
+            # handicap 是加在主队得分上的有符号值。数值下降（例如
+            # -3.5 -> -5.5，或 +5.5 -> +3.5）都代表主队变强。
+            line_side = 'home' if line_move < 0 else 'away'
+
+    signal_conflict = (
+        water_side != 'flat' and line_side != 'flat' and water_side != line_side
+    )
+    signal_agreement = (
+        water_side != 'flat' and line_side != 'flat' and water_side == line_side
+    )
+    if signal_conflict:
+        # 冲突时保留较直接的水位方向用于展示，但禁止后续反推。
+        side = water_side
+    elif water_side != 'flat':
+        side = water_side
     else:
-        side = 'flat'
+        side = line_side
+
+    if signal_agreement:
+        raw_strength += 0.05
 
     strength = min(1.0, raw_strength / 0.4)
 
@@ -165,7 +218,7 @@ def _movement_from_snapshots(snaps: List[Dict], hk: str, ak: str,
     last_move_age = (now - last_move_ts).total_seconds() / 60.0 if last_move_ts else None
 
     steam = strength >= STEAM_STRENGTH and (last_move_age is None or last_move_age <= 90)
-    stale = (last_move_age is not None and last_move_age >= STALE_MINUTES) or len(valid) < 3
+    stale = last_move_age is not None and last_move_age >= STALE_MINUTES
 
     return {
         'available': True,
@@ -183,6 +236,10 @@ def _movement_from_snapshots(snaps: List[Dict], hk: str, ak: str,
         'opening_line': opening_line,
         'current_line': current_line,
         'kind': kind,
+        'water_side': water_side,
+        'line_side': line_side,
+        'signal_agreement': signal_agreement,
+        'signal_conflict': signal_conflict,
     }
 
 
@@ -201,12 +258,38 @@ def _normalize_okooo_trend(trend: Optional[Dict], kind: str) -> Optional[Dict]:
     elif direction in ('away_backing', 'under_backing'):
         side = 'under' if kind == 'ou' else 'away'
     elif direction == 'line_up':
-        side = 'home' if kind in ('ah', 'ml') else 'over'
+        side = 'away' if kind == 'ah' else ('home' if kind == 'ml' else 'over')
     elif direction == 'line_down':
-        side = 'away' if kind in ('ah', 'ml') else 'under'
+        side = 'home' if kind == 'ah' else ('away' if kind == 'ml' else 'under')
     else:
         side = 'flat'
 
+    home_move = float(trend.get('home_move', 0) or 0)
+    away_move = float(trend.get('away_move', 0) or 0)
+    line_move = float(trend.get('line_move', 0) or 0)
+    first_side = 'over' if kind == 'ou' else 'home'
+    second_side = 'under' if kind == 'ou' else 'away'
+    water_side = 'flat'
+    if home_move < -0.02 and away_move > 0.01:
+        water_side = first_side
+    elif away_move < -0.02 and home_move > 0.01:
+        water_side = second_side
+    elif home_move < -0.04 and away_move >= -0.005:
+        water_side = first_side
+    elif away_move < -0.04 and home_move >= -0.005:
+        water_side = second_side
+    line_side = 'flat'
+    if abs(line_move) >= 0.5:
+        if kind == 'ou':
+            line_side = 'over' if line_move > 0 else 'under'
+        elif kind == 'ah':
+            line_side = 'home' if line_move < 0 else 'away'
+    signal_conflict = (
+        water_side != 'flat' and line_side != 'flat' and water_side != line_side
+    )
+    signal_agreement = (
+        water_side != 'flat' and line_side != 'flat' and water_side == line_side
+    )
     strength = min(1.0, float(trend.get('strength', 0) or 0) / 0.2)
     return {
         'available': True,
@@ -218,13 +301,113 @@ def _normalize_okooo_trend(trend: Optional[Dict], kind: str) -> Optional[Dict]:
         'samples': int(trend.get('samples', 0) or 0),
         'window_min': None,
         'last_move_age_min': None,
-        'home_move': round(float(trend.get('home_move', 0) or 0), 4),
-        'away_move': round(float(trend.get('away_move', 0) or 0), 4),
-        'line_move': round(float(trend.get('line_move', 0) or 0), 4),
+        'home_move': round(home_move, 4),
+        'away_move': round(away_move, 4),
+        'line_move': round(line_move, 4),
         'opening_line': trend.get('opening_line'),
         'current_line': trend.get('current_line'),
         'kind': kind,
+        'water_side': water_side,
+        'line_side': line_side,
+        'signal_agreement': signal_agreement,
+        'signal_conflict': signal_conflict,
     }
+
+
+def infer_market_from_movement(movement: Optional[Dict], market: str) -> Dict:
+    """把盘口/水位变化转成可审计的独立反推结论。"""
+    names = {
+        'rqspf': {'home': '让胜', 'away': '让负'},
+        'dx': {'over': '大分', 'under': '小分'},
+    }
+    mapping = names.get(market, {})
+    side = (movement or {}).get('side', 'flat')
+    strength = float((movement or {}).get('strength', 0) or 0)
+    samples = int((movement or {}).get('samples', 0) or 0)
+    stale = bool((movement or {}).get('stale'))
+    conflict = bool((movement or {}).get('signal_conflict'))
+    available = bool(movement and movement.get('available') and side in mapping)
+
+    reason = 'movement_unavailable'
+    if available:
+        if samples < 2:
+            reason = 'movement_samples_insufficient'
+        elif stale:
+            reason = 'movement_stale'
+        elif conflict:
+            reason = 'water_line_conflict'
+        elif strength < INFERENCE_MIN_STRENGTH:
+            reason = 'movement_signal_weak'
+        else:
+            reason = 'water_line_inference'
+    actionable = available and reason == 'water_line_inference'
+    confidence = (
+        'high' if actionable and (strength >= 0.65 or movement.get('steam'))
+        else 'medium' if actionable else 'low'
+    )
+    return {
+        'available': available,
+        'actionable': actionable,
+        'side': side,
+        'recommendation': mapping.get(side),
+        'strength': round(strength, 4),
+        'confidence': confidence,
+        'reason': reason,
+        'samples': samples,
+        'stale': stale,
+        'steam': bool((movement or {}).get('steam')),
+        'water_side': (movement or {}).get('water_side', side),
+        'line_side': (movement or {}).get('line_side', 'flat'),
+        'signal_agreement': bool((movement or {}).get('signal_agreement')),
+        'signal_conflict': conflict,
+        'opening_line': (movement or {}).get('opening_line'),
+        'current_line': (movement or {}).get('current_line'),
+        'line_move': float((movement or {}).get('line_move', 0) or 0),
+        'first_water_move': float((movement or {}).get('home_move', 0) or 0),
+        'second_water_move': float((movement or {}).get('away_move', 0) or 0),
+    }
+
+
+def apply_market_inference(p_first: float, p_second: float,
+                           movement: Optional[Dict], market: str) -> tuple:
+    """融合模型与水位反推；强走势可翻转弱模型，但不能碾压强模型。"""
+    inference = infer_market_from_movement(movement, market)
+    model_side = 'home' if market == 'rqspf' and p_first >= p_second else None
+    if market == 'rqspf' and model_side is None:
+        model_side = 'away'
+    elif market == 'dx':
+        model_side = 'over' if p_first >= p_second else 'under'
+    inference['model_side_before'] = model_side
+    inference['model_recommendation_before'] = (
+        {'home': '让胜', 'away': '让负', 'over': '大分', 'under': '小分'}
+        .get(model_side)
+    )
+    if not inference['actionable']:
+        inference['reversed_model'] = False
+        inference['probability_shift'] = 0.0
+        return p_first, p_second, inference
+
+    strength = inference['strength']
+    movement_edge = 0.025 + 0.075 * strength
+    if inference['signal_agreement']:
+        movement_edge += 0.015
+    if inference['steam']:
+        movement_edge += 0.01
+    movement_first = inference['side'] in ('home', 'over')
+    original_first = float(p_first)
+    # 保留 55% 的原模型边际，让高确定性基本盘不被一次异常跳水硬翻。
+    final_edge = (float(p_first) - 0.5) * 0.55
+    final_edge += movement_edge if movement_first else -movement_edge
+    final_first = max(0.34, min(0.66, 0.5 + final_edge))
+    final_second = 1.0 - final_first
+    final_side = (
+        ('home' if final_first >= final_second else 'away') if market == 'rqspf'
+        else ('over' if final_first >= final_second else 'under')
+    )
+    inference['reversed_model'] = final_side != model_side
+    inference['final_side'] = final_side
+    inference['probability_shift'] = round(final_first - original_first, 4)
+    return final_first, final_second, inference
 
 
 def build_movement_for_match(match: Dict, kv_history: Dict = None,

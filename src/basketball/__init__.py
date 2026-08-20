@@ -16,7 +16,7 @@ from ..common import kv_store
 
 log = setup_logger('basketball')
 
-BASKETBALL_VERSION = '2026-08-12-joint-line-movement-v2'
+BASKETBALL_VERSION = '2026-08-20-water-reverse-v3'
 BASKETBALL_HISTORY_KEY = 'basketball_prediction_history'
 BASKETBALL_HISTORY_LIMIT = 500
 
@@ -96,7 +96,8 @@ def _official_pick_status(bet_type, pick_prob, confidence):
     return {'playable': True, 'official': True, 'skip_reason': None}
 
 
-def _movement_accuracy_gate(bet_type, status, movement, confirmation):
+def _movement_accuracy_gate(bet_type, status, movement, confirmation,
+                            inference=None):
     """Accuracy-first admission for spread and totals official picks."""
     if bet_type not in ('rqspf', 'dx'):
         return status
@@ -109,6 +110,9 @@ def _movement_accuracy_gate(bet_type, status, movement, confirmation):
     if int(movement.get('samples', 0) or 0) < 2:
         return {**status, 'playable': False, 'official': False,
                 'skip_reason': 'movement_samples_insufficient'}
+    if inference is not None and not inference.get('actionable'):
+        return {**status, 'playable': False, 'official': False,
+                'skip_reason': inference.get('reason') or 'movement_signal_weak'}
     if not confirmation.get('confirmed'):
         return {**status, 'playable': False, 'official': False,
                 'skip_reason': 'movement_conflicts_with_model'}
@@ -204,7 +208,7 @@ def analyze_spf(match, movement=None):
                 confidence = 'medium'
             elif confidence == 'medium' and sc['boost'] >= 1.0:
                 confidence = 'high'
-        status = _movement_accuracy_gate('rqspf', status, movement, sc)
+        status = _movement_accuracy_gate('spf', status, movement, sc)
     
     return {
         'available': True,
@@ -256,14 +260,16 @@ def analyze_rqspf(match, movement=None):
         p_away = 1.0 - p_home
     else:
         elo_home_prob = None
-    # 赔率实时走势微调（让分侧：home=让胜, away=让负）
-    if movement and movement.get('available') and movement.get('side') != 'flat':
-        from .odds_movement import apply_movement
-        p_home, p_away = apply_movement(p_home, p_away, movement)
+    # 盘口 + 水位独立反推：新鲜强信号可以翻转弱模型，但不能硬翻强基本盘。
+    from .odds_movement import apply_market_inference
+    p_home, p_away, water_inference = apply_market_inference(
+        p_home, p_away, movement, 'rqspf'
+    )
     confidence = _confidence_from_probs(p_home, p_away)
     (p_home, p_away), raw_pick_prob = _calibrate_pick(
         'rqspf', p_home, p_away, match.get('league', ''), confidence)
     recommendation = '让胜' if p_home > p_away else '让负'
+    water_inference['final_recommendation'] = recommendation
     pick_prob = max(p_home, p_away)
     status = _official_pick_status('rqspf', pick_prob, confidence)
     line_movement = None
@@ -280,7 +286,9 @@ def analyze_rqspf(match, movement=None):
                 confidence = 'medium'
             elif confidence == 'medium' and sc['boost'] >= 1.0:
                 confidence = 'high'
-    status = _movement_accuracy_gate('rqspf', status, movement, sc)
+    status = _movement_accuracy_gate(
+        'rqspf', status, movement, sc, water_inference
+    )
     
     return {
         'available': True,
@@ -298,6 +306,8 @@ def analyze_rqspf(match, movement=None):
         'elo_home_prob': round(elo_home_prob, 4) if elo_home_prob is not None else None,
         'elo_trust': round(elo_trust, 3),
         'line_movement': line_movement,
+        'water_inference': water_inference,
+        'movement_led': bool(water_inference.get('reversed_model')),
         'sharp_confirmed': sharp_confirmed,
         **status,
     }
@@ -347,14 +357,16 @@ def analyze_daxiao(match, movement=None):
         p_under = 1.0 - p_over
     else:
         elo_over_prob = None
-    # 赔率实时走势微调（大小分：over=主侧, under=客侧）
-    if movement and movement.get('available') and movement.get('side') != 'flat':
-        from .odds_movement import apply_movement
-        p_over, p_under = apply_movement(p_over, p_under, movement)
+    # 大小分水位反推：升盘/大分降水指向大，降盘/小分降水指向小。
+    from .odds_movement import apply_market_inference
+    p_over, p_under, water_inference = apply_market_inference(
+        p_over, p_under, movement, 'dx'
+    )
     confidence = _confidence_from_probs(p_over, p_under)
     (p_over, p_under), raw_pick_prob = _calibrate_pick(
         'dx', p_over, p_under, league, confidence)
     recommendation = '大分' if p_over > p_under else '小分'
+    water_inference['final_recommendation'] = recommendation
     pick_prob = max(p_over, p_under)
     status = _official_pick_status('dx', pick_prob, confidence)
     line_movement = None
@@ -371,7 +383,7 @@ def analyze_daxiao(match, movement=None):
                 confidence = 'medium'
             elif confidence == 'medium' and sc['boost'] >= 1.0:
                 confidence = 'high'
-    status = _movement_accuracy_gate('dx', status, movement, sc)
+    status = _movement_accuracy_gate('dx', status, movement, sc, water_inference)
     
     return {
         'available': True,
@@ -389,6 +401,8 @@ def analyze_daxiao(match, movement=None):
         'elo_over_prob': round(elo_over_prob, 4) if elo_over_prob is not None else None,
         'elo_trust': round(elo_trust, 3),
         'line_movement': line_movement,
+        'water_inference': water_inference,
+        'movement_led': bool(water_inference.get('reversed_model')),
         'sharp_confirmed': sharp_confirmed,
         **status,
     }
@@ -757,7 +771,10 @@ def generate_basketball_recommendations(date=None, bet_types=None, source='500',
         results.append(result)
     
     # 统计走势命中情况，便于后续评估优化效果
-    movement_stats = {'sharp_confirmed': 0, 'with_movement': 0, 'steam': 0}
+    movement_stats = {
+        'sharp_confirmed': 0, 'with_movement': 0, 'steam': 0,
+        'movement_led': 0,
+    }
     for r in results:
         for bt in ('spf', 'rqspf', 'dx'):
             b = r.get(bt) or {}
@@ -767,6 +784,8 @@ def generate_basketball_recommendations(date=None, bet_types=None, source='500',
                     movement_stats['sharp_confirmed'] += 1
                 if (b.get('line_movement') or {}).get('steam'):
                     movement_stats['steam'] += 1
+                if b.get('movement_led'):
+                    movement_stats['movement_led'] += 1
 
     payload = {
         'date': date,

@@ -80,6 +80,31 @@ class BasketballPredictionPipelineTests(unittest.TestCase):
         self.assertFalse(result['official'])
         self.assertEqual(result['skip_reason'], 'movement_stale')
 
+    @patch('src.basketball._elo_predictions')
+    def test_water_inference_reverses_weak_spread_and_total_models(self, elo_predictions):
+        elo_predictions.return_value = ({}, {}, {}, 0.0)
+        spread_flow = {
+            'available': True, 'side': 'away', 'strength': .8,
+            'samples': 5, 'stale': False, 'steam': False,
+            'water_side': 'away', 'line_side': 'away',
+            'signal_agreement': True, 'signal_conflict': False,
+        }
+        total_flow = {
+            'available': True, 'side': 'under', 'strength': .8,
+            'samples': 5, 'stale': False, 'steam': False,
+            'water_side': 'under', 'line_side': 'under',
+            'signal_agreement': True, 'signal_conflict': False,
+        }
+        with patch('src.basketball._calibrate_pick', side_effect=lambda _t, a, b, _l, _c: ((a, b), max(a, b))):
+            spread = analyze_rqspf(self.match, spread_flow)
+            total = analyze_daxiao(self.match, total_flow)
+        self.assertEqual(spread['recommendation'], '让负')
+        self.assertTrue(spread['movement_led'])
+        self.assertTrue(spread['official'])
+        self.assertEqual(total['recommendation'], '小分')
+        self.assertTrue(total['movement_led'])
+        self.assertTrue(total['official'])
+
     def test_refresh_preserves_settled_result_and_other_same_day_match(self):
         old = [
             {'date': '2026-07-20', 'match_id': 'm1', 'result': {'home_score': 100, 'away_score': 90}},

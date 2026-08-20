@@ -237,12 +237,13 @@ def adjust_two_way_by_trend(p_home: float, p_away: float, trend: Optional[Dict],
         p_away *= (1 + adj)
         p_home *= (1 - adj * 0.6)
     elif direction == 'line_up' and trend.get('kind') == 'ah':
-        # 让分上调（主队让分更多/客队让更少）常反映主队受追捧
-        p_home *= (1 + adj * 0.5)
-        p_away *= (1 - adj * 0.3)
-    elif direction == 'line_down' and trend.get('kind') == 'ah':
+        # handicap 是加在主队一侧的数值；数值上升代表客队方向增强。
         p_away *= (1 + adj * 0.5)
         p_home *= (1 - adj * 0.3)
+    elif direction == 'line_down' and trend.get('kind') == 'ah':
+        # 例如 -3.5 -> -5.5：主队让深，代表主队方向增强。
+        p_home *= (1 + adj * 0.5)
+        p_away *= (1 - adj * 0.3)
 
     total = p_home + p_away + 1e-9
     return p_home / total, p_away / total

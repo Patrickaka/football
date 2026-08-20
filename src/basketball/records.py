@@ -93,6 +93,8 @@ def save_predictions(date_str: str, matches: List[Dict], version: str = ''):
                 'elo_trust': rqspf.get('elo_trust'),
                 'market_home_prob': rqspf.get('market_home_prob'),
                 'line_movement': rqspf.get('line_movement'),
+                'water_inference': rqspf.get('water_inference'),
+                'movement_led': rqspf.get('movement_led', False),
                 'sharp_confirmed': rqspf.get('sharp_confirmed', False),
             } if rqspf else None,
 
@@ -111,6 +113,8 @@ def save_predictions(date_str: str, matches: List[Dict], version: str = ''):
                 'elo_trust': dx.get('elo_trust'),
                 'market_over_prob': dx.get('market_over_prob'),
                 'line_movement': dx.get('line_movement'),
+                'water_inference': dx.get('water_inference'),
+                'movement_led': dx.get('movement_led', False),
                 'sharp_confirmed': dx.get('sharp_confirmed', False),
             } if dx else None,
 
@@ -328,6 +332,10 @@ def get_prediction_stats() -> Dict:
         'spf': {'total': 0, 'correct': 0, 'void': 0, 'accuracy': 0.0},
         'rqspf': {'total': 0, 'correct': 0, 'void': 0, 'accuracy': 0.0},
         'dx': {'total': 0, 'correct': 0, 'void': 0, 'accuracy': 0.0},
+        'water_inference': {
+            'rqspf': {'total': 0, 'correct': 0, 'accuracy': 0.0},
+            'dx': {'total': 0, 'correct': 0, 'accuracy': 0.0},
+        },
     }
 
     for r in settled:
@@ -355,6 +363,10 @@ def get_prediction_stats() -> Dict:
                 stats['rqspf']['total'] += 1
                 if hits['rqspf_hit']:
                     stats['rqspf']['correct'] += 1
+                if rqspf.get('movement_led'):
+                    stats['water_inference']['rqspf']['total'] += 1
+                    if hits['rqspf_hit']:
+                        stats['water_inference']['rqspf']['correct'] += 1
 
         dx = r.get('dx') or {}
         if dx.get('available') and dx.get('playable', True):
@@ -365,10 +377,18 @@ def get_prediction_stats() -> Dict:
                 stats['dx']['total'] += 1
                 if hits['dx_hit']:
                     stats['dx']['correct'] += 1
+                if dx.get('movement_led'):
+                    stats['water_inference']['dx']['total'] += 1
+                    if hits['dx_hit']:
+                        stats['water_inference']['dx']['correct'] += 1
 
     for key in ['spf', 'rqspf', 'dx']:
         if stats[key]['total'] > 0:
             stats[key]['accuracy'] = round(stats[key]['correct'] / stats[key]['total'], 4)
+    for key in ('rqspf', 'dx'):
+        item = stats['water_inference'][key]
+        if item['total'] > 0:
+            item['accuracy'] = round(item['correct'] / item['total'], 4)
 
     return stats
 

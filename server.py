@@ -1715,7 +1715,11 @@ class Handler(BaseHTTPRequestHandler):
                             '客胜': rqspf.get('away_odds'),
                         },
                         'line_movement': rqspf.get('line_movement'),
+                        'water_inference': rqspf.get('water_inference'),
+                        'movement_led': rqspf.get('movement_led'),
                         'sharp_confirmed': rqspf.get('sharp_confirmed'),
+                        'official': rqspf.get('official'),
+                        'skip_reason': rqspf.get('skip_reason'),
                     }
                 else:
                     match_item['rqspf'] = {'error': rqspf.get('reason') if rqspf else 'no_data'}
@@ -1734,7 +1738,11 @@ class Handler(BaseHTTPRequestHandler):
                             '小分': daxiao.get('under_odds'),
                         },
                         'line_movement': daxiao.get('line_movement'),
+                        'water_inference': daxiao.get('water_inference'),
+                        'movement_led': daxiao.get('movement_led'),
                         'sharp_confirmed': daxiao.get('sharp_confirmed'),
+                        'official': daxiao.get('official'),
+                        'skip_reason': daxiao.get('skip_reason'),
                     }
                 else:
                     match_item['daxiao'] = {'error': daxiao.get('reason') if daxiao else 'no_data'}
@@ -2977,7 +2985,7 @@ def _candidate_ips():
 
 
 def _start_background_sync():
-    """启动后台自动同步线程（football + KL8）"""
+    """启动后台自动同步线程（football + KL8 + basketball）"""
     try:
         from src.football.result_sync import start_background_sync
         import threading
@@ -3001,6 +3009,14 @@ def _start_background_sync():
         log.info('快乐8定时调度器已启动')
     except Exception as e:
         log.warning(f"启动快乐8调度器失败: {e}")
+
+    # 篮球盘口/水位自动采样，为开盘 -> 即时盘反推持续积累真实快照。
+    try:
+        from src.basketball.odds_movement import start_basketball_odds_scheduler
+        start_basketball_odds_scheduler(interval_minutes=15)
+        log.info('篮球赔率自动追踪器已启动')
+    except Exception as e:
+        log.warning(f"启动篮球赔率追踪器失败: {e}")
 
     # 3D 缓存预热：启动后台线程提前算好规则 + ML 结果，用户永不承担冷计算
     threading.Thread(target=_warm_3d_caches, daemon=True, name='Warm3DThread').start()

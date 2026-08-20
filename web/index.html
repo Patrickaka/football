@@ -7956,6 +7956,18 @@ function renderBasketball(result) {
             });
             html += '</div>';
           }
+          const rqWater = m.rqspf.water_inference || {};
+          if (rqWater.available) {
+            const rqLine = rqWater.opening_line != null && rqWater.current_line != null
+              ? `${esc(rqWater.opening_line)} → ${esc(rqWater.current_line)}` : '盘口历史不足';
+            const rqWaterText = `主水 ${Number(rqWater.first_water_move || 0) >= 0 ? '+' : ''}${Number(rqWater.first_water_move || 0).toFixed(2)} · 客水 ${Number(rqWater.second_water_move || 0) >= 0 ? '+' : ''}${Number(rqWater.second_water_move || 0).toFixed(2)}`;
+            const rqInferenceColor = rqWater.actionable ? '#06b6d4' : '#f59e0b';
+            html += `<div style="margin-top:7px;font-size:11px;color:${rqInferenceColor}">
+              💧 水位反推：${rqLine} · ${rqWaterText} · 指向 ${esc(rqWater.recommendation || '观望')}
+              ${m.rqspf.movement_led ? ' · <b>已改判原模型</b>' : ''}
+              ${rqWater.signal_conflict ? ' · 盘口与水位冲突，未采用' : ''}
+            </div>`;
+          }
           html += '</div>';
         }
         
@@ -7981,6 +7993,18 @@ function renderBasketball(result) {
               </div>`;
             });
             html += '</div>';
+          }
+          const dxWater = m.daxiao.water_inference || {};
+          if (dxWater.available) {
+            const dxLine = dxWater.opening_line != null && dxWater.current_line != null
+              ? `${esc(dxWater.opening_line)} → ${esc(dxWater.current_line)}` : '盘口历史不足';
+            const dxWaterText = `大分水 ${Number(dxWater.first_water_move || 0) >= 0 ? '+' : ''}${Number(dxWater.first_water_move || 0).toFixed(2)} · 小分水 ${Number(dxWater.second_water_move || 0) >= 0 ? '+' : ''}${Number(dxWater.second_water_move || 0).toFixed(2)}`;
+            const dxInferenceColor = dxWater.actionable ? '#06b6d4' : '#f59e0b';
+            html += `<div style="margin-top:7px;font-size:11px;color:${dxInferenceColor}">
+              💧 水位反推：${dxLine} · ${dxWaterText} · 指向 ${esc(dxWater.recommendation || '观望')}
+              ${m.daxiao.movement_led ? ' · <b>已改判原模型</b>' : ''}
+              ${dxWater.signal_conflict ? ' · 盘口与水位冲突，未采用' : ''}
+            </div>`;
           }
           html += '</div>';
         }

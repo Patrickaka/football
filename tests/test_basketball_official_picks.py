@@ -84,6 +84,46 @@ class BasketballOfficialPickTests(unittest.TestCase):
         self.assertEqual(saved[0]['spf']['skip_reason'], 'low_confidence')
         self.assertEqual(saved[0]['spf']['pick_prob'], 0.57)
 
+    def test_save_predictions_persists_water_inference_audit_fields(self):
+        saved = []
+        matches = [{
+            'match': {'id': 'm2', 'league': 'NBA', 'home': 'H', 'away': 'A'},
+            'rqspf': {
+                'available': True, 'recommendation': '让负', 'pick_prob': .58,
+                'playable': True, 'official': True, 'movement_led': True,
+                'water_inference': {'actionable': True, 'recommendation': '让负'},
+            },
+            'dx': {
+                'available': True, 'recommendation': '小分', 'pick_prob': .57,
+                'playable': True, 'official': True, 'movement_led': True,
+                'water_inference': {'actionable': True, 'recommendation': '小分'},
+            },
+        }]
+        with patch('src.basketball.records.kv_store.load', return_value=[]), \
+                patch('src.basketball.records.kv_store.save', side_effect=lambda _key, rows: saved.extend(rows)):
+            save_predictions('2026-08-20', matches)
+        self.assertTrue(saved[0]['rqspf']['movement_led'])
+        self.assertEqual(saved[0]['rqspf']['water_inference']['recommendation'], '让负')
+        self.assertTrue(saved[0]['dx']['movement_led'])
+
+    def test_stats_report_water_led_accuracy_separately(self):
+        records = [{
+            'result': {'home_score': 100, 'away_score': 95},
+            'spf': None,
+            'rqspf': {
+                'available': True, 'playable': True, 'recommendation': '让负',
+                'handicap': -8.5, 'movement_led': True,
+            },
+            'dx': {
+                'available': True, 'playable': True, 'recommendation': '小分',
+                'total_line': 210.5, 'movement_led': True,
+            },
+        }]
+        with patch('src.basketball.records.kv_store.load', return_value=records):
+            stats = get_prediction_stats()
+        self.assertEqual(stats['water_inference']['rqspf']['accuracy'], 1.0)
+        self.assertEqual(stats['water_inference']['dx']['accuracy'], 1.0)
+
 
 if __name__ == '__main__':
     unittest.main()
