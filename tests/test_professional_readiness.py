@@ -101,10 +101,26 @@ class ProfessionalReadinessTests(unittest.TestCase):
             {"production_ready": True},
             {"coverage_score": .82},
             {"official_bet_allowed": True},
-            {"spf": {"selected": True, "validation_status": "chronological_holdout_near_target"}},
+            {"spf": {
+                "selected": True,
+                "validation_status": "independent_chronological_holdout_supported",
+            }},
         )
         self.assertTrue(gate["official_bet_allowed"])
         self.assertEqual(gate["supported_markets"], ["spf"])
+
+    def test_professional_gate_rejects_market_proxy_validation(self):
+        gate = build_professional_decision_gate(
+            {"production_ready": True},
+            {"coverage_score": .82},
+            {"official_bet_allowed": True},
+            {"spf": {
+                "selected": True,
+                "validation_status": "dual_season_market_proxy_supported",
+            }},
+        )
+        self.assertFalse(gate["official_bet_allowed"])
+        self.assertFalse(gate["market_gate_passed"])
 
     def test_professional_gate_fails_closed_for_unprofitable_validation(self):
         gate = build_professional_decision_gate(

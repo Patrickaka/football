@@ -116,6 +116,31 @@ def main():
                 lambda row, value=threshold: row["probability"] >= value and row["margin"] >= 0.10,
             )
 
+    print("\nchronological frozen league policies (select 2024/25 -> verify 2025/26):")
+    thresholds = (0.60, 0.62, 0.65, 0.67, 0.70, 0.72, 0.75)
+    for league in LEAGUES:
+        training = [row for row in rows if row["league"] == league and row["season"] == "2425"]
+        holdout = [row for row in rows if row["league"] == league and row["season"] == "2526"]
+        selected = None
+        for threshold in thresholds:
+            selector = lambda row, value=threshold: (
+                row["probability"] >= value and row["margin"] >= 0.10
+            )
+            train_metrics = metrics(training, selector)
+            if train_metrics["selected"] >= 40 and train_metrics["accuracy"] >= 0.80:
+                selected = (threshold, train_metrics, metrics(holdout, selector))
+                break
+        if not selected:
+            print(f"{league}: abstain (no training threshold reaches target with n>=40)")
+            continue
+        threshold, train_metrics, test_metrics = selected
+        supported = test_metrics["selected"] >= 30 and test_metrics["accuracy"] >= 0.80
+        print(
+            f"{league}: p>={threshold:.2f} train={train_metrics['accuracy']:.2%} "
+            f"n={train_metrics['selected']} holdout={test_metrics['accuracy']:.2%} "
+            f"n={test_metrics['selected']} status={'supported' if supported else 'rejected'}"
+        )
+
 
 if __name__ == "__main__":
     main()

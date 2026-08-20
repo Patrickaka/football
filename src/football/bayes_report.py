@@ -665,6 +665,7 @@ def build_report(cache_path: str, live: dict, out_path: str) -> dict:
             d.get("lottery") or {},
             confidence=conf,
             anomaly=d.get("anomaly") or {},
+            league=league,
         )
     professional_evidence = d.get("professional_evidence")
     from .professional_readiness import build_match_evidence_profile

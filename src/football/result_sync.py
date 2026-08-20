@@ -63,7 +63,7 @@ from ..common import repositories
 
 log = logging.getLogger('football')
 
-PRODUCTION_MODEL_VERSION = 'football-v2026.08.20-professional-residual-gated-07'
+PRODUCTION_MODEL_VERSION = 'football-v2026.08.20-league-validated-gated-08'
 # 3,504-match chronological validation (2024/25 -> 2025/26): the 0.65 gate
 # held 76.86% -> 77.82% accuracy at 19.98% -> 15.70% coverage.  Margin 0.10
 # remains explicit for auditability; at a normalized 65% top probability the
@@ -88,6 +88,34 @@ def _prediction_decision_snapshot(predicted_1x2: Dict[str, float]) -> Dict:
         'min_probability': ACTIONABLE_MIN_PROBABILITY,
         'min_margin': ACTIONABLE_MIN_MARGIN,
     }
+
+
+def _audited_decision_snapshot(
+    predicted_1x2: Dict[str, float],
+    professional_snapshot: Dict = None,
+) -> Dict:
+    """Prefer the persisted match/league gate over the legacy global rule."""
+    decision = _prediction_decision_snapshot(predicted_1x2)
+    spf = (((professional_snapshot or {}).get('accuracy_gate') or {}).get('spf') or {})
+    if not spf:
+        return decision
+    candidate = {'胜': 'H', '平': 'D', '负': 'A'}.get(
+        spf.get('candidate'), spf.get('candidate'),
+    )
+    decision.update({
+        'eligible': spf.get('selected') is True,
+        'prediction': candidate,
+        'top_probability': spf.get('probability'),
+        'market_probability': spf.get('market_probability'),
+        'margin': spf.get('margin'),
+        'market_margin': spf.get('market_margin'),
+        'min_probability': spf.get('minimum_probability'),
+        'threshold_scope': spf.get('threshold_scope'),
+        'validation_status': spf.get('validation_status'),
+        'reasons': list(spf.get('reasons') or []),
+        'policy_version': 'league-validated-spf-v1',
+    })
+    return decision
 
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), 'data')
@@ -599,7 +627,9 @@ class PredictionHistory:
                     'updated_at': datetime.now().isoformat(),
                     'odds_snapshot': odds_data,
                     'model_version': model_version,
-                    'decision_snapshot': _prediction_decision_snapshot(predicted_1x2),
+                    'decision_snapshot': _audited_decision_snapshot(
+                        predicted_1x2, professional_snapshot,
+                    ),
                     'professional_snapshot': professional_snapshot,
                     '_pred_sig': new_sig,
                 }
@@ -702,7 +732,9 @@ class PredictionHistory:
             'predicted_scores': predicted_scores,
             'predicted_1x2': predicted_1x2,
             'model_version': model_version,
-            'decision_snapshot': _prediction_decision_snapshot(predicted_1x2),
+            'decision_snapshot': _audited_decision_snapshot(
+                predicted_1x2, professional_snapshot,
+            ),
             'professional_snapshot': professional_snapshot,
             'lottery_handicap': lottery_handicap,
             'predicted_rqspf': predicted_rqspf,

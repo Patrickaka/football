@@ -119,6 +119,33 @@ class ScoreScenarioDiversityTests(unittest.TestCase):
             False,
         )
 
+    def test_database_decision_snapshot_uses_league_accuracy_gate(self):
+        history = PredictionHistory.__new__(PredictionHistory)
+        history.records = []
+        professional = {"accuracy_gate": {"spf": {
+            "selected": False,
+            "candidate": "胜",
+            "probability": .72,
+            "market_probability": .68,
+            "margin": .40,
+            "market_margin": .30,
+            "minimum_probability": .70,
+            "threshold_scope": "global",
+            "validation_status": "chronological_holdout_near_target",
+            "reasons": ["官方赔率去水概率低于70%"],
+        }}}
+        with patch.object(history, "_save_record"):
+            history.add_prediction(
+                "audit-gate", "意甲", "A", "B", "2099-07-25 20:00",
+                {"1-0": .2}, {"H": .72, "D": .17, "A": .11},
+                professional_snapshot=professional,
+            )
+
+        decision = history.records[0]["decision_snapshot"]
+        self.assertFalse(decision["eligible"])
+        self.assertEqual(decision["prediction"], "H")
+        self.assertEqual(decision["policy_version"], "league-validated-spf-v1")
+
 
 if __name__ == "__main__":
     unittest.main()

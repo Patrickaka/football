@@ -41,6 +41,39 @@ class FootballAccuracyGateTests(unittest.TestCase):
         self.assertFalse(result["spf"]["selected"])
         self.assertEqual(result["spf"]["decision"], "观望")
 
+    def test_spf_uses_official_market_probability_for_validated_threshold(self):
+        result = build_accuracy_gate({
+            "standard": {
+                "probabilities": {"胜": 0.76, "平": 0.14, "负": 0.10},
+                "market_probabilities": {"胜": 0.62, "平": 0.23, "负": 0.15},
+            }
+        })
+        self.assertFalse(result["spf"]["selected"])
+        self.assertIn("官方赔率去水概率低于70%", result["spf"]["reasons"])
+
+    def test_sp1_uses_dual_season_validated_lower_threshold(self):
+        lottery = {"standard": {
+            "probabilities": {"胜": 0.72, "平": 0.17, "负": 0.11},
+            "market_probabilities": {"胜": 0.66, "平": 0.20, "负": 0.14},
+        }}
+        spain = build_accuracy_gate(lottery, league="西甲")
+        global_gate = build_accuracy_gate(lottery)
+
+        self.assertTrue(spain["spf"]["selected"])
+        self.assertEqual(spain["spf"]["minimum_probability"], 0.65)
+        self.assertEqual(spain["spf"]["threshold_scope"], "SP1")
+        self.assertFalse(global_gate["spf"]["selected"])
+
+    def test_volatile_league_does_not_receive_unvalidated_override(self):
+        lottery = {"standard": {
+            "probabilities": {"胜": 0.73, "平": 0.16, "负": 0.11},
+            "market_probabilities": {"胜": 0.68, "平": 0.19, "负": 0.13},
+        }}
+        result = build_accuracy_gate(lottery, league="意甲")
+
+        self.assertFalse(result["spf"]["selected"])
+        self.assertEqual(result["spf"]["threshold_scope"], "global")
+
     def test_rqspf_requires_stricter_probability_and_market_agreement(self):
         result = build_accuracy_gate({
             "handicap": {

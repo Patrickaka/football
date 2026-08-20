@@ -31,7 +31,7 @@ from ..common.paths import data_path
 
 log = setup_logger('football')
 
-FOOTBALL_PREDICTION_LOGIC_VERSION = '2026-08-20-professional-residual-gated-fair-price-joint-matrix-v29'
+FOOTBALL_PREDICTION_LOGIC_VERSION = '2026-08-20-league-validated-professional-fair-price-joint-matrix-v30'
 # Official 1X2 prices are the strongest observable production signal.  Raising
 # their share from 40% to 80% improved the pooled high-confidence proxy from
 # 61.67% to 62.55%; the model retains 20% for team/Asian/context information.
@@ -8598,6 +8598,7 @@ def analyze_match(match, force_refresh=False):
             'joint_water': joint_anomaly,
             'euro_asian_deviation': euro_asian_dev,
         },
+        league=match.get('league'),
     )
 
     result = {

@@ -216,12 +216,17 @@ def build_professional_decision_gate(
     validation_passed = validation.get("production_ready") is True
     evidence_passed = float(evidence.get("coverage_score", 0.0) or 0.0) >= 0.70
     live_context_passed = live_quality.get("official_bet_allowed") is True
+    independently_supported_statuses = {
+        "independent_chronological_holdout_supported",
+        "dual_season_independent_holdout_supported",
+    }
     supported_markets = []
     for market in ("spf", "rqspf"):
         decision = accuracy_gate.get(market) or {}
-        if decision.get("selected") and not str(
-            decision.get("validation_status") or ""
-        ).startswith("pending"):
+        if (
+            decision.get("selected")
+            and decision.get("validation_status") in independently_supported_statuses
+        ):
             supported_markets.append(market)
     market_gate_passed = bool(supported_markets)
 
