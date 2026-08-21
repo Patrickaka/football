@@ -9,17 +9,19 @@ import time
 import unittest
 
 import src.football as fb
+from src.football import fetching as fb_fetching
+from src.football import parsing as fb_parsing
 
 
 class FootballFetchCacheTests(unittest.TestCase):
     def setUp(self):
-        self._original_raw = fb._fetch_raw
+        self._original_raw = fb_fetching._fetch_raw
         fb.clear_fetch_cache()
         self.calls = []
         self.lock = threading.Lock()
 
     def tearDown(self):
-        fb._fetch_raw = self._original_raw
+        fb_fetching._fetch_raw = self._original_raw
         fb.clear_fetch_cache()
 
     def _stub(self, delay=0.0, body='BODY'):
@@ -32,7 +34,7 @@ class FootballFetchCacheTests(unittest.TestCase):
         return _raw
 
     def test_repeated_url_is_fetched_once_within_ttl(self):
-        fb._fetch_raw = self._stub()
+        fb_fetching._fetch_raw = self._stub()
         url = f'{fb.BASE}/fenxi/yazhi-1.shtml'
 
         first = fb.fetch(url)
@@ -42,7 +44,7 @@ class FootballFetchCacheTests(unittest.TestCase):
         self.assertEqual(self.calls, [url])
 
     def test_concurrent_requests_for_same_url_hit_upstream_once(self):
-        fb._fetch_raw = self._stub(delay=0.2)
+        fb_fetching._fetch_raw = self._stub(delay=0.2)
         url = f'{fb.BASE}/fenxi/daxiao-1.shtml'
         threads = [threading.Thread(target=lambda: fb.fetch(url)) for _ in range(6)]
 
@@ -65,7 +67,7 @@ class FootballFetchCacheTests(unittest.TestCase):
                 state['now'] -= 1
             return 'BODY'
 
-        fb._fetch_raw = _raw
+        fb_fetching._fetch_raw = _raw
         threads = [
             threading.Thread(target=lambda i=i: fb.fetch(f'{fb.BASE}/fenxi/yazhi-{i}.shtml'))
             for i in range(fb.FETCH_MAX_CONCURRENCY * 3)
@@ -85,7 +87,7 @@ class FootballFetchCacheTests(unittest.TestCase):
             attempts.append(url)
             raise OSError('upstream down')
 
-        fb._fetch_raw = _raw
+        fb_fetching._fetch_raw = _raw
         for _ in range(2):
             with self.assertRaises(OSError):
                 fb.fetch(f'{fb.BASE}/fenxi/yazhi-1.shtml')
@@ -93,7 +95,7 @@ class FootballFetchCacheTests(unittest.TestCase):
         self.assertEqual(len(attempts), 2)
 
     def test_clear_fetch_cache_forces_refetch(self):
-        fb._fetch_raw = self._stub()
+        fb_fetching._fetch_raw = self._stub()
         url = f'{fb.BASE}/fenxi/shuju-1.shtml'
 
         fb.fetch(url)
@@ -109,7 +111,7 @@ class FootballAnalyzeParallelFetchTests(unittest.TestCase):
     def test_odds_pages_are_fetched_concurrently(self):
         barrier = threading.Barrier(5, timeout=5)
         original = {
-            name: getattr(fb, name)
+            name: getattr(fb_parsing, name)
             for name in (
                 'fetch_yazhi', 'fetch_ouzhi', 'fetch_daxiao',
                 'fetch_team_strength', 'fetch_single_company_odds',
@@ -122,7 +124,7 @@ class FootballAnalyzeParallelFetchTests(unittest.TestCase):
             raise RuntimeError('stubbed')
 
         for name in original:
-            setattr(fb, name, _blocking)
+            setattr(fb_parsing, name, _blocking)
         try:
             with self.assertRaises(ValueError) as ctx:
                 fb.analyze_match({
@@ -131,7 +133,7 @@ class FootballAnalyzeParallelFetchTests(unittest.TestCase):
                 }, force_refresh=True)
         finally:
             for name, func in original.items():
-                setattr(fb, name, func)
+                setattr(fb_parsing, name, func)
 
         # 只有五个抓取同时在飞，屏障才会放行并抛出 stubbed；
         # 串行执行时屏障超时崩溃，这里就看不到 stubbed。

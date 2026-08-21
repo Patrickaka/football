@@ -11,6 +11,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import src.football as football
+from src.football import fetching as fb_fetching
+from src.football import parsing as fb_parsing
 
 
 def test_ouzhi_json_first_is_close():
@@ -20,7 +22,7 @@ def test_ouzhi_json_first_is_close():
         [1.49, 3.95, 6.20, 92.1, '2026-06-01 10:00'],
         [1.46, 4.03, 6.39, 91.8, '2026-05-29 00:05'],
     ]
-    football.fetch_json = lambda url, referer=None: series
+    fb_fetching.fetch_json = lambda url, referer=None: series
     oz = football.fetch_ouzhi('x')
     assert oz['close']['home'] == 1.52 and oz['close']['return_rate'] == 92.6
     assert oz['open']['home'] == 1.46 and oz['open']['return_rate'] == 91.8
@@ -28,7 +30,7 @@ def test_ouzhi_json_first_is_close():
 
 def test_daxiao_first_triple_is_open():
     nums = [0.90, 2.31, 0.88, 0.87, 2.38, 0.89]  # [初盘组][终盘组]
-    football._fetch_avg_page = lambda mid, page: (None, nums)
+    fb_parsing._fetch_avg_page = lambda mid, page: (None, nums)
     dx = football.fetch_daxiao('x')
     assert dx['open']['line'] == 2.31, dx['open']
     assert dx['close']['line'] == 2.38, dx['close']
@@ -37,7 +39,7 @@ def test_daxiao_first_triple_is_open():
 def test_yazhi_first_triple_is_open():
     nums = [0.899, -0.969, 0.89, 0.863, -1.063, 0.911]
     fake_html = '平均值 0.899 -0.969 0.89 0.863 -1.063 0.911'
-    football._fetch_avg_page = lambda mid, page: (fake_html, nums)
+    fb_parsing._fetch_avg_page = lambda mid, page: (fake_html, nums)
     ya = football.fetch_yazhi('x')
     # 取反后正=主让；初盘让球 0.969 < 终盘 1.063（主队走强）
     assert round(ya['open']['handicap'], 3) == 0.969, ya['open']

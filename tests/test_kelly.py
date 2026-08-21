@@ -7,6 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import src.football as football
+from src.football import fetching as fb_fetching
 
 
 def test_kelly_near_return_rate():
@@ -37,7 +38,7 @@ def test_fetch_ouzhi_return_rate():
         [1.52, 3.88, 6.11, 92.6, '2026-06-03'],
         [1.46, 4.03, 6.39, 91.8, '2026-05-29'],
     ]
-    football.fetch_json = lambda url, referer=None: series
+    fb_fetching.fetch_json = lambda url, referer=None: series
     oz = football.fetch_ouzhi('x')
     assert oz['close']['return_rate'] == 92.6
     euro = football.analyze_euro(oz)

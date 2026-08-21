@@ -7,6 +7,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import src.football as football
+from src.football import fetching as fb_fetching
+from src.football import modeling as fb_modeling
+from src.football import scoring as fb_scoring
 from unittest.mock import patch
 
 
@@ -53,7 +56,7 @@ def test_asian_supremacy_differs_from_handicap_line():
 
 
 def test_quarter_handicap_half_win_counts_half_probability():
-    with patch.object(football, 'build_score_matrix', return_value={(1, 0): 1.0}):
+    with patch.object(fb_modeling, 'build_score_matrix', return_value={(1, 0): 1.0}):
         cover = football._asian_cover_prob(1.5, 1.0, 0.75)
     assert cover == 0.5, cover
 
@@ -65,7 +68,7 @@ def test_predict_scores_does_not_apply_market_move_twice():
     total['open_prob'] = {'over': 0.56, 'under': 0.44}
     total['lambda_adjust'] = {'total': 9.0}
     with patch.object(
-        football,
+        fb_scoring,
         'fit_lambdas_from_markets',
         return_value=(1.5, 1.0, 2.5, 0.0),
     ):
@@ -117,7 +120,7 @@ def test_parse_team_strength_from_html():
 
     snippet = block('丹麦', 28, 9) + block('民主刚果', 12, 4)
     # 用 patch 而非直接赋值：直接赋值会把替身永久留在模块上，污染后续用例
-    with patch.object(football, 'fetch', lambda *a, **k: snippet):
+    with patch.object(fb_fetching, 'fetch', lambda *a, **k: snippet):
         st = football.fetch_team_strength('x', '丹麦', '民主刚果')
     assert st is not None
     assert st['attack_home'] > st['attack_away']
