@@ -3,6 +3,9 @@ import unittest
 from scripts.backtest_kl8_select6_chain import (
     _one_chain,
     _paired_summary,
+    _row_score,
+    _score,
+    _strategy_slate,
     _summarize,
 )
 
@@ -47,6 +50,30 @@ class KL8Select6ChainBacktestTests(unittest.TestCase):
         self.assertEqual(comparison['mean'], 0.0)
         self.assertLess(comparison['ci_95'][0], 0.0)
         self.assertGreater(comparison['ci_95'][1], 0.0)
+
+    def test_primary_accuracy_outweighs_late_chain_coverage(self):
+        primary_better = [3, 0, 0, 0, 0]
+        coverage_better = [1, 4, 4, 4, 4]
+
+        self.assertGreater(_row_score(primary_better), _row_score(coverage_better))
+
+        primary_metrics = _summarize([primary_better], rounds=5)
+        coverage_metrics = _summarize([coverage_better], rounds=5)
+        self.assertGreater(_score(primary_metrics), _score(coverage_metrics))
+
+    def test_slate_keeps_v10_8_and_v10_9_controls(self):
+        slate = _strategy_slate()
+
+        self.assertEqual(slate['previous_reference_v3']['window_size'], 100)
+        self.assertEqual(
+            slate['previous_reference_v3']['final_selection_mode'],
+            'concentrated',
+        )
+        self.assertEqual(slate['previous_chain_v4']['window_size'], 150)
+        self.assertEqual(
+            slate['previous_chain_v4']['final_selection_mode'],
+            'shape_balanced',
+        )
 
 
 if __name__ == '__main__':

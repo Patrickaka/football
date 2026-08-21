@@ -84,9 +84,9 @@ class KL8PredictionGuardTests(unittest.TestCase):
 
         self.assertEqual(select5['final_selection_mode'], 'concentrated')
         self.assertEqual(select5['window_size'], 100)
-        self.assertEqual(select6['final_selection_mode'], 'shape_balanced')
-        self.assertEqual(select6['window_size'], 150)
-        self.assertEqual(select6['chain_objective'], 'primary_then_cumulative_exclusion')
+        self.assertEqual(select6['final_selection_mode'], 'concentrated')
+        self.assertEqual(select6['window_size'], 100)
+        self.assertEqual(select6['chain_objective'], 'primary_accuracy_then_early_exclusion')
         self.assertEqual(select6['chain_audit_rounds'], 5)
         for strategy in (select5, select6):
             self.assertFalse(strategy['pool_diversify'])
@@ -594,13 +594,13 @@ class KL8PredictionGuardTests(unittest.TestCase):
             kl8_module.VERIFY_ONLY_MODE = original_verify_only
 
         self.assertEqual(select5['final_selection_mode'], 'concentrated')
-        self.assertEqual(select6['final_selection_mode'], 'shape_balanced')
+        self.assertEqual(select6['final_selection_mode'], 'concentrated')
         self.assertEqual(select10['final_selection_mode'], 'concentrated')
         self.assertFalse(select5['pool_diversify'])
         self.assertFalse(select6['pool_diversify'])
         self.assertFalse(select10['pool_diversify'])
         self.assertEqual(select5['strategy_id'], 'select_5_ref_transition_repeat_v3')
-        self.assertEqual(select6['strategy_id'], 'select_6_ref_transition_chain_v4')
+        self.assertEqual(select6['strategy_id'], 'select_6_ref_transition_primary_v5')
         self.assertEqual(select10['strategy_id'], 'select_10_ref_trend100_shape_balanced')
         self.assertNotEqual(select5['feature_weights'], select6['feature_weights'])
         self.assertEqual(select5['target_hits'], 4)
@@ -659,7 +659,7 @@ class KL8PredictionGuardTests(unittest.TestCase):
             self.assertEqual(result[key]['numbers'], sorted(result[key]['numbers']))
 
         for key in [f'select_{pick}' for pick in range(3, 11)]:
-            expected_mode = 'shape_balanced' if key == 'select_6' else 'concentrated'
+            expected_mode = 'concentrated'
             self.assertEqual(
                 result['resolved_strategies'][key]['final_selection_mode'],
                 expected_mode,
@@ -668,10 +668,10 @@ class KL8PredictionGuardTests(unittest.TestCase):
             self.assertNotIn('variants', result[key])
 
         self.assertEqual(result['resolved_strategies']['select_5']['pool_max_last_numbers'], 2)
-        self.assertEqual(result['resolved_strategies']['select_6']['pool_max_last_numbers'], 4)
+        self.assertEqual(result['resolved_strategies']['select_6']['pool_max_last_numbers'], 3)
         self.assertEqual(
             result['resolved_strategies']['select_6']['chain_objective'],
-            'primary_then_cumulative_exclusion',
+            'primary_accuracy_then_early_exclusion',
         )
         self.assertEqual(result['resolved_strategies']['select_6']['chain_audit_rounds'], 5)
         last_numbers = set(analyzer.history_data[0]['numbers'])
@@ -688,7 +688,7 @@ class KL8PredictionGuardTests(unittest.TestCase):
         self.assertEqual(result['select_6']['accuracy_profile']['expected_hits_random'], 1.5)
         self.assertEqual(result['select_6']['accuracy_profile']['key_thresholds'], ['>=5', '>=4'])
         self.assertEqual(result['select_6']['accuracy_profile']['target_hits'], 5)
-        self.assertEqual(result['select_6']['accuracy_profile']['selected_mode'], 'shape_balanced')
+        self.assertEqual(result['select_6']['accuracy_profile']['selected_mode'], 'concentrated')
         self.assertNotIn('variants', result['select_6'])
         self.assertEqual(
             result['resolved_strategies']['select_10']['final_selection_mode'],

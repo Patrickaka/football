@@ -58,6 +58,28 @@ def _strategy_slate():
             'pool_diversify': False,
             'final_selection_mode': 'concentrated',
         },
+        'previous_chain_v4': {
+            'strategy_id': 'select_6_ref_transition_chain_v4',
+            'feature_weights': {
+                'frequency': 0.20,
+                'gap': 0.10,
+                'trend': 0.10,
+                'next_transition': 0.35,
+                'pair_cooccurrence': 0.05,
+                'position_residual': 0.10,
+                'position_residual_cross': 0.0,
+                'road_residual': 0.05,
+                'repeat': 0.05,
+                'odd_even': 0.0,
+                'big_small': 0.0,
+            },
+            'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
+            'window_size': 150,
+            'repeat_direction': 'follow',
+            'pool_max_last_numbers': 4,
+            'pool_diversify': False,
+            'final_selection_mode': 'shape_balanced',
+        },
         # Pre-registered compromise between the current 100-draw reference and
         # transition_repeat_150_cap4.  Its weights are fixed before the oldest
         # untouched 600-draw audit is opened.
@@ -163,6 +185,10 @@ def _summarize(rows, rounds):
         sum(hit * weights[index] for index, hit in enumerate(row))
         for row in early
     ]
+    discounted_followup_hits = [
+        sum(hit / index for index, hit in enumerate(row[1:], 1))
+        for row in early
+    ]
     return {
         'n_tests': n_tests,
         'rounds': round_metrics,
@@ -175,28 +201,33 @@ def _summarize(rows, rounds):
         'mean_first_hit_3_round': round(sum(first_ge3) / n_tests, 4),
         'mean_first_hit_4_round': round(sum(first_ge4) / n_tests, 4),
         'discounted_hits': round(sum(discounted_hits) / n_tests, 4),
+        'discounted_followup_hits': round(
+            sum(discounted_followup_hits) / n_tests, 4,
+        ),
     }
 
 
 def _score(metrics):
-    """Earlier hits matter, while the primary recommendation remains dominant."""
+    """Rank primarily by the formal select-6 ticket, not near-full coverage."""
     return round(
-        metrics.get('primary_mean_hits', 0) * 0.45
-        + metrics.get('discounted_hits', 0) * 0.25
-        + metrics.get('early_any_hit_3_rate', 0) * 0.20
-        + metrics.get('early_any_hit_4_rate', 0) * 0.10,
+        metrics.get('primary_mean_hits', 0) * 0.65
+        + metrics.get('primary_hit_3_rate', 0) * 0.20
+        + metrics.get('discounted_followup_hits', 0) * 0.10
+        + metrics.get('early_any_hit_3_rate', 0) * 0.05,
         6,
     )
 
 
 def _row_score(row):
-    weights = [1.0 / (index + 1) for index in range(len(row))]
-    discounted = sum(hit * weights[index] for index, hit in enumerate(row))
+    followups = row[1:]
+    discounted_followups = sum(
+        hit / (index + 1) for index, hit in enumerate(followups)
+    )
     return (
-        row[0] * 0.45
-        + discounted * 0.25
-        + (max(row) >= 3) * 0.20
-        + (max(row) >= 4) * 0.10
+        row[0] * 0.65
+        + (row[0] >= 3) * 0.20
+        + discounted_followups * 0.10
+        + (max(row) >= 3) * 0.05
     )
 
 
@@ -260,8 +291,8 @@ def _run_slice(raw, target_indices, strategies, rounds):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--history', default='data/kl8_history.json')
-    parser.add_argument('--validation-periods', type=int, default=300)
-    parser.add_argument('--final-periods', type=int, default=300)
+    parser.add_argument('--validation-periods', type=int, default=100)
+    parser.add_argument('--final-periods', type=int, default=100)
     parser.add_argument('--offset', type=int, default=0, help='skip this many newest draws')
     parser.add_argument('--rounds', type=int, default=5, help='includes primary round 0')
     parser.add_argument('--strategies', default='', help='comma-separated strategy names')
