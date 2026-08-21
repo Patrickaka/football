@@ -49,5 +49,9 @@ data/market_cluster_db.json
 data/lottery3d_online_predictions.json
 data/lottery3d_recent_recommend.json
 
+# 快乐8策略持久化（测试/线上运行时写入）
+data/kl8_active_strategies.json
+data/kl8_strategy_trials.json
+
 # CatBoost 训练产物
 catboost_info/

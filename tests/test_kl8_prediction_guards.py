@@ -4,6 +4,10 @@ import tempfile
 from pathlib import Path
 
 import src.kl8 as kl8_module
+from src.kl8 import config as kl8_config
+from src.kl8 import records as kl8_records
+from src.kl8 import snapshots as kl8_snapshots
+from src.kl8 import strategies as kl8_strategies
 from src.kl8 import (
     KL8RollingBacktest,
     KL8Analyzer,
@@ -33,11 +37,11 @@ def _record(issue: int):
 class KL8PredictionGuardTests(unittest.TestCase):
     def setUp(self):
         self._recalculation_tmp = tempfile.TemporaryDirectory()
-        self._original_recalculation_dir = kl8_module.KL8_RECALCULATION_DIR
-        kl8_module.KL8_RECALCULATION_DIR = self._recalculation_tmp.name
+        self._original_recalculation_dir = kl8_config.KL8_RECALCULATION_DIR
+        kl8_config.KL8_RECALCULATION_DIR = self._recalculation_tmp.name
 
     def tearDown(self):
-        kl8_module.KL8_RECALCULATION_DIR = self._original_recalculation_dir
+        kl8_config.KL8_RECALCULATION_DIR = self._original_recalculation_dir
         self._recalculation_tmp.cleanup()
 
     def test_next_transition_uses_older_to_newer_draws_with_shrinkage(self):
@@ -59,7 +63,7 @@ class KL8PredictionGuardTests(unittest.TestCase):
         self.assertGreater(score, 0.50)
 
     def test_unvalidated_numbers_use_dynamic_reference_by_default(self):
-        self.assertFalse(kl8_module.VERIFY_ONLY_MODE)
+        self.assertFalse(kl8_config.VERIFY_ONLY_MODE)
         select5 = resolve_play_strategy('select_5')
         select6 = resolve_play_strategy('select_6')
         self.assertEqual(select5['baseline_type'], 'adaptive_pattern_reference')
@@ -201,9 +205,9 @@ class KL8PredictionGuardTests(unittest.TestCase):
         analyzer.statistics = {'last_numbers': set(range(1, 21))}
 
         original_build = KL8Analyzer.build_pool_by_strategy
-        original_verify_only = kl8_module.VERIFY_ONLY_MODE
+        original_verify_only = kl8_config.VERIFY_ONLY_MODE
         try:
-            kl8_module.VERIFY_ONLY_MODE = False
+            kl8_config.VERIFY_ONLY_MODE = False
             KL8Analyzer.build_pool_by_strategy = lambda self, strategy, pool_size=20: {
                 'selected': list(range(1, min(pool_size, 40) + 1)),
                 'candidates': [(n, float(100 - n)) for n in range(1, 41)],
@@ -212,7 +216,7 @@ class KL8PredictionGuardTests(unittest.TestCase):
             result = analyzer.recalculate_play_excluding('select_5', [1, 2, 3, 4, 5])
         finally:
             KL8Analyzer.build_pool_by_strategy = original_build
-            kl8_module.VERIFY_ONLY_MODE = original_verify_only
+            kl8_config.VERIFY_ONLY_MODE = original_verify_only
 
         self.assertNotIn('error', result)
         self.assertEqual(len(result['numbers']), 5)
@@ -227,12 +231,12 @@ class KL8PredictionGuardTests(unittest.TestCase):
         analyzer.statistics = {'last_numbers': set(range(1, 21))}
 
         original_build = KL8Analyzer.build_pool_by_strategy
-        original_dir = kl8_module.KL8_RECALCULATION_DIR
-        original_verify_only = kl8_module.VERIFY_ONLY_MODE
+        original_dir = kl8_config.KL8_RECALCULATION_DIR
+        original_verify_only = kl8_config.VERIFY_ONLY_MODE
         try:
             with tempfile.TemporaryDirectory() as tmp:
-                kl8_module.KL8_RECALCULATION_DIR = tmp
-                kl8_module.VERIFY_ONLY_MODE = False
+                kl8_config.KL8_RECALCULATION_DIR = tmp
+                kl8_config.VERIFY_ONLY_MODE = False
                 KL8Analyzer.build_pool_by_strategy = lambda self, strategy, pool_size=20: {
                     'selected': list(range(1, 51)),
                     'candidates': [(n, float(100 - n)) for n in range(1, 51)],
@@ -247,8 +251,8 @@ class KL8PredictionGuardTests(unittest.TestCase):
                 stored = kl8_module.list_exclude_recalculations()
         finally:
             KL8Analyzer.build_pool_by_strategy = original_build
-            kl8_module.KL8_RECALCULATION_DIR = original_dir
-            kl8_module.VERIFY_ONLY_MODE = original_verify_only
+            kl8_config.KL8_RECALCULATION_DIR = original_dir
+            kl8_config.VERIFY_ONLY_MODE = original_verify_only
 
         self.assertEqual(first['recalculation_record']['round'], 1)
         self.assertEqual(duplicate['recalculation_record']['record_id'], first['recalculation_record']['record_id'])
@@ -261,9 +265,9 @@ class KL8PredictionGuardTests(unittest.TestCase):
         analyzer.using_simulated_data = False
         analyzer.statistics = {'last_numbers': set()}
         original_build = KL8Analyzer.build_pool_by_strategy
-        original_verify_only = kl8_module.VERIFY_ONLY_MODE
+        original_verify_only = kl8_config.VERIFY_ONLY_MODE
         try:
-            kl8_module.VERIFY_ONLY_MODE = False
+            kl8_config.VERIFY_ONLY_MODE = False
             KL8Analyzer.build_pool_by_strategy = lambda self, strategy, pool_size=20: {
                 'selected': list(range(1, 19)),
                 'candidates': [(n, float(100 - n)) for n in range(1, 19)],
@@ -276,7 +280,7 @@ class KL8PredictionGuardTests(unittest.TestCase):
             stored = kl8_module.list_exclude_recalculations()
         finally:
             KL8Analyzer.build_pool_by_strategy = original_build
-            kl8_module.VERIFY_ONLY_MODE = original_verify_only
+            kl8_config.VERIFY_ONLY_MODE = original_verify_only
 
         self.assertEqual(chain['generated_rounds'], 2)
         self.assertTrue(chain['exhausted'])
@@ -293,17 +297,17 @@ class KL8PredictionGuardTests(unittest.TestCase):
         candidates = [(n, float(100 - n)) for n in range(1, 31)]
 
         original_build = KL8Analyzer.build_pool_by_strategy
-        original_dir = kl8_module.KL8_RECALCULATION_DIR
-        original_verify_only = kl8_module.VERIFY_ONLY_MODE
+        original_dir = kl8_config.KL8_RECALCULATION_DIR
+        original_verify_only = kl8_config.VERIFY_ONLY_MODE
         try:
-            kl8_module.VERIFY_ONLY_MODE = False
+            kl8_config.VERIFY_ONLY_MODE = False
             KL8Analyzer.build_pool_by_strategy = lambda self, strategy, pool_size=20: {
                 'selected': [n for n, _ in candidates],
                 'candidates': candidates,
                 'votes': {},
             }
             with tempfile.TemporaryDirectory() as automatic_dir:
-                kl8_module.KL8_RECALCULATION_DIR = automatic_dir
+                kl8_config.KL8_RECALCULATION_DIR = automatic_dir
                 chain = analyzer.generate_exclude_recalculation_chain(
                     'select_6',
                     initial,
@@ -317,7 +321,7 @@ class KL8PredictionGuardTests(unittest.TestCase):
                 ))
 
             with tempfile.TemporaryDirectory() as manual_dir:
-                kl8_module.KL8_RECALCULATION_DIR = manual_dir
+                kl8_config.KL8_RECALCULATION_DIR = manual_dir
                 excluded = set(initial)
                 manual_numbers = []
                 current = initial
@@ -339,8 +343,8 @@ class KL8PredictionGuardTests(unittest.TestCase):
                     excluded.update(current)
         finally:
             KL8Analyzer.build_pool_by_strategy = original_build
-            kl8_module.KL8_RECALCULATION_DIR = original_dir
-            kl8_module.VERIFY_ONLY_MODE = original_verify_only
+            kl8_config.KL8_RECALCULATION_DIR = original_dir
+            kl8_config.VERIFY_ONLY_MODE = original_verify_only
 
         self.assertEqual(automatic_numbers, manual_numbers)
 
@@ -352,12 +356,12 @@ class KL8PredictionGuardTests(unittest.TestCase):
         candidates = [(n, float(100 - n)) for n in range(1, 41)]
 
         original_build = KL8Analyzer.build_pool_by_strategy
-        original_dir = kl8_module.KL8_RECALCULATION_DIR
-        original_verify_only = kl8_module.VERIFY_ONLY_MODE
+        original_dir = kl8_config.KL8_RECALCULATION_DIR
+        original_verify_only = kl8_config.VERIFY_ONLY_MODE
         try:
             with tempfile.TemporaryDirectory() as tmp:
-                kl8_module.KL8_RECALCULATION_DIR = tmp
-                kl8_module.VERIFY_ONLY_MODE = False
+                kl8_config.KL8_RECALCULATION_DIR = tmp
+                kl8_config.VERIFY_ONLY_MODE = False
                 KL8Analyzer.build_pool_by_strategy = lambda self, strategy, pool_size=20: {
                     'selected': [n for n, _ in candidates],
                     'candidates': candidates,
@@ -381,8 +385,8 @@ class KL8PredictionGuardTests(unittest.TestCase):
                 stored = kl8_module.list_exclude_recalculations()
         finally:
             KL8Analyzer.build_pool_by_strategy = original_build
-            kl8_module.KL8_RECALCULATION_DIR = original_dir
-            kl8_module.VERIFY_ONLY_MODE = original_verify_only
+            kl8_config.KL8_RECALCULATION_DIR = original_dir
+            kl8_config.VERIFY_ONLY_MODE = original_verify_only
 
         self.assertEqual(automatic['record_id'], manual['record_id'])
         self.assertEqual(automatic['numbers'], manual['numbers'])
@@ -418,9 +422,9 @@ class KL8PredictionGuardTests(unittest.TestCase):
         analyzer.statistics = {'last_numbers': set(range(1, 21))}
 
         original_build = KL8Analyzer.build_pool_by_strategy
-        original_verify_only = kl8_module.VERIFY_ONLY_MODE
+        original_verify_only = kl8_config.VERIFY_ONLY_MODE
         try:
-            kl8_module.VERIFY_ONLY_MODE = False
+            kl8_config.VERIFY_ONLY_MODE = False
             unsorted_candidates = [20, 19, 18, 17, 16, 15, 14, 13, 12, 11] + list(range(21, 51))
             KL8Analyzer.build_pool_by_strategy = lambda self, strategy, pool_size=20: {
                 'selected': list(range(1, min(pool_size, 50) + 1)),
@@ -430,7 +434,7 @@ class KL8PredictionGuardTests(unittest.TestCase):
             result = analyzer.recalculate_play_excluding('select_10', list(range(1, 11)))
         finally:
             KL8Analyzer.build_pool_by_strategy = original_build
-            kl8_module.VERIFY_ONLY_MODE = original_verify_only
+            kl8_config.VERIFY_ONLY_MODE = original_verify_only
 
         self.assertNotIn('error', result)
         self.assertEqual(len(result['numbers']), 10)
@@ -449,14 +453,14 @@ class KL8PredictionGuardTests(unittest.TestCase):
         analyzer.statistics = {'last_numbers': set(range(1, 21))}
 
         original_build = KL8Analyzer.build_pool_by_strategy
-        original_resolve = kl8_module.resolve_play_strategy
+        original_resolve = kl8_strategies.resolve_play_strategy
         try:
             KL8Analyzer.build_pool_by_strategy = lambda self, strategy, pool_size=20: {
                 'selected': list(range(1, min(pool_size, 50) + 1)),
                 'candidates': [(n, float(100 - n)) for n in range(1, 51)],
                 'votes': {},
             }
-            kl8_module.resolve_play_strategy = lambda play_type: {
+            kl8_strategies.resolve_play_strategy = lambda play_type: {
                 'strategy_id': f'{play_type}_forced_prize_floor',
                 'feature_weights': {'frequency': 1.0},
                 'model_weights': {'rank': 1.0},
@@ -468,7 +472,7 @@ class KL8PredictionGuardTests(unittest.TestCase):
             result = analyzer.recalculate_play_excluding('select_10', list(range(1, 11)))
         finally:
             KL8Analyzer.build_pool_by_strategy = original_build
-            kl8_module.resolve_play_strategy = original_resolve
+            kl8_strategies.resolve_play_strategy = original_resolve
 
         self.assertNotIn('error', result)
         self.assertEqual(result['quality']['requested_selection_mode'], 'prize_floor')
@@ -584,14 +588,14 @@ class KL8PredictionGuardTests(unittest.TestCase):
         self.assertIn('pick count', result['error'])
 
     def test_reference_plays_use_distinct_adaptive_strategies(self):
-        original_verify_only = kl8_module.VERIFY_ONLY_MODE
+        original_verify_only = kl8_config.VERIFY_ONLY_MODE
         try:
-            kl8_module.VERIFY_ONLY_MODE = False
-            select5 = kl8_module.resolve_play_strategy('select_5')
-            select6 = kl8_module.resolve_play_strategy('select_6')
-            select10 = kl8_module.resolve_play_strategy('select_10')
+            kl8_config.VERIFY_ONLY_MODE = False
+            select5 = kl8_strategies.resolve_play_strategy('select_5')
+            select6 = kl8_strategies.resolve_play_strategy('select_6')
+            select10 = kl8_strategies.resolve_play_strategy('select_10')
         finally:
-            kl8_module.VERIFY_ONLY_MODE = original_verify_only
+            kl8_config.VERIFY_ONLY_MODE = original_verify_only
 
         self.assertEqual(select5['final_selection_mode'], 'concentrated')
         self.assertEqual(select6['final_selection_mode'], 'concentrated')
@@ -633,14 +637,14 @@ class KL8PredictionGuardTests(unittest.TestCase):
         analyzer.update_statistics()
 
         original_save = KL8Analyzer._save_prediction_snapshot
-        original_verify_only = kl8_module.VERIFY_ONLY_MODE
+        original_verify_only = kl8_config.VERIFY_ONLY_MODE
         try:
-            kl8_module.VERIFY_ONLY_MODE = False
+            kl8_config.VERIFY_ONLY_MODE = False
             KL8Analyzer._save_prediction_snapshot = lambda self, prediction_result: None
             result = analyzer.predict_all()
         finally:
             KL8Analyzer._save_prediction_snapshot = original_save
-            kl8_module.VERIFY_ONLY_MODE = original_verify_only
+            kl8_config.VERIFY_ONLY_MODE = original_verify_only
 
         for pick in range(3, 11):
             self.assertNotIn('multi_slips', result[f'select_{pick}'])
@@ -730,9 +734,9 @@ class KL8PredictionGuardTests(unittest.TestCase):
 
         original_save = KL8Analyzer._save_prediction_snapshot
         original_chain = KL8Analyzer.generate_exclude_recalculation_chain
-        original_verify_only = kl8_module.VERIFY_ONLY_MODE
+        original_verify_only = kl8_config.VERIFY_ONLY_MODE
         try:
-            kl8_module.VERIFY_ONLY_MODE = False
+            kl8_config.VERIFY_ONLY_MODE = False
             KL8Analyzer._save_prediction_snapshot = (
                 lambda self, prediction_result: 'snapshot_auto-chain-id.json'
             )
@@ -752,7 +756,7 @@ class KL8PredictionGuardTests(unittest.TestCase):
         finally:
             KL8Analyzer._save_prediction_snapshot = original_save
             KL8Analyzer.generate_exclude_recalculation_chain = original_chain
-            kl8_module.VERIFY_ONLY_MODE = original_verify_only
+            kl8_config.VERIFY_ONLY_MODE = original_verify_only
 
         self.assertEqual(captured['play_type'], 'select_6')
         self.assertEqual(captured['initial_numbers'], result['select_6']['numbers'])
@@ -1049,16 +1053,16 @@ class KL8PredictionGuardTests(unittest.TestCase):
         def fake_permutation(*args, **kwargs):
             return {'p_value': 0.01}
 
-        original_activate = kl8_module.activate_verified_strategy
-        original_persist = kl8_module._persist_trial_results
-        original_trials = kl8_module.STRATEGY_TRIAL_RESULTS
+        original_activate = kl8_snapshots.activate_verified_strategy
+        original_persist = kl8_records._persist_trial_results
+        original_trials = kl8_config.STRATEGY_TRIAL_RESULTS
 
         try:
             backtest._rolling_backtest_parametric = fake_rolling
             backtest._permutation_test = fake_permutation
-            kl8_module.activate_verified_strategy = lambda *args, **kwargs: None
-            kl8_module._persist_trial_results = lambda: None
-            kl8_module.STRATEGY_TRIAL_RESULTS = []
+            kl8_snapshots.activate_verified_strategy = lambda *args, **kwargs: None
+            kl8_records._persist_trial_results = lambda: None
+            kl8_config.STRATEGY_TRIAL_RESULTS = []
 
             result = backtest.run_candidate_tournament_per_play_type(
                 'select_5',
@@ -1075,9 +1079,9 @@ class KL8PredictionGuardTests(unittest.TestCase):
                 n_permutations=1,
             )
         finally:
-            kl8_module.activate_verified_strategy = original_activate
-            kl8_module._persist_trial_results = original_persist
-            kl8_module.STRATEGY_TRIAL_RESULTS = original_trials
+            kl8_snapshots.activate_verified_strategy = original_activate
+            kl8_records._persist_trial_results = original_persist
+            kl8_config.STRATEGY_TRIAL_RESULTS = original_trials
 
         self.assertTrue(result.get('activated'))
         final_calls = [c for c in captured if c['start_idx'] == 600 and c['end_idx'] == 820]
@@ -1111,14 +1115,14 @@ class KL8PredictionGuardTests(unittest.TestCase):
         def fake_permutation(*args, **kwargs):
             return {'p_value': 1.0}
 
-        original_persist = kl8_module._persist_trial_results
-        original_trials = kl8_module.STRATEGY_TRIAL_RESULTS
+        original_persist = kl8_records._persist_trial_results
+        original_trials = kl8_config.STRATEGY_TRIAL_RESULTS
 
         try:
             backtest._rolling_backtest_parametric = fake_rolling
             backtest._permutation_test = fake_permutation
-            kl8_module._persist_trial_results = lambda: None
-            kl8_module.STRATEGY_TRIAL_RESULTS = []
+            kl8_records._persist_trial_results = lambda: None
+            kl8_config.STRATEGY_TRIAL_RESULTS = []
 
             result = backtest.run_candidate_tournament(
                 candidate_strategies={
@@ -1142,8 +1146,8 @@ class KL8PredictionGuardTests(unittest.TestCase):
                 n_permutations=1,
             )
         finally:
-            kl8_module._persist_trial_results = original_persist
-            kl8_module.STRATEGY_TRIAL_RESULTS = original_trials
+            kl8_records._persist_trial_results = original_persist
+            kl8_config.STRATEGY_TRIAL_RESULTS = original_trials
 
         self.assertNotIn('error', result)
         by_marker = {marker: kwargs for marker, kwargs in validation_calls}
@@ -1169,8 +1173,8 @@ class KL8PredictionGuardTests(unittest.TestCase):
             'resolved_strategies': {},
         }
 
-        original_snapshot_dir = kl8_module.KL8_SNAPSHOT_DIR
-        original_settlement_dir = kl8_module.KL8_SETTLEMENT_DIR
+        original_snapshot_dir = kl8_config.KL8_SNAPSHOT_DIR
+        original_settlement_dir = kl8_config.KL8_SETTLEMENT_DIR
 
         with tempfile.TemporaryDirectory() as tmp:
             snapshot_dir = Path(tmp) / 'snapshots'
@@ -1181,8 +1185,8 @@ class KL8PredictionGuardTests(unittest.TestCase):
             snapshot_path.write_text(json.dumps(snapshot), encoding='utf-8')
 
             try:
-                kl8_module.KL8_SNAPSHOT_DIR = str(snapshot_dir)
-                kl8_module.KL8_SETTLEMENT_DIR = str(settlement_dir)
+                kl8_config.KL8_SNAPSHOT_DIR = str(snapshot_dir)
+                kl8_config.KL8_SETTLEMENT_DIR = str(settlement_dir)
 
                 result = analyzer.settle_prediction(
                     snapshot_path.name,
@@ -1190,8 +1194,8 @@ class KL8PredictionGuardTests(unittest.TestCase):
                     list(range(1, 21)),
                 )
             finally:
-                kl8_module.KL8_SNAPSHOT_DIR = original_snapshot_dir
-                kl8_module.KL8_SETTLEMENT_DIR = original_settlement_dir
+                kl8_config.KL8_SNAPSHOT_DIR = original_snapshot_dir
+                kl8_config.KL8_SETTLEMENT_DIR = original_settlement_dir
 
         self.assertTrue(result['success'])
         settlement = result['settlement']
@@ -1213,7 +1217,7 @@ class KL8PredictionGuardTests(unittest.TestCase):
         self.assertEqual(fushi['hit_distribution'], {10: 11})
 
     def test_recent_settlement_performance_compares_random_baseline(self):
-        original_settlement_dir = kl8_module.KL8_SETTLEMENT_DIR
+        original_settlement_dir = kl8_config.KL8_SETTLEMENT_DIR
 
         with tempfile.TemporaryDirectory() as tmp:
             settlement_dir = Path(tmp) / 'settlements'
@@ -1245,10 +1249,10 @@ class KL8PredictionGuardTests(unittest.TestCase):
                 path.write_text(json.dumps(row), encoding='utf-8')
 
             try:
-                kl8_module.KL8_SETTLEMENT_DIR = str(settlement_dir)
+                kl8_config.KL8_SETTLEMENT_DIR = str(settlement_dir)
                 result = kl8_module._build_recent_settlement_performance(windows=(2,))
             finally:
-                kl8_module.KL8_SETTLEMENT_DIR = original_settlement_dir
+                kl8_config.KL8_SETTLEMENT_DIR = original_settlement_dir
 
         self.assertEqual(result['available_count'], 2)
         window = result['windows'][0]
@@ -1264,18 +1268,18 @@ class KL8PredictionGuardTests(unittest.TestCase):
         self.assertEqual(fushi7['random_expected_hits'], 2.0)
 
     def test_strategy_health_combines_validation_and_recent_settlements(self):
-        original_strategies = kl8_module.ACTIVE_STRATEGIES
+        original_strategies = kl8_config.ACTIVE_STRATEGIES
         try:
-            kl8_module.ACTIVE_STRATEGIES = {
+            kl8_config.ACTIVE_STRATEGIES = {
                 key: {'strategy_id': '', 'feature_weights': {}, 'model_weights': {}, 'window_size': 0}
                 for key in list(kl8_module.SELECT_PLAY_KEYS) + list(kl8_module.FUSHI_PLAY_KEYS)
             }
-            kl8_module.ACTIVE_STRATEGIES['select_5'] = {
+            kl8_config.ACTIVE_STRATEGIES['select_5'] = {
                 'strategy_id': 'select_5_good',
                 'is_validated': True,
                 'validation_report': {'validation_lift': 0.2, 'final_test_lift': 0.1},
             }
-            kl8_module.ACTIVE_STRATEGIES['select_6'] = {
+            kl8_config.ACTIVE_STRATEGIES['select_6'] = {
                 'strategy_id': 'select_6_weak',
                 'is_validated': True,
                 'validation_report': {'validation_lift': -0.1, 'final_test_lift': -0.05},
@@ -1305,7 +1309,7 @@ class KL8PredictionGuardTests(unittest.TestCase):
 
             result = kl8_module._build_strategy_health(performance)
         finally:
-            kl8_module.ACTIVE_STRATEGIES = original_strategies
+            kl8_config.ACTIVE_STRATEGIES = original_strategies
 
         health = result['health_by_play']
         self.assertEqual(health['select_5']['status'], 'healthy')
