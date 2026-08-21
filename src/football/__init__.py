@@ -31,7 +31,7 @@ from ..common.paths import data_path
 
 log = setup_logger('football')
 
-FOOTBALL_PREDICTION_LOGIC_VERSION = '2026-08-20-audited-upset-production-league-gated-fair-price-joint-matrix-v33'
+FOOTBALL_PREDICTION_LOGIC_VERSION = '2026-08-21-jczq-market-availability-v34'
 # Official 1X2 prices are the strongest observable production signal.  Raising
 # their share from 40% to 80% improved the pooled high-confidence proxy from
 # 61.67% to 62.55%; the model retains 20% for team/Asian/context information.
@@ -548,6 +548,19 @@ def lottery_market_probabilities(candidates, lottery_handicap=None, spf_odds=Non
         'linked_recommendation': linked_recommendation,
         'settlement_rule': '中国体彩：主队进球 + 让球数，与客队进球比较',
     }
+
+
+def _apply_lottery_market_availability(lottery):
+    """对已匹配的竞彩场次，关闭官方未开售的胜平负输出。"""
+    spf_prediction_enabled = (
+        not lottery.get('offer_matched') or bool(lottery.get('spf_available'))
+    )
+    if not spf_prediction_enabled:
+        # 模型内部仍可用比分分布分析让球玩法，对外不产生 SPF 推荐。
+        lottery['standard'] = None
+        lottery['joint_recommendation'] = None
+        lottery['linked_recommendation'] = None
+    return spf_prediction_enabled
 
 
 # ===================== 抓取比赛列表 =====================
@@ -7193,6 +7206,10 @@ def _is_lottery_cache_current(result: Dict, match: Dict) -> bool:
     expected_market = match.get('lottery_primary_market') or None
     if cached.get('primary_market') != expected_market:
         return False
+    if bool(cached.get('spf_available')) != bool(match.get('lottery_spf_available')):
+        return False
+    if bool(cached.get('rqspf_available')) != bool(match.get('lottery_rqspf_available')):
+        return False
     expected_handicap = parse_lottery_handicap(match.get('lottery_handicap'))
     cached_handicap = parse_lottery_handicap((cached.get('handicap') or {}).get('handicap'))
     return expected_handicap == cached_handicap
@@ -7602,11 +7619,6 @@ def analyze_match(match, force_refresh=False):
                     for (h, a), prob in candidates[:30]
                 }
                 
-                predicted_1x2 = {
-                    'H': sum(prob for (h, a), prob in candidates if h > a),
-                    'D': sum(prob for (h, a), prob in candidates if h == a),
-                    'A': sum(prob for (h, a), prob in candidates if h < a),
-                }
                 predicted_half_full = _half_full_probs_to_dict(model.get('half_full_time'))
                 cached_lottery = cached_result.get('lottery') or lottery_market_probabilities(
                     candidates,
@@ -7614,6 +7626,15 @@ def analyze_match(match, force_refresh=False):
                     spf_odds=match.get('lottery_spf_odds'),
                     rqspf_odds=match.get('lottery_rqspf_odds'),
                 )
+                cached_spf_enabled = (
+                    not cached_lottery.get('offer_matched')
+                    or bool(cached_lottery.get('spf_available'))
+                )
+                predicted_1x2 = ({
+                    'H': sum(prob for (h, a), prob in candidates if h > a),
+                    'D': sum(prob for (h, a), prob in candidates if h == a),
+                    'A': sum(prob for (h, a), prob in candidates if h < a),
+                } if cached_spf_enabled else {})
                 
                 persistence_result = save_prediction(
                     match_id=mid,
@@ -8663,6 +8684,7 @@ def analyze_match(match, force_refresh=False):
         'spf_odds': match.get('lottery_spf_odds'),
         'rqspf_odds': match.get('lottery_rqspf_odds'),
     })
+    spf_prediction_enabled = _apply_lottery_market_availability(lottery)
     official_primary = match.get('lottery_primary_market')
     lottery['primary_market'] = official_primary
     if official_primary == 'rqspf' and lottery.get('handicap'):
@@ -8840,11 +8862,11 @@ def analyze_match(match, force_refresh=False):
         }
         log.info(f"构建 predicted_scores: {len(predicted_scores)} 条")
 
-        predicted_1x2 = {
+        predicted_1x2 = ({
             'H': sum(prob for (h, a), prob in candidates if h > a),
             'D': sum(prob for (h, a), prob in candidates if h == a),
             'A': sum(prob for (h, a), prob in candidates if h < a),
-        }
+        } if spf_prediction_enabled else {})
         log.info(f"构建 predicted_1x2: {predicted_1x2}")
 
         # 影子预测：base_1x2 是现有基础模型的预测结果
@@ -8870,7 +8892,7 @@ def analyze_match(match, force_refresh=False):
             },
             # 影子预测相关字段
             base_1x2=base_1x2,
-            ml_1x2=ml_1x2,
+            ml_1x2=ml_1x2 if spf_prediction_enabled else {},
             ml_model_version=ml_model_version,
             ml_available=ml_available,
             ml_feature_snapshot=ml_feature_snapshot,

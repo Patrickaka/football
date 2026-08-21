@@ -35,6 +35,32 @@ class FootballPredictionRecordsMarketViewTests(unittest.TestCase):
         self.assertTrue(row['hit_rqspf'])
         self.assertNotIn('predicted_scores', row)
 
+    def test_list_hides_legacy_spf_prediction_when_official_market_was_closed(self):
+        record = {
+            'match_id': 'market-view-spf-closed',
+            'home': '阿森纳',
+            'away': '考文垂',
+            'match_time': '2026-08-21 22:00',
+            'predicted_1x2': {'H': 0.80, 'D': 0.12, 'A': 0.08},
+            'predicted_rqspf': {'让胜': 0.40, '让平': 0.35, '让负': 0.25},
+            'hit_1x2': True,
+            'odds_snapshot': {
+                'lottery': {
+                    'offer_matched': True,
+                    'spf_available': True,
+                    'spf_odds': None,
+                    'rqspf_available': True,
+                },
+            },
+        }
+
+        with patch.object(result_sync._global_history, 'records', [record]):
+            row = result_sync.get_prediction_records(include_hidden=True)[0]
+
+        self.assertEqual(row['predicted_1x2'], {})
+        self.assertIsNone(row['hit_1x2'])
+        self.assertTrue(row['predicted_rqspf'])
+
 
 if __name__ == '__main__':
     unittest.main()

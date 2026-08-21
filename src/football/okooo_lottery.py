@@ -161,12 +161,14 @@ def _parse_okooo_div_schedule(html: str) -> List[Dict]:
         away = names[1].strip() if len(names) > 1 else (_attr(tag, 'data-aname') or '')
         time_match = re.search(r'class=["\'][^"\']*shijian[^"\']*["\'][^>]*\bmTime=["\']([^"\']+)', block, re.I)
         odds = _selection_odds(block)
-        spf_available = 'class="shenpf' in block or "class='shenpf" in block
-        rq_available = ('rangqiuspf' in block and handicap not in (None, 0))
         spf_odds = ({'胜': odds['0'].get(0), '平': odds['0'].get(1), '负': odds['0'].get(2)}
                     if len(odds['0']) == 3 else None)
         rqspf_odds = ({'让胜': odds['1'].get(0), '让平': odds['1'].get(1), '让负': odds['1'].get(2)}
                       if len(odds['1']) == 3 else None)
+        # 未开售的玩法也会保留 shenpf/rangqiuspf 容器。只有三项
+        # 有效赔率都解析到时，才视为该玩法已开售。
+        spf_available = spf_odds is not None
+        rq_available = rqspf_odds is not None and handicap not in (None, 0)
         matches.append({
             'okooo_id': match_id,
             'num': order,
@@ -219,21 +221,21 @@ def parse_okooo_jczq_schedule(html: str) -> List[Dict]:
         odds = [_number(value) for value in re.findall(r'<em\b[^>]*>([\d.]+)</em>', row, re.I)]
         odds = [value for value in odds if value is not None]
         time_match = re.search(r'(\d{2}-\d{2})?\s*(\d{2}:\d{2})', row_text)
-        rq_available = handicap not in (None, 0)
+        has_integer_handicap = handicap not in (None, 0)
         # 澳客有些场次只给一组三项赔率：有整数让球时，这组三项就是
         # 让球胜平负，并不代表同时开放了普通胜平负。
-        spf_available = len(odds) >= 6 or (len(odds) >= 3 and not rq_available)
-        if not spf_available and not rq_available and '胜平负' in row_text:
-            spf_available = True
         spf_odds = None
         rqspf_odds = None
         if len(odds) >= 6:
             spf_odds = {'胜': odds[0], '平': odds[1], '负': odds[2]}
             rqspf_odds = {'让胜': odds[3], '让平': odds[4], '让负': odds[5]}
-        elif len(odds) >= 3 and rq_available:
+        elif len(odds) >= 3 and has_integer_handicap:
             rqspf_odds = {'让胜': odds[0], '让平': odds[1], '让负': odds[2]}
         elif len(odds) >= 3:
             spf_odds = {'胜': odds[0], '平': odds[1], '负': odds[2]}
+        # 文字中出现“胜平负”或整数让球，都不等于已开售。
+        spf_available = spf_odds is not None
+        rq_available = rqspf_odds is not None and has_integer_handicap
 
         matches.append({
             'okooo_id': match_id_match.group(1) if match_id_match else None,

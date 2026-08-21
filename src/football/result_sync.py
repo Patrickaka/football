@@ -636,9 +636,9 @@ class PredictionHistory:
                 if predicted_half_full:
                     update_data['predicted_half_full'] = predicted_half_full
                 # 添加影子预测字段
-                if base_1x2:
+                if base_1x2 is not None:
                     update_data['base_1x2'] = base_1x2
-                if ml_1x2:
+                if ml_1x2 is not None:
                     update_data['ml_1x2'] = ml_1x2
                 if ml_model_version:
                     update_data['ml_model_version'] = ml_model_version
@@ -890,7 +890,7 @@ class PredictionHistory:
         hit_top10 = actual_score in top10
         hit_top20 = actual_score in top20
         hit_top30 = actual_score in top30
-        hit_1x2 = pred_result == actual_result
+        hit_1x2 = (pred_result == actual_result) if pred_result and actual_result else None
 
         actual_rqspf = None
         hit_rqspf = None
@@ -2682,6 +2682,10 @@ def get_prediction_records(include_hidden: bool = False) -> List[Dict]:
             and record.get('match_time')
             and not _is_match_settle_due(record.get('match_time'), minutes=180)
         )
+        lottery_snapshot = (record.get('odds_snapshot') or {}).get('lottery') or {}
+        spf_was_offered = not lottery_snapshot.get('offer_matched') or bool(
+            lottery_snapshot.get('spf_available') and lottery_snapshot.get('spf_odds')
+        )
 
         records.append({
             'match_id': record.get('match_id'),
@@ -2702,12 +2706,14 @@ def get_prediction_records(include_hidden: bool = False) -> List[Dict]:
             'hit_top3': None if is_future_settled else record.get('hit_top3'),
             # 预测记录页以两个竞彩赛果市场为主。精确比分仍保留在存储和
             # 完整导出中，列表只在赛后输出 actual_score。
-            'predicted_1x2': record.get('predicted_1x2'),
+            'predicted_1x2': record.get('predicted_1x2') if spf_was_offered else {},
             'predicted_rqspf': record.get('predicted_rqspf'),
             'lottery_handicap': record.get('lottery_handicap'),
             'actual_result': None if is_future_settled else record.get('actual_result'),
             'actual_rqspf': None if is_future_settled else record.get('actual_rqspf'),
-            'hit_1x2': None if is_future_settled else record.get('hit_1x2'),
+            'hit_1x2': (
+                None if is_future_settled or not spf_was_offered else record.get('hit_1x2')
+            ),
             'hit_rqspf': None if is_future_settled else record.get('hit_rqspf'),
         })
     

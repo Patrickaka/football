@@ -85,6 +85,24 @@ class PredictionPostprocessTests(unittest.TestCase):
         self.assertEqual(offer['spf_odds']['胜'], 1.8)
         self.assertEqual(offer['rqspf_odds']['让负'], 2.2)
 
+    def test_okooo_div_page_marks_spf_unavailable_when_it_says_not_on_sale(self):
+        html = '''<div class="touzhu_1" data-mid="89" data-ordercn="周六010"
+          data-rq="-2" data-hname="阿森纳" data-aname="考文垂">
+          <div class="shijian" mTime="22:00"></div>
+          <div class="shenpf"><span>未开售</span></div>
+          <div class="rangqiuspf"><div class="zhu weiks" data-sp="2.23" data-wf="1" data-wz="0"></div>
+          <div class="ping weiks" data-sp="3.80" data-wf="1" data-wz="1"></div>
+          <div class="fu weiks" data-sp="2.40" data-wf="1" data-wz="2"></div></div>
+        </div>'''
+
+        offer = parse_okooo_jczq_schedule(html)[0]
+
+        self.assertFalse(offer['spf_available'])
+        self.assertIsNone(offer['spf_odds'])
+        self.assertTrue(offer['rqspf_available'])
+        self.assertNotIn('spf', offer['available_markets'])
+        self.assertIn('rqspf', offer['available_markets'])
+
     def test_lottery_handicap_is_integer_and_separate_from_asian_line(self):
         self.assertEqual(football.parse_lottery_handicap('(-1)'), -1)
         self.assertEqual(football.parse_lottery_handicap('（+2）'), 2)
@@ -104,6 +122,26 @@ class PredictionPostprocessTests(unittest.TestCase):
         self.assertAlmostEqual(sum(markets['standard']['probabilities'].values()), 1.0)
         self.assertEqual(markets['joint_recommendation']['standard_prediction'], '胜')
         self.assertEqual(markets['joint_recommendation']['handicap_prediction'], '让平')
+
+    def test_unoffered_spf_is_removed_without_removing_open_rqspf(self):
+        markets = football.lottery_market_probabilities([
+            ((3, 0), 0.45), ((2, 0), 0.30), ((1, 1), 0.25),
+        ], lottery_handicap=-2, rqspf_odds={
+            '让胜': 2.23, '让平': 3.80, '让负': 2.40,
+        })
+        markets.update({
+            'offer_matched': True,
+            'spf_available': False,
+            'rqspf_available': True,
+        })
+
+        enabled = football._apply_lottery_market_availability(markets)
+
+        self.assertFalse(enabled)
+        self.assertIsNone(markets['standard'])
+        self.assertIsNone(markets['joint_recommendation'])
+        self.assertIsNone(markets['linked_recommendation'])
+        self.assertIsNotNone(markets['handicap'])
 
     def test_joint_lottery_recommendation_avoids_impossible_independent_picks(self):
         markets = football.lottery_market_probabilities([
@@ -600,6 +638,26 @@ class PredictionPostprocessTests(unittest.TestCase):
         }
 
         self.assertTrue(football._is_lottery_cache_current(cached, match))
+
+    def test_lottery_cache_invalidates_when_spf_offer_closes(self):
+        cached = {
+            'lottery': {
+                'offer_matched': True,
+                'primary_market': 'rqspf',
+                'spf_available': True,
+                'rqspf_available': True,
+                'handicap': {'handicap': -2},
+            }
+        }
+        match = {
+            'lottery_offer_matched': True,
+            'lottery_primary_market': 'rqspf',
+            'lottery_spf_available': False,
+            'lottery_rqspf_available': True,
+            'lottery_handicap': -2,
+        }
+
+        self.assertFalse(football._is_lottery_cache_current(cached, match))
 
     def test_diversify_score_recommendations_replaces_third_same_pattern(self):
         picked = [
