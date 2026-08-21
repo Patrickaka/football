@@ -4,6 +4,9 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 import server
+from src.webapp import caching as webapp_caching
+from src.webapp import jobs as webapp_jobs
+from src.webapp import lazy_modules as webapp_lazy
 
 
 class ServerProfessionalStatusTests(unittest.TestCase):
@@ -30,7 +33,7 @@ class ServerProfessionalStatusTests(unittest.TestCase):
         handler = server.Handler.__new__(server.Handler)
         handler._log = server.log
         with TemporaryDirectory() as temp_dir:
-            with patch.object(server, 'REPORTS_DIR', Path(temp_dir)):
+            with patch.object(webapp_jobs, 'REPORTS_DIR', Path(temp_dir)):
                 payload = handler._football_professional_status_payload()
         result = payload['result']
         self.assertEqual(result['out_of_sample_n'], 1804)

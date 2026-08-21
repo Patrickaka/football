@@ -2,6 +2,9 @@ import unittest
 from unittest.mock import patch
 
 import server
+from src.webapp import caching as webapp_caching
+from src.webapp import jobs as webapp_jobs
+from src.webapp import lazy_modules as webapp_lazy
 
 
 class ServerLotteryPerformanceTests(unittest.TestCase):
@@ -13,7 +16,7 @@ class ServerLotteryPerformanceTests(unittest.TestCase):
 
     def test_normal_lottery_load_uses_fast_prediction_options(self):
         result = {'data_quality': {'issues': 100}, 'recommendations': {}}
-        with patch.object(server, 'lottery_run_prediction', return_value=result) as run:
+        with patch.object(webapp_lazy, 'lottery_run_prediction', return_value=result) as run:
             payload = self.handler._lottery_payload()
 
         self.assertEqual(payload['result'], result)
@@ -31,7 +34,7 @@ class ServerLotteryPerformanceTests(unittest.TestCase):
             'status': 'processing',
             'message': 'started',
         }
-        with patch.object(server, '_start_lottery_refresh_job', return_value=job):
+        with patch.object(webapp_jobs, '_start_lottery_refresh_job', return_value=job):
             payload = self.handler._lottery_refresh_payload()
 
         self.assertTrue(payload['processing'])
@@ -43,7 +46,7 @@ class ServerLotteryPerformanceTests(unittest.TestCase):
             'status': 'processing',
             'message': 'started',
         }
-        with patch.object(server, '_start_3d_refresh_job', return_value=job) as start:
+        with patch.object(webapp_jobs, '_start_3d_refresh_job', return_value=job) as start:
             payload = self.handler._lottery_3d_refresh_payload({'backtest': ['1']})
 
         self.assertTrue(payload['processing'])
@@ -68,7 +71,7 @@ class ServerLotteryPerformanceTests(unittest.TestCase):
 
     def test_fetch_endpoint_uses_same_background_fast_path(self):
         job = {'task_id': 'job-3', 'status': 'processing', 'message': 'started'}
-        with patch.object(server, '_start_lottery_refresh_job', return_value=job):
+        with patch.object(webapp_jobs, '_start_lottery_refresh_job', return_value=job):
             payload = self.handler._lottery_fetch_payload()
 
         self.assertTrue(payload['processing'])
@@ -88,7 +91,7 @@ class ServerLotteryPerformanceTests(unittest.TestCase):
             'back_coverage_profile': {'unique_number_count': 2},
             'version': 'test-version',
         }
-        with patch.object(server, 'lottery_run_prediction', return_value=snapshot) as run:
+        with patch.object(webapp_lazy, 'lottery_run_prediction', return_value=snapshot) as run:
             payload = self.handler._lottery_recommend_payload({})
 
         self.assertEqual(payload['result']['recommendations'][0]['front'], [1, 2, 3, 4, 5])

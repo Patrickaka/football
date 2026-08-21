@@ -3,12 +3,15 @@ from unittest.mock import Mock, patch
 import time
 
 import server
+from src.webapp import caching as webapp_caching
+from src.webapp import jobs as webapp_jobs
+from src.webapp import lazy_modules as webapp_lazy
 
 
 class Server3DCacheVersionTests(unittest.TestCase):
     def test_old_3d_prediction_version_is_rejected(self):
         module = type("Lottery3D", (), {"PREDICTOR_VERSION": "3d-current"})()
-        with patch.object(server, "_get_lottery3d_module", return_value=module):
+        with patch.object(webapp_lazy, "_get_lottery3d_module", return_value=module):
             self.assertFalse(
                 server._is_cache_payload_current("3d", {"version": "3d-old"})
             )
@@ -43,9 +46,9 @@ class Server3DCacheVersionTests(unittest.TestCase):
         server._CACHE["3d"]["data"] = {"period": "2026219"}
         server._CACHE["3d_ml"]["data"] = None
         try:
-            with patch.object(server, "_get_lottery3d_module", return_value=rule), \
-                    patch.object(server, "_persist_cache"), \
-                    patch.object(server, "_set_lottery_background_job"):
+            with patch.object(webapp_lazy, "_get_lottery3d_module", return_value=rule), \
+                    patch.object(webapp_caching, "_persist_cache"), \
+                    patch.object(webapp_jobs, "_set_lottery_background_job"):
                 server._run_3d_refresh_job("job", enable_backtest=False)
         finally:
             for key, entry in old_entries.items():
@@ -77,10 +80,10 @@ class Server3DCacheVersionTests(unittest.TestCase):
         ml = Mock()
         ml.load_ml_cache.return_value = cached
         try:
-            with patch.object(server, "_get_lottery3d_module", return_value=rule), \
-                    patch.object(server, "_get_lottery3d_ml_module", return_value=ml), \
-                    patch.object(server, "predict_current") as train, \
-                    patch.object(server, "_serve_cached", return_value=({"zhixuan": []}, None)):
+            with patch.object(webapp_lazy, "_get_lottery3d_module", return_value=rule), \
+                    patch.object(webapp_lazy, "_get_lottery3d_ml_module", return_value=ml), \
+                    patch.object(webapp_lazy, "predict_current") as train, \
+                    patch.object(webapp_caching, "_serve_cached", return_value=({"zhixuan": []}, None)):
                 result = server._compute_3d_ml()
         finally:
             data_entry.update(old_entry)
