@@ -118,13 +118,19 @@ def _attr(tag: str, name: str):
 
 def _selection_odds(block: str) -> Dict[str, Dict[int, float]]:
     result = {'0': {}, '1': {}}
+    # 正在销售的选择项 class 只有 zhu/ping/fu；截止或禁用后才会追加
+    # weiks。不能用 weiks 判断选择项，否则会把所有在售场次漏掉。
+    # data-wf/data-wz 才是区分胜平负玩法与位置的稳定字段。
     pattern = re.compile(
-        r'<div\b[^>]*class=["\'][^"\']*(?:zhu|ping|fu)[^"\']*weiks[^"\']*["\'][^>]*>',
+        r'<div\b(?=[^>]*\bdata-wf=["\'][01]["\'])'
+        r'(?=[^>]*\bdata-wz=["\'][012]["\'])[^>]*>',
         re.I,
     )
     selections = list(pattern.finditer(block))
     for index, selection in enumerate(selections):
         tag = selection.group(0)
+        if not {'zhu', 'ping', 'fu'}.intersection((_attr(tag, 'class') or '').split()):
+            continue
         workflow = _attr(tag, 'data-wf')
         position = _attr(tag, 'data-wz')
         if workflow not in result or position not in ('0', '1', '2'):

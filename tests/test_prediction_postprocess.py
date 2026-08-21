@@ -68,13 +68,13 @@ class PredictionPostprocessTests(unittest.TestCase):
         html = '''<div class="touzhu_1" data-mid="88" data-ordercn="周六001"
           data-rq="-1" data-hname="主队" data-aname="客队">
           <div class="shijian" mTime="18:00"></div>
-          <div class="shenpf"><div class="zhu weiks" data-sp="1.80" data-wf="0" data-wz="0"></div>
-          <div class="ping weiks" data-sp="3.20" data-wf="0" data-wz="1"></div>
-          <div class="fu weiks" data-sp="4.10" data-wf="0" data-wz="2"></div></div>
+          <div class="shenpf"><div class="zhu" data-sp="1.80" data-wf="0" data-wz="0"></div>
+          <div class="ping" data-sp="3.20" data-wf="0" data-wz="1"></div>
+          <div class="fu" data-sp="4.10" data-wf="0" data-wz="2"></div></div>
           <a href="/soccer/match/88/odds/"></a>
-          <div class="rangqiuspf"><div class="zhu weiks" data-sp="2.60" data-wf="1" data-wz="0"></div>
-          <div class="ping weiks" data-sp="3.50" data-wf="1" data-wz="1"></div>
-          <div class="fu weiks" data-sp="2.20" data-wf="1" data-wz="2"></div></div>
+          <div class="rangqiuspf"><div class="zhu" data-sp="2.60" data-wf="1" data-wz="0"></div>
+          <div class="ping" data-sp="3.50" data-wf="1" data-wz="1"></div>
+          <div class="fu" data-sp="2.20" data-wf="1" data-wz="2"></div></div>
         </div>'''
 
         offer = parse_okooo_jczq_schedule(html)[0]
@@ -85,11 +85,38 @@ class PredictionPostprocessTests(unittest.TestCase):
         self.assertEqual(offer['spf_odds']['胜'], 1.8)
         self.assertEqual(offer['rqspf_odds']['让负'], 2.2)
 
+    def test_okooo_div_page_parses_live_choices_without_weiks_class(self):
+        html = '''<div class="touzhu_1" data-mid="1317908" data-ordercn="周五004"
+          data-rq="-1" data-hname="塞伊" data-aname="拉赫">
+          <div class="shenpf">
+            <div class="zhu " data-sp="2.50" data-wf="0" data-wz="0"></div>
+            <div class="ping " data-sp="3.15" data-wf="0" data-wz="1"></div>
+            <div class="fu " data-sp="2.45" data-wf="0" data-wz="2"></div>
+          </div>
+          <div class="rangqiuspf">
+            <div class="zhu " data-sp="5.28" data-wf="1" data-wz="0"></div>
+            <div class="ping " data-sp="4.45" data-wf="1" data-wz="1"></div>
+            <div class="fu " data-sp="1.40" data-wf="1" data-wz="2"></div>
+          </div>
+        </div>'''
+
+        offer = parse_okooo_jczq_schedule(html)[0]
+
+        self.assertTrue(offer['spf_available'])
+        self.assertTrue(offer['rqspf_available'])
+        self.assertEqual(offer['spf_odds'], {'胜': 2.5, '平': 3.15, '负': 2.45})
+        self.assertEqual(offer['rqspf_odds'], {'让胜': 5.28, '让平': 4.45, '让负': 1.4})
+
     def test_okooo_div_page_marks_spf_unavailable_when_it_says_not_on_sale(self):
         html = '''<div class="touzhu_1" data-mid="89" data-ordercn="周六010"
           data-rq="-2" data-hname="阿森纳" data-aname="考文垂">
           <div class="shijian" mTime="22:00"></div>
-          <div class="shenpf"><span>未开售</span></div>
+          <div class="shenpf">
+            <div class="zhu weiks" data-sp="0" data-wf="0" data-wz="0"><div class="peilv">0.00</div></div>
+            <div class="ping weiks" data-sp="0" data-wf="0" data-wz="1"><div class="peilv">0.00</div></div>
+            <div class="fu weiks" data-sp="0" data-wf="0" data-wz="2"><div class="peilv">0.00</div></div>
+            <span>未开售</span>
+          </div>
           <div class="rangqiuspf"><div class="zhu weiks" data-sp="2.23" data-wf="1" data-wz="0"></div>
           <div class="ping weiks" data-sp="3.80" data-wf="1" data-wz="1"></div>
           <div class="fu weiks" data-sp="2.40" data-wf="1" data-wz="2"></div></div>
