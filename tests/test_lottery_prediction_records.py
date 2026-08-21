@@ -4,6 +4,7 @@ from unittest.mock import patch
 
 from src import ssq
 from src import lottery
+from src.lottery import records as lottery_records
 
 
 class PredictionRecordTests(unittest.TestCase):
@@ -43,7 +44,7 @@ class PredictionRecordTests(unittest.TestCase):
         self.assertEqual(records[0]['results'][1]['red_hits'], 1)
 
     def test_dlt_pending_record_is_automatically_compared(self):
-        state, load_patch, save_patch = self._store_patches(lottery)
+        state, load_patch, save_patch = self._store_patches(lottery_records)
         state.append({
             'period': '2026079',
             'based_on_issue': '2026078',
@@ -66,7 +67,7 @@ class PredictionRecordTests(unittest.TestCase):
         self.assertEqual(records[0]['integrity_status'], 'verified_forward')
 
     def test_dlt_legacy_record_is_not_reported_as_a_hit(self):
-        state, load_patch, save_patch = self._store_patches(lottery)
+        state, load_patch, save_patch = self._store_patches(lottery_records)
         state.append({
             'period': '2026077',
             'recommendations': {
@@ -87,7 +88,7 @@ class PredictionRecordTests(unittest.TestCase):
         self.assertEqual(stats['settled_count'], 0)
 
     def test_dlt_stats_use_strategy_specific_denominator_and_portfolio_metrics(self):
-        state, load_patch, save_patch = self._store_patches(lottery)
+        state, load_patch, save_patch = self._store_patches(lottery_records)
         state.extend([
             {
                 'period': '2026079', 'version': 'v-new', 'settled': True,
