@@ -1,6 +1,6 @@
 import unittest
 
-from scripts.backtest_kl8_select6_chain import (
+from scripts.backtest.backtest_kl8_select6_chain import (
     _one_chain,
     _paired_summary,
     _row_score,
