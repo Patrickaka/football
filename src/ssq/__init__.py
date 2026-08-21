@@ -40,7 +40,30 @@ RECENT_WINDOW = 30                  # 近期趋势窗口
 DEFAULT_RECENT = 15                 # 页面默认展示近期期数
 NUM_SETS = 5                        # 推荐注数
 SSQ_PREDICTIONS_KEY = 'lottery_ssq_online_predictions'
-SSQ_PREDICTION_VERSION = 'ssq-v3.2-red-cover'
+SSQ_PREDICTION_VERSION = 'ssq-v3.3-prize-stats'
+
+
+def ssq_prize_tier(red_hits, blue_hit):
+    """双色球奖级判定（0=未中奖）。
+
+    一等奖 6+1 / 二等奖 6+0 / 三等奖 5+1 / 四等奖 5+0,4+1 /
+    五等奖 4+0,3+1 / 六等奖 2+1,1+1,0+1。
+    注意：红球命中≤2 且蓝球未中时奖金为 0 —— "红球≥2命中率"是面子指标，
+    只有蓝球命中或红球≥3+蓝/≥4 才对应真实奖金。
+    """
+    if red_hits == 6 and blue_hit:
+        return 1
+    if red_hits == 6:
+        return 2
+    if red_hits == 5 and blue_hit:
+        return 3
+    if red_hits == 5 or (red_hits == 4 and blue_hit):
+        return 4
+    if red_hits == 4 or (red_hits == 3 and blue_hit):
+        return 5
+    if blue_hit:
+        return 6
+    return 0
 
 
 def load_prediction_records():
@@ -97,6 +120,8 @@ def settle_prediction_records(history):
                 'red_hit_numbers': red_hits,
                 'blue_hit': blue_hit,
                 'total_hits': len(red_hits) + int(blue_hit),
+                # v3.3: 奖级结算（0=未中奖）——命中数≠中奖，奖级才对应真实奖金
+                'prize': ssq_prize_tier(len(red_hits), blue_hit),
             })
         record['settled'] = True
         record['settled_at'] = time.strftime('%Y-%m-%d %H:%M:%S')
@@ -110,18 +135,36 @@ def calculate_prediction_stats(records=None):
     records = records if records is not None else load_prediction_records()
     settled = [item for item in records if item.get('settled')]
     results = [result for item in settled for result in item.get('results', [])]
+    # v3.3: 奖级分布（旧记录无 prize 字段，按命中数回算）
+    prize_counts = {str(tier): 0 for tier in range(0, 7)}
+    for item in results:
+        tier = item.get('prize')
+        if tier is None:
+            tier = ssq_prize_tier(item.get('red_hits', 0), item.get('blue_hit', False))
+        prize_counts[str(tier)] = prize_counts.get(str(tier), 0) + 1
+    n = len(results)
     return {
         'total_records': len(records),
         'settled_count': len(settled),
         'unsettled_count': len(records) - len(settled),
-        'total_sets': len(results),
+        'total_sets': n,
         'red_hit_average': round(
-            sum(item.get('red_hits', 0) for item in results) / len(results), 3
+            sum(item.get('red_hits', 0) for item in results) / n, 3
         ) if results else 0.0,
         'blue_hit_count': sum(1 for item in results if item.get('blue_hit')),
         'blue_hit_rate': round(
-            sum(1 for item in results if item.get('blue_hit')) / len(results), 4
+            sum(1 for item in results if item.get('blue_hit')) / n, 4
         ) if results else 0.0,
+        # v3.3: 奖级统计 + 随机基准（诚实标注：单注理论值，公平摇奖不可超越）
+        'prize_counts': prize_counts,
+        'any_prize_rate': round((n - prize_counts.get('0', 0)) / n, 4) if n else 0.0,
+        'baseline': {
+            'note': '单注随机理论值：六等奖(蓝球命中)=6.25%，任意奖级≈6.71%，'
+                    '五等奖(4红或3红+蓝)≈0.78%；组合5注蓝球去重后任1注中蓝=31.25%（已达上界）',
+            'single_ticket_any_prize': 0.0671,
+            'single_ticket_sixth': 0.0625,
+            'five_sets_any_blue': 0.3125,
+        },
     }
 
 
