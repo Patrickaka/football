@@ -30,6 +30,7 @@ data/kv_store_fallback.json
 data/*_cache.json
 data/server_cache_*.json
 src/football/cache/
+src/beidan/cache/
 
 # 运行时抓取的开奖历史与快照（可重建）
 data/kl8_history.json

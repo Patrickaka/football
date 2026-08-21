@@ -26,8 +26,9 @@ log = setup_logger('server')
 from .http_util import (
     _sanitize_json,
 )
+from .beidan_cache import beidan_cache_key, write_beidan_cache
 from .lazy_modules import (
-    KL8RollingBacktest, analyze_match, data_path, ensure_football_report, fetch_match_list, football_reportable_ids, get_kl8_analyzer, refresh_football_cache_index, sync_beidan_reports, sync_football_reports,
+    KL8RollingBacktest, _load_beidan_helpers, analyze_match, data_path, ensure_football_report, fetch_match_list, football_reportable_ids, get_kl8_analyzer, refresh_football_cache_index, sync_beidan_reports, sync_football_reports,
 )
 from .caching import (
     _CACHE, _is_cache_payload_current,
@@ -137,6 +138,37 @@ def _warm_football_caches():
         except Exception:
             log.warning('足球缓存预热失败', exc_info=True)
         time.sleep(FOOTBALL_WARM_INTERVAL)
+
+
+BEIDAN_WARM_INTERVAL = int(os.getenv('BEIDAN_WARM_INTERVAL', '1800'))
+BEIDAN_WARM_SOURCE = os.getenv('BEIDAN_WARM_SOURCE', 'okooo')
+BEIDAN_WARM_TYPES = os.getenv('BEIDAN_WARM_TYPES', 'spf,rqspf,zjq')
+
+
+def _warm_beidan_caches():
+    """后台预热当天北单推荐。
+
+    北单是「一次请求算完整页」的结构，冷算实测 12~15 秒全部压在用户那一次点击上，
+    所以预热的收益比足球更直接：命中后前端几乎是秒开。
+    预热用的键必须与接口层一致（date 缺省同为当天、bet_types 同序），否则热不到点上。
+    """
+    bet_types = [item for item in BEIDAN_WARM_TYPES.split(',') if item]
+    while True:
+        try:
+            generate_beidan_recommendations, _, _ = _load_beidan_helpers()
+            started = time.perf_counter()
+            result = generate_beidan_recommendations(
+                date=None, bet_types=bet_types, source=BEIDAN_WARM_SOURCE)
+            if 'error' in result:
+                log.warning('北单缓存预热跳过: %s', result['error'])
+            else:
+                write_beidan_cache(beidan_cache_key(None, BEIDAN_WARM_SOURCE, bet_types), result)
+                log.info('北单缓存预热完成: 推荐=%d条, 耗时 %.1fs',
+                         len(result.get('recommendations') or []),
+                         time.perf_counter() - started)
+        except Exception:
+            log.warning('北单缓存预热失败', exc_info=True)
+        time.sleep(BEIDAN_WARM_INTERVAL)
 
 
 def _trigger_football_analysis(matches):

@@ -29,6 +29,9 @@ from .lazy_modules import (
 from .jobs import (
     _attach_bayes_report_url, _trigger_beidan_report_sync,
 )
+from .beidan_cache import (
+    beidan_cache_key, beidan_earliest_kickoff, read_beidan_cache, write_beidan_cache,
+)
 
 class BeidanApiMixin:
     def _beidan_payload(self, params):
@@ -38,11 +41,20 @@ class BeidanApiMixin:
             source = params.get('source', ['okooo'])[0]
             bet_types = params.get('types', ['spf,rqspf,zjq'])[0].split(',')
             
+            force_refresh = params.get('force_refresh', ['false'])[0].lower() == 'true'
+
             self._log.info(f'北单推荐请求: date={date}, source={source}, types={bet_types}')
-            
-            generate_beidan_recommendations, _, _ = _load_beidan_helpers()
-            result = generate_beidan_recommendations(date=date, bet_types=bet_types, source=source)
-            
+
+            cache_key = beidan_cache_key(date, source, bet_types)
+            result = None if force_refresh else read_beidan_cache(cache_key)
+            if result is None:
+                generate_beidan_recommendations, _, _ = _load_beidan_helpers()
+                result = generate_beidan_recommendations(date=date, bet_types=bet_types, source=source)
+                if 'error' not in result:
+                    write_beidan_cache(cache_key, result)
+            else:
+                self._log.info('北单推荐命中缓存: %s', cache_key)
+
             if 'error' in result:
                 return result
 

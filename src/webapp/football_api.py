@@ -14,9 +14,15 @@ from datetime import datetime, timedelta
 import importlib
 import threading
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
 from pathlib import Path
+
+# 批量预测：单批场次上限（防止超大 body 拖垮单个请求线程），以及批内并发度。
+# 并发只影响缓存未命中时的分析吞吐，对上游的真实压力由 fetch 的全局限速兜底。
+FOOTBALL_BATCH_LIMIT = max(1, int(os.getenv('FOOTBALL_BATCH_LIMIT', '30')))
+FOOTBALL_BATCH_CONCURRENCY = max(1, int(os.getenv('FOOTBALL_BATCH_CONCURRENCY', '4')))
 
 from src.common.logger import setup_logger
 from src.common.paths import data_path
@@ -122,14 +128,9 @@ class FootballApiMixin:
             }
 
 
-    def _predict_payload(self, params):
-        match_id = params.get('match_id', [''])[0]
-        if not match_id:
-            return {'error': '缺少 match_id 参数'}
-        
-        # 检查是否强制刷新缓存
-        force_refresh = params.get('force_refresh', ['false'])[0].lower() == 'true'
-        
+    def _match_from_params(self, params):
+        """把 GET 查询参数解析成 analyze_match 需要的 match 字典"""
+
         def _json_param(name):
             raw = params.get(name, [''])[0]
             if not raw:
@@ -148,8 +149,8 @@ class FootballApiMixin:
             except (TypeError, ValueError):
                 return None
 
-        match = {
-            'match_id': match_id,
+        return {
+            'match_id': params.get('match_id', [''])[0],
             'home': params.get('home', [''])[0],
             'away': params.get('away', [''])[0],
             'league': params.get('league', [''])[0],
@@ -170,6 +171,49 @@ class FootballApiMixin:
             'lottery_spf_odds': _json_param('lottery_spf_odds'),
             'lottery_rqspf_odds': _json_param('lottery_rqspf_odds'),
         }
+
+    @staticmethod
+    def _match_from_json(raw):
+        """把批量接口 JSON body 里的一场比赛归一化成与查询参数路径同构的字典"""
+
+        def _dict_or_none(value):
+            return value if isinstance(value, dict) else None
+
+        def _number_or_none(value):
+            try:
+                number = float(value)
+            except (TypeError, ValueError):
+                return None
+            return int(number) if number.is_integer() else number
+
+        markets = raw.get('lottery_available_markets') or []
+        if isinstance(markets, str):
+            markets = [item for item in markets.split(',') if item]
+
+        return {
+            'match_id': str(raw.get('match_id') or ''),
+            'home': raw.get('home') or '',
+            'away': raw.get('away') or '',
+            'league': raw.get('league') or '',
+            'time': raw.get('time') or '',
+            'num': raw.get('num') or '',
+            'schedule_source': raw.get('schedule_source') or '',
+            'analysis_source_id_available': bool(raw.get('analysis_source_id_available', True)),
+            'okooo_id': raw.get('okooo_id') or '',
+            'lottery_handicap': _number_or_none(raw.get('lottery_handicap')),
+            'lottery_primary_market': raw.get('lottery_primary_market') or None,
+            'lottery_source': raw.get('lottery_source') or 'unavailable',
+            'lottery_offer_matched': bool(raw.get('lottery_offer_matched')),
+            'lottery_available_markets': [item for item in markets if item],
+            'lottery_spf_available': bool(raw.get('lottery_spf_available')),
+            'lottery_rqspf_available': bool(raw.get('lottery_rqspf_available')),
+            'lottery_spf_odds': _dict_or_none(raw.get('lottery_spf_odds')),
+            'lottery_rqspf_odds': _dict_or_none(raw.get('lottery_rqspf_odds')),
+        }
+
+    def _analyze_one(self, match, force_refresh=False):
+        """分析单场并把异常归一化成 error 字段，供单场与批量接口共用"""
+        match_id = match.get('match_id', '')
         try:
             return {'result': analyze_match(match, force_refresh=force_refresh)}
         except ValueError as e:
@@ -180,6 +224,45 @@ class FootballApiMixin:
             error_msg = f'赔率分析失败: {str(e)}'
             self._log.error('赔率分析失败 match_id=%s', match_id, exc_info=True)
             return {'error': error_msg}
+
+    def _predict_payload(self, params):
+        match_id = params.get('match_id', [''])[0]
+        if not match_id:
+            return {'error': '缺少 match_id 参数'}
+        force_refresh = params.get('force_refresh', ['false'])[0].lower() == 'true'
+        return self._analyze_one(self._match_from_params(params), force_refresh)
+
+    def _predict_batch_payload(self, body):
+        """批量预测：一次请求分析多场，把每场一次 HTTP 往返压成一次。
+
+        逐场结果按入参顺序原样返回（失败场次带 error 而非整批失败），
+        前端据此保持渐进渲染，不必等整批算完。
+        """
+        if not isinstance(body, dict):
+            return {'error': '请求体缺失或不是合法 JSON 对象'}
+        raw_matches = body.get('matches')
+        if not isinstance(raw_matches, list) or not raw_matches:
+            return {'error': '缺少 matches 参数'}
+        if len(raw_matches) > FOOTBALL_BATCH_LIMIT:
+            return {'error': f'单批最多 {FOOTBALL_BATCH_LIMIT} 场，收到 {len(raw_matches)} 场'}
+        force_refresh = bool(body.get('force_refresh'))
+
+        matches = [self._match_from_json(item) for item in raw_matches if isinstance(item, dict)]
+        if not matches:
+            return {'error': 'matches 中没有有效的比赛对象'}
+
+        workers = min(FOOTBALL_BATCH_CONCURRENCY, len(matches))
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix='PredictBatch') as pool:
+            outcomes = list(pool.map(
+                lambda m: self._analyze_one(m, force_refresh), matches
+            ))
+
+        results = []
+        for match, outcome in zip(matches, outcomes):
+            entry = {'match_id': match['match_id']}
+            entry.update(outcome)
+            results.append(entry)
+        return {'results': results}
 
 
     def _football_clear_cache_payload(self):

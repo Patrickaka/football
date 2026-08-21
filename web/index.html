@@ -1494,13 +1494,13 @@ async function fetchJson(path, options = {}) {
   }
 }
 
-async function fetchJsonWithTimeout(path, timeoutMs = 30000) {
+async function fetchJsonWithTimeout(path, timeoutMs = 30000, options = {}) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    return await fetchJson(path, { signal: controller.signal });
+    return await fetchJson(path, { ...options, signal: controller.signal });
   } catch (error) {
-    if (error?.name === 'AbortError') throw new Error(`单场分析超时（${Math.round(timeoutMs / 1000)}秒）`);
+    if (error?.name === 'AbortError') throw new Error(`分析超时（${Math.round(timeoutMs / 1000)}秒）`);
     throw error;
   } finally {
     clearTimeout(timer);
@@ -1938,6 +1938,10 @@ function setFootballSort(sort) {
 const FOOTBALL_ANALYSIS_CONCURRENCY = 6;
 // 每完成一场就整表重绘会造成 50+ 次全量 DOM 重建，按间隔合并重绘。
 const FOOTBALL_RENDER_INTERVAL_MS = 400;
+// /api/predict 是单场接口，一场一次往返，50+ 场就是 50+ 次 HTTP。打包成批后
+// 往返次数降到 ceil(总场次/批大小)。仍分多批而非一次全量，是为了保住渐进渲染：
+// 每批落地即可先行展示，冷缓存时不会退化成长时间白屏。
+const FOOTBALL_BATCH_SIZE = 12;
 
 function buildPredictQuery(m) {
   return new URLSearchParams({
@@ -1957,6 +1961,25 @@ function buildPredictQuery(m) {
     schedule_source: m.schedule_source || '',
     analysis_source_id_available: String(m.analysis_source_id_available !== false)
   });
+}
+
+function buildBatchMatch(m) {
+  return {
+    match_id: m.match_id, home: m.home, away: m.away,
+    league: m.league || '', time: m.time || '', num: m.num || '',
+    lottery_handicap: m.lottery_handicap ?? null,
+    lottery_primary_market: m.lottery_primary_market || '',
+    lottery_source: m.lottery_source || 'unavailable',
+    lottery_offer_matched: Boolean(m.lottery_offer_matched),
+    lottery_available_markets: m.lottery_available_markets || [],
+    lottery_spf_available: Boolean(m.lottery_spf_available),
+    lottery_rqspf_available: Boolean(m.lottery_rqspf_available),
+    lottery_spf_odds: m.lottery_spf_odds || null,
+    lottery_rqspf_odds: m.lottery_rqspf_odds || null,
+    okooo_id: m.okooo_id || '',
+    schedule_source: m.schedule_source || '',
+    analysis_source_id_available: m.analysis_source_id_available !== false
+  };
 }
 
 async function loadAllPredictions() {
@@ -1995,25 +2018,57 @@ async function loadAllPredictions() {
     if (renderTimer === null) renderTimer = setTimeout(paint, FOOTBALL_RENDER_INTERVAL_MS);
   };
 
-  const worker = async () => {
-    while (cursor < total) {
-      const index = cursor++;
-      const m = allMatches[index];
-      try {
-        const data = await fetchJsonWithTimeout('/api/predict?' + buildPredictQuery(m), 30000);
-        if (!data.error && data.result) slots[index] = { match: m, result: data.result };
-        else footballAnalysisFailures.push({ match: m, reason: data.error || '未返回预测结果' });
-      } catch (e) {
-        footballAnalysisFailures.push({ match: m, reason: e.message || '分析失败' });
-        console.warn(`预测 ${m.home} vs ${m.away} 失败:`, e);
+  const chunks = [];
+  for (let start = 0; start < total; start += FOOTBALL_BATCH_SIZE) {
+    chunks.push({ start, matches: allMatches.slice(start, start + FOOTBALL_BATCH_SIZE) });
+  }
+
+  const analyzeSingle = async (m, index) => {
+    try {
+      const data = await fetchJsonWithTimeout('/api/predict?' + buildPredictQuery(m), 30000);
+      if (!data.error && data.result) slots[index] = { match: m, result: data.result };
+      else footballAnalysisFailures.push({ match: m, reason: data.error || '未返回预测结果' });
+    } catch (e) {
+      footballAnalysisFailures.push({ match: m, reason: e.message || '分析失败' });
+      console.warn(`预测 ${m.home} vs ${m.away} 失败:`, e);
+    }
+  };
+
+  // 整批失败（旧后端没有该接口、网关拦 POST、批量超时）时逐场重试，
+  // 保证新前端配旧后端也能出结果，只是退回到原来的往返次数。
+  const analyzeChunk = async ({ start, matches }) => {
+    try {
+      const data = await fetchJsonWithTimeout('/api/predict/batch', 60000, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ matches: matches.map(buildBatchMatch) })
+      });
+      if (data.error || !Array.isArray(data.results)) {
+        throw new Error(data.error || '批量接口未返回结果');
       }
-      completed++;
-      schedulePaint();
+      matches.forEach((m, offset) => {
+        const entry = data.results[offset];
+        if (entry && !entry.error && entry.result) slots[start + offset] = { match: m, result: entry.result };
+        else footballAnalysisFailures.push({ match: m, reason: (entry && entry.error) || '未返回预测结果' });
+      });
+    } catch (e) {
+      console.warn('批量预测失败，回退到单场请求:', e);
+      for (let offset = 0; offset < matches.length; offset++) {
+        await analyzeSingle(matches[offset], start + offset);
+      }
+    }
+    completed += matches.length;
+    schedulePaint();
+  };
+
+  const worker = async () => {
+    while (cursor < chunks.length) {
+      await analyzeChunk(chunks[cursor++]);
     }
   };
 
   try {
-    const workers = Math.min(FOOTBALL_ANALYSIS_CONCURRENCY, total);
+    const workers = Math.min(FOOTBALL_ANALYSIS_CONCURRENCY, chunks.length);
     await Promise.all(Array.from({ length: workers }, worker));
     if (renderTimer !== null) {
       clearTimeout(renderTimer);
@@ -2964,13 +3019,16 @@ let beidanPageSize = 12;
 let beidanLastResult = null;
 let beidanSearchDebounceTimer = null;
 
-async function loadBeidan() {
+// forceRefresh 仅由「🔄 刷新」按钮传入：结果级缓存让常规打开走缓存，
+// 但用户显式点刷新时必须真的重算，否则按钮会变成空操作。
+async function loadBeidan(forceRefresh = false) {
   appBeidan.innerHTML = '<div class="status">加载中…</div>';
   try {
     const q = new URLSearchParams({
       source: beidanSource,
       date: beidanDate || '',
       types: 'spf,rqspf,zjq',
+      force_refresh: String(Boolean(forceRefresh)),
       _: Date.now().toString()
     });
     const data = await fetchJson('/api/beidan?' + q);
@@ -3256,7 +3314,7 @@ function renderBeidan(result) {
         <span class="toolbar-label">日期</span>
         <span class="date-value">${esc(result.date)}</span>
       </div>
-      <button onclick="loadBeidan()" class="tb-refresh">🔄 刷新</button>
+      <button onclick="loadBeidan(true)" class="tb-refresh">🔄 刷新</button>
     </div>
     <div class="toolbar-row">
       <div class="toolbar-group" style="flex:1;min-width:220px">

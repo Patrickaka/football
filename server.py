@@ -36,7 +36,7 @@ from src.webapp.jobs import (
     LOTTERY_BACKGROUND_JOBS, LOTTERY_BACKGROUND_LOCK, REPORTS_DIR,
     _run_3d_refresh_job, _start_3d_refresh_job, _run_lottery_refresh_job,
     _start_lottery_refresh_job, _set_lottery_background_job,
-    _warm_football_caches,
+    _warm_football_caches, _warm_beidan_caches,
 )
 from src.webapp.lazy_modules import (
     _get_football_module, _get_lottery3d_module, _get_lottery3d_ml_module,
@@ -117,6 +117,10 @@ def _start_background_sync():
     # 足球缓存预热：同理，把每日首次打开的全量冷分析挪到后台
     threading.Thread(target=_warm_football_caches, daemon=True, name='WarmFootballThread').start()
     log.info('足球缓存预热线程已启动')
+
+    # 北单缓存预热：北单一次请求要算完整页，冷算 12 秒以上，同样挪到后台
+    threading.Thread(target=_warm_beidan_caches, daemon=True, name='WarmBeidanThread').start()
+    log.info('北单缓存预热线程已启动')
 
     # 定时维护：兜底清理过期 binlog 与旧滚动日志，防止磁盘被写满（无需人工）
     try:

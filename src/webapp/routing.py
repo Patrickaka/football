@@ -23,6 +23,9 @@ from src.common.paths import data_path
 
 log = setup_logger('server')
 
+# JSON 请求体上限，防止超大 body 占满内存（批量预测是目前唯一的 body 消费方）
+MAX_JSON_BODY_BYTES = 2 * 1024 * 1024
+
 from .settings import (
     AUTH_ENABLED, CORS_ORIGIN, CREDENTIALS, INDEX_FILE,
 )
@@ -65,6 +68,8 @@ class Handler(FootballApiMixin, LotteryApiMixin, KL8ApiMixin,
         elif path == '/api/predict':
             params = parse_qs(route.query)
             self._serve_json(self._predict_payload(params))
+        elif path == '/api/predict/batch':
+            self._serve_json(self._predict_batch_payload(self._read_json_body()))
         elif path == '/api/football/clear_cache':
             self._serve_json(self._football_clear_cache_payload())
         elif path == '/api/football/prepare_ml_data':
@@ -216,6 +221,23 @@ class Handler(FootballApiMixin, LotteryApiMixin, KL8ApiMixin,
 
     def do_POST(self):
         self.do_GET()
+
+    def _read_json_body(self):
+        """读取并解析 JSON 请求体；缺失、超限或非法时返回 None，由调用方给出业务报错"""
+        try:
+            length = int(self.headers.get('Content-Length') or 0)
+        except (TypeError, ValueError):
+            return None
+        if length <= 0:
+            return None
+        if length > MAX_JSON_BODY_BYTES:
+            self._log.warning('请求体过大 %d 字节: %s', length, self.path)
+            return None
+        try:
+            return json.loads(self.rfile.read(length).decode('utf-8'))
+        except (ValueError, UnicodeDecodeError) as e:
+            self._log.warning('解析 JSON 请求体失败: %s', e)
+            return None
 
     def do_OPTIONS(self):
         self._handle_options()
