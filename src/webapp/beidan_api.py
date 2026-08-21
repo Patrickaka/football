@@ -23,12 +23,8 @@ from src.common.paths import data_path
 
 log = setup_logger('server')
 
-from .lazy_modules import (
-    _BAYES_REPORT_AVAILABLE, _load_beidan_helpers, persist_beidan_recs,
-)
-from .jobs import (
-    _attach_bayes_report_url, _trigger_beidan_report_sync,
-)
+from .lazy_modules import _load_beidan_helpers
+from .jobs import finalize_beidan_recs
 from .beidan_cache import (
     beidan_cache_key, read_beidan_cache, refresh_beidan_async, write_beidan_cache,
 )
@@ -49,8 +45,13 @@ class BeidanApiMixin:
             generate_beidan_recommendations, _, _ = _load_beidan_helpers()
 
             def _compute():
-                return generate_beidan_recommendations(
+                computed = generate_beidan_recommendations(
                     date=date, bet_types=bet_types, source=source)
+                if 'error' not in computed:
+                    # 落盘与报告生成只在算出新数据时做一次，算完再写缓存，
+                    # 这样缓存里的 rec 已带报告 URL，读缓存不必重复这些副作用。
+                    finalize_beidan_recs(computed.get('recommendations'))
+                return computed
 
             cached, fresh = read_beidan_cache(cache_key)
             if cached is None:
@@ -75,20 +76,6 @@ class BeidanApiMixin:
 
             if 'error' in result:
                 return result
-
-            # 为北单推荐持久化 rec（供按需生成报告）并附加深度报告 URL
-            recs = result.get('recommendations')
-            if isinstance(recs, list):
-                if _BAYES_REPORT_AVAILABLE:
-                    persisted = set(persist_beidan_recs(recs))
-                    for rec in recs:
-                        mid = str(rec.get('match_id') or '')
-                        if mid and mid in persisted:
-                            rec['bayes_report_url'] = f"/reports/beidan_bayes_{mid}.html"
-                else:
-                    _attach_bayes_report_url(recs, kind='beidan')
-                # 后台预生成深度报告：无报告则生成、变盘则重生成
-                _trigger_beidan_report_sync(recs)
 
             return {'result': result}
         except Exception as e:

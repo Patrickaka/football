@@ -129,12 +129,11 @@ class BeidanPayloadNeverBlocksTests(unittest.TestCase):
         with patch.object(beidan_api, 'read_beidan_cache', return_value=(cached, fresh)), \
              patch.object(beidan_api, 'write_beidan_cache'), \
              patch.object(beidan_api, 'refresh_beidan_async', return_value=True) as bg, \
+             patch.object(beidan_api, 'finalize_beidan_recs') as finalize, \
              patch.object(beidan_api, '_load_beidan_helpers',
-                          return_value=(fake_generate, None, None)), \
-             patch.object(beidan_api, '_BAYES_REPORT_AVAILABLE', False), \
-             patch.object(beidan_api, '_attach_bayes_report_url'), \
-             patch.object(beidan_api, '_trigger_beidan_report_sync'):
+                          return_value=(fake_generate, None, None)):
             payload = self.handler._beidan_payload(params)
+        self.finalize = finalize
         return payload, sync_calls, bg
 
     def test_stale_cache_is_served_without_recomputing(self):
@@ -170,13 +169,27 @@ class BeidanPayloadNeverBlocksTests(unittest.TestCase):
                           return_value=({'recommendations': [], 'tag': 'old'}, True)), \
              patch.object(beidan_api, 'write_beidan_cache'), \
              patch.object(beidan_api, 'refresh_beidan_async', return_value=False), \
+             patch.object(beidan_api, 'finalize_beidan_recs'), \
              patch.object(beidan_api, '_load_beidan_helpers',
-                          return_value=(lambda **kw: {}, None, None)), \
-             patch.object(beidan_api, '_BAYES_REPORT_AVAILABLE', False), \
-             patch.object(beidan_api, '_attach_bayes_report_url'), \
-             patch.object(beidan_api, '_trigger_beidan_report_sync'):
+                          return_value=(lambda **kw: {}, None, None)):
             payload = self.handler._beidan_payload(params)
         self.assertTrue(payload['result']['refreshing'])
+
+    def test_cache_hit_does_not_run_persist_or_report_side_effects(self):
+        """事故回归：落盘 340 个 JSON + 整批报告生成此前挂在每次请求上，
+        北单变快后被反复触发，把服务器 CPU 与磁盘打满到 SSH 都连不上。
+        读缓存必须完全不碰这些副作用。"""
+        self._run(cached={'recommendations': [{'match_id': '1'}], 'tag': 'x'}, fresh=True)
+        self.finalize.assert_not_called()
+
+    def test_stale_cache_hit_also_skips_side_effects(self):
+        self._run(cached={'recommendations': [{'match_id': '1'}]}, fresh=False)
+        self.finalize.assert_not_called()
+
+    def test_cold_compute_does_run_side_effects_once(self):
+        """新算出来的数据仍要落盘并附报告 URL，否则缓存里的 rec 没有报告入口"""
+        self._run(cached=None, fresh=False)
+        self.finalize.assert_called_once()
 
     def test_cold_start_computes_synchronously(self):
         """从来没算过时别无选择，只能同步算这一次"""
