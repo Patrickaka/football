@@ -28,7 +28,18 @@ data/kv_store_fallback.json
 
 # 预测缓存（运行时生成，重启自动重建）
 data/*_cache.json
+data/server_cache_*.json
 src/football/cache/
+
+# 运行时抓取的开奖历史与快照（可重建）
+data/kl8_history.json
+data/kl8_recalculations/
+data/kl8_snapshots/
+data/ssq_history.json
+data/ssq_history_full.json
+
+# 运行时生成的分析报告
+reports/
 
 # 线上运行时持续写入的数据（不入 git，避免每次发版 pull 冲突）
 src/football/data/prediction_history.json
