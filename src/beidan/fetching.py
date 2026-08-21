@@ -11,6 +11,11 @@ import urllib.request
 import urllib.error
 import random
 import requests
+
+from src.football.fetching import (
+    FETCH_THROTTLE_SECONDS, RATE_LIMIT_STATUSES,
+    _await_fetch_throttle, _await_rate_slot, _enter_fetch_throttle,
+)
 from datetime import datetime, timedelta
 from typing import Dict, List, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -26,13 +31,30 @@ from .config import (
     DC_SCHEDULE_URL, HEADERS, OKOOO_DANCHANG_URL, OKOOO_HEADERS, OKOOO_MATCH_URL, SCHEDULE_URL, _is_okooo_waf_blocked, _mark_okooo_waf_blocked, _okooo_session,
 )
 
+# 北单与足球打的是同一个 odds.500.com。两边各跑一条预热线程，若各自独立发请求，
+# 就会互相挤占源站配额、把对方推进 429。这里让 500.com 的请求共用足球那条限速
+# 令牌流：请求前领号，撞限流则写进全局冷却，足球侧也会一起退避。
+# okooo 走另一个域名和独立 session，不参与这条预算。
+_SHARED_RATE_LIMIT_HOST = 'odds.500.com'
+
+
+def _shares_football_rate_budget(url):
+    return _SHARED_RATE_LIMIT_HOST in (url or '')
+
+
 def fetch(url, encoding='utf-8', referer=None):
     headers = {**HEADERS, 'Referer': referer} if referer else HEADERS
     req = urllib.request.Request(url, headers=headers)
+    throttled = _shares_football_rate_budget(url)
+    if throttled:
+        _await_fetch_throttle()
+        _await_rate_slot()
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
             raw = resp.read()
     except urllib.error.HTTPError as e:
+        if throttled and e.code in RATE_LIMIT_STATUSES:
+            _enter_fetch_throttle(FETCH_THROTTLE_SECONDS + random.uniform(0, 0.3))
         log.warning(f"HTTP Error {e.code} for {url}")
         return None
     except urllib.error.URLError as e:

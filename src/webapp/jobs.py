@@ -143,6 +143,9 @@ def _warm_football_caches():
 BEIDAN_WARM_INTERVAL = int(os.getenv('BEIDAN_WARM_INTERVAL', '1800'))
 BEIDAN_WARM_SOURCE = os.getenv('BEIDAN_WARM_SOURCE', 'okooo')
 BEIDAN_WARM_TYPES = os.getenv('BEIDAN_WARM_TYPES', 'spf,rqspf,zjq')
+# 北单与足球预热打的是同一个 odds.500.com。两者共用限速令牌流后不会再互相推进 429，
+# 但同时起跑仍会从第一秒起互抢配额、把两边都拖慢。错开启动让足球那轮先跑完。
+BEIDAN_WARM_START_DELAY = int(os.getenv('BEIDAN_WARM_START_DELAY', '150'))
 
 
 def _warm_beidan_caches():
@@ -153,6 +156,8 @@ def _warm_beidan_caches():
     预热用的键必须与接口层一致（date 缺省同为当天、bet_types 同序），否则热不到点上。
     """
     bet_types = [item for item in BEIDAN_WARM_TYPES.split(',') if item]
+    if BEIDAN_WARM_START_DELAY > 0:
+        time.sleep(BEIDAN_WARM_START_DELAY)
     while True:
         try:
             generate_beidan_recommendations, _, _ = _load_beidan_helpers()
