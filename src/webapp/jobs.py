@@ -86,6 +86,27 @@ def _trigger_beidan_report_sync(recs):
     ).start()
 
 
+def finalize_beidan_recs(recs):
+    """落盘北单 rec 并附上深度报告 URL，然后触发报告同步。
+
+    只能在「真正算出了新数据」时调用。这一步一次要写三百多个 JSON、
+    还会触发整批深度报告生成；此前它挂在每次请求上，北单变快之后被反复触发，
+    直接把服务器 CPU 与磁盘打满、SSH 都连不上。读缓存时不该重复做这件事，
+    缓存里的 rec 已经带着上一次生成的 bayes_report_url。
+    """
+    if not isinstance(recs, list) or not recs:
+        return
+    if _lazy_mod._BAYES_REPORT_AVAILABLE:
+        persisted = set(_lazy_mod.persist_beidan_recs(recs))
+        for rec in recs:
+            mid = str(rec.get('match_id') or '')
+            if mid and mid in persisted:
+                rec['bayes_report_url'] = f"/reports/beidan_bayes_{mid}.html"
+    else:
+        _attach_bayes_report_url(recs, kind='beidan')
+    _trigger_beidan_report_sync(recs)
+
+
 _ANALYZE_LOCK = threading.Lock()
 
 
@@ -167,6 +188,7 @@ def _warm_beidan_caches():
             if 'error' in result:
                 log.warning('北单缓存预热跳过: %s', result['error'])
             else:
+                finalize_beidan_recs(result.get('recommendations'))
                 write_beidan_cache(beidan_cache_key(None, BEIDAN_WARM_SOURCE, bet_types), result)
                 log.info('北单缓存预热完成: 推荐=%d条, 耗时 %.1fs',
                          len(result.get('recommendations') or []),
