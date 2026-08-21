@@ -17,12 +17,15 @@ _FORMATTER = logging.Formatter(
     datefmt='%Y-%m-%d %H:%M:%S',
 )
 
-# 小时级轮转，保留 24 个文件 = 1 天
+# 按大小轮转，给日志总占用设置硬上限。小时轮转在单小时突发大量日志时
+# 仍可能写满磁盘；默认最多约 40 MiB（活动文件 + 3 个备份）。
+LOG_MAX_BYTES = max(1024 * 1024, int(os.environ.get('FOOTBALL_LOG_MAX_BYTES', 10 * 1024 * 1024)))
+LOG_BACKUP_COUNT = max(1, int(os.environ.get('FOOTBALL_LOG_BACKUP_COUNT', 3)))
 _FILE_HANDLER = None
 
 
-class _SafeTimedRotatingFileHandler(logging.handlers.TimedRotatingFileHandler):
-    """安全的TimedRotatingFileHandler，在Windows文件占用时忽略轮转错误"""
+class _SafeRotatingFileHandler(logging.handlers.RotatingFileHandler):
+    """安全的大小轮转处理器，在 Windows 文件占用时跳过本轮轮转。"""
     
     def doRollover(self):
         try:
@@ -45,8 +48,9 @@ def _ensure_file_handler():
         return _FILE_HANDLER
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     log_file = str(LOG_DIR / 'football.log')
-    _FILE_HANDLER = _SafeTimedRotatingFileHandler(
-        log_file, when='H', interval=1, backupCount=24, encoding='utf-8',
+    _FILE_HANDLER = _SafeRotatingFileHandler(
+        log_file, maxBytes=LOG_MAX_BYTES, backupCount=LOG_BACKUP_COUNT,
+        encoding='utf-8',
     )
     _FILE_HANDLER.setFormatter(_FORMATTER)
     _FILE_HANDLER.setLevel(getattr(logging, LOG_LEVEL, logging.INFO))
@@ -60,7 +64,7 @@ def setup_logger(name):
         handler = logging.StreamHandler(sys.stderr)
         handler.setFormatter(_FORMATTER)
         logger.addHandler(handler)
-    if not any(isinstance(h, logging.handlers.TimedRotatingFileHandler) for h in logger.handlers):
+    if not any(isinstance(h, logging.handlers.RotatingFileHandler) for h in logger.handlers):
         logger.addHandler(_ensure_file_handler())
     logger.propagate = False
     return logger

@@ -697,7 +697,7 @@ def calculate_half_full_time_probs(candidates, team_strength=None, asian=None, t
                     history_weight = max(history_weight, real_weight)
                     sample_count = max(sample_count, int(stats_meta.get('weighted_sample_count') or 20))
                     distance = min(distance, stats_distance)
-                    log.info(f"半全场概率已融合真实半场统计数据，权重={real_weight:.3f}")
+                    log.debug("半全场概率融合真实统计: 权重=%.3f", real_weight)
         except Exception as e:
             log.debug(f"无法加载真实半场统计数据调整半全场概率: {e}")
             sample_warnings.append('加载真实半场统计数据失败')
@@ -760,7 +760,7 @@ def calculate_half_full_time_probs(candidates, team_strength=None, asian=None, t
                             for k, v in sorted(blended_htf.items(), key=lambda x: -x[1])
                         }
                 
-                log.info(f"半全场概率已结合历史盘口数据调整（倒推数据），权重={history_weight:.3f}")
+                log.debug("半全场概率融合历史盘口: 权重=%.3f", history_weight)
             else:
                 if market_sample_count < 50:
                     sample_warnings.append('历史半场样本不足，不启用历史融合')
@@ -982,7 +982,7 @@ def predict_scores(asian, euro, total, team_strength=None, league_profile=None,
             adjustment = bookmaker_consensus.get('adjustment', 0)
             if adjustment != 0:
                 lam_home += adjustment
-                log.info(f"应用博彩公司分歧指数调整: lam_home += {adjustment:.3f}")
+                log.debug("博彩公司分歧调整: lam_home += %.3f", adjustment)
 
         # 确保 λ 值为正
         lam_home = max(0.08, lam_home)
@@ -1034,14 +1034,17 @@ def predict_scores(asian, euro, total, team_strength=None, league_profile=None,
         # 获取历史盘口比分概率
         handicap = asian.get('handicap', 0)
         close_line = total.get('close_line', 2.5)
-        log.info(f"尝试加载历史盘口比分库: 亚盘={handicap}, 大小球={close_line}")
+        log.debug("加载历史盘口比分库: 亚盘=%s, 大小球=%s", handicap, close_line)
         
         market_result = get_market_score_prob(handicap, close_line)
         market_probs = market_result.get('probabilities', {})
         sample_count = market_result.get('sample_count', 0)
         distance = market_result.get('distance', float('inf'))
         
-        log.info(f"历史盘口数据: 样本数={sample_count}, 比分种类={len(market_probs)}, 距离={distance:.3f}")
+        log.debug(
+            "历史盘口数据: 样本数=%s, 比分种类=%s, 距离=%.3f",
+            sample_count, len(market_probs), distance,
+        )
         
         # 将矩阵转换为字典格式
         model_probs = {f"{h}-{a}": prob for (h, a), prob in matrix.items()}
@@ -1100,13 +1103,16 @@ def predict_scores(asian, euro, total, team_strength=None, league_profile=None,
                                              weights={'model': model_weight + (0.15 - static_weight), 'market': static_weight})
             model_probs = blended_probs
             market_db_used = True
-            log.info(f"静态盘口比分库融合成功，权重: 模型{(model_weight + (0.15 - static_weight)):.0%} + 静态历史{static_weight:.0%}")
+            log.debug(
+                "静态盘口比分库融合: 模型=%.0f%%, 静态历史=%.0f%%",
+                (model_weight + (0.15 - static_weight)) * 100, static_weight * 100,
+            )
         else:
             static_market_weight = 0
             if sample_count < 30:
-                log.info(f"静态盘口样本不足({sample_count}<30)，跳过融合")
+                log.debug("静态盘口样本不足(%s<30)，跳过融合", sample_count)
             elif distance > 0.5:
-                log.info(f"盘口距离过远({distance:.3f}>0.5)，跳过融合")
+                log.debug("盘口距离过远(%.3f>0.5)，跳过融合", distance)
         
         # ========== 盘口变化先验 ==========
         # 获取开盘盘口数据
@@ -1141,11 +1147,17 @@ def predict_scores(asian, euro, total, team_strength=None, league_profile=None,
                                                      weights={'current': 1 - change_weight, 'change': change_weight})
                     model_probs = blended_probs
                     change_db_used = True
-                    log.info(f"盘口变化数据库融合成功，权重: 当前{(1 - change_weight):.0%} + 变化历史{change_weight:.0%}")
+                    log.debug(
+                        "盘口变化数据库融合: 当前=%.0f%%, 变化历史=%.0f%%",
+                        (1 - change_weight) * 100, change_weight * 100,
+                    )
                 else:
-                    log.info(f"盘口变化样本不足({change_sample_count}<30)，跳过融合")
+                    log.debug("盘口变化样本不足(%s<30)，跳过融合", change_sample_count)
             else:
-                log.info(f"未找到盘口变化记录: {asian_open}→{asian_close}, {ou_open}→{ou_close}")
+                log.debug(
+                    "未找到盘口变化记录: %s→%s, %s→%s",
+                    asian_open, asian_close, ou_open, ou_close,
+                )
         
         # 更新矩阵
         if market_db_used or change_db_used:
@@ -1176,7 +1188,7 @@ def predict_scores(asian, euro, total, team_strength=None, league_profile=None,
                     tuple(map(int, score.split("-"))): prob
                     for score, prob in score_probs.items()
                 }
-                log.info("已应用贝叶斯概率校准")
+                log.debug("已应用贝叶斯概率校准")
             except Exception as e:
                 log.warning(f"贝叶斯校准失败，降级使用Platt校准: {e}")
                 # 降级到 Platt 校准

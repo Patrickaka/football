@@ -17,6 +17,9 @@ import json
 from typing import Dict, List, Tuple, Optional
 
 from ..common import kv_store
+from ..common.logger import setup_logger
+
+log = setup_logger('football.dynamic_elo')
 
 # ==================== 常量配置 ====================
 DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'data')
@@ -37,9 +40,9 @@ class DynamicELO:
         """从 MySQL 加载ELO数据库"""
         try:
             self.teams = kv_store.load('dynamic_elo_db') or {}
-            print(f"已加载动态ELO数据库，{len(self.teams)} 支球队")
+            log.debug("已加载动态 ELO 数据库: %d 支球队", len(self.teams))
         except Exception as e:
-            print(f"加载ELO数据库失败: {e}")
+            log.warning("加载动态 ELO 数据库失败: %s", e)
             self.teams = {}
 
     def save(self):

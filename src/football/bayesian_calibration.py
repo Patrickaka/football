@@ -22,6 +22,9 @@ from typing import Dict, List, Tuple, Optional
 from collections import defaultdict
 
 from ..common import kv_store
+from ..common.logger import setup_logger
+
+log = setup_logger('football.bayesian_calibration')
 
 # ==================== 常量配置 ====================
 DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'data')
@@ -48,9 +51,9 @@ class BayesianCalibrator:
         """加载校准数据库"""
         try:
             self.history = kv_store.load('calibration_db') or {}
-            print(f"已加载贝叶斯校准数据库，{len(self.history)} 个分桶")
+            log.debug("已加载贝叶斯校准数据库: %d 个分桶", len(self.history))
         except Exception as e:
-            print(f"加载校准数据库失败: {e}")
+            log.warning("加载贝叶斯校准数据库失败: %s", e)
             self.history = {}
 
     def save(self):

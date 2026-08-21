@@ -615,7 +615,11 @@ def calculate_bookmaker_consensus(bet365_data, pinnacle_data, avg_handicap):
             result['confidence'] = 0.0
             result['adjustment'] = 0.0
 
-        log.info(f"博彩公司分歧指数: Pinnacle={pinnacle_handicap}, 平均={avg_handicap}, 差异={result['pinnacle_diff']:.3f}, 方向={result['sharp_bias']}, 调整={result['adjustment']:.3f}")
+        log.debug(
+            "博彩公司分歧指数: Pinnacle=%s, 平均=%s, 差异=%.3f, 方向=%s, 调整=%.3f",
+            pinnacle_handicap, avg_handicap, result['pinnacle_diff'],
+            result['sharp_bias'], result['adjustment'],
+        )
 
     except Exception as e:
         log.warning(f"计算博彩公司分歧指数失败: {e}")
@@ -630,7 +634,7 @@ def fetch_single_company_odds(match_id):
     返回：
         dict: 包含各公司的亚盘和大小球数据
     """
-    log.info(f"========== 开始抓取独赔数据 match_id={match_id} ==========")
+    log.debug("抓取独赔数据: match_id=%s", match_id)
     result = {
         'bet365': None,
         'pinnacle': None,
@@ -647,7 +651,7 @@ def fetch_single_company_odds(match_id):
         bet365_yazhi = _extract_company_odds(yazhi_html, 'Bet365', is_total=False)
         bet365_daxiao = _extract_company_odds(daxiao_html, 'Bet365', is_total=True)
         
-        log.info(f"Bet365 亚盘原始数据: {bet365_yazhi}")
+        log.debug("Bet365 亚盘原始数据: %s", bet365_yazhi)
         
         # 只要有亚盘数据就返回（大小球可选）
         if bet365_yazhi:
@@ -725,7 +729,11 @@ def fetch_single_company_odds(match_id):
                 }
             result['pinnacle'] = pinnacle_data
         
-        log.info(f"独赔数据抓取完成: Bet365={'有' if result['bet365'] else '无'}, Pinnacle={'有' if result['pinnacle'] else '无'}")
+        log.debug(
+            "独赔数据抓取完成: Bet365=%s, Pinnacle=%s",
+            '有' if result['bet365'] else '无',
+            '有' if result['pinnacle'] else '无',
+        )
         
     except Exception as e:
         log.warning(f"抓取独赔数据失败: {e}")

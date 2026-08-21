@@ -437,7 +437,10 @@ def predict_goal_counts_from_candidates(candidates: List[Tuple], max_goals: int 
                 
                 import logging
                 log = logging.getLogger('football')
-                log.info(f"进球数分布已结合历史盘口数据调整 (样本:{sample_count}, 距离:{distance:.2f}, 权重:{history_weight:.3f})")
+                log.debug(
+                    "进球数分布融合历史盘口: 样本=%s, 距离=%.2f, 权重=%.3f",
+                    sample_count, distance, history_weight,
+                )
         except Exception as e:
             import logging
             log = logging.getLogger('football')

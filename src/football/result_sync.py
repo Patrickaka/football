@@ -534,7 +534,7 @@ class PredictionHistory:
         """从 MySQL 加载记录"""
         try:
             self.records = repositories.football_prediction_load()
-            log.info(f"已加载 {len(self.records)} 条预测历史记录")
+            log.debug("已加载 %d 条预测历史记录", len(self.records))
         except Exception as e:
             log.error(f"加载预测历史失败: {e}")
             self.records = []

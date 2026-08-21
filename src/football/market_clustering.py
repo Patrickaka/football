@@ -19,6 +19,9 @@ from typing import Dict, List, Tuple, Optional
 from collections import defaultdict
 
 from ..common import kv_store
+from ..common.logger import setup_logger
+
+log = setup_logger('football.market_clustering')
 
 # ==================== 常量配置 ====================
 DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'data')
@@ -46,9 +49,9 @@ class MarketCluster:
         """加载聚类数据库"""
         try:
             self.clusters = kv_store.load('market_cluster_db') or {}
-            print(f"已加载盘口聚类数据库，{len(self.clusters)} 个盘口组合")
+            log.debug("已加载盘口聚类数据库: %d 个盘口组合", len(self.clusters))
         except Exception as e:
-            print(f"加载聚类数据库失败: {e}")
+            log.warning("加载盘口聚类数据库失败: %s", e)
             self.clusters = {}
 
     def save(self):

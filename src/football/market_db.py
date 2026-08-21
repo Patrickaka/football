@@ -25,6 +25,9 @@ from typing import Dict, List, Tuple, Optional, Any
 from collections import defaultdict
 
 from ..common import kv_store
+from ..common.logger import setup_logger
+
+log = setup_logger('football.market_db')
 
 # ==================== 常量配置 ====================
 
@@ -366,9 +369,9 @@ class MarketScoreDB:
             self.db = data.get('probabilities', {})
             self.sample_counts = data.get('sample_counts', {})
             if self.db:
-                print(f"已加载数据库，{len(self.db)} 个盘口组合")
+                log.debug("已加载盘口比分数据库: %d 个盘口组合", len(self.db))
         except Exception as e:
-            print(f"加载数据库失败: {e}")
+            log.warning("加载盘口比分数据库失败: %s", e)
             self.db = {}
             self.sample_counts = {}
 
@@ -737,9 +740,9 @@ class MarketChangeDB:
         try:
             self.db = kv_store.load('market_change_db') or {}
             if self.db:
-                print(f"已加载盘口变化数据库，{len(self.db)} 个变化组合")
+                log.debug("已加载盘口变化数据库: %d 个变化组合", len(self.db))
         except Exception as e:
-            print(f"加载盘口变化数据库失败: {e}")
+            log.warning("加载盘口变化数据库失败: %s", e)
             self.db = {}
 
     def save(self):

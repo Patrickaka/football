@@ -335,11 +335,10 @@ def analyze_match(match, force_refresh=False):
         match: 比赛信息字典
         force_refresh: 是否强制刷新缓存（重新抓取数据）
     """
-    log.info("========== analyze_match 函数开始执行 ==========")
     mid = match['match_id']
     home, away = match.get('home', ''), match.get('away', '')
     league_profile = resolve_league_profile(match.get('league', ''))
-    log.info('分析比赛 %s vs %s (id=%s)', home, away, mid)
+    log.debug('分析比赛 %s vs %s (id=%s)', home, away, mid)
     
     # 尝试从缓存获取结果
     cache_key = f"{mid}_{home}_{away}"
@@ -367,7 +366,7 @@ def analyze_match(match, force_refresh=False):
             )
             cached_result = None
         if cached_result is not None:
-            log.info(f"使用缓存的比赛分析结果: {home} vs {away}")
+            log.debug("使用缓存的比赛分析结果: %s vs %s", home, away)
             # 即使使用缓存，也要确保预测记录被保存
             try:
                 from .result_sync import save_prediction
@@ -429,7 +428,6 @@ def analyze_match(match, force_refresh=False):
                         'accuracy_gate': (cached_lottery or {}).get('accuracy_gate'),
                     },
                 )
-                log.info(f"缓存结果的预测记录已保存: {home} vs {away}")
                 model_status = cached_result.get('model_status')
                 # 仅在标记真正翻转时才回写缓存：否则每次命中都要 pickle 整个
                 # 分析结果并落盘，54 场一轮就是 54 次无谓的整对象序列化。
@@ -439,7 +437,6 @@ def analyze_match(match, force_refresh=False):
                         (persistence_result or {}).get('persistence_backend')
                     )
                     set_cache('match_analysis', cache_key, cached_result, match_time)
-                    log.info(f"缓存结果补写 prediction_saved 标记: {home} vs {away}")
             except Exception as e:
                 log.error(f"保存缓存结果的预测记录失败: {e}")
             return cached_result
@@ -513,7 +510,11 @@ def analyze_match(match, force_refresh=False):
     if not okooo_only:
         try:
             single_odds = single_odds_task.result()
-            log.info(f"独赔数据抓取结果: Bet365={'有' if single_odds.get('bet365') else '无'}, Pinnacle={'有' if single_odds.get('pinnacle') else '无'}")
+            log.debug(
+                "独赔数据抓取结果: Bet365=%s, Pinnacle=%s",
+                '有' if single_odds.get('bet365') else '无',
+                '有' if single_odds.get('pinnacle') else '无',
+            )
         except Exception as e:
             log.warning(f"抓取独赔数据失败: {e}")
     
@@ -526,7 +527,11 @@ def analyze_match(match, force_refresh=False):
             single_odds['pinnacle'],
             original_handicap
         )
-        log.info(f"博彩公司分歧指数计算完成: 可用={bookmaker_consensus['available']}, Sharp方向={bookmaker_consensus['sharp_bias']}, 调整={bookmaker_consensus['adjustment']:.3f}")
+        log.debug(
+            "博彩公司分歧指数: 可用=%s, Sharp方向=%s, 调整=%.3f",
+            bookmaker_consensus['available'], bookmaker_consensus['sharp_bias'],
+            bookmaker_consensus['adjustment'],
+        )
 
     # ========== 保存独赔数据（用于分析，不直接替换平均盘）==========
     # 平均盘作为主模型基准
@@ -537,13 +542,11 @@ def analyze_match(match, force_refresh=False):
             # 保存 Bet365 数据作为大众盘参考
             asian['bet365'] = single_odds['bet365'].get('asian')
             total['bet365'] = single_odds['bet365'].get('total')
-            log.info("保存 Bet365 数据作为大众盘参考")
         
         if single_odds.get('pinnacle'):
             # 保存 Pinnacle 数据作为 Sharp 信号
             asian['pinnacle'] = single_odds['pinnacle'].get('asian')
             total['pinnacle'] = single_odds['pinnacle'].get('total')
-            log.info("保存 Pinnacle 数据作为 Sharp 信号")
     
     # 确保时间字段始终存在（用于盘口变化速度分析）
     if 'close_time' not in asian:
@@ -702,9 +705,12 @@ def analyze_match(match, force_refresh=False):
         }
         
         if ml_available and ml_1x2:
-            log.info(f"机器学习模型预测完成: 主胜{ml_1x2['H']:.3f}, 平局{ml_1x2['D']:.3f}, 客胜{ml_1x2['A']:.3f}, 版本={ml_model_version}")
+            log.debug(
+                "机器学习预测: 主胜=%.3f, 平局=%.3f, 客胜=%.3f, 版本=%s",
+                ml_1x2['H'], ml_1x2['D'], ml_1x2['A'], ml_model_version,
+            )
         else:
-            log.info(f"机器学习模型未训练或不可用")
+            log.debug("机器学习模型未训练或不可用")
     except Exception as e:
         log.warning(f"机器学习模型预测失败: {e}")
 
@@ -781,7 +787,10 @@ def analyze_match(match, force_refresh=False):
         candidates.sort(key=lambda x: -x[1])
         
         if market_change_result.get('used'):
-            log.info(f"盘口变化先验融合完成: sample={market_change_result['sample_count']}, weight={market_change_result['weight']}")
+            log.debug(
+                "盘口变化先验融合: sample=%s, weight=%s",
+                market_change_result['sample_count'], market_change_result['weight'],
+            )
     except Exception as e:
         log.warning(f"盘口变化先验融合失败: {e}")
 
@@ -807,7 +816,7 @@ def analyze_match(match, force_refresh=False):
             ]
             candidates.sort(key=lambda x: -x[1])
             meta['bayesian_candidate_calibrated'] = True
-            log.info("贝叶斯比分校准已写回候选比分排序")
+            log.debug("贝叶斯比分校准已写回候选比分排序")
         except Exception as e:
             meta['bayesian_candidate_calibrated'] = False
             log.warning(f"贝叶斯比分候选校准失败: {e}")
@@ -827,7 +836,7 @@ def analyze_match(match, force_refresh=False):
             candidates.sort(key=lambda x: -x[1])
             meta['score_total_movement_adjusted'] = True
             meta['score_total_movement'] = score_total_movement_result
-            log.info(
+            log.debug(
                 "score total movement adjusted: %s %.3f -> %.3f",
                 score_total_movement_result.get('direction'),
                 score_total_movement_result.get('expected_before', 0),
@@ -873,7 +882,7 @@ def analyze_match(match, force_refresh=False):
         )
         meta['score_goal_anchor'] = score_goal_anchor
         if score_goal_anchor.get('applied'):
-            log.info(
+            log.debug(
                 "score goal mean anchored: %.3f -> %.3f (target %.3f)",
                 score_goal_anchor['expected_before'],
                 score_goal_anchor['expected_after'],
@@ -893,7 +902,7 @@ def analyze_match(match, force_refresh=False):
         candidates, history_adjustment = apply_history_calibration(candidates, history_profile)
         meta['production_history_calibration'] = history_adjustment
         if history_adjustment.get('applied'):
-            log.info(
+            log.debug(
                 "production history calibrated: n=%s beta=%.4f goals %.3f -> %.3f",
                 history_adjustment.get('sample_count'),
                 history_adjustment.get('goal_beta', 0.0),
@@ -925,7 +934,7 @@ def analyze_match(match, force_refresh=False):
         )
         meta['final_score_goal_anchor'] = final_score_goal_anchor
         if final_score_goal_anchor.get('applied'):
-            log.info(
+            log.debug(
                 "final score goal mean anchored after history: %.3f -> %.3f (target %.3f)",
                 final_score_goal_anchor['expected_before'],
                 final_score_goal_anchor['expected_after'],
@@ -963,7 +972,10 @@ def analyze_match(match, force_refresh=False):
             '1x2': dc_1x2,
             'rho': dc_rho
         }
-        log.info(f"Dixon-Coles 模型预测完成: 主胜{dc_1x2['home']:.3f}, 平局{dc_1x2['draw']:.3f}, 客胜{dc_1x2['away']:.3f}")
+        log.debug(
+            "Dixon-Coles 预测: 主胜=%.3f, 平局=%.3f, 客胜=%.3f",
+            dc_1x2['home'], dc_1x2['draw'], dc_1x2['away'],
+        )
     except Exception as e:
         log.warning(f"Dixon-Coles 模型预测失败: {e}")
 
@@ -993,7 +1005,10 @@ def analyze_match(match, force_refresh=False):
                 k=1000,
                 league=match.get('league', '')
             )
-            log.info(f"相似盘口匹配完成: {similar_market_result['count']} 场匹配, 置信度 {similar_market_result['confidence']:.2%}")
+            log.debug(
+                "相似盘口匹配: %s 场, 置信度 %.2f%%",
+                similar_market_result['count'], similar_market_result['confidence'] * 100,
+            )
         except Exception as e:
             log.warning(f"相似盘口匹配失败: {e}")
 
@@ -1124,11 +1139,11 @@ def analyze_match(match, force_refresh=False):
             # 更新大小球概率
             goal_count_result['over_under'] = _goal_over_under_from_line(calibrated_dist, total)
             
-            log.info(f"进球数校准完成: 期望总进球{expected_total:.2f} → 校准后分布已更新")
+            log.debug("进球数校准完成: 期望总进球 %.2f", expected_total)
         except Exception as e:
             log.warning(f"进球数校准失败: {e}，使用原始分布")
         
-        log.info(f"进球数推荐完成: {goal_count_result['recommendations']}")
+        log.debug("进球数推荐: %s", goal_count_result['recommendations'])
     except Exception as e:
         log.warning(f"进球数推荐失败: {e}")
 
@@ -1137,7 +1152,7 @@ def analyze_match(match, force_refresh=False):
     if STEAM_MOVE_AVAILABLE:
         try:
             steam_result = steam_move_detector(asian, total, match.get('time'))
-            log.info(f"资金流检测完成: {len(steam_result['signals'])} 个信号")
+            log.debug("资金流检测: %d 个信号", len(steam_result['signals']))
         except Exception as e:
             log.warning(f"资金流检测失败: {e}")
 
@@ -1173,7 +1188,7 @@ def analyze_match(match, force_refresh=False):
                 'reasons': _recommend_reasons(h, a, asian, euro, total, team, heat=heat),
             })
     else:
-        log.info(f"风险等级 {risk['level']}，不推荐具体比分")
+        log.debug("风险等级 %s，不推荐具体比分", risk['level'])
     
     # ========== 构建概率排序（纯模型概率）==========
     probability_rank = []
@@ -1229,7 +1244,10 @@ def analyze_match(match, force_refresh=False):
                 'similar': 0.10,
                 'ml': ml_w
             }
-            log.info(f"动态权重获取成功: market={market_w:.3f}, team={team_w:.3f}, elo={elo_w:.3f}, ml={ml_w:.3f}")
+            log.debug(
+                "动态权重: market=%.3f, team=%.3f, elo=%.3f, ml=%.3f",
+                market_w, team_w, elo_w, ml_w,
+            )
     except Exception as e:
         log.warning(f"获取动态权重失败: {e}")
     
@@ -1621,28 +1639,22 @@ def analyze_match(match, force_refresh=False):
         log.debug(f"比赛分析结果已缓存: {home} vs {away}")
     
     # 保存预测记录用于赛后回填
-    log.info(f"开始保存预测记录: {home} vs {away}")
     try:
         from .result_sync import save_prediction
-        log.info(f"导入 save_prediction 成功")
 
         model = result.get('model', {})
-        top_scores = model.get('top_scores', [])
         candidates = model.get('candidates', [])
-        log.info(f"获取模型数据: top_scores={len(top_scores)}, candidates={len(candidates)}")
 
         predicted_scores = {
             f"{h}-{a}": prob
             for (h, a), prob in candidates[:30]
         }
-        log.info(f"构建 predicted_scores: {len(predicted_scores)} 条")
 
         predicted_1x2 = ({
             'H': sum(prob for (h, a), prob in candidates if h > a),
             'D': sum(prob for (h, a), prob in candidates if h == a),
             'A': sum(prob for (h, a), prob in candidates if h < a),
         } if spf_prediction_enabled else {})
-        log.info(f"构建 predicted_1x2: {predicted_1x2}")
 
         # 影子预测：base_1x2 是现有基础模型的预测结果
         predicted_half_full = _half_full_probs_to_dict(model.get('half_full_time'))
@@ -1687,18 +1699,15 @@ def analyze_match(match, force_refresh=False):
             },
         )
         prediction_saved = True
-        log.info(f"预测记录已保存: {home} vs {away}")
         # 更新模型状态中的保存状态
         if 'model_status' in result:
             result['model_status']['prediction_saved'] = True
             result['model_status']['persistence_backend'] = (
                 (persistence_result or {}).get('persistence_backend')
             )
-            log.info(f"更新 model_status['prediction_saved'] 为 True")
             # 更新缓存以包含最新的 prediction_saved 状态
             if CACHE_AVAILABLE:
                 set_cache('match_analysis', cache_key, result, match_time)
-                log.info(f"已更新缓存中的 prediction_saved 状态")
     except Exception as e:
         log.error(f"保存预测记录失败: {e}", exc_info=True)
     

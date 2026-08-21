@@ -22,6 +22,9 @@ from collections import defaultdict
 from datetime import datetime
 
 from ..common import repositories
+from ..common.logger import setup_logger
+
+log = setup_logger('football.similar_market')
 
 # ==================== 常量配置 ====================
 
@@ -263,9 +266,9 @@ class SimilarMarketDB:
             data = repositories.similar_market_load()
             for record_data in data.get('records', []):
                 self.records.append(MatchRecord(record_data))
-            print(f"已加载相似盘口数据库，{len(self.records)} 条记录")
+            log.debug("已加载相似盘口数据库: %d 条记录", len(self.records))
         except Exception as e:
-            print(f"加载相似盘口数据库失败: {e}")
+            log.warning("加载相似盘口数据库失败: %s", e)
             self.records = []
 
     def save(self):

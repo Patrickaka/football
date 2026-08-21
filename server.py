@@ -122,14 +122,25 @@ def _start_background_sync():
     threading.Thread(target=_warm_beidan_caches, daemon=True, name='WarmBeidanThread').start()
     log.info('北单缓存预热线程已启动')
 
-    # 定时维护：兜底清理过期 binlog 与旧滚动日志，防止磁盘被写满（无需人工）
+    # 定时维护：启动时已同步执行过一轮，这里只负责后续周期清理。
     try:
         from src.common.maintenance import start_maintenance_scheduler
-        start_maintenance_scheduler()
+        start_maintenance_scheduler(run_immediately=False)
     except Exception as e:
         log.warning(f"启动定时维护线程失败: {e}")
 
 def main():
+    # 必须早于缓存恢复和各类预热线程。生产磁盘已满时，先回收可再生
+    # 日志/报告与过期 binlog，避免启动任务继续放大磁盘压力。
+    try:
+        from src.common.maintenance import run_maintenance
+        emergency_on_startup = os.getenv(
+            'MAINTENANCE_EMERGENCY_ON_STARTUP', '1'
+        ).strip().lower() not in ('0', 'false', 'no', 'off')
+        run_maintenance(force_emergency=emergency_on_startup)
+    except Exception as e:
+        log.warning('启动前磁盘清理失败: %s', e)
+
     server = ThreadingHTTPServer((HOST, PORT), Handler)
     local_url = f'http://localhost:{PORT}'
     candidates = _candidate_ips()
