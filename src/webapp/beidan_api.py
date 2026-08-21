@@ -30,7 +30,7 @@ from .jobs import (
     _attach_bayes_report_url, _trigger_beidan_report_sync,
 )
 from .beidan_cache import (
-    beidan_cache_key, beidan_earliest_kickoff, read_beidan_cache, write_beidan_cache,
+    beidan_cache_key, read_beidan_cache, refresh_beidan_async, write_beidan_cache,
 )
 
 class BeidanApiMixin:
@@ -46,14 +46,32 @@ class BeidanApiMixin:
             self._log.info(f'北单推荐请求: date={date}, source={source}, types={bet_types}')
 
             cache_key = beidan_cache_key(date, source, bet_types)
-            result = None if force_refresh else read_beidan_cache(cache_key)
-            if result is None:
-                generate_beidan_recommendations, _, _ = _load_beidan_helpers()
-                result = generate_beidan_recommendations(date=date, bet_types=bet_types, source=source)
+            generate_beidan_recommendations, _, _ = _load_beidan_helpers()
+
+            def _compute():
+                return generate_beidan_recommendations(
+                    date=date, bet_types=bet_types, source=source)
+
+            cached, fresh = read_beidan_cache(cache_key)
+            if cached is None:
+                # 从来没算过，只能同步算这一次；之后都走缓存 + 后台刷新
+                result = _compute()
                 if 'error' not in result:
                     write_beidan_cache(cache_key, result)
             else:
-                self._log.info('北单推荐命中缓存: %s', cache_key)
+                # 有缓存就立刻返回。整页重算在线上要 160 秒，远超网关超时，
+                # 让用户等于必然 504，所以过期只触发后台刷新、不阻塞这次请求。
+                result = cached
+                if force_refresh or not fresh:
+                    started = refresh_beidan_async(cache_key, _compute)
+                    # 无论本次是否真的起了新线程，都有一轮刷新在跑（未起说明已有同键在刷），
+                    # 都要告诉前端「正在刷新」，否则它不会回来取更新后的数据。
+                    result = dict(result)
+                    result['refreshing'] = True
+                    self._log.info('北单返回缓存并%s后台刷新: %s',
+                                   '触发' if started else '复用进行中的', cache_key)
+                else:
+                    self._log.info('北单推荐命中缓存: %s', cache_key)
 
             if 'error' in result:
                 return result

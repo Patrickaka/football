@@ -3040,9 +3040,46 @@ async function loadBeidan(forceRefresh = false) {
       return;
     }
     renderBeidan(data.result);
+    // 服务端整页重算要两三分钟，久过网关超时，所以它只会先把缓存返回、
+    // 把重算放后台。这里轮询取回刷新后的结果，否则用户点了刷新看不到变化。
+    scheduleBeidanRefreshPoll(Boolean(data.result && data.result.refreshing));
   } catch (e) {
     appBeidan.innerHTML = `<div class="status error">网络请求失败：${esc(e.message)}</div>`;
   }
+}
+
+let beidanRefreshPollTimer = null;
+let beidanRefreshPollsLeft = 0;
+const BEIDAN_REFRESH_POLL_MS = 20000;
+const BEIDAN_REFRESH_MAX_POLLS = 12;
+
+function scheduleBeidanRefreshPoll(refreshing) {
+  if (beidanRefreshPollTimer !== null) {
+    clearTimeout(beidanRefreshPollTimer);
+    beidanRefreshPollTimer = null;
+  }
+  if (!refreshing) {
+    beidanRefreshPollsLeft = 0;
+    return;
+  }
+  if (beidanRefreshPollsLeft <= 0) beidanRefreshPollsLeft = BEIDAN_REFRESH_MAX_POLLS;
+  showBeidanRefreshingHint();
+  beidanRefreshPollTimer = setTimeout(() => {
+    beidanRefreshPollTimer = null;
+    beidanRefreshPollsLeft -= 1;
+    if (beidanRefreshPollsLeft <= 0) return;
+    loadBeidan();
+  }, BEIDAN_REFRESH_POLL_MS);
+}
+
+function showBeidanRefreshingHint() {
+  if (!appBeidan || document.getElementById('beidan-refreshing-hint')) return;
+  const hint = document.createElement('div');
+  hint.id = 'beidan-refreshing-hint';
+  hint.className = 'status';
+  hint.style.cssText = 'margin:8px 0;font-size:12px;color:var(--muted)';
+  hint.textContent = '数据后台刷新中，完成后会自动更新…';
+  appBeidan.prepend(hint);
 }
 
 function renderBeidanQuality(q) {
