@@ -22,6 +22,7 @@ import os
 import json
 import logging
 import re
+import threading
 from typing import Dict, Optional, Tuple, Any
 
 logger = logging.getLogger(__name__)
@@ -74,6 +75,8 @@ class ELORatingSystem:
         self.elo_file = elo_file
         self.ratings: Dict[str, float] = {}
         self.history: Dict[str, list] = {}  # 存储每个球队的历史评分记录
+        # 多场比赛并发分析时，新球队初始化会整表回写，必须串行
+        self._write_lock = threading.RLock()
         self._load_ratings()
     
     def _sanitize_team_name(self, team_name: str) -> Optional[str]:
@@ -270,14 +273,17 @@ class ELORatingSystem:
             team_name: 球队名称（已清理）
         """
         try:
-            self.ratings[team_name] = INITIAL_ELO
-            self.history[team_name] = [{
-                'rating': INITIAL_ELO,
-                'date': __import__('datetime').datetime.now().isoformat(),
-                'event': 'initialized'
-            }]
-            logger.info(f"初始化新球队 ELO: {team_name} = {INITIAL_ELO}")
-            self._save_ratings()
+            with self._write_lock:
+                if team_name in self.ratings:
+                    return
+                self.ratings[team_name] = INITIAL_ELO
+                self.history[team_name] = [{
+                    'rating': INITIAL_ELO,
+                    'date': __import__('datetime').datetime.now().isoformat(),
+                    'event': 'initialized'
+                }]
+                logger.info(f"初始化新球队 ELO: {team_name} = {INITIAL_ELO}")
+                self._save_ratings()
         except Exception as e:
             logger.error(f"初始化球队失败: {team_name}, 错误: {e}")
     
@@ -620,6 +626,7 @@ class ELORatingSystem:
 
 # 全局 ELO 系统实例
 _elo_system = None
+_elo_system_lock = threading.Lock()
 
 
 def get_elo_system() -> ELORatingSystem:
@@ -631,13 +638,17 @@ def get_elo_system() -> ELORatingSystem:
     """
     global _elo_system
     
-    if _elo_system is None:
-        try:
-            _elo_system = ELORatingSystem()
-        except Exception as e:
-            logger.error(f"创建 ELO 系统实例失败: {e}")
-            # 返回一个空的系统作为降级方案
-            _elo_system = ELORatingSystem()
+    if _elo_system is not None:
+        return _elo_system
+    # 多场比赛并发分析时，加载评分表只做一次
+    with _elo_system_lock:
+        if _elo_system is None:
+            try:
+                _elo_system = ELORatingSystem()
+            except Exception as e:
+                logger.error(f"创建 ELO 系统实例失败: {e}")
+                # 返回一个空的系统作为降级方案
+                _elo_system = ELORatingSystem()
     
     return _elo_system
 

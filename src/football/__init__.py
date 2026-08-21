@@ -25,6 +25,9 @@ import json
 import urllib.request
 import urllib.error
 import random
+import threading
+from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, Tuple
 from ..common.logger import setup_logger
 from ..common.paths import data_path
@@ -271,8 +274,150 @@ def get_close_total_line(total: dict, default: float = 2.5) -> float:
     )
 
 
+# ===================== 上游抓取：短期复用 + 并发去重 + 全局限流 =====================
+# 单场分析要打 4~6 个 500.com 页面（其中 yazhi/daxiao 两页被平均盘与独赔重复抓取），
+# 整页往返是「打开页面卡很久」的唯一瓶颈。这里做四件事：
+#   1. 同 URL 在 TTL 内复用，消灭同一场分析里的重复抓取；
+#   2. 同 URL 并发只真正打一次，其余等待复用结果；
+#   3. 按固定速率发号，前端并行化后也不会把源站打到限流；
+#   4. 真撞上限流则全局退避重试，而不是让这一场直接失败。
+FETCH_PAGE_TTL = float(os.getenv('FOOTBALL_PAGE_TTL', '90'))
+FETCH_MAX_CONCURRENCY = max(1, int(os.getenv('FOOTBALL_FETCH_CONCURRENCY', '6')))
+# 源站按「每秒请求数」限流，光压并发数没用：并发低也可能瞬间打满，并发高只要
+# 平均速率达标反而不会被拒。这里用发号器把上游请求摊成固定间隔，实测 6 req/s
+# 是既不触发 429、又能把 54 场压进十几秒的档位。
+FETCH_RATE_LIMIT = float(os.getenv('FOOTBALL_FETCH_RATE', '6'))
+# 真撞上 429 时只做短暂的全局冷却 + 线性退避；指数退避会让一次限流拖垮整轮。
+FETCH_RETRY_ATTEMPTS = max(1, int(os.getenv('FOOTBALL_FETCH_RETRIES', '4')))
+FETCH_THROTTLE_SECONDS = float(os.getenv('FOOTBALL_FETCH_THROTTLE', '1.0'))
+FETCH_THROTTLE_CEILING = float(os.getenv('FOOTBALL_FETCH_THROTTLE_MAX', '4'))
+RATE_LIMIT_STATUSES = frozenset({428, 429, 503})
+_FETCH_CACHE_LIMIT = 256
+_FETCH_URL_LOCK_LIMIT = 512
+_fetch_cache = OrderedDict()
+_fetch_url_locks = OrderedDict()
+_fetch_cache_lock = threading.Lock()
+_fetch_semaphore = threading.BoundedSemaphore(FETCH_MAX_CONCURRENCY)
+_fetch_throttle_lock = threading.Lock()
+_fetch_throttle_until = 0.0
+_fetch_rate_lock = threading.Lock()
+_fetch_next_slot = 0.0
+
+
+def _fetch_cache_get(cache_key):
+    if FETCH_PAGE_TTL <= 0:
+        return None
+    with _fetch_cache_lock:
+        entry = _fetch_cache.get(cache_key)
+        if entry is None:
+            return None
+        cached_at, value = entry
+        if time.time() - cached_at >= FETCH_PAGE_TTL:
+            _fetch_cache.pop(cache_key, None)
+            return None
+        _fetch_cache.move_to_end(cache_key)
+        return value
+
+
+def _fetch_cache_set(cache_key, value):
+    if FETCH_PAGE_TTL <= 0:
+        return
+    with _fetch_cache_lock:
+        _fetch_cache[cache_key] = (time.time(), value)
+        _fetch_cache.move_to_end(cache_key)
+        while len(_fetch_cache) > _FETCH_CACHE_LIMIT:
+            _fetch_cache.popitem(last=False)
+
+
+def _fetch_url_lock(cache_key):
+    """取 URL 级锁：丢弃最老的锁只会削弱去重，不影响正确性。"""
+    with _fetch_cache_lock:
+        lock = _fetch_url_locks.get(cache_key)
+        if lock is None:
+            lock = threading.Lock()
+            _fetch_url_locks[cache_key] = lock
+        _fetch_url_locks.move_to_end(cache_key)
+        while len(_fetch_url_locks) > _FETCH_URL_LOCK_LIMIT:
+            _fetch_url_locks.popitem(last=False)
+        return lock
+
+
+def clear_fetch_cache():
+    """清空页面级抓取缓存（force_refresh / 手动清缓存时调用）。"""
+    with _fetch_cache_lock:
+        _fetch_cache.clear()
+
+
+def _enter_fetch_throttle(seconds):
+    """源站限流后设置全局冷却截止时间（只延后、不提前）。"""
+    global _fetch_throttle_until
+    with _fetch_throttle_lock:
+        _fetch_throttle_until = max(_fetch_throttle_until, time.time() + seconds)
+
+
+def _await_fetch_throttle():
+    """冷却期内所有抓取一起等，避免重试风暴把限流窗口拉长。"""
+    while True:
+        with _fetch_throttle_lock:
+            remaining = _fetch_throttle_until - time.time()
+        if remaining <= 0:
+            return
+        time.sleep(min(remaining, 0.5))
+
+
+def _await_rate_slot():
+    """发号器：给每个上游请求分配一个不早于「上一个号 + 间隔」的出发时刻。"""
+    global _fetch_next_slot
+    if FETCH_RATE_LIMIT <= 0:
+        return
+    interval = 1.0 / FETCH_RATE_LIMIT
+    with _fetch_rate_lock:
+        slot = max(time.time(), _fetch_next_slot)
+        _fetch_next_slot = slot + interval
+    delay = slot - time.time()
+    if delay > 0:
+        time.sleep(delay)
+
+
 def fetch(url, encoding='gbk', referer=None):
-    """抓取网页，自动处理 gzip 压缩和编码"""
+    """抓取网页，自动处理 gzip 压缩和编码（带 TTL 复用与并发去重）"""
+    cache_key = (url, encoding)
+    cached = _fetch_cache_get(cache_key)
+    if cached is not None:
+        return cached
+    with _fetch_url_lock(cache_key):
+        cached = _fetch_cache_get(cache_key)
+        if cached is not None:
+            return cached
+        with _fetch_semaphore:
+            result = _fetch_raw(url, encoding, referer)
+        _fetch_cache_set(cache_key, result)
+        return result
+
+
+def _fetch_raw(url, encoding='gbk', referer=None):
+    """发起网络抓取（无缓存），对源站限流做全局退避重试"""
+    last_error = None
+    for attempt in range(FETCH_RETRY_ATTEMPTS):
+        _await_fetch_throttle()
+        _await_rate_slot()
+        try:
+            return _fetch_once(url, encoding, referer)
+        except urllib.error.HTTPError as e:
+            if e.code not in RATE_LIMIT_STATUSES:
+                raise
+            last_error = e
+            backoff = min(
+                FETCH_THROTTLE_SECONDS * (attempt + 1) + random.uniform(0, 0.3),
+                FETCH_THROTTLE_CEILING,
+            )
+            _enter_fetch_throttle(backoff)
+            log.warning('源站限流 HTTP %s，%.1fs 后重试: %s', e.code, backoff, url)
+    raise last_error
+
+
+def _fetch_once(url, encoding='gbk', referer=None):
+    """真正发起一次网络抓取（无缓存、不重试）"""
     start = time.perf_counter()
     headers = {**HEADERS, 'Referer': referer} if referer else HEADERS
     req = urllib.request.Request(url, headers=headers)
@@ -7587,6 +7732,10 @@ def analyze_match(match, force_refresh=False):
     cache_key = f"{mid}_{home}_{away}"
     match_time = match.get('time', '')
     
+    if force_refresh:
+        # 强制刷新必须穿透页面级缓存，否则只会拿到刚抓过的同一份 HTML
+        clear_fetch_cache()
+
     if not force_refresh and CACHE_AVAILABLE:
         cached_result = get_cache('match_analysis', cache_key, match_time)
         if cached_result is not None and not _is_prediction_cache_current(cached_result):
@@ -7668,15 +7817,16 @@ def analyze_match(match, force_refresh=False):
                     },
                 )
                 log.info(f"缓存结果的预测记录已保存: {home} vs {away}")
-                if 'model_status' in cached_result:
-                    cached_result['model_status']['prediction_saved'] = True
-                    cached_result['model_status']['persistence_backend'] = (
+                model_status = cached_result.get('model_status')
+                # 仅在标记真正翻转时才回写缓存：否则每次命中都要 pickle 整个
+                # 分析结果并落盘，54 场一轮就是 54 次无谓的整对象序列化。
+                if model_status is not None and not model_status.get('prediction_saved'):
+                    model_status['prediction_saved'] = True
+                    model_status['persistence_backend'] = (
                         (persistence_result or {}).get('persistence_backend')
                     )
-                    log.info(f"更新缓存结果的 model_status['prediction_saved'] 为 True")
-                    # 将更新后的缓存重新保存
                     set_cache('match_analysis', cache_key, cached_result, match_time)
-                    log.info(f"已将更新后的缓存重新保存")
+                    log.info(f"缓存结果补写 prediction_saved 标记: {home} vs {away}")
             except Exception as e:
                 log.error(f"保存缓存结果的预测记录失败: {e}")
             return cached_result
@@ -7713,23 +7863,35 @@ def analyze_match(match, force_refresh=False):
         team = None
         log.warning('比赛 %s 使用澳客独立降级模型', mid)
     else:
+        # 五组抓取彼此独立，并发发起把单场耗时从「往返之和」降到「最慢的一次」；
+        # 对源站的实际压力由 fetch() 的发号器统一控速，重复 URL 也只会打一次。
+        pool = ThreadPoolExecutor(max_workers=5, thread_name_prefix='FootballOdds')
         try:
-            yazhi_raw = fetch_yazhi(mid)
+            yazhi_task = pool.submit(fetch_yazhi, mid)
+            euro_task = pool.submit(fetch_ouzhi, mid)
+            daxiao_task = pool.submit(fetch_daxiao, mid)
+            team_task = pool.submit(fetch_team_strength, mid, home, away, league_profile)
+            single_odds_task = pool.submit(fetch_single_company_odds, mid)
+        finally:
+            pool.shutdown(wait=False)
+        # 解析顺序与串行版一致，保证失败时抛出的仍是最先失败那一环的错误
+        try:
+            yazhi_raw = yazhi_task.result()
             asian = analyze_asian(yazhi_raw)
             log.debug(f"亚盘数据获取成功: keys={list(asian.keys())}")
         except Exception as e:
             raise ValueError(f"亚盘数据获取失败: {e}")
         try:
-            euro_raw = fetch_ouzhi(mid)
+            euro_raw = euro_task.result()
             euro = analyze_euro(euro_raw)
         except Exception as e:
             raise ValueError(f"欧赔数据获取/分析失败: {e}")
         try:
-            daxiao_raw = fetch_daxiao(mid)
+            daxiao_raw = daxiao_task.result()
             total = analyze_total(daxiao_raw)
         except Exception as e:
             raise ValueError(f"大小球数据获取失败: {e}")
-        team = fetch_team_strength(mid, home, away, league_profile)
+        team = team_task.result()
     if team:
         team['league_profile'] = league_profile
     
@@ -7737,7 +7899,7 @@ def analyze_match(match, force_refresh=False):
     single_odds = None
     if not okooo_only:
         try:
-            single_odds = fetch_single_company_odds(mid)
+            single_odds = single_odds_task.result()
             log.info(f"独赔数据抓取结果: Bet365={'有' if single_odds.get('bet365') else '无'}, Pinnacle={'有' if single_odds.get('pinnacle') else '无'}")
         except Exception as e:
             log.warning(f"抓取独赔数据失败: {e}")

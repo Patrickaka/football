@@ -1932,56 +1932,97 @@ function setFootballSort(sort) {
   loadAllPredictions();
 }
 
+// 单场分析要打好几个源站页面，串行时 50+ 场会把首屏拖到分钟级。
+// 这里用固定并发的工作池把整轮压缩成「最慢的一批」，服务端的抓取信号量
+// 兜住上游并发，不会因为前端并行把源站打爆。
+const FOOTBALL_ANALYSIS_CONCURRENCY = 6;
+// 每完成一场就整表重绘会造成 50+ 次全量 DOM 重建，按间隔合并重绘。
+const FOOTBALL_RENDER_INTERVAL_MS = 400;
+
+function buildPredictQuery(m) {
+  return new URLSearchParams({
+    match_id: m.match_id, home: m.home, away: m.away,
+    league: m.league || '', time: m.time || '', num: m.num || '',
+    lottery_handicap: m.lottery_handicap ?? '',
+    lottery_primary_market: m.lottery_primary_market || '',
+    lottery_source: m.lottery_source || 'unavailable',
+    lottery_offer_matched: String(Boolean(m.lottery_offer_matched)),
+    lottery_unavailable_reason: m.lottery_unavailable_reason || '',
+    lottery_available_markets: (m.lottery_available_markets || []).join(','),
+    lottery_spf_available: String(Boolean(m.lottery_spf_available)),
+    lottery_rqspf_available: String(Boolean(m.lottery_rqspf_available)),
+    lottery_spf_odds: m.lottery_spf_odds ? JSON.stringify(m.lottery_spf_odds) : '',
+    lottery_rqspf_odds: m.lottery_rqspf_odds ? JSON.stringify(m.lottery_rqspf_odds) : '',
+    okooo_id: m.okooo_id || '',
+    schedule_source: m.schedule_source || '',
+    analysis_source_id_available: String(m.analysis_source_id_available !== false)
+  });
+}
+
 async function loadAllPredictions() {
   loading('正在分析比赛数据…');
   allPredictions = [];
   footballAnalysisFailures = [];
-  try {
-    const results = [];
-    for (let i = 0; i < allMatches.length; i++) {
-      const m = allMatches[i];
-      footballAnalysisProgress = {
-        active: true,
-        completed: i,
-        total: allMatches.length,
-        current: `${m.home} vs ${m.away}`,
-      };
-      if (results.length) renderFootballPredictions([...results]);
-      else loading(`正在分析 ${m.home} vs ${m.away} (${i + 1}/${allMatches.length})…`);
-      const q = new URLSearchParams({
-        match_id: m.match_id, home: m.home, away: m.away,
-        league: m.league || '', time: m.time || '', num: m.num || '',
-        lottery_handicap: m.lottery_handicap ?? '',
-        lottery_primary_market: m.lottery_primary_market || '',
-        lottery_source: m.lottery_source || 'unavailable',
-        lottery_offer_matched: String(Boolean(m.lottery_offer_matched)),
-        lottery_unavailable_reason: m.lottery_unavailable_reason || '',
-        lottery_available_markets: (m.lottery_available_markets || []).join(','),
-        lottery_spf_available: String(Boolean(m.lottery_spf_available)),
-        lottery_rqspf_available: String(Boolean(m.lottery_rqspf_available)),
-        lottery_spf_odds: m.lottery_spf_odds ? JSON.stringify(m.lottery_spf_odds) : '',
-        lottery_rqspf_odds: m.lottery_rqspf_odds ? JSON.stringify(m.lottery_rqspf_odds) : '',
-        okooo_id: m.okooo_id || '',
-        schedule_source: m.schedule_source || '',
-        analysis_source_id_available: String(m.analysis_source_id_available !== false)
-      });
+  const total = allMatches.length;
+  if (!total) {
+    footballAnalysisProgress = null;
+    return renderFootballPredictions([]);
+  }
+
+  // 按赛程下标占位，保证并发完成顺序不打乱列表顺序
+  const slots = new Array(total).fill(null);
+  const doneResults = () => slots.filter(Boolean);
+  let completed = 0;
+  let cursor = 0;
+  let renderTimer = null;
+  let painted = false;
+
+  const paint = () => {
+    renderTimer = null;
+    footballAnalysisProgress = completed < total
+      ? { active: true, completed, total }
+      : null;
+    const results = doneResults();
+    if (!results.length && !painted) {
+      loading(`正在分析比赛数据（${completed}/${total}）…`);
+      return;
+    }
+    painted = true;
+    renderFootballPredictions(results);
+  };
+
+  const schedulePaint = () => {
+    if (renderTimer === null) renderTimer = setTimeout(paint, FOOTBALL_RENDER_INTERVAL_MS);
+  };
+
+  const worker = async () => {
+    while (cursor < total) {
+      const index = cursor++;
+      const m = allMatches[index];
       try {
-        const data = await fetchJsonWithTimeout('/api/predict?' + q, 30000);
-        if (!data.error && data.result) {
-          results.push({ match: m, result: data.result });
-        } else {
-          footballAnalysisFailures.push({ match: m, reason: data.error || '未返回预测结果' });
-        }
+        const data = await fetchJsonWithTimeout('/api/predict?' + buildPredictQuery(m), 30000);
+        if (!data.error && data.result) slots[index] = { match: m, result: data.result };
+        else footballAnalysisFailures.push({ match: m, reason: data.error || '未返回预测结果' });
       } catch (e) {
         footballAnalysisFailures.push({ match: m, reason: e.message || '分析失败' });
         console.warn(`预测 ${m.home} vs ${m.away} 失败:`, e);
       }
-      footballAnalysisProgress.completed = i + 1;
-      renderFootballPredictions([...results]);
+      completed++;
+      schedulePaint();
+    }
+  };
+
+  try {
+    const workers = Math.min(FOOTBALL_ANALYSIS_CONCURRENCY, total);
+    await Promise.all(Array.from({ length: workers }, worker));
+    if (renderTimer !== null) {
+      clearTimeout(renderTimer);
+      renderTimer = null;
     }
     footballAnalysisProgress = null;
-    renderFootballPredictions(results);
+    renderFootballPredictions(doneResults());
   } catch (e) {
+    if (renderTimer !== null) clearTimeout(renderTimer);
     footballAnalysisProgress = null;
     showError('预测分析失败：' + e.message);
   }
@@ -2311,7 +2352,7 @@ function renderFootballPredictions(results) {
   if (footballAnalysisProgress?.active) {
     const progress = footballAnalysisProgress;
     html += `<div class="status" style="padding:8px 0 12px;font-size:12px;color:#3b82f6">
-      <span class="spinner"></span>正在继续分析 ${esc(progress.current || '')}（${progress.completed}/${progress.total}）；已完成结果先行展示。
+      <span class="spinner"></span>正在并发分析剩余比赛（${progress.completed}/${progress.total}）；已完成结果先行展示。
     </div>`;
   }
   if (footballAnalysisFailures.length) {
