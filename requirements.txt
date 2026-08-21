@@ -1,5 +1,4 @@
 # 运行时第三方依赖（其余均为 Python 标准库或 src 自有模块）
-flask>=3.0.0  # app.py Web 界面
 PyMySQL>=1.1.0  # MySQL 持久化（数据存储）
 requests>=2.31.0  # src/beidan 抓取数据
 # 生产曾执行“移除未使用包”，不能再依赖 requests 的隐式传递依赖。
