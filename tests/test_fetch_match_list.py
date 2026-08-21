@@ -15,6 +15,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import src.football as football
+from unittest.mock import patch
 
 FIXTURE = Path(__file__).parent / 'fixtures' / 'index_jczq.html'
 
@@ -28,8 +29,9 @@ EXPECTED = [
 
 
 def _load(monkeypatched_html):
-    football.fetch = lambda *a, **k: monkeypatched_html
-    return football.fetch_match_list()
+    # 用 patch 而非直接赋值：直接赋值会把替身永久留在模块上，污染后续用例
+    with patch.object(football, 'fetch', lambda *a, **k: monkeypatched_html):
+        return football.fetch_match_list()
 
 
 def test_all_matches_parsed_with_correct_ids():

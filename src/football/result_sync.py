@@ -56,7 +56,7 @@ import hashlib
 import logging
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
-from threading import Thread
+from threading import Thread, RLock
 
 from ..common import repositories
 
@@ -521,7 +521,11 @@ def _append_market_timeline(
 
 class PredictionHistory:
     """预测历史记录管理器"""
-    
+
+    # 多场比赛并发分析时 add_prediction 会同时读写 records 并做单条 UPSERT，
+    # 用类级可重入锁把「查重—更新—落库」串起来（实例可能绕过 __init__ 构造）。
+    _records_lock = RLock()
+
     def __init__(self):
         self.records: List[Dict] = []
         self._load()
@@ -560,7 +564,12 @@ class PredictionHistory:
             log.error(f"保存预测记录失败: {e}")
             return 'failed'
     
-    def add_prediction(self, match_id: str, league: str, home: str, away: str,
+    def add_prediction(self, *args, **kwargs):
+        """添加预测记录（并发安全入口）"""
+        with self._records_lock:
+            return self._add_prediction(*args, **kwargs)
+
+    def _add_prediction(self, match_id: str, league: str, home: str, away: str,
                        match_time: str, predicted_scores: Dict[str, float],
                        predicted_1x2: Dict[str, float], asian: float = None,
                        total_line: float = None, odds_data: Dict = None,

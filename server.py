@@ -202,6 +202,51 @@ _ANALYZE_SYNC_INTERVAL = 60  # 秒（比报告同步更保守）
 _ANALYZE_BATCH_MAX = 15
 
 
+def _match_started(match):
+    """判断比赛是否已开赛（时间缺失时保守判为未开赛）。"""
+    raw = match.get('time', '') or ''
+    parsed = re.match(r'(\d{2})-(\d{2})\s+(\d{2}):(\d{2})', raw)
+    if not parsed:
+        return False
+    month, day, hour, minute = (int(x) for x in parsed.groups())
+    now = datetime.now()
+    try:
+        kickoff = datetime(now.year, month, day, hour, minute)
+    except ValueError:
+        return False
+    # 跨年修正：若按今年解析明显在过去很久，视为明年（如 12 月看 1 月场）
+    if kickoff < now - timedelta(days=180):
+        try:
+            kickoff = datetime(now.year + 1, month, day, hour, minute)
+        except ValueError:
+            return False
+    return kickoff <= now
+
+
+# 分析缓存按自然天分桶，每天第一次打开页面都会撞上全量冷分析：50+ 场逐场抓
+# 源站页面、还要受源站限流，冷跑接近一分钟。与 3D 同思路，放后台提前跑完，
+# 前台就只剩缓存命中。
+FOOTBALL_WARM_INTERVAL = int(os.getenv('FOOTBALL_WARM_INTERVAL', '1800'))
+
+
+def _warm_football_caches():
+    """后台预热当天未开赛场次的分析缓存，让用户不必承担冷分析。"""
+    while True:
+        try:
+            matches = [m for m in fetch_match_list() if not _match_started(m)]
+            warmed = failed = 0
+            for match in matches:
+                try:
+                    analyze_match(match)
+                    warmed += 1
+                except Exception:
+                    failed += 1
+            log.info('足球缓存预热完成: 成功=%d, 失败=%d, 共%d场', warmed, failed, len(matches))
+        except Exception:
+            log.warning('足球缓存预热失败', exc_info=True)
+        time.sleep(FOOTBALL_WARM_INTERVAL)
+
+
 def _trigger_football_analysis(matches):
     """对名单内「没有分析缓存 pkl」的比赛，后台补跑 analyze_match，使其可生成深度报告。
 
@@ -1261,26 +1306,7 @@ class Handler(BaseHTTPRequestHandler):
 
             # 过滤掉「已开赛」的比赛：列表只保留未开赛场次，减少前端渲染量、
             # 也避免对已经无法进行投注分析的比赛做无谓展示（提速）。
-            def _started(m):
-                t = m.get('time', '') or ''
-                mm = re.match(r'(\d{2})-(\d{2})\s+(\d{2}):(\d{2})', t)
-                if not mm:
-                    return False  # 时间缺失无法判断，保守保留
-                mo, da, hh, mi = (int(x) for x in mm.groups())
-                now = datetime.now()
-                try:
-                    dt = datetime(now.year, mo, da, hh, mi)
-                except ValueError:
-                    return False
-                # 跨年修正：若按今年解析明显在过去很久，视为明年（如 12 月看 1 月场）
-                if dt < now - timedelta(days=180):
-                    try:
-                        dt = datetime(now.year + 1, mo, da, hh, mi)
-                    except ValueError:
-                        return False
-                return dt <= now
-
-            matches = [m for m in matches if not _started(m)]
+            matches = [m for m in matches if not _match_started(m)]
             # 后台预生成深度报告：对未开赛且有缓存的比赛，无报告则生成、变盘则重生成
             try:
                 reportable = football_reportable_ids()
@@ -1366,7 +1392,9 @@ class Handler(BaseHTTPRequestHandler):
         """清除足球模块缓存"""
         try:
             from src.football.cache_manager import clear_all_cache
+            from src.football import clear_fetch_cache
             result = clear_all_cache()
+            clear_fetch_cache()
             return result
         except Exception as e:
             self._log.error('清除足球缓存失败', exc_info=True)
@@ -3051,6 +3079,10 @@ def _start_background_sync():
     # 3D 缓存预热：启动后台线程提前算好规则 + ML 结果，用户永不承担冷计算
     threading.Thread(target=_warm_3d_caches, daemon=True, name='Warm3DThread').start()
     log.info('3D 缓存预热线程已启动')
+
+    # 足球缓存预热：同理，把每日首次打开的全量冷分析挪到后台
+    threading.Thread(target=_warm_football_caches, daemon=True, name='WarmFootballThread').start()
+    log.info('足球缓存预热线程已启动')
 
     # 定时维护：兜底清理过期 binlog 与旧滚动日志，防止磁盘被写满（无需人工）
     try:

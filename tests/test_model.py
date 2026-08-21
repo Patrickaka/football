@@ -116,8 +116,9 @@ def test_parse_team_strength_from_html():
         )
 
     snippet = block('丹麦', 28, 9) + block('民主刚果', 12, 4)
-    football.fetch = lambda *a, **k: snippet
-    st = football.fetch_team_strength('x', '丹麦', '民主刚果')
+    # 用 patch 而非直接赋值：直接赋值会把替身永久留在模块上，污染后续用例
+    with patch.object(football, 'fetch', lambda *a, **k: snippet):
+        st = football.fetch_team_strength('x', '丹麦', '民主刚果')
     assert st is not None
     assert st['attack_home'] > st['attack_away']
 
