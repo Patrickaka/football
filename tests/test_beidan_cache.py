@@ -100,6 +100,26 @@ class BeidanSingleFlightTests(unittest.TestCase):
                 time.sleep(0.1)
         self.assertNotIn('k', beidan_cache._refreshing, '刷新结束后必须释放闸门')
 
+    def test_error_result_is_not_written_to_cache(self):
+        """冷启动现在完全依赖后台计算，它把错误结果写进缓存的话，
+        坏数据会一直顶在那儿直到下一轮刷新。"""
+        with patch.object(beidan_cache, 'write_beidan_cache') as writer:
+            beidan_cache.refresh_beidan_async('err', lambda: {'error': '未获取到比赛数据'})
+            for _ in range(50):
+                if 'err' not in beidan_cache._refreshing:
+                    break
+                time.sleep(0.1)
+        writer.assert_not_called()
+
+    def test_successful_refresh_writes_cache(self):
+        with patch.object(beidan_cache, 'write_beidan_cache') as writer:
+            beidan_cache.refresh_beidan_async('ok', lambda: {'recommendations': [{'match_id': '1'}]})
+            for _ in range(50):
+                if 'ok' not in beidan_cache._refreshing:
+                    break
+                time.sleep(0.1)
+        writer.assert_called_once()
+
     def test_gate_is_released_even_when_refresh_raises(self):
         with patch.object(beidan_cache, 'write_beidan_cache'):
             beidan_cache.refresh_beidan_async('boom', lambda: (_ for _ in ()).throw(RuntimeError('x')))
@@ -127,7 +147,6 @@ class BeidanPayloadNeverBlocksTests(unittest.TestCase):
             return {'recommendations': [], 'source': source}
 
         with patch.object(beidan_api, 'read_beidan_cache', return_value=(cached, fresh)), \
-             patch.object(beidan_api, 'write_beidan_cache'), \
              patch.object(beidan_api, 'refresh_beidan_async', return_value=True) as bg, \
              patch.object(beidan_api, 'finalize_beidan_recs') as finalize, \
              patch.object(beidan_api, '_load_beidan_helpers',
@@ -167,7 +186,6 @@ class BeidanPayloadNeverBlocksTests(unittest.TestCase):
         params['force_refresh'] = ['true']
         with patch.object(beidan_api, 'read_beidan_cache',
                           return_value=({'recommendations': [], 'tag': 'old'}, True)), \
-             patch.object(beidan_api, 'write_beidan_cache'), \
              patch.object(beidan_api, 'refresh_beidan_async', return_value=False), \
              patch.object(beidan_api, 'finalize_beidan_recs'), \
              patch.object(beidan_api, '_load_beidan_helpers',
@@ -186,29 +204,39 @@ class BeidanPayloadNeverBlocksTests(unittest.TestCase):
         self._run(cached={'recommendations': [{'match_id': '1'}]}, fresh=False)
         self.finalize.assert_not_called()
 
-    def test_cold_compute_does_run_side_effects_once(self):
-        """新算出来的数据仍要落盘并附报告 URL，否则缓存里的 rec 没有报告入口"""
+    def test_cold_start_defers_side_effects_to_the_background(self):
+        """冷启动的落盘/报告生成也应发生在后台计算里，不在请求线程"""
         self._run(cached=None, fresh=False)
-        self.finalize.assert_called_once()
+        self.finalize.assert_not_called()
 
-    def test_cold_start_computes_synchronously(self):
-        """从来没算过时别无选择，只能同步算这一次"""
+    def test_cold_start_does_not_block_either(self):
+        """没有任何缓存时也不能同步硬算：整页重算一两分钟，一样会撞网关超时。
+        改为转后台算并立刻回 computing，由前端轮询。"""
         payload, sync_calls, bg = self._run(cached=None, fresh=False)
-        self.assertEqual(sync_calls, ['okooo'])
-        bg.assert_not_called()
+        self.assertEqual(sync_calls, [], '冷启动不得在请求线程里同步重算')
+        bg.assert_called_once()
+        self.assertTrue(payload['result']['computing'])
+        self.assertTrue(payload['result']['refreshing'])
+        self.assertEqual(payload['result']['recommendations'], [])
 
-    def test_error_on_cold_start_is_not_cached(self):
-        def failing(date=None, bet_types=None, source=None):
-            return {'error': '未获取到比赛数据'}
+    def test_cold_start_response_carries_query_context(self):
+        """计算中的占位结果也要带上 date/source，前端才能正确显示上下文"""
+        payload, _, _ = self._run(cached=None, fresh=False)
+        self.assertEqual(payload['result']['source'], 'okooo')
+        self.assertIn('date', payload['result'])
 
-        with patch.object(beidan_api, 'read_beidan_cache', return_value=(None, False)), \
-             patch.object(beidan_api, 'write_beidan_cache') as writer, \
-             patch.object(beidan_api, '_load_beidan_helpers',
-                          return_value=(failing, None, None)):
-            payload = self.handler._beidan_payload(dict(self.params))
-
-        self.assertIn('error', payload)
-        writer.assert_not_called()
+    def test_no_request_path_ever_computes_synchronously(self):
+        """把三条路径一起锁死：无论有无缓存、是否强制刷新，
+        请求线程都不许跑重算——这正是先前 504 的成因。"""
+        for cached, fresh, force in (
+            (None, False, False),
+            ({'recommendations': []}, False, False),
+            ({'recommendations': []}, True, True),
+            ({'recommendations': []}, True, False),
+        ):
+            with self.subTest(cached=bool(cached), fresh=fresh, force=force):
+                _, sync_calls, _ = self._run(cached=cached, fresh=fresh, force_refresh=force)
+                self.assertEqual(sync_calls, [])
 
 
 if __name__ == '__main__':

@@ -26,7 +26,7 @@ log = setup_logger('server')
 from .lazy_modules import _load_beidan_helpers
 from .jobs import finalize_beidan_recs
 from .beidan_cache import (
-    beidan_cache_key, read_beidan_cache, refresh_beidan_async, write_beidan_cache,
+    beidan_cache_key, read_beidan_cache, refresh_beidan_async,
 )
 
 class BeidanApiMixin:
@@ -42,9 +42,11 @@ class BeidanApiMixin:
             self._log.info(f'北单推荐请求: date={date}, source={source}, types={bet_types}')
 
             cache_key = beidan_cache_key(date, source, bet_types)
-            generate_beidan_recommendations, _, _ = _load_beidan_helpers()
 
             def _compute():
+                # 惰性导入放在这里而不是请求线程：北单模块会连带拉起 numpy/sklearn，
+                # 首次导入要好几秒，没必要让打开页面的人替它买单。
+                generate_beidan_recommendations, _, _ = _load_beidan_helpers()
                 computed = generate_beidan_recommendations(
                     date=date, bet_types=bet_types, source=source)
                 if 'error' not in computed:
@@ -55,24 +57,31 @@ class BeidanApiMixin:
 
             cached, fresh = read_beidan_cache(cache_key)
             if cached is None:
-                # 从来没算过，只能同步算这一次；之后都走缓存 + 后台刷新
-                result = _compute()
-                if 'error' not in result:
-                    write_beidan_cache(cache_key, result)
+                # 从来没算过。整页重算线上要一两分钟，同步算一样会超过网关超时，
+                # 所以照样丢后台，先回一个「计算中」，由前端轮询取结果。
+                # 触发窗口：服务重启到预热跑起来之间，以及每天零点缓存键翻天之后。
+                refresh_beidan_async(cache_key, _compute)
+                self._log.info('北单无缓存，转后台首次计算: %s', cache_key)
+                return {'result': {
+                    'computing': True,
+                    'refreshing': True,
+                    'date': date or '',
+                    'source': source,
+                    'recommendations': [],
+                }}
+
+            # 有缓存就立刻返回，过期与否只决定要不要在后台补一轮刷新。
+            result = cached
+            if force_refresh or not fresh:
+                started = refresh_beidan_async(cache_key, _compute)
+                # 无论本次是否真的起了新线程，都有一轮刷新在跑（未起说明已有同键在刷），
+                # 都要告诉前端「正在刷新」，否则它不会回来取更新后的数据。
+                result = dict(result)
+                result['refreshing'] = True
+                self._log.info('北单返回缓存并%s后台刷新: %s',
+                               '触发' if started else '复用进行中的', cache_key)
             else:
-                # 有缓存就立刻返回。整页重算在线上要 160 秒，远超网关超时，
-                # 让用户等于必然 504，所以过期只触发后台刷新、不阻塞这次请求。
-                result = cached
-                if force_refresh or not fresh:
-                    started = refresh_beidan_async(cache_key, _compute)
-                    # 无论本次是否真的起了新线程，都有一轮刷新在跑（未起说明已有同键在刷），
-                    # 都要告诉前端「正在刷新」，否则它不会回来取更新后的数据。
-                    result = dict(result)
-                    result['refreshing'] = True
-                    self._log.info('北单返回缓存并%s后台刷新: %s',
-                                   '触发' if started else '复用进行中的', cache_key)
-                else:
-                    self._log.info('北单推荐命中缓存: %s', cache_key)
+                self._log.info('北单推荐命中缓存: %s', cache_key)
 
             if 'error' in result:
                 return result

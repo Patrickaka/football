@@ -3039,6 +3039,13 @@ async function loadBeidan(forceRefresh = false) {
       appBeidan.innerHTML = `<div class="status error">✗ ${esc(data.error)}${attempts ? `<div style="margin-top:6px;font-size:12px;color:var(--muted)">已尝试：${attempts}</div>` : ''}</div>`;
       return;
     }
+    // 完全没有缓存时（重启后预热还没跑、或零点刚翻天），服务端不会同步硬算——
+    // 那要一两分钟、必然网关超时——而是转后台算并回一个 computing 标记。
+    if (data.result && data.result.computing) {
+      appBeidan.innerHTML = '<div class="status">首次计算中，通常需要 1~3 分钟，完成后会自动显示…</div>';
+      scheduleBeidanRefreshPoll(true);
+      return;
+    }
     renderBeidan(data.result);
     // 服务端整页重算要两三分钟，久过网关超时，所以它只会先把缓存返回、
     // 把重算放后台。这里轮询取回刷新后的结果，否则用户点了刷新看不到变化。
