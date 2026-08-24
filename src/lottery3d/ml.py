@@ -85,6 +85,12 @@ if hasattr(sys.stdout, "reconfigure"):
     except Exception:
         pass
 
+log.info("3D-ML 后端可用性: catboost=%s xgboost=%s lightgbm=%s sklearn=%s",
+         HAS_CATBOOST, HAS_XGBOOST, HAS_LIGHTGBM, HAS_SKLEARN)
+
+# 在整个进程生命周期内，对「ML 后端不可用→降级」只告警一次，避免每次预测都刷屏。
+_ML_FALLBACK_WARNED = False
+
 URL = "https://www.8300.cn/kjhhis/3/2000.html"  # 与规则模型统一拉取约 2000 期历史
 
 # 模型参数（v7优化版：更深模型、更大窗口、更丰富特征）
@@ -1129,7 +1135,13 @@ def train_ensemble(X, y, models_to_try=None, sample_weight=None, group_ids=None)
             log.info(f"全量重训 {used_name} 完成，融合权重依据验证得分: {score:.4f}")
 
     if not trained_models:
-        log.warning("所有 ML 模型训练失败，使用纯 Python 随机森林")
+        if not _ML_FALLBACK_WARNED:
+            log.warning(
+                "ML 集成后端不可用（catboost=%s xgboost=%s lightgbm=%s sklearn=%s），"
+                "已降级为纯 Python 随机森林；若期望启用 ML 集成，请用已安装这些库的虚拟环境运行服务。",
+                HAS_CATBOOST, HAS_XGBOOST, HAS_LIGHTGBM, HAS_SKLEARN,
+            )
+            _ML_FALLBACK_WARNED = True
         model = SimpleRandomForest(n_trees=30, max_depth=4, min_samples_split=15)
         model.fit(X_full, y)
         trained_models.append((model, "random_forest", 0.5))

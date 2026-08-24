@@ -8,10 +8,15 @@ MySQL 不可用时自动降级到本地 JSON 文件（kv_store_fallback.json）�
 """
 import json
 import os
+import threading
+import time
 from datetime import datetime
 
 from . import db
+from .logger import setup_logger
 from .paths import data_path
+
+log = setup_logger('kv_store')
 
 _UPSERT = (
     "INSERT INTO kv_store (k, json_value, cache_date, updated_at) "
@@ -23,6 +28,8 @@ _UPSERT = (
 _FALLBACK_FILE = None
 _FALLBACK_CACHE = None
 _FALLBACK_CACHE_SIG = None
+# 串行化所有 fallback 写操作：所有 key 共用同一个 JSON 文件，并发写会互相覆盖/竞争 .tmp。
+_FALLBACK_WRITE_LOCK = threading.Lock()
 
 
 def _fallback_path():
@@ -57,17 +64,73 @@ def _fallback_load_all():
         return {}
 
 
+def _atomic_replace(path, data_obj):
+    """Windows / 线程安全的原子 JSON 写入，带重试与兜底直接写。
+
+    旧实现直接 ``os.replace(tmp, path)``。在 Windows 上，当目标文件被其它
+    进程短暂锁定时（例如：未退出的旧 server 进程仍持有句柄、或杀毒软件实时
+    扫描），``os.replace`` 会抛 ``PermissionError``（WinError 5，拒绝访问），
+    导致写入丢失。对于依赖持久化的功能（如 3D 每日推荐轮换历史
+    ``save_recent_3d_recommendations`` / ``save_recent_zu6_four``）而言，写入
+    丢失意味着去重历史无法落盘，表现为「每日推荐重复」与「旧进程 PID 异常」。
+
+    策略：
+      1. 序列化到 ``.tmp`` 临时文件后，用短重试/退避尝试 ``os.replace``
+         （覆盖杀毒软件/锁的瞬时窗口）。
+      2. 首次遇到权限错误时，先尝试删除被锁的目标文件再重试
+         （删除有时比改名更被允许）。
+      3. 作为最后兜底，直接写目标文件，确保数据绝不静默丢失。
+    """
+    global _FALLBACK_CACHE_SIG
+    tmp = path + '.tmp'
+    text = json.dumps(data_obj, ensure_ascii=False)
+    # 先把内容写到 tmp（重试循环之外），保证即使改名失败也不会在目标文件上
+    # 留下半截内容。
+    with open(tmp, 'w', encoding='utf-8') as f:
+        f.write(text)
+    last_err = None
+    for attempt in range(6):
+        try:
+            os.replace(tmp, path)
+            _FALLBACK_CACHE_SIG = None
+            return
+        except PermissionError as e:
+            last_err = e
+            if attempt == 0:
+                # 目标可能被读者/旧进程锁住：重命名前先尝试删除（删除常比改名更被允许）。
+                try:
+                    os.remove(path)
+                    continue
+                except OSError:
+                    pass
+            time.sleep(0.05 * (attempt + 1))
+        except OSError as e:
+            last_err = e
+            time.sleep(0.05 * (attempt + 1))
+    # 最后兜底：直接写目标文件，避免数据丢失。
+    try:
+        with open(path, 'w', encoding='utf-8') as f:
+            f.write(text)
+        _FALLBACK_CACHE_SIG = None
+    except Exception:
+        log.error("kv_store fallback 直接写入失败: %s", last_err)
+    finally:
+        try:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+        except OSError:
+            pass
+
+
 def _fallback_save(key, value, cache_date=None):
     """写入单条到 fallback 文件"""
-    global _FALLBACK_CACHE_SIG
-    data = dict(_fallback_load_all())
-    data[key] = {'json_value': json.dumps(value, ensure_ascii=False), 'cache_date': cache_date}
-    path = _fallback_path()
-    tmp = path + '.tmp'
-    with open(tmp, 'w', encoding='utf-8') as f:
-        json.dump(data, f, ensure_ascii=False)
-    os.replace(tmp, path)
-    _FALLBACK_CACHE_SIG = None  # 失效缓存，下次 load 重新读取
+    global _FALLBACK_CACHE, _FALLBACK_CACHE_SIG
+    with _FALLBACK_WRITE_LOCK:
+        data = dict(_fallback_load_all())
+        data[key] = {'json_value': json.dumps(value, ensure_ascii=False), 'cache_date': cache_date}
+        _atomic_replace(_fallback_path(), data)
+        _FALLBACK_CACHE = data
+        _FALLBACK_CACHE_SIG = None  # 失效缓存，下次 load 重新读取
 
 
 def _fallback_load(key, default=None, check_today=False):
@@ -130,13 +193,12 @@ def delete(key):
     try:
         db.execute("DELETE FROM kv_store WHERE k=%s", (key,))
     except Exception:
-        data = _fallback_load_all()
-        data.pop(key, None)
-        path = _fallback_path()
-        tmp = path + '.tmp'
-        with open(tmp, 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False)
-        os.replace(tmp, path)
+        with _FALLBACK_WRITE_LOCK:
+            data = _fallback_load_all()
+            data.pop(key, None)
+            _atomic_replace(_fallback_path(), data)
+            _FALLBACK_CACHE = data
+            _FALLBACK_CACHE_SIG = None
 
 
 def save_cache(key, data):
