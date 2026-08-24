@@ -1284,7 +1284,7 @@ const TAB_META = {
   },
   lottery3d: {
     title: '🎲 福彩3D预测',
-    desc: '数据来源：8300.cn 近200期 · 形态概率 + 组六五码主推 + 直选Top3/Top15',
+    desc: '数据来源：8300.cn 近200期 · 形态概率 + 组六四码主推 + 直选Top3/Top15',
     disclaimer: '⚠ 3D 开奖具有随机性，以上分析仅为历史统计参考，回测用于观察候选池收缩效果，不构成任何投注建议。',
   },
   lottery: {
@@ -4534,12 +4534,13 @@ function formProbBar(blend) {
 }
 
 function renderLottery3dCompact(r) {
-  const primary = r.zu6_primary || r.zu6_four || {};
+  const primary = r.zu6_four || {};
+  const expand6 = r.zu6_primary || {};
   const evidence = r.zu6_strategy_evidence || {};
   const online = r.online_stats || {};
   const combos = Array.isArray(primary.combos) ? primary.combos : [];
   const validationText = evidence.recent_trials
-    ? `最近${evidence.recent_trials}期逐期验证 · ${evidence.pool_size || primary.size || 6}码完整覆盖 ${pct(evidence.validation_hit_rate || 0)} · 至少中2码 ${pct(evidence.validation_ge2_rate || 0)} · 5码完整覆盖 ${pct(evidence.previous_validation_hit_rate || 0)}`
+    ? `最近${evidence.recent_trials}期逐期验证 · 6码完整覆盖 ${pct(evidence.validation_hit_rate || 0)} · 至少中2码 ${pct(evidence.validation_ge2_rate || 0)} · 5码完整覆盖 ${pct(evidence.previous_validation_hit_rate || 0)}`
     : '等待更多结算样本';
 
   let html = `<div class="highlight lottery3d-compact-primary" style="border-color:var(--accent2);padding:14px">
@@ -4551,13 +4552,16 @@ function renderLottery3dCompact(r) {
       <button id="refresh-3d" class="kl8-refresh-btn">↻ 刷新数据</button>
     </div>
     <div style="margin-top:15px;text-align:center">
-      <div style="font-size:13px;color:var(--muted);margin-bottom:5px">🎯 组六唯一主推 · ${primary.size || 5}码</div>
+      <div style="font-size:13px;color:var(--muted);margin-bottom:5px">🎯 组六主推 · ${primary.size || 4}码</div>
       <div class="big" style="font-size:30px;letter-spacing:8px;color:#f85149">${esc(primary.digits_str || '')}</div>
-      <div class="sub">覆盖 ${primary.notes || combos.length} 注 · ${primary.cost || '-'} 元 · 理论单期命中 ${pct(primary.hit_rate || 0.06)}</div>
+      <div class="sub">覆盖 ${primary.notes || combos.length} 注 · ${primary.cost || '-'} 元 · 理论单期命中 ${pct(primary.hit_rate || 0.024)}</div>
     </div>
     <div class="tags" style="justify-content:center;margin-top:10px">${combos.map(c => `<span class="tag">${esc(c)}</span>`).join('')}</div>
+    ${expand6.digits_str ? `<div class="note" style="margin-top:12px;border-left:3px solid var(--accent2);padding-left:9px">
+      进阶扩展：${esc(expand6.size || 6)}码 <b style="letter-spacing:3px">${esc(expand6.digits_str)}</b> · 覆盖 ${expand6.notes || ''} 注 · ${expand6.cost || ''} 元 · 组六期约 ${pct(expand6.conditional_hit_rate || 0.167)}
+    </div>` : ''}
     <div class="note" style="margin-top:12px;border-left:3px solid #06b6d4;padding-left:9px">
-      样本外验证：${esc(validationText)}。6码把组六条件下的理论完整覆盖由5码的8.33%提高到16.67%，代价是由10注增至20注；这是扩大覆盖，不是模型变得能预测随机开奖。
+      样本外验证：${esc(validationText)}。4码主推（8元）成本最低；如需提高覆盖可扩展至 5/6 码。这是扩大覆盖，不是模型变得能预测随机开奖。
     </div>
   </div>`;
 
@@ -4611,12 +4615,11 @@ function renderLottery3d(r) {
       <span>豹子 ${pct(f.blend.baozi)}</span>
     </div>
     <div class="note" style="margin:8px 0;border-left:3px solid var(--accent2);padding-left:8px">
-      <b>v4.11 快速覆盖</b>：普通刷新改为增量单次抓取并复用ML/权重缓存；组六主推改为六码，提高三个开奖号同时落入号码池的覆盖率。公平摇奖无法保证模型选号优于随机，提升来自增加覆盖注数。
+      <b>v4.11 快速覆盖</b>：普通刷新改为增量单次抓取并复用ML/权重缓存；组六主推改为四码，降低成本。公平摇奖无法保证模型选号优于随机，扩大码数只能提高覆盖不能改变等概率。
     </div>
-    <div class="row"><span class="k">组六主推${z6Primary.size || 5}码</span><span class="v" style="letter-spacing:3px;font-size:20px;font-weight:700;color:var(--accent2)">${esc(z6Primary.digits_str)}</span></div>
-    <div class="row"><span class="k">覆盖组六</span><span class="v">${esc((z6Primary.combos || []).join(', '))} · ${z6Primary.notes || ''}注 · 组六期理论约 ${pct(z6Primary.conditional_hit_rate || 0.083)}</span></div>
-    ${z6Coverage.find(t => t.size === 6) ? `<div class="row"><span class="k">增强六码</span><span class="v" style="letter-spacing:2px;font-weight:700;color:var(--accent2)">${esc(z6Coverage.find(t => t.size === 6).digits_str)}（${z6Coverage.find(t => t.size === 6).notes}注 · 组六期约 ${pct(z6Coverage.find(t => t.size === 6).conditional_hit_rate || 0.167)}）</span></div>` : ''}
-    <div class="row"><span class="k">预算四码</span><span class="v" style="letter-spacing:3px;opacity:.75">${esc(z6.digits_str)} <span class="muted">备选 · 组六期约 ${pct(z6.conditional_hit_rate || 0.033)}</span></span></div>
+    <div class="row"><span class="k">组六主推 · 四码</span><span class="v" style="letter-spacing:3px;font-size:20px;font-weight:700;color:var(--accent2)">${esc(z6.digits_str)}</span></div>
+    <div class="row"><span class="k">覆盖组六</span><span class="v">${esc((z6.combos || []).join(', '))} · ${z6.notes || 4}注 · 组六期理论约 ${pct(z6.conditional_hit_rate || 0.033)}</span></div>
+    ${z6Primary.digits_str ? `<div class="row"><span class="k">进阶扩展 · 六码</span><span class="v" style="letter-spacing:2px;font-weight:700;color:var(--accent2)">${esc(z6Primary.digits_str)}（${z6Primary.notes || ''}注 · 组六期约 ${pct(z6Primary.conditional_hit_rate || 0.167)}）</span></div>` : ''}
     ${r.window_weights ? `<div class="row"><span class="k">热号窗口权重</span><span class="v">${
       Object.entries(r.window_weights).map(([k,v]) => k + '期 ' + pct(parseFloat(v))).join(' · ')
     } <span class="muted">（是加权占比，不是命中率）</span></span></div>` : ''}
@@ -4801,20 +4804,22 @@ function renderLottery3d(r) {
     <div class="note" style="margin:6px 0 0">v5.0 切合实开：选码经分布校准+上期降权，含上期码比例贴合随机（不再绑上期）；公平摇奖无法保证更高命中率。</div>
   </div>`;
 
-  // ── 组六主推（默认五码）──
-  html += `<div class="section-title">【组六主推 ${z6Primary.size || 5} 码】（推荐打法 · 组六期理论约 ${pct(z6Primary.conditional_hit_rate || 0.083)}）</div>`;
-  html += `<div class="highlight">
-    <div class="big" style="color:#f85149">${esc(z6Primary.digits_str)}</div>
-    <div class="sub">评分：欠号回补 + 过热降权 + Top候选组合共现优化（不再死贴热号 TopN）</div>
-    <div class="sub">覆盖 ${z6Primary.notes || (z6Primary.combos || []).length} 注组六 · 约 ${z6Primary.cost || ''} 元 · 无条件 ${pct(z6Primary.hit_rate || 0)}</div>
-    <div class="tags">${(z6Primary.combos || []).map(c => `<span class="tag">${esc(c)}</span>`).join('')}</div>
-    <div class="note">四码全中理论只有 2.4%/期（组六期约 3.3%），连挂十几二十期很正常。预算够时优先 5/6 码。</div>
-  </div>`;
-
-  html += `<div class="section-title">【预算四码 · 你主玩】（覆盖窄 · 组六期约 ${pct(z6.conditional_hit_rate || 0.033)}）</div>`;
+  // ── 组六主推 · 四码 ──
+  html += `<div class="section-title">【组六主推 · 四码】（推荐打法 · 组六期理论约 ${pct(z6.conditional_hit_rate || 0.033)}）</div>`;
   html += `<div class="highlight" style="border-color:var(--accent2)">
     <div class="big" style="color:var(--accent2)">${esc(z6.digits_str)}</div>
-    <div class="sub">覆盖 4 注 · ${(z6.combos || []).join(', ')} <span class="muted">· 四码全中理论仅 3.3%/期(组六期)，连挂十几二十期正常</span></div>
+    <div class="sub">评分：欠号回补 + 过热降权 + Top候选组合共现优化（不再死贴热号 TopN）</div>
+    <div class="sub">覆盖 ${z6.notes || 4} 注组六 · 约 ${z6.cost || 8} 元 · 无条件 ${pct(z6.hit_rate || 0)}</div>
+    <div class="tags">${(z6.combos || []).map(c => `<span class="tag">${esc(c)}</span>`).join('')}</div>
+    <div class="note">四码全中理论仅约 2.4%/期（组六期约 3.3%），连挂十几二十期很正常。</div>
+  </div>`;
+
+  html += `<div class="section-title">【进阶扩展 · 六码】（提高覆盖 · 组六期理论约 ${pct(z6Primary.conditional_hit_rate || 0.167)}）</div>`;
+  html += `<div class="highlight">
+    <div class="big" style="color:#f85149">${esc(z6Primary.digits_str)}</div>
+    <div class="sub">覆盖 ${z6Primary.notes || (z6Primary.combos || []).length} 注组六 · 约 ${z6Primary.cost || 40} 元 · 无条件 ${pct(z6Primary.hit_rate || 0)}</div>
+    <div class="tags">${(z6Primary.combos || []).map(c => `<span class="tag">${esc(c)}</span>`).join('')}</div>
+    <div class="note">预算够时优先 5/6 码扩大覆盖，但公平摇奖无法保证模型选号优于随机。</div>
   </div>`;
 
   if (z6Variants.length > 1) {
@@ -4833,7 +4838,7 @@ function renderLottery3d(r) {
       <h3>组六覆盖档位</h3>
       <div class="note" style="margin-bottom:10px">真正抬高命中频率的是覆盖码数，不是“更准的四码”。</div>
       ${z6Coverage.map(t => `<div class="row">
-        <span class="k">${t.size}码${t.is_primary ? ' · 主推' : ''}</span>
+        <span class="k">${t.size}码</span>
         <span class="v"><b style="letter-spacing:2px">${esc(t.digits_str)}</b> · ${t.notes}注 · ${t.cost}元 · 组六期${pct(t.conditional_hit_rate || t.hit_rate)}</span>
       </div>`).join('')}
     </div>`;
@@ -4900,8 +4905,8 @@ function renderLottery3d(r) {
       ${bt.significance ? `<div class="row"><span class="k">置换检验 p 值</span><span class="v" style="color:${bt.significance.significant ? 'var(--accent2)' : 'var(--muted)'}">${bt.significance.pvalue.toFixed(3)} · ${bt.significance.significant ? '显著优于随机' : '未显著优于随机（打乱均值 ' + pct(bt.significance.shuffled_mean_rate) + '）'}</span></div>` : ''}
       <div class="row"><span class="k">推荐池至少一注重合2码</span><span class="v">${pct(bt.ge2_digit_rate)}</span></div>
       ${bt.sum_band_rate != null ? `<div class="row"><span class="k">和值落在预测带±4</span><span class="v">${pct(bt.sum_band_rate)}</span></div>` : ''}
-      <div class="row"><span class="k">组六四码命中</span><span class="v">${bt.zu6_draws ? pct(bt.zu6_four_rate) + ' (' + bt.zu6_four_hit + '/' + bt.zu6_draws + '，组六期 · 理论 ' + pct(bt.zu6_four_theory || 0.033) + ')' : '—'}</span></div>
-      <div class="row"><span class="k">主推${bt.zu6_pool_size || 5}码命中</span><span class="v">${bt.zu6_draws ? pct(bt.zu6_pool_rate) + ' (' + bt.zu6_pool_hit + '/' + bt.zu6_draws + ' · 理论 ' + pct(bt.zu6_pool_theory || 0.083) + ')' : '—'}</span></div>
+      <div class="row"><span class="k">主推四码命中</span><span class="v">${bt.zu6_draws ? pct(bt.zu6_four_rate) + ' (' + bt.zu6_four_hit + '/' + bt.zu6_draws + '，组六期 · 理论 ' + pct(bt.zu6_four_theory || 0.033) + ')' : '—'}</span></div>
+      <div class="row"><span class="k">扩展六码命中</span><span class="v">${bt.zu6_draws ? pct(bt.zu6_pool_rate) + ' (' + bt.zu6_pool_hit + '/' + bt.zu6_draws + ' · 理论 ' + pct(bt.zu6_pool_theory || 0.167) + ')' : '—'}</span></div>
       ${bt.zu6_ge2_rate != null ? `<div class="row"><span class="k">四码至少中2个开奖数字</span><span class="v">${bt.zu6_draws ? pct(bt.zu6_ge2_rate) + ' (' + bt.zu6_ge2_hit + '/' + bt.zu6_draws + ')' : '—'}</span></div>` : ''}
       ${bt.zu6_random_four_rate != null ? `<div class="row"><span class="k">随机四码基准（组六期）</span><span class="v">${bt.zu6_draws ? pct(bt.zu6_random_four_rate) : '—'}</span></div>` : ''}
       ${bt.zu6_random_pool_rate != null ? `<div class="row"><span class="k">随机${bt.zu6_pool_size || 5}码基准（组六期）</span><span class="v">${bt.zu6_draws ? pct(bt.zu6_random_pool_rate) : '—'}</span></div>` : ''}
