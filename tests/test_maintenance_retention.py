@@ -3,6 +3,7 @@ import logging
 import tempfile
 import time
 import unittest
+from collections import namedtuple
 from pathlib import Path
 from unittest.mock import patch
 
@@ -11,6 +12,28 @@ from src.common.logger import _SafeRotatingFileHandler
 
 
 class MaintenanceRetentionTests(unittest.TestCase):
+    def test_disk_status_has_warning_and_critical_levels(self):
+        usage = namedtuple('usage', 'total used free')
+        total = 20 * 1024 ** 3
+        with patch.object(maintenance, 'DISK_WARNING_FREE_GB', 5), \
+             patch.object(maintenance, 'DISK_WARNING_FREE_PERCENT', 15), \
+             patch.object(maintenance, 'DISK_MIN_FREE_GB', 2), \
+             patch.object(maintenance, 'DISK_MIN_FREE_PERCENT', 10), \
+             patch.object(maintenance.shutil, 'disk_usage', return_value=usage(
+                 total, total - 4 * 1024 ** 3, 4 * 1024 ** 3,
+             )):
+            warning = maintenance.disk_status()
+        self.assertEqual(warning['pressure_level'], 'warning')
+        self.assertTrue(warning['under_pressure'])
+        self.assertFalse(warning['critical'])
+
+        with patch.object(maintenance.shutil, 'disk_usage', return_value=usage(
+            total, total - 1024 ** 3, 1024 ** 3,
+        )):
+            critical = maintenance.disk_status()
+        self.assertEqual(critical['pressure_level'], 'critical')
+        self.assertTrue(critical['critical'])
+
     def test_only_allowlisted_old_artifacts_are_removed(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -98,6 +121,28 @@ class MaintenanceRetentionTests(unittest.TestCase):
         logs.assert_called_once_with(0)
         artifacts.assert_called_once_with(maintenance.EMERGENCY_ARTIFACT_RETENTION_DAYS)
         self.assertTrue(result['emergency'])
+
+    def test_warning_pressure_uses_staged_retention(self):
+        warning = {
+            'free_gb': 4.0, 'free_percent': 12.0, 'under_pressure': True,
+            'critical': False, 'pressure_level': 'warning',
+            'total_bytes': 100, 'used_bytes': 88, 'free_bytes': 12,
+        }
+        healthy = {**warning, 'free_gb': 20.0, 'free_percent': 20.0,
+                   'under_pressure': False, 'pressure_level': 'healthy'}
+        with patch.object(maintenance, 'disk_status', return_value=healthy), \
+             patch.object(maintenance, 'purge_binlogs', return_value=True) as purge, \
+             patch.object(maintenance, 'cleanup_rotated_logs', return_value=1) as logs, \
+             patch.object(maintenance, 'cleanup_regenerable_artifacts', return_value={
+                 'removed_count': 1, 'bytes_freed': 1024, 'errors': [],
+             }) as artifacts:
+            result = maintenance.run_maintenance(status=warning)
+
+        purge.assert_called_once_with(maintenance.PRESSURE_BINLOG_RETENTION_DAYS)
+        logs.assert_called_once_with(maintenance.PRESSURE_ARTIFACT_RETENTION_DAYS)
+        artifacts.assert_called_once_with(maintenance.PRESSURE_ARTIFACT_RETENTION_DAYS)
+        self.assertFalse(result['emergency'])
+        self.assertEqual(result['pressure_level'], 'warning')
 
     def test_log_handler_has_bounded_backup_count(self):
         with tempfile.TemporaryDirectory() as temp:

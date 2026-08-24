@@ -36,6 +36,16 @@ MAINTENANCE_STARTUP_DELAY_SECONDS = int(os.getenv('MAINTENANCE_STARTUP_DELAY_SEC
 ARTIFACT_RETENTION_DAYS = int(os.getenv('ARTIFACT_RETENTION_DAYS', '3'))
 DISK_MIN_FREE_GB = float(os.getenv('DISK_MIN_FREE_GB', '2'))
 DISK_MIN_FREE_PERCENT = float(os.getenv('DISK_MIN_FREE_PERCENT', '10'))
+DISK_WARNING_FREE_GB = float(os.getenv('DISK_WARNING_FREE_GB', '5'))
+DISK_WARNING_FREE_PERCENT = float(os.getenv('DISK_WARNING_FREE_PERCENT', '15'))
+DISK_CHECK_INTERVAL_SECONDS = max(
+    30, int(os.getenv('DISK_CHECK_INTERVAL_SECONDS', '60')),
+)
+PRESSURE_CLEANUP_COOLDOWN_SECONDS = max(
+    60, int(os.getenv('PRESSURE_CLEANUP_COOLDOWN_SECONDS', '300')),
+)
+PRESSURE_BINLOG_RETENTION_DAYS = int(os.getenv('PRESSURE_BINLOG_RETENTION_DAYS', '2'))
+PRESSURE_ARTIFACT_RETENTION_DAYS = int(os.getenv('PRESSURE_ARTIFACT_RETENTION_DAYS', '1'))
 ACTIVE_LOG_MAX_BYTES = max(
     1024 * 1024,
     int(os.getenv('ACTIVE_LOG_MAX_BYTES', str(20 * 1024 * 1024))),
@@ -71,17 +81,33 @@ def _is_within(path: Path, root: Path) -> bool:
 def disk_status(path: Path = PROJECT_ROOT) -> dict:
     usage = shutil.disk_usage(path)
     free_percent = usage.free / usage.total * 100 if usage.total else 0.0
+    critical = (
+        usage.free < DISK_MIN_FREE_GB * 1024 ** 3
+        or free_percent < DISK_MIN_FREE_PERCENT
+    )
+    warning = critical or (
+        usage.free < DISK_WARNING_FREE_GB * 1024 ** 3
+        or free_percent < DISK_WARNING_FREE_PERCENT
+    )
+    pressure_level = 'critical' if critical else ('warning' if warning else 'healthy')
     return {
         'total_bytes': usage.total,
         'used_bytes': usage.used,
         'free_bytes': usage.free,
         'free_gb': round(usage.free / (1024 ** 3), 3),
         'free_percent': round(free_percent, 2),
-        'under_pressure': (
-            usage.free < DISK_MIN_FREE_GB * 1024 ** 3
-            or free_percent < DISK_MIN_FREE_PERCENT
-        ),
+        'pressure_level': pressure_level,
+        'under_pressure': warning,
+        'critical': critical,
     }
+
+
+def _pressure_level(status: dict) -> str:
+    """兼容旧状态结构；缺少分级时将 under_pressure 视作紧急。"""
+    level = status.get('pressure_level')
+    if level in ('healthy', 'warning', 'critical'):
+        return level
+    return 'critical' if status.get('under_pressure') else 'healthy'
 
 
 def cleanup_regenerable_artifacts(
@@ -200,30 +226,35 @@ def truncate_oversized_active_logs(max_bytes: int = None) -> dict:
     }
 
 
-def run_maintenance(force_emergency: bool = False) -> dict:
+def run_maintenance(force_emergency: bool = False, status: dict = None) -> dict:
     """执行一轮维护清理；磁盘承压时自动采用紧急保留策略。"""
-    before = disk_status()
-    emergency = bool(force_emergency or before['under_pressure'])
-    binlog_retention = (
-        EMERGENCY_BINLOG_RETENTION_DAYS if emergency else BINLOG_RETENTION_DAYS
-    )
-    artifact_retention = (
-        EMERGENCY_ARTIFACT_RETENTION_DAYS if emergency else ARTIFACT_RETENTION_DAYS
-    )
+    before = status or disk_status()
+    level = 'critical' if force_emergency else _pressure_level(before)
+    emergency = level == 'critical'
+    if emergency:
+        binlog_retention = EMERGENCY_BINLOG_RETENTION_DAYS
+        artifact_retention = EMERGENCY_ARTIFACT_RETENTION_DAYS
+        rotated_log_retention = 0
+    elif level == 'warning':
+        binlog_retention = PRESSURE_BINLOG_RETENTION_DAYS
+        artifact_retention = PRESSURE_ARTIFACT_RETENTION_DAYS
+        rotated_log_retention = PRESSURE_ARTIFACT_RETENTION_DAYS
+    else:
+        binlog_retention = BINLOG_RETENTION_DAYS
+        artifact_retention = ARTIFACT_RETENTION_DAYS
+        rotated_log_retention = LOG_RETENTION_DAYS
     log.debug(
-        "开始维护清理: emergency=%s, free_gb=%.3f, free_percent=%.2f",
-        emergency, before['free_gb'], before['free_percent'],
+        "开始维护清理: level=%s, free_gb=%.3f, free_percent=%.2f",
+        level, before['free_gb'], before['free_percent'],
     )
-    result = {'emergency': emergency, 'disk_before': before}
+    result = {'emergency': emergency, 'pressure_level': level, 'disk_before': before}
     try:
         result['binlog_purged'] = purge_binlogs(binlog_retention)
     except Exception as e:
         log.error(f"binlog 清理异常：{e}")
         result['binlog_purged'] = False
     try:
-        result['logs_removed'] = cleanup_rotated_logs(
-            0 if emergency else LOG_RETENTION_DAYS
-        )
+        result['logs_removed'] = cleanup_rotated_logs(rotated_log_retention)
     except Exception as e:
         log.error(f"日志清理异常：{e}")
         result['logs_removed'] = 0
@@ -247,12 +278,12 @@ def run_maintenance(force_emergency: bool = False) -> dict:
         artifact_result.get('bytes_freed', 0)
         + active_log_result.get('bytes_freed', 0)
     )
-    emit = log.warning if emergency else log.debug
+    emit = log.warning if level != 'healthy' else log.debug
     emit(
-        "维护清理完成: emergency=%s, rotated_logs=%s, active_logs=%s, "
+        "维护清理完成: level=%s, rotated_logs=%s, active_logs=%s, "
         "artifacts=%s, freed_mb=%.2f, "
         "free_gb=%.3f→%.3f, binlog_purged=%s, errors=%s",
-        emergency,
+        level,
         result.get('logs_removed', 0),
         active_log_result.get('truncated_count', 0),
         artifact_result.get('removed_count', 0),
@@ -268,7 +299,7 @@ def start_maintenance_scheduler(
     interval_hours: float = None,
     run_immediately: bool = True,
 ) -> threading.Thread:
-    """启动后台维护线程（守护线程，随主进程退出）。"""
+    """启动后台维护线程；每分钟巡检磁盘，定期执行完整维护。"""
     interval_hours = MAINTENANCE_INTERVAL_HOURS if interval_hours is None else interval_hours
     interval_seconds = max(60.0, interval_hours * 3600)
 
@@ -280,16 +311,53 @@ def start_maintenance_scheduler(
                 run_maintenance()
             except Exception as e:
                 log.error(f"首次维护清理异常：{e}")
+        next_regular_run = time.monotonic() + interval_seconds
+        last_pressure_cleanup = float('-inf')
+        last_level = None
         while True:
-            time.sleep(interval_seconds)
+            time.sleep(DISK_CHECK_INTERVAL_SECONDS)
             try:
-                run_maintenance()
+                status = disk_status()
+                level = _pressure_level(status)
+                if level != last_level:
+                    if level == 'healthy' and last_level is not None:
+                        log.info(
+                            "磁盘空间已恢复：free_gb=%.3f, free_percent=%.2f",
+                            status['free_gb'], status['free_percent'],
+                        )
+                    elif level != 'healthy':
+                        log.warning(
+                            "磁盘空间%s：free_gb=%.3f, free_percent=%.2f",
+                            '紧急' if level == 'critical' else '预警',
+                            status['free_gb'], status['free_percent'],
+                        )
+                    last_level = level
+
+                now = time.monotonic()
+                pressure_due = (
+                    level != 'healthy'
+                    and now - last_pressure_cleanup >= PRESSURE_CLEANUP_COOLDOWN_SECONDS
+                )
+                if pressure_due or now >= next_regular_run:
+                    run_maintenance(status=status)
+                    next_regular_run = now + interval_seconds
+                    if level != 'healthy':
+                        last_pressure_cleanup = now
+                else:
+                    # 活动日志可能在两轮完整维护之间暴涨，巡检时单独执行硬上限。
+                    truncate_oversized_active_logs()
             except Exception as e:
                 log.error(f"维护线程异常：{e}")
 
     thread = threading.Thread(target=_loop, daemon=True, name='MaintenanceThread')
     thread.start()
-    log.info(f"维护清理线程已启动：间隔 {interval_hours} 小时，binlog 保留 {BINLOG_RETENTION_DAYS} 天，日志保留 {LOG_RETENTION_DAYS} 天")
+    log.info(
+        "磁盘守护线程已启动：每 %s 秒巡检，完整维护间隔 %s 小时，"
+        "预警线 %.1fGB/%.1f%%，紧急线 %.1fGB/%.1f%%",
+        DISK_CHECK_INTERVAL_SECONDS, interval_hours,
+        DISK_WARNING_FREE_GB, DISK_WARNING_FREE_PERCENT,
+        DISK_MIN_FREE_GB, DISK_MIN_FREE_PERCENT,
+    )
     return thread
 
 
