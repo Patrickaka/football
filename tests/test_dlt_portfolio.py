@@ -12,7 +12,7 @@ class DltPortfolioTests(unittest.TestCase):
         policy = result['portfolio_policy']
         recommendations = result['recommendations']
 
-        self.assertEqual(policy['name'], 'portfolio_cover_v4.4')
+        self.assertEqual(policy['name'], 'portfolio_cover_v4.6')
         self.assertEqual(len(policy['front_anchors']), 2)
         self.assertEqual(len(policy['back_anchors']), 0)
         portfolio = [item for item in recommendations if not item['strategy'].startswith('picked')]
@@ -21,29 +21,57 @@ class DltPortfolioTests(unittest.TestCase):
             for item in portfolio
         }
         self.assertEqual(len(tickets), len(portfolio))
-        # v4.4 组合覆盖: 5注前区完全不重叠, union=25
+        # v4.4 组合覆盖: 前5注(primary+4策略)前区完全不重叠, union=25;
+        # v4.6 第6注 back_cover 不参与前区覆盖结构
+        core_portfolio = [item for item in portfolio if item['strategy'] != 'back_cover']
+        self.assertEqual(len(core_portfolio), 5)
         front_union = set()
-        for item in portfolio:
+        for item in core_portfolio:
             front_union.update(item['front'])
         self.assertEqual(len(front_union), 25)
         self.assertEqual(policy['front_union'], 25)
+        # v4.6: 6注后区覆盖全部12码
         back_numbers = {
             number
-            for item in recommendations
+            for item in portfolio
             for number in item['back']
         }
-        self.assertEqual(len(back_numbers), 10)
-        self.assertEqual(result['back_coverage_profile']['unique_number_count'], 10)
+        self.assertEqual(len(back_numbers), 12)
+        self.assertEqual(result['back_coverage_profile']['unique_number_count'], 12)
         self.assertAlmostEqual(
             result['back_coverage_profile']['at_least_one_group_ge1_probability'],
-            65 / 66,
+            1.0,
             places=6,
         )
         self.assertAlmostEqual(
             result['back_coverage_profile']['at_least_one_group_ge2_probability'],
-            5 / 66,
+            6 / 66,
             places=6,
         )
+
+    def test_back_cover_note_partitions_all_back_numbers(self):
+        """v4.6: 第6注后区=前5注未覆盖的2码, 6注后区不相交划分全部12码"""
+        result = self.analyzer.generate_multi_strategy_recommendations()
+        by_strategy = {item['strategy']: item for item in result['recommendations']}
+        self.assertIn('back_cover', by_strategy)
+
+        cover = by_strategy['back_cover']
+        self.assertEqual(len(cover['front']), 5)
+        self.assertEqual(len(cover['back']), 2)
+
+        portfolio = [item for item in result['recommendations']
+                     if not item['strategy'].startswith('picked')]
+        back_pairs = [tuple(sorted(item['back'])) for item in portfolio]
+        # 6注后区对互不重叠
+        all_backs = [n for pair in back_pairs for n in pair]
+        self.assertEqual(len(all_backs), 12)
+        self.assertEqual(len(set(all_backs)), 12)
+        # 保底注的后区 = 前5注未覆盖的号码
+        core_backs = {n for item in portfolio if item['strategy'] != 'back_cover'
+                      for n in item['back']}
+        self.assertEqual(set(cover['back']) & core_backs, set())
+        self.assertEqual(set(cover['back']) | core_backs,
+                         set(range(1, 13)))
 
     def test_cover_tickets_do_not_overlap_primary_front(self):
         """v4.4: 第2-5注前区与主推完全不重叠(覆盖策略核心)"""
@@ -83,7 +111,7 @@ class DltPortfolioTests(unittest.TestCase):
         )
 
     def test_predictor_version_invalidates_old_cache(self):
-        self.assertEqual(LOTTERY_PREDICTOR_VERSION, 'dlt-v4.5-next-issue')
+        self.assertEqual(LOTTERY_PREDICTOR_VERSION, 'dlt-v4.6-back-cover')
 
     def test_single_pick_designates_walk_forward_winner_without_fake_mix(self):
         result = self.analyzer.generate_multi_strategy_recommendations()

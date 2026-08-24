@@ -25,7 +25,11 @@ MIN_REAL_HISTORY_FOR_RANKING = 80  # 降低阈值: 120期真实数据足够支�
 # v4.5: 跨年期号修复 — _next_issue() 替代 str(int(issue)+1):
 #   年末最后一期(如2025150)+1 会得到永不存在的 2025151, 预测记录永远 pending 无法结算
 #   (与双色球 v3.1 同类 bug)。年内期号不变, 仅跨年进位, 预测/覆盖逻辑零改动。
-LOTTERY_PREDICTOR_VERSION = "dlt-v4.5-next-issue"
+# v4.6: 后区全覆盖保底注 — generate_multi_strategy_recommendations 追加第6注:
+#   前5注后区互不重叠覆盖12码中的10码, 第6注后区=剩余2码 → 6注不相交划分全部12码,
+#   任意开奖"任1注后区≥1"=100%(鸽笼原理, 纯组合保证, 非预测能力)。
+#   前区取排名Top5, 不参与5注前区覆盖结构(union=25 不变)。
+LOTTERY_PREDICTOR_VERSION = "dlt-v4.6-back-cover"
 FULL_HISTORY_FETCH_COUNT = 100
 MIN_FULL_HISTORY_ISSUES = 500
 ROLLING_BACKTEST_TRIALS = 30

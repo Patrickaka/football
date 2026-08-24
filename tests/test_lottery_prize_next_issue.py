@@ -38,8 +38,8 @@ class TestNextIssue(unittest.TestCase):
         self.assertEqual(_next_issue('2025155', None), '2026001')
 
     def test_version_bump(self):
-        self.assertEqual(LOTTERY_PREDICTOR_VERSION, 'dlt-v4.5-next-issue')
-        self.assertEqual(SSQ_PREDICTION_VERSION, 'ssq-v3.3-prize-stats')
+        self.assertEqual(LOTTERY_PREDICTOR_VERSION, 'dlt-v4.6-back-cover')
+        self.assertEqual(SSQ_PREDICTION_VERSION, 'ssq-v3.4-blue-cover')
 
 
 class TestSsqPrizeTier(unittest.TestCase):

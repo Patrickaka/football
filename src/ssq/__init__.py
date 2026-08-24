@@ -40,7 +40,10 @@ RECENT_WINDOW = 30                  # 近期趋势窗口
 DEFAULT_RECENT = 15                 # 页面默认展示近期期数
 NUM_SETS = 5                        # 推荐注数
 SSQ_PREDICTIONS_KEY = 'lottery_ssq_online_predictions'
-SSQ_PREDICTION_VERSION = 'ssq-v3.3-prize-stats'
+# v3.4: 蓝球全覆盖保底方案（16注）——run_prediction 输出新增 blue_full_cover_plan。
+# 16注蓝球互不相同覆盖全部16码，任意开奖蓝球必被其中1注命中（鸽笼原理，100%）。
+# 红球按5注推荐轮转复用，无额外预测假设。纯组合保证，非预测能力。
+SSQ_PREDICTION_VERSION = 'ssq-v3.4-blue-cover'
 
 
 def ssq_prize_tier(red_hits, blue_hit):
@@ -475,6 +478,24 @@ def run_prediction(data=None, force_refresh=False, recent=DEFAULT_RECENT):
     red_pool = [item['number'] for item in analysis['red_ranking'][:15]]
     blue_pool = [item['number'] for item in analysis['blue_ranking'][:8]]
 
+    # v3.4: 蓝球全覆盖保底方案（16注）。
+    # 16注蓝球互不相同 = 覆盖全部16个蓝球，任意开奖蓝球必被其中1注命中（鸽笼原理）。
+    # 命中蓝球的那注至少六等奖(5元)；若其红球同时命中≥2则升至更高奖级。
+    # 红球按5注推荐轮转复用（第i注红球 = 推荐第 (i%5)+1 注），无额外预测假设。
+    # 诚实标注：32元成本换5元保底，长期数学期望为负，这是"保底体验"而非盈利策略。
+    blue_full_cover_plan = {
+        'name': '蓝球全覆盖保底（16注）',
+        'notes': [
+            {'red': sets[i % NUM_SETS]['red'], 'blue': b}
+            for i, b in enumerate(BLUE_RANGE)
+        ],
+        'cost_yuan': 2 * len(BLUE_RANGE),
+        'guarantee': '16注覆盖全部16个蓝球，任意开奖蓝球必被其中1注命中（100%，鸽笼原理）',
+        'min_prize': '命中蓝球的注至少六等奖(5元)；该注红球≥2时奖级相应提升',
+        'red_reuse_rule': f'红球按{NUM_SETS}注推荐轮转复用，不引入新预测假设',
+        'disclaimer': '纯组合覆盖，非预测能力；32元成本换5元保底，长期期望为负，仅供娱乐',
+    }
+
     # Only live predictions are persisted. Tests/callers supplying historical
     # data can evaluate the pure prediction function without changing storage.
     if data is None:
@@ -497,6 +518,8 @@ def run_prediction(data=None, force_refresh=False, recent=DEFAULT_RECENT):
             'primary': sets[0],
             'sets': sets,
         },
+        # v3.4: 蓝球全覆盖保底方案（16注，鸽笼原理100%命中蓝球）
+        'blue_full_cover_plan': blue_full_cover_plan,
         # v2.0: 大底池选号参考区 + 完整排名
         'red_pool': red_pool,
         'blue_pool': blue_pool,

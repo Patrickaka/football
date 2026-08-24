@@ -2054,6 +2054,35 @@ class LotteryAnalyzer:
             covered_front.update(front)
             used_back.update(back)
 
+        # v4.6: 后区全覆盖保底注（第6注）。
+        # 前5注后区互不重叠地覆盖12个号码中的10个，"任1注后区≥1"概率 65/66≈98.5%。
+        # 第6注后区 = 剩余2个未覆盖号码 → 6注后区构成12码的不相交划分（鸽笼原理）：
+        # 开奖2个后区号必落入某个注的后区对中，"任1注后区≥1" = 100%（纯组合收益）。
+        # 前区取排名Top5（最强单注），不参与5注前区覆盖结构（union=25 不变）。
+        back_pairs = {
+            tuple(sorted(item.get('back', [])))
+            for item in recommendations
+            if len(item.get('back', [])) == 2
+        }
+        covered_back = set().union(*(set(pair) for pair in back_pairs)) if back_pairs else set()
+        uncovered_back = [n for n in BACK_NUMBERS if n not in covered_back]
+        if len(uncovered_back) >= 2:
+            cover_front = sorted(ranked_front_numbers[:5])
+            cover_back = sorted(uncovered_back[:2])
+            cover_ticket = (tuple(cover_front), tuple(cover_back))
+            if cover_ticket not in seen_tickets:
+                recommendations.append({
+                    'front': cover_front,
+                    'back': cover_back,
+                    'method': '后区全覆盖保底',
+                    'strategy': 'back_cover',
+                    'cover_reason': (
+                        '第6注后区=前5注未覆盖的2个号码，6注后区不相交划分全部12码，'
+                        '任意开奖"任1注后区≥1"=100%（鸽笼原理，纯组合保证，非预测）'),
+                })
+                seen_tickets.add(cover_ticket)
+                used_back.update(cover_back)
+        # back_pairs/covered_back 需含保底注后再计算覆盖画像
         back_pairs = {
             tuple(sorted(item.get('back', [])))
             for item in recommendations
@@ -2108,15 +2137,16 @@ class LotteryAnalyzer:
         return {
             'recommendations': recommendations,
             'portfolio_policy': {
-                'name': 'portfolio_cover_v4.4',
+                'name': 'portfolio_cover_v4.6',
                 'front_anchors': sorted(front_anchors),
                 'back_anchors': sorted(back_anchors),
                 'primary_based_on_issue': latest_issue,
                 'primary_front_pool': ranked_front_numbers[:10],
                 'primary_back_pool': ranked_back_numbers[:6],
                 'front_union': len(covered_front),
-                'note': 'v4.4组合覆盖: 主推保留排名核心+按期号轮换; 第2-5注前区排名池步长分散且与主推不重叠(union=25); '
-                        '后区五组优先覆盖10个不同号码; front_any_ge2 实测 52.5%→64.0%(200期walk-forward)',
+                'note': 'v4.6组合覆盖: 主推保留排名核心+按期号轮换; 第2-5注前区排名池步长分散且与主推不重叠(union=25); '
+                        '后区前5注覆盖10个不同号码, 第6注(back_cover)补齐剩余2码→12码全覆盖, '
+                        '"任1注后区≥1"=100%(鸽笼原理); front_any_ge2 实测 52.5%→64.0%(200期walk-forward)',
             },
             'back_coverage_profile': back_coverage_profile,
             'voting_front': [c['number'] for c in (voting.get('front_candidates') or [])[:12]],
