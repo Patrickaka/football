@@ -14,7 +14,7 @@ import server
 import src.webapp.beidan_api as beidan_api
 import src.webapp.beidan_cache as beidan_cache
 from src.webapp.beidan_cache import (
-    beidan_cache_key, beidan_earliest_kickoff, beidan_refresh_after,
+    beidan_cache_key, beidan_earliest_kickoff, beidan_refresh_after, prune_beidan_payload,
 )
 
 
@@ -70,6 +70,47 @@ class BeidanRefreshAfterTests(unittest.TestCase):
         """刷新档位只决定后台节奏，任何一档都不该退化成「每次请求都刷」"""
         for offset in (1, 30, 120, 600):
             self.assertGreaterEqual(beidan_refresh_after({'recommendations': [_rec(offset)]}), 60)
+
+
+class BeidanPrunePayloadTests(unittest.TestCase):
+    """history_summary.latest 是 30 条完整历史记录，占整份响应四成以上，前端从不读"""
+
+    def test_drops_unused_history_latest(self):
+        result = {'history_summary': {'latest': [{'x': 1}] * 30, 'total_records': 200,
+                                      'quality_levels': {'strong': 3}}}
+        prune_beidan_payload(result)
+        self.assertNotIn('latest', result['history_summary'])
+
+    def test_keeps_the_counters_the_frontend_renders(self):
+        result = {'history_summary': {'latest': [1], 'total_records': 200,
+                                      'settled_records': 10, 'pending_records': 5,
+                                      'quality_levels': {'strong': 3}}}
+        prune_beidan_payload(result)
+        hs = result['history_summary']
+        self.assertEqual(hs['total_records'], 200)
+        self.assertEqual(hs['settled_records'], 10)
+        self.assertEqual(hs['pending_records'], 5)
+        self.assertEqual(hs['quality_levels'], {'strong': 3})
+
+    def test_leaves_recommendations_untouched(self):
+        recs = [{'match_id': '1', 'spf': {'analysis': 'x'}}]
+        result = {'recommendations': recs, 'history_summary': {'latest': [1]}}
+        prune_beidan_payload(result)
+        self.assertEqual(result['recommendations'], recs)
+
+    def test_tolerates_missing_or_odd_history_summary(self):
+        for payload in ({}, {'history_summary': None}, {'history_summary': 'x'},
+                        {'history_summary': {}}):
+            with self.subTest(payload=payload):
+                prune_beidan_payload(dict(payload))
+
+    def test_write_cache_prunes_before_storing(self):
+        """预热线程与接口计算都经由 write_beidan_cache，剔除必须发生在落盘前"""
+        result = {'history_summary': {'latest': [1] * 30}, 'recommendations': []}
+        with patch.object(beidan_cache, 'set_cache') as setter:
+            beidan_cache.write_beidan_cache('k', result)
+        stored = setter.call_args[0][2]
+        self.assertNotIn('latest', stored['history_summary'])
 
 
 class BeidanSingleFlightTests(unittest.TestCase):

@@ -78,7 +78,23 @@ def read_beidan_cache(cache_key):
     return payload, (time.time() - cached_at) < beidan_refresh_after(payload)
 
 
+# history_summary.latest 是 30 条完整历史预测记录，单独就占整份响应四成以上，
+# 而前端只用 history_summary 里的几个计数器，从不读它。独立的
+# /api/beidan/history 端点仍返回完整摘要，所以只在这份大响应里剔除。
+_PRUNED_HISTORY_FIELDS = ('latest',)
+
+
+def prune_beidan_payload(result):
+    """剔除前端不消费的重字段，让缓存与响应都只留列表页真正要用的数据。"""
+    history = result.get('history_summary')
+    if isinstance(history, dict):
+        for field in _PRUNED_HISTORY_FIELDS:
+            history.pop(field, None)
+    return result
+
+
 def write_beidan_cache(cache_key, result):
+    prune_beidan_payload(result)
     result['_cached_at'] = time.time()
     set_cache(BEIDAN_CACHE_TYPE, cache_key, result)
 
