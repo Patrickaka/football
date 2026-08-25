@@ -87,6 +87,24 @@ class TaskSchedulerTests(unittest.TestCase):
             scheduler.submit('late', lambda: None)
         scheduler.shutdown(wait=True)
 
+    def test_zero_max_workers_rejected_at_construction(self):
+        with self.assertRaises(ValueError):
+            TaskScheduler(max_workers=0)
+
+    def test_negative_max_workers_rejected_at_construction(self):
+        with self.assertRaises(ValueError):
+            TaskScheduler(max_workers=-1)
+
+    def test_duplicate_task_name_rejected(self):
+        scheduler = TaskScheduler(max_workers=1)
+        scheduler.submit('dup', lambda: 'first')
+        with self.assertRaises(ValueError) as ctx:
+            scheduler.submit('dup', lambda: 'second')
+        self.assertIn('dup', str(ctx.exception))
+        scheduler.start()
+        scheduler.shutdown(wait=True)
+        self.assertEqual(scheduler.results()['dup']['value'], 'first')
+
 
 if __name__ == '__main__':
     unittest.main()

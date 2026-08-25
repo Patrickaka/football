@@ -13,8 +13,11 @@ class TaskScheduler:
     """
 
     def __init__(self, max_workers=2):
+        if max_workers <= 0:
+            raise ValueError('max_workers must be > 0, got %r' % (max_workers,))
         self.max_workers = max_workers
         self._pending = []
+        self._pending_names = set()
         self._results = {}
         self._executor = None
         self._started = False
@@ -24,6 +27,9 @@ class TaskScheduler:
         with self._guard:
             if self._started:
                 raise RuntimeError('调度器已启动，不接受新任务')
+            if name in self._pending_names:
+                raise ValueError('任务名重复: %r' % (name,))
+            self._pending_names.add(name)
             self._pending.append((priority, len(self._pending), name, fn))
 
     def start(self):
