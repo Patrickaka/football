@@ -21,6 +21,7 @@ class Cache:
         self.lock_timeout = lock_timeout
         self._refresh_threads = []
         self._refresh_guard = threading.Lock()
+        self._epoch = 0
 
     def get(self, key, compute_fn, ttl=None):
         ttl = self.default_ttl if ttl is None else ttl
@@ -47,6 +48,15 @@ class Cache:
         self.l1.set(key, value, ttl, now=now)
 
     def invalidate(self, key):
+        """清除该 key 的所有层缓存，并作废所有在途的后台刷新。
+
+        纪元计数器用全局而非 per-key：invalidate 频率很低，全局计数器
+        不会有内存增长问题，代价只是"任一 invalidate 会作废所有在途刷新"，
+        偏保守但安全——避免 SWR 后台刷新在 invalidate 之后无条件写回，
+        让已清空的缓存"自己复活"。
+        """
+        with self._refresh_guard:
+            self._epoch += 1
         self.l1.delete(key)
         self.l2.delete(key)
 
@@ -59,40 +69,48 @@ class Cache:
         with self._refresh_guard:
             self._refresh_threads = [t for t in self._refresh_threads if t.is_alive()]
 
-    def _compute_with_single_flight(self, key, compute_fn, ttl):
-        acquired = self.l2.lock(key, timeout=self.lock_timeout)
-        if not acquired:
-            waited = self._wait_for_other_flight(key)
-            if waited is not None:
-                return waited
-            return compute_fn()
-        try:
-            entry = self.l2.get(key)
-            if entry is not None and entry.is_fresh():
-                return entry.value
-            value = compute_fn()
-            self.set(key, value, ttl)
-            return value
-        finally:
-            self.l2.unlock(key)
+    def _compute_with_single_flight(self, key, compute_fn, ttl, poll_interval=0.02):
+        """单飞：同一 key 的并发冷启动只允许一个线程计算。
 
-    def _wait_for_other_flight(self, key, poll_interval=0.02):
+        等待方轮询两件事——值是否出现、锁是否空出。winner 失败时会释放锁但不写值，
+        此时等待方必须能立刻接手，否则一次瞬时故障会把所有并发请求拖满 lock_timeout。
+        """
         deadline = time.time() + self.lock_timeout
-        while time.time() < deadline:
+        while True:
+            if self.l2.lock(key, timeout=self.lock_timeout):
+                try:
+                    entry = self.l2.get(key)
+                    if entry is not None and entry.is_fresh():
+                        return entry.value
+                    value = compute_fn()
+                    self.set(key, value, ttl)
+                    return value
+                finally:
+                    self.l2.unlock(key)
+
             entry = self.l2.get(key)
             if entry is not None:
                 return entry.value
+            if time.time() >= deadline:
+                log.warning('等待单飞超时，回退为本地计算: key=%s', key)
+                return compute_fn()
             time.sleep(poll_interval)
-        log.warning('等待单飞超时，回退为本地计算: key=%s', key)
-        return None
 
     def _refresh_in_background(self, key, compute_fn, ttl):
         if not self.l2.lock(key, timeout=self.lock_timeout):
             return
 
+        with self._refresh_guard:
+            epoch_at_start = self._epoch
+
         def _run():
             try:
-                self.set(key, compute_fn(), ttl)
+                value = compute_fn()
+                with self._refresh_guard:
+                    if self._epoch != epoch_at_start:
+                        log.info('刷新期间缓存已被失效，丢弃本次结果: key=%s', key)
+                        return
+                self.set(key, value, ttl)
             except Exception:
                 log.exception('后台刷新失败，保留陈旧值: key=%s', key)
             finally:
