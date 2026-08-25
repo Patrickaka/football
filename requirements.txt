@@ -14,3 +14,11 @@ scikit-learn>=1.5.2
 lightgbm>=4.5.0
 xgboost-cpu>=2.0.0  # 使用 CPU 版本避免 NVIDIA 依赖
 catboost>=1.2.5
+
+# ---- 架构重构：技术底座依赖（2026-08-25 起）----
+fastapi>=0.115.0  # API 层框架
+uvicorn>=0.32.0  # ASGI 服务器，取代 http.server
+pydantic>=2.9.0  # 出入参契约，fastapi 依赖但显式登记
+starlette>=0.40.0  # fastapi 依赖，显式登记
+SQLAlchemy>=2.0.36  # Core 层，Repository 之下的 SQL 构造
+redis>=5.2.0  # 缓存 L2 后端
