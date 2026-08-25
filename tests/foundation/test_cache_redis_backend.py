@@ -13,12 +13,12 @@ class RedisBackendTests(unittest.TestCase):
     def test_get_missing_returns_none(self):
         self.client.get.return_value = None
         self.assertIsNone(self.backend.get('k'))
-        self.client.get.assert_called_once_with('t:k')
+        self.client.get.assert_called_once_with('t:v:k')
 
     def test_set_serialises_entry_as_json(self):
         self.backend.set('k', {'a': 1}, ttl=60, now=100.0)
         args, kwargs = self.client.set.call_args
-        self.assertEqual(args[0], 't:k')
+        self.assertEqual(args[0], 't:v:k')
         payload = json.loads(args[1])
         self.assertEqual(payload, {'value': {'a': 1}, 'stored_at': 100.0, 'ttl': 60})
 
@@ -43,12 +43,13 @@ class RedisBackendTests(unittest.TestCase):
 
     def test_delete_uses_prefix(self):
         self.backend.delete('k')
-        self.client.delete.assert_called_once_with('t:k')
+        self.client.delete.assert_called_once_with('t:v:k')
 
     def test_lock_uses_setnx_with_expiry(self):
         self.client.set.return_value = True
         self.assertTrue(self.backend.lock('k', timeout=30))
-        _, kwargs = self.client.set.call_args
+        args, kwargs = self.client.set.call_args
+        self.assertEqual(args[0], 't:lock:k')
         self.assertTrue(kwargs['nx'])
         self.assertEqual(kwargs['ex'], 30)
 
@@ -59,6 +60,12 @@ class RedisBackendTests(unittest.TestCase):
     def test_unlock_deletes_lock_key(self):
         self.backend.unlock('k')
         self.client.delete.assert_called_once_with('t:lock:k')
+
+    def test_data_and_lock_namespaces_never_collide(self):
+        for key in ['foo', 'lock:foo', 'v:foo', '', 'a:b:c']:
+            self.assertNotEqual(self.backend._k(key), self.backend._lock_k(key))
+        # 交叉碰撞：任意 key 的数据键不得等于任意其他 key 的锁键
+        self.assertNotEqual(self.backend._k('lock:foo'), self.backend._lock_k('foo'))
 
 
 if __name__ == '__main__':

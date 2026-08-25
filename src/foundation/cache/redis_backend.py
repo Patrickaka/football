@@ -57,7 +57,7 @@ class RedisBackend:
         self.client.delete(self._lock_k(key))
 
     def _k(self, key):
-        return f'{self.prefix}{key}'
+        return f'{self.prefix}v:{key}'
 
     def _lock_k(self, key):
         return f'{self.prefix}lock:{key}'
