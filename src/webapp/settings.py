@@ -34,7 +34,7 @@ INDEX_FILE = _ROOT / 'web' / 'index.html'
 sys.stdout.reconfigure(encoding='utf-8')
 
 
-HOST = '0.0.0.0'  # 监听所有网卡，局域网/公网（经端口转发或隧道）可访问
+HOST = os.environ.get('FOOTBALL_HOST', '0.0.0.0')  # 默认监听所有网卡；线上经反代时设为 127.0.0.1 收窄暴露面
 
 
 PORT = int(os.environ.get('FOOTBALL_PORT', '9004'))
