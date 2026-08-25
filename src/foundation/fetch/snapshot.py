@@ -4,7 +4,13 @@ import threading
 
 
 class SnapshotStore:
-    """响应快照。用于离线回归测试与抓取失败时的兜底。"""
+    """响应快照。用于离线回归测试与抓取失败时的兜底。
+
+    save() 用 tmp 文件 + os.replace 落盘，原子性前提是 tmp 与目标文件同处
+    一个文件系统：root 必须是本地磁盘路径，不支持挂载到 NFS/对象存储等
+    跨文件系统场景（这类挂载盘上 os.replace 可能退化为非原子的跨设备
+    拷贝+删除，甚至直接抛 OSError），否则原子性保证失效。
+    """
 
     def __init__(self, root):
         self.root = root

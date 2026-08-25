@@ -71,7 +71,13 @@ class FetchClient:
                     continue
                 succeeded = True
                 if self.snapshots is not None:
-                    self.snapshots.save(url, body)
+                    # 快照落盘失败（磁盘满等）不该让一次已经成功拿到 body 的
+                    # 请求失败——快照只是可选的降级辅助，不是请求成功与否的
+                    # 前提条件，否则兜底机制自己会变成新的故障源。
+                    try:
+                        self.snapshots.save(url, body)
+                    except Exception:
+                        log.warning('快照保存失败，忽略：url=%s', url, exc_info=True)
                 return body
 
             log.warning('抓取失败，重试耗尽: url=%s error=%s', url, last_error)
