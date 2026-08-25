@@ -1,9 +1,9 @@
 import unittest
 
 
-class PlatformPackageTests(unittest.TestCase):
-    def test_platform_package_importable(self):
-        import src.platform  # noqa: F401
+class FoundationPackageTests(unittest.TestCase):
+    def test_foundation_package_importable(self):
+        import src.foundation  # noqa: F401
 
     def test_required_dependencies_available(self):
         import fastapi  # noqa: F401

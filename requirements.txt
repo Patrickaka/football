@@ -22,3 +22,12 @@ pydantic>=2.9.0  # 出入参契约，fastapi 依赖但显式登记
 starlette>=0.40.0  # fastapi 依赖，显式登记
 SQLAlchemy>=2.0.36  # Core 层，Repository 之下的 SQL 构造
 redis>=5.2.0  # 缓存 L2 后端
+# 同样遵循“显式列出传递依赖”的既有约定，不依赖 pip 隐式解析。
+click>=8.1.0  # uvicorn 命令行入口
+h11>=0.16.0  # uvicorn HTTP/1.1 协议实现
+anyio>=4.14.0  # starlette 异步兼容层
+typing-extensions>=4.16.0  # pydantic/SQLAlchemy 类型支持
+typing-inspection>=0.4.4  # pydantic 类型内省
+annotated-types>=0.8.0  # pydantic 约束类型
+annotated-doc>=0.0.5  # fastapi 文档注解
+pydantic-core>=2.46.0  # pydantic 核心（Rust 实现）
