@@ -63,6 +63,18 @@ class DomainRateLimitersTests(unittest.TestCase):
         self.assertEqual(limiters.for_domain('slow.com').rate_per_sec, 0.5)
         self.assertEqual(limiters.for_domain('other.com').rate_per_sec, 10)
 
+    def test_non_positive_default_rate_rejected_at_construction(self):
+        with self.assertRaises(ValueError):
+            DomainRateLimiters(default_rate=0)
+        with self.assertRaises(ValueError):
+            DomainRateLimiters(default_rate=-1)
+
+    def test_non_positive_override_rejected_at_construction(self):
+        with self.assertRaisesRegex(ValueError, 'bad.com'):
+            DomainRateLimiters(default_rate=10, overrides={'bad.com': -1})
+        with self.assertRaisesRegex(ValueError, 'zero.com'):
+            DomainRateLimiters(default_rate=10, overrides={'zero.com': 0})
+
 
 if __name__ == '__main__':
     unittest.main()

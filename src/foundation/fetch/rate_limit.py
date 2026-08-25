@@ -37,9 +37,17 @@ class DomainRateLimiters:
     """按域名隔离的限速器集合。"""
 
     def __init__(self, default_rate=1, burst=1, overrides=None):
+        if default_rate <= 0:
+            raise ValueError('default_rate must be > 0, got %r' % (default_rate,))
+        overrides = overrides or {}
+        for domain, rate in overrides.items():
+            if rate <= 0:
+                raise ValueError(
+                    "overrides[%r] must be > 0, got %r" % (domain, rate)
+                )
         self.default_rate = default_rate
         self.burst = burst
-        self.overrides = overrides or {}
+        self.overrides = overrides
         self._limiters = {}
         self._guard = threading.Lock()
 
