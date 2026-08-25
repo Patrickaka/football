@@ -56,3 +56,6 @@ data/kl8_strategy_trials.json
 
 # CatBoost 训练产物
 catboost_info/
+
+# SDD 执行工作区（账本/简报/审查包，非产物）
+.superpowers/

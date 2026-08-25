@@ -1,0 +1,61 @@
+import threading
+import time
+
+
+class RateLimiter:
+    """令牌桶。acquire 返回调用方需 sleep 的秒数，不自行阻塞。"""
+
+    def __init__(self, rate_per_sec, burst=1):
+        if rate_per_sec <= 0:
+            raise ValueError('rate_per_sec must be > 0, got %r' % (rate_per_sec,))
+        self.rate_per_sec = rate_per_sec
+        self.burst = max(1, burst)
+        self._tokens = float(self.burst)
+        self._last = None
+        self._guard = threading.Lock()
+
+    def acquire(self, now=None):
+        now = time.time() if now is None else now
+        with self._guard:
+            if self._last is None:
+                self._last = now
+            elapsed = max(0.0, now - self._last)
+            # 时钟可能因 NTP 校时短暂倒退：绝不让 _last 倒退，
+            # 否则时钟恢复前进后会用被压低的 _last 算出虚高的 elapsed，
+            # 凭空"复活"出本不该有的令牌。
+            self._last = max(self._last, now)
+            self._tokens = min(self.burst, self._tokens + elapsed * self.rate_per_sec)
+            if self._tokens >= 1:
+                self._tokens -= 1
+                return 0
+            deficit = 1 - self._tokens
+            self._tokens = 0
+            return deficit / self.rate_per_sec
+
+
+class DomainRateLimiters:
+    """按域名隔离的限速器集合。"""
+
+    def __init__(self, default_rate=1, burst=1, overrides=None):
+        if default_rate <= 0:
+            raise ValueError('default_rate must be > 0, got %r' % (default_rate,))
+        overrides = overrides or {}
+        for domain, rate in overrides.items():
+            if rate <= 0:
+                raise ValueError(
+                    "overrides[%r] must be > 0, got %r" % (domain, rate)
+                )
+        self.default_rate = default_rate
+        self.burst = burst
+        self.overrides = overrides
+        self._limiters = {}
+        self._guard = threading.Lock()
+
+    def for_domain(self, domain):
+        with self._guard:
+            limiter = self._limiters.get(domain)
+            if limiter is None:
+                rate = self.overrides.get(domain, self.default_rate)
+                limiter = RateLimiter(rate_per_sec=rate, burst=self.burst)
+                self._limiters[domain] = limiter
+            return limiter
