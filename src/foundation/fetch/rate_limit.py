@@ -6,6 +6,8 @@ class RateLimiter:
     """令牌桶。acquire 返回调用方需 sleep 的秒数，不自行阻塞。"""
 
     def __init__(self, rate_per_sec, burst=1):
+        if rate_per_sec <= 0:
+            raise ValueError('rate_per_sec must be > 0, got %r' % (rate_per_sec,))
         self.rate_per_sec = rate_per_sec
         self.burst = max(1, burst)
         self._tokens = float(self.burst)
@@ -18,7 +20,10 @@ class RateLimiter:
             if self._last is None:
                 self._last = now
             elapsed = max(0.0, now - self._last)
-            self._last = now
+            # 时钟可能因 NTP 校时短暂倒退：绝不让 _last 倒退，
+            # 否则时钟恢复前进后会用被压低的 _last 算出虚高的 elapsed，
+            # 凭空"复活"出本不该有的令牌。
+            self._last = max(self._last, now)
             self._tokens = min(self.burst, self._tokens + elapsed * self.rate_per_sec)
             if self._tokens >= 1:
                 self._tokens -= 1

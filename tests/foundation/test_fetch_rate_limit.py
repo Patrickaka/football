@@ -28,6 +28,26 @@ class RateLimiterTests(unittest.TestCase):
         limiter.acquire(now=100.0)
         self.assertAlmostEqual(limiter.acquire(now=100.0), 0.5, places=3)
 
+    def test_zero_rate_rejected(self):
+        with self.assertRaises(ValueError):
+            RateLimiter(rate_per_sec=0, burst=1)
+
+    def test_negative_rate_rejected(self):
+        with self.assertRaises(ValueError):
+            RateLimiter(rate_per_sec=-1, burst=1)
+
+    def test_non_positive_burst_clamped_to_one(self):
+        self.assertEqual(RateLimiter(rate_per_sec=1, burst=0).burst, 1)
+        self.assertEqual(RateLimiter(rate_per_sec=1, burst=-5).burst, 1)
+
+    def test_clock_going_backward_does_not_grant_free_tokens(self):
+        limiter = RateLimiter(rate_per_sec=1, burst=1)
+        limiter.acquire(now=100.0)  # 消耗唯一令牌，_last=100
+        limiter.acquire(now=90.0)  # 时钟倒退（如 NTP 校时），不应压低 _last
+        wait = limiter.acquire(now=93.0)  # 时钟恢复，仍应视作只过了 -7s（钳为 0s）
+        self.assertGreater(wait, 0)
+        self.assertEqual(limiter._last, 100.0)
+
 
 class DomainRateLimitersTests(unittest.TestCase):
     def test_same_domain_returns_same_limiter(self):
