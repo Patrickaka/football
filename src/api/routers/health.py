@@ -40,6 +40,10 @@ def _probe_database(db):
 
 
 def _probe_tasks(scheduler):
+    """仅探测 TaskScheduler 是否已装配到 app.state，不代表调度器已 start()
+    或后台任务本身健康——本阶段 TaskScheduler 刻意不 start()（无待跑任务），
+    'tasks': 'ok' 只表示"对象存在"，不要误读成"后台任务系统正在运行"。
+    """
     try:
         return 'ok' if scheduler is not None else 'error'
     except Exception:

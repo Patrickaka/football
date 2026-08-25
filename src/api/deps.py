@@ -5,6 +5,8 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Optional
 
+from fastapi import Request
+
 from src.foundation.cache import Cache, MemoryBackend, RedisBackend
 from src.foundation.store import Database, make_engine, mysql_url_from_env
 
@@ -74,6 +76,24 @@ def build_cache(settings):
 def build_database(settings):
     url = settings.mysql_url or mysql_url_from_env()
     return Database(make_engine(url))
+
+
+def get_cache(request: Request) -> Cache:
+    """FastAPI 依赖：从 app.state 取出装配好的 Cache 单例。
+
+    路由用 `Depends(get_cache)` 注入；测试用
+    `app.dependency_overrides[get_cache] = lambda: fake_cache` 替换。
+    """
+    return request.app.state.cache
+
+
+def get_db(request: Request) -> Database:
+    """FastAPI 依赖：从 app.state 取出装配好的 Database 单例。
+
+    路由用 `Depends(get_db)` 注入；测试用
+    `app.dependency_overrides[get_db] = lambda: fake_db` 替换。
+    """
+    return request.app.state.db
 
 
 def get_executor(workers=4):

@@ -1,3 +1,4 @@
+import contextlib
 import unittest
 
 from fastapi.testclient import TestClient
@@ -8,7 +9,14 @@ from src.api.deps import Settings
 
 class HealthTests(unittest.TestCase):
     def setUp(self):
-        self.client = TestClient(create_app(Settings(redis_url=None, mysql_url='sqlite+pysqlite:///:memory:')))
+        app = create_app(Settings(redis_url=None, mysql_url='sqlite+pysqlite:///:memory:'))
+        # TestClient 只有在作为上下文管理器使用时才会触发 ASGI lifespan
+        # （Starlette/FastAPI 标准行为），app.state 上的 cache/db/tasks 由
+        # lifespan 装配；用 ExitStack + addCleanup 保证测试结束时退出
+        # 上下文，从而触发 lifespan 的关闭路径（tasks.shutdown 等）。
+        stack = contextlib.ExitStack()
+        self.addCleanup(stack.close)
+        self.client = stack.enter_context(TestClient(app))
 
     def test_healthz_returns_ok(self):
         response = self.client.get('/healthz')
@@ -19,6 +27,11 @@ class HealthTests(unittest.TestCase):
         payload = self.client.get('/healthz').json()
         self.assertIn('cache', payload['components'])
         self.assertIn('database', payload['components'])
+
+    def test_healthz_reports_tasks_component_ok(self):
+        payload = self.client.get('/healthz').json()
+        self.assertIn('tasks', payload['components'])
+        self.assertEqual(payload['components']['tasks'], 'ok')
 
     def test_openapi_schema_is_served(self):
         response = self.client.get('/openapi.json')

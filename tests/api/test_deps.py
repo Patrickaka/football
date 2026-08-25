@@ -1,7 +1,10 @@
 import asyncio
 import unittest
 
-from src.api.deps import Settings, build_cache, run_blocking
+from fastapi import Depends, FastAPI
+from fastapi.testclient import TestClient
+
+from src.api.deps import Settings, build_cache, build_database, get_cache, get_db, run_blocking
 
 
 class SettingsTests(unittest.TestCase):
@@ -22,6 +25,59 @@ class BuildCacheTests(unittest.TestCase):
         cache = build_cache(Settings(redis_url=None))
         cache.set('k', 'v')
         self.assertEqual(cache.get('k', lambda: 'recomputed'), 'v')
+
+
+class GetCacheGetDbTests(unittest.TestCase):
+    """get_cache / get_db 是给业务路由用 Depends() 注入、给测试用
+    dependency_overrides 替换的标准入口——这两点都要测到，否则它们
+    存在的理由本身就没被验证过。
+    """
+
+    def setUp(self):
+        settings = Settings(redis_url=None, mysql_url='sqlite+pysqlite:///:memory:')
+        self.cache = build_cache(settings)
+        self.db = build_database(settings)
+
+        app = FastAPI()
+        app.state.cache = self.cache
+        app.state.db = self.db
+
+        @app.get('/cache-id')
+        def _cache_id(cache=Depends(get_cache)):
+            return {'id': id(cache)}
+
+        @app.get('/db-id')
+        def _db_id(db=Depends(get_db)):
+            return {'id': id(db)}
+
+        self.app = app
+        self.client = TestClient(app)
+
+    def test_get_cache_returns_app_state_cache(self):
+        response = self.client.get('/cache-id')
+        self.assertEqual(response.json()['id'], id(self.cache))
+
+    def test_get_db_returns_app_state_db(self):
+        response = self.client.get('/db-id')
+        self.assertEqual(response.json()['id'], id(self.db))
+
+    def test_dependency_overrides_replaces_cache(self):
+        fake_cache = object()
+        self.app.dependency_overrides[get_cache] = lambda: fake_cache
+        try:
+            response = self.client.get('/cache-id')
+            self.assertEqual(response.json()['id'], id(fake_cache))
+        finally:
+            self.app.dependency_overrides.clear()
+
+    def test_dependency_overrides_replaces_db(self):
+        fake_db = object()
+        self.app.dependency_overrides[get_db] = lambda: fake_db
+        try:
+            response = self.client.get('/db-id')
+            self.assertEqual(response.json()['id'], id(fake_db))
+        finally:
+            self.app.dependency_overrides.clear()
 
 
 class RunBlockingTests(unittest.TestCase):
