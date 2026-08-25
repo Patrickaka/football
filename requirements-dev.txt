@@ -1,0 +1,3 @@
+# 测试与开发依赖。不进 requirements.txt——那是生产部署依赖，
+# deploy.yml 会在服务器上安装它，pytest 不是运行时所需。
+pytest>=8.0.0
