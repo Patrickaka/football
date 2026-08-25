@@ -6,11 +6,22 @@ class CircuitBreaker:
     """三态熔断器：closed 正常放行，open 直接拒绝，half_open 试探一次。"""
 
     def __init__(self, failure_threshold=5, recovery_timeout=60, probe_timeout=None):
+        if failure_threshold <= 0:
+            raise ValueError(
+                'failure_threshold must be > 0, got %r' % (failure_threshold,)
+            )
+        if recovery_timeout <= 0:
+            raise ValueError(
+                'recovery_timeout must be > 0, got %r' % (recovery_timeout,)
+            )
+        probe_timeout = recovery_timeout if probe_timeout is None else probe_timeout
+        if probe_timeout <= 0:
+            raise ValueError('probe_timeout must be > 0, got %r' % (probe_timeout,))
         self.failure_threshold = failure_threshold
         self.recovery_timeout = recovery_timeout
         # 探针租约：拿到放行名额的调用方若迟迟不上报结果（崩溃/异常路径未覆盖），
         # 租约到期后允许下一次探测，避免熔断器永久卡在 half_open。
-        self.probe_timeout = recovery_timeout if probe_timeout is None else probe_timeout
+        self.probe_timeout = probe_timeout
         self.state = 'closed'
         self._failures = 0
         self._opened_at = None

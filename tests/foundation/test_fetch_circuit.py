@@ -163,6 +163,32 @@ class CircuitBreakerTests(unittest.TestCase):
         self.assertEqual(sum(1 for r in allowed if r), 1)
         self.assertEqual(self.cb.state, 'half_open')
 
+    def test_zero_probe_timeout_rejected(self):
+        with self.assertRaisesRegex(ValueError, 'probe_timeout'):
+            CircuitBreaker(failure_threshold=1, recovery_timeout=60, probe_timeout=0)
+
+    def test_negative_probe_timeout_rejected(self):
+        with self.assertRaisesRegex(ValueError, 'probe_timeout'):
+            CircuitBreaker(failure_threshold=1, recovery_timeout=60, probe_timeout=-1)
+
+    def test_zero_or_negative_failure_threshold_rejected(self):
+        with self.assertRaisesRegex(ValueError, 'failure_threshold'):
+            CircuitBreaker(failure_threshold=0)
+        with self.assertRaisesRegex(ValueError, 'failure_threshold'):
+            CircuitBreaker(failure_threshold=-1)
+
+    def test_zero_or_negative_recovery_timeout_rejected(self):
+        with self.assertRaisesRegex(ValueError, 'recovery_timeout'):
+            CircuitBreaker(recovery_timeout=0)
+        with self.assertRaisesRegex(ValueError, 'recovery_timeout'):
+            CircuitBreaker(recovery_timeout=-1)
+
+    def test_valid_construction_unaffected_by_new_validation(self):
+        CircuitBreaker()  # 全部使用默认值
+        CircuitBreaker(failure_threshold=1, recovery_timeout=1, probe_timeout=1)
+        cb = CircuitBreaker(failure_threshold=2, recovery_timeout=30)
+        self.assertEqual(cb.probe_timeout, 30)  # 未传时仍默认等于 recovery_timeout
+
 
 if __name__ == '__main__':
     unittest.main()
