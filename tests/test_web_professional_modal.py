@@ -117,7 +117,7 @@ class WebProfessionalModalTests(unittest.TestCase):
         self.assertIn('function renderLottery3dCompact(r)', html)
         self.assertIn('renderLottery3dCompact(data.result);', html)
         self.assertIn('lottery3d-compact-primary', html)
-        self.assertIn('组六唯一主推', html)
+        self.assertIn('组六主推 · 四码', html)
         self.assertIn('最近25期数字出现频率', html)
 
 
