@@ -4,3 +4,8 @@
 旧实现中 kl8 绕过 _serve_cached 手搓 _CACHE 字典，导致缓存过期时
 并发请求同时触发 6 秒重算。
 """
+from .backend import CacheBackend, Entry, MemoryBackend
+from .cache import Cache
+from .redis_backend import RedisBackend
+
+__all__ = ['Cache', 'CacheBackend', 'Entry', 'MemoryBackend', 'RedisBackend']
