@@ -1,4 +1,5 @@
 import unittest
+from unittest import mock
 
 from fastapi.testclient import TestClient
 
@@ -37,6 +38,58 @@ class ExecutorWorkersWiringTests(unittest.TestCase):
         with TestClient(app):
             executor = get_executor()
             self.assertEqual(executor._max_workers, 7)
+
+
+class LifespanShutdownOrderTests(unittest.TestCase):
+    """回归测试：优雅停机必须先排空 SWR 刷新，再停消费者，最后释放消费者
+    依赖的资源，顺序为
+    cache.wait_for_refreshes → tasks.shutdown → shutdown_executor → db.dispose。
+
+    SWR 刷新线程是 daemon，进程退出即被杀，`finally: self.l2.unlock(key)`
+    得不到执行，会在 Redis 残留一把 TTL 最长 lock_timeout 秒的锁——不先
+    排空就会在每次重启后的头 30 秒复现 P1 惊群。后两者的顺序也不能反：
+    应先停消费者（executor/tasks），再释放它们依赖的资源（db）。
+    用 mock 记录调用序列钉死顺序。
+    """
+
+    def setUp(self):
+        shutdown_executor()
+        self.addCleanup(shutdown_executor)
+
+    def test_shutdown_sequence_matches_required_order(self):
+        order = []
+
+        fake_cache = mock.Mock()
+        fake_cache.lock_timeout = 30
+        fake_cache.wait_for_refreshes.side_effect = (
+            lambda timeout=None: order.append('cache.wait_for_refreshes')
+        )
+
+        fake_db = mock.Mock()
+        fake_db.dispose.side_effect = lambda: order.append('db.dispose')
+
+        fake_tasks = mock.Mock()
+        fake_tasks.shutdown.side_effect = lambda wait=True: order.append('tasks.shutdown')
+
+        def recording_shutdown_executor():
+            order.append('shutdown_executor')
+
+        settings = Settings(redis_url=None, mysql_url='sqlite+pysqlite:///:memory:')
+
+        with mock.patch('src.api.app.build_cache', return_value=fake_cache), \
+                mock.patch('src.api.app.build_database', return_value=fake_db), \
+                mock.patch('src.api.app.TaskScheduler', return_value=fake_tasks), \
+                mock.patch(
+                    'src.api.app.shutdown_executor', side_effect=recording_shutdown_executor
+                ):
+            app = create_app(settings)
+            with TestClient(app):
+                pass  # 进入/退出触发 lifespan 的启动与关闭
+
+        self.assertEqual(
+            order,
+            ['cache.wait_for_refreshes', 'tasks.shutdown', 'shutdown_executor', 'db.dispose'],
+        )
 
 
 if __name__ == '__main__':

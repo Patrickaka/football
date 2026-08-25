@@ -30,9 +30,19 @@ def create_app(settings=None):
         get_executor(settings.executor_workers)
         log.info('API 启动完成')
         yield
+        # 关闭顺序：先排空 SWR 后台刷新，再停消费者，最后释放消费者依赖的资源。
+        # 1. cache.wait_for_refreshes：SWR 刷新线程是 daemon，进程退出即被杀，
+        #    `finally: self.l2.unlock(key)` 得不到执行，会在 Redis 残留一把
+        #    TTL 最长 lock_timeout 秒的锁——重启后第一个请求撞上这把锁，
+        #    复现 P1 惊群。必须在关闭序列的最前面排空。
+        # 2. tasks.shutdown → shutdown_executor：先停消费者（任务调度器与
+        #    线程池），再释放它们依赖的资源（db），顺序不能反——旧写法先
+        #    dispose db 再关 executor，executor 里仍在跑的任务可能这期间
+        #    还在用 db。
+        app.state.cache.wait_for_refreshes(timeout=app.state.cache.lock_timeout)
         app.state.tasks.shutdown(wait=True)
-        app.state.db.dispose()
         shutdown_executor()
+        app.state.db.dispose()
         log.info('API 已停止')
 
     app = FastAPI(title='Football 预测服务', version='2.0.0', lifespan=lifespan)
