@@ -76,6 +76,47 @@ class RepositoryTests(unittest.TestCase):
         self.assertIsInstance(row, dict)
         self.assertEqual(row['score'], 1)
 
+    def test_delete_by_without_filters_raises(self):
+        self.repo.insert_many([
+            {'period': '2026001', 'numbers': 'a', 'score': 1},
+            {'period': '2026002', 'numbers': 'b', 'score': 2},
+        ])
+        with self.assertRaises(ValueError):
+            self.repo.delete_by()
+        self.assertEqual(self.repo.count(), 2)
+
+    def test_delete_all_clears_table(self):
+        self.repo.insert_many([
+            {'period': '2026001', 'numbers': 'a', 'score': 1},
+            {'period': '2026002', 'numbers': 'b', 'score': 2},
+        ])
+        self.assertEqual(self.repo.delete_all(), 2)
+        self.assertEqual(self.repo.count(), 0)
+
+    def test_insert_many_rejects_unknown_column(self):
+        with self.assertRaises(ValueError):
+            self.repo.insert_many([
+                {'period': '2026001', 'numbers': 'a', 'score': 1, 'extraTypo': 'zz'},
+            ])
+        self.assertEqual(self.repo.count(), 0)
+
+    def test_upsert_rejects_unknown_column_when_absent(self):
+        with self.assertRaises(ValueError):
+            self.repo.upsert(
+                {'period': '2026001', 'numbers': 'a', 'score': 1, 'extraTypo': 'zz'},
+                key_cols=['period'],
+            )
+        self.assertEqual(self.repo.count(), 0)
+
+    def test_upsert_rejects_unknown_column_when_present(self):
+        self.repo.upsert({'period': '2026001', 'numbers': 'a', 'score': 1}, key_cols=['period'])
+        with self.assertRaises(ValueError):
+            self.repo.upsert(
+                {'period': '2026001', 'numbers': 'z', 'score': 9, 'extraTypo': 'zz'},
+                key_cols=['period'],
+            )
+        self.assertEqual(self.repo.find_by(period='2026001')[0]['numbers'], 'a')
+
 
 if __name__ == '__main__':
     unittest.main()
