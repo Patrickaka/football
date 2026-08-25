@@ -4,7 +4,7 @@ import unittest
 from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
 
-from src.api.deps import Settings, build_cache, build_database, get_cache, get_db, run_blocking
+from src.api.deps import Settings, build_cache, build_database, get_cache, get_db, run_blocking, shutdown_executor
 
 
 class SettingsTests(unittest.TestCase):
@@ -81,6 +81,15 @@ class GetCacheGetDbTests(unittest.TestCase):
 
 
 class RunBlockingTests(unittest.TestCase):
+    def tearDown(self):
+        # run_blocking() 会隐式创建模块级全局 _executor 单例（默认
+        # workers=4），且此单例在测试之间不会自动清理。不清理会污染
+        # 后续测试——尤其是依赖“单例首次创建时的 workers 参数生效”这一
+        # 语义的用例（如 ExecutorWorkersWiringTests）：pytest 按文件名
+        # 顺序先跑本文件，若不清理，等到别处用非默认 workers 首次期望
+        # 生效时，单例早已存在，传参被静默忽略。
+        shutdown_executor()
+
     def test_runs_sync_function_off_event_loop(self):
         import threading
 
