@@ -31,7 +31,9 @@ class Server3DCacheVersionTests(unittest.TestCase):
         self.assertFalse(server._is_cache_payload_current("ssq", {"result": []}))
 
     def test_other_non_versioned_cache_is_unchanged(self):
-        self.assertTrue(server._is_cache_payload_current("kl8", {"result": []}))
+        # kl8 自 2026-08-25 接入单飞缓存起也做期号+版本校验，不再属于本用例范畴，
+        # 这里改用仍未版本化的 beidan。
+        self.assertTrue(server._is_cache_payload_current("beidan", {"result": []}))
 
     def test_normal_refresh_fetches_once_and_skips_weight_recalculation(self):
         rule = Mock()

@@ -40,22 +40,6 @@ def _current_kl8_predictor_version():
         return KL8_PREDICTOR_VERSION
 
 
-def _is_kl8_cache_current(cache_entry, now):
-    if not _is_cache_valid(cache_entry, now):
-        return False
-    data = cache_entry.get('data')
-    if not isinstance(data, dict):
-        return False
-    analyzer = get_kl8_analyzer()
-    latest_issue = analyzer.history_data[0]['issue'] if analyzer.history_data else ''
-    if not latest_issue:
-        return False
-    return (
-        data.get('based_on_issue') == latest_issue
-        and data.get('statistics', {}).get('version') == _current_kl8_predictor_version()
-    )
-
-
 def _is_same_day(timestamp):
     """检查时间戳是否属于今天"""
     from datetime import date
@@ -79,6 +63,18 @@ def _is_cache_payload_current(key, data):
     if key == 'ssq':
         import src.ssq as _ssq
         return data.get('version') == _ssq.SSQ_PREDICTION_VERSION
+    if key == 'kl8':
+        # 除代码版本外还要比对期号：新开奖后旧预测必须失效，否则会一直返回上一期结果。
+        if not isinstance(data, dict):
+            return False
+        analyzer = get_kl8_analyzer()
+        latest_issue = analyzer.history_data[0]['issue'] if analyzer.history_data else ''
+        if not latest_issue:
+            return False
+        return (
+            data.get('based_on_issue') == latest_issue
+            and data.get('statistics', {}).get('version') == _current_kl8_predictor_version()
+        )
     return True
 
 

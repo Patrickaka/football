@@ -27,7 +27,7 @@ from .lazy_modules import (
     KL8RollingBacktest, get_kl8_analyzer, kl8_check_data_integrity, kl8_clear_cache, kl8_list_conflict_queue, kl8_list_recalculations, kl8_list_snapshots, kl8_run_prediction, validate_and_activate_strategy,
 )
 from .caching import (
-    _CACHE, _is_kl8_cache_current,
+    _CACHE, _serve_cached,
 )
 from .jobs import (
     _get_kl8_parameter_search_job, _run_kl8_parameter_search_job, _save_kl8_parameter_search_report, _set_kl8_parameter_search_job,
@@ -35,24 +35,23 @@ from .jobs import (
 
 class KL8ApiMixin:
     def _kl8_payload(self):
-        """获取快乐8预测结果"""
-        try:
-            now = time.time()
-            cache = _CACHE['kl8']
+        """获取快乐8预测结果。
 
-            if cache['data'] is not None and _is_kl8_cache_current(cache, now):
-                self._log.info('快乐8使用缓存')
-                return {'result': cache['data']}
-
-            self._log.info('快乐8重新计算')
+        走统一的 _serve_cached：并发请求单飞（此前无锁，缓存一过期就每个请求
+        各算一遍，线上实测平均 6.05 秒），缓存陈旧时先返回旧值再后台刷新。
+        期号与版本校验在 _is_cache_payload_current 里完成。
+        """
+        def _compute():
             result = kl8_run_prediction(force_refresh=False)
+            if isinstance(result, dict) and 'error' in result:
+                raise RuntimeError(result['error'])
+            return result
 
-            if 'error' in result:
-                return {'error': result['error']}
-
-            cache['data'] = result
-            cache['timestamp'] = now
-            return {'result': result}
+        try:
+            data, error = _serve_cached('kl8', _compute)
+            if error:
+                return {'error': error}
+            return {'result': data}
         except Exception:
             self._log.error('快乐8预测失败', exc_info=True)
             return {'error': '快乐8预测失败'}
