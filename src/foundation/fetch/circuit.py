@@ -19,7 +19,11 @@ class CircuitBreaker:
             if self.state == 'closed':
                 return True
             if self.state == 'half_open':
-                return True
+                # half_open 只放行一次试探：把 closed/open -> half_open 的这次
+                # allow() 调用本身当作那唯一的探测名额，state 已是 half_open
+                # 说明探测名额已被占用，其余并发调用一律拒绝，直到
+                # record_success/record_failure 让状态离开 half_open。
+                return False
             if now - self._opened_at >= self.recovery_timeout:
                 self.state = 'half_open'
                 return True
