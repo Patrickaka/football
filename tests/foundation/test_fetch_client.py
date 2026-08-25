@@ -1,5 +1,8 @@
 import tempfile
+import threading
+import time
 import unittest
+from unittest import mock
 from urllib.parse import urlparse
 
 from src.foundation.fetch.circuit import CircuitBreaker
@@ -154,6 +157,121 @@ class FetchClientBreakerReportPairingTests(unittest.TestCase):
         self.assertEqual(spy.allow_calls, 1)
         self.assertEqual(spy.success_calls, 0)
         self.assertEqual(spy.failure_calls, 1)
+
+
+class FetchClientConstructorValidationTests(unittest.TestCase):
+    """回归测试：构造参数非法值必须在 __init__ 时立即拒绝，
+    不能悄悄放行然后在运行期产生诡异行为（如 max_retries=0 从不
+    调用 transport 却仍上报一次 record_failure）。
+    """
+
+    def make(self, **overrides):
+        kwargs = dict(
+            transport=lambda url, timeout: 'ok',
+            limiters=DomainRateLimiters(default_rate=1000, burst=1000),
+        )
+        kwargs.update(overrides)
+        return FetchClient(**kwargs)
+
+    def test_max_retries_zero_rejected(self):
+        with self.assertRaises(ValueError):
+            self.make(max_retries=0)
+
+    def test_max_retries_negative_rejected(self):
+        with self.assertRaises(ValueError):
+            self.make(max_retries=-1)
+
+    def test_base_backoff_negative_rejected(self):
+        with self.assertRaises(ValueError):
+            self.make(base_backoff=-1)
+
+    def test_base_backoff_zero_accepted(self):
+        self.make(base_backoff=0)
+
+    def test_failure_threshold_zero_rejected(self):
+        with self.assertRaises(ValueError):
+            self.make(failure_threshold=0)
+
+    def test_failure_threshold_negative_rejected(self):
+        with self.assertRaises(ValueError):
+            self.make(failure_threshold=-1)
+
+    def test_recovery_timeout_zero_rejected(self):
+        with self.assertRaises(ValueError):
+            self.make(recovery_timeout=0)
+
+    def test_recovery_timeout_negative_rejected(self):
+        with self.assertRaises(ValueError):
+            self.make(recovery_timeout=-1)
+
+    def test_valid_construction_does_not_raise(self):
+        client = self.make(
+            max_retries=1, base_backoff=0, failure_threshold=1, recovery_timeout=1
+        )
+        self.assertEqual(client.get('https://a.com/x'), 'ok')
+
+    def test_rejected_construction_raises_fetcherror_subtype_not_bare_valueerror_downstream(self):
+        """构造期抛的是裸 ValueError（非 FetchError），调用方在构造阶段
+        就能感知配置错误，而不是让它穿透到运行期的 except FetchError。
+        """
+        with self.assertRaises(ValueError):
+            self.make(base_backoff=-1)
+        # 明确不是 FetchError 的实例——构造期失败与运行期抓取失败是两类问题。
+        try:
+            self.make(base_backoff=-1)
+        except ValueError as exc:
+            self.assertNotIsInstance(exc, FetchError)
+
+
+class FetchClientBreakerConcurrencyTests(unittest.TestCase):
+    """回归测试：并发首次访问同一域名必须拿到同一把熔断器实例，
+    否则失败计数会被多把熔断器摊薄，形同虚设。
+
+    单纯用 Barrier 同步线程起跑不足以稳定复现竞态——check-then-act
+    的窗口太窄（几微秒），GIL 的默认切换间隔（5ms）经常让整个
+    `_breaker` 调用在一次调度片内跑完，race 撞不上。因此用一个
+    "变慢的 CircuitBreaker 构造函数"人为撑大窗口：所有线程先在
+    barrier 处对齐同时起跑，再各自调用 `_breaker(domain)`；构造过程
+    人为 sleep 一小段时间。若无锁保护，多个线程会在这段 sleep 期间
+    都判定"当前无实例"从而各自构造一把，产生多把不同实例；有锁保护
+    时，同一时刻只有一个线程能进入构造路径，其余线程会阻塞在锁上，
+    待其释放后直接复用已写入 dict 的实例。
+    """
+
+    def test_concurrent_first_access_shares_single_breaker_instance(self):
+        client = FetchClient(
+            transport=lambda url, timeout: 'ok',
+            limiters=DomainRateLimiters(default_rate=1000, burst=1000),
+        )
+        domain = 'concurrent.example.com'
+        thread_count = 16
+        start_barrier = threading.Barrier(thread_count)
+
+        from src.foundation.fetch.circuit import CircuitBreaker as RealCircuitBreaker
+
+        class SlowCircuitBreaker(RealCircuitBreaker):
+            def __init__(self, *args, **kwargs):
+                time.sleep(0.15)
+                super().__init__(*args, **kwargs)
+
+        breakers = []
+        breakers_lock = threading.Lock()
+
+        def worker():
+            start_barrier.wait(timeout=5)
+            breaker = client._breaker(domain)
+            with breakers_lock:
+                breakers.append(breaker)
+
+        with mock.patch('src.foundation.fetch.client.CircuitBreaker', SlowCircuitBreaker):
+            threads = [threading.Thread(target=worker) for _ in range(thread_count)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join(timeout=10)
+
+        self.assertEqual(len(breakers), thread_count)
+        self.assertEqual(len(set(id(b) for b in breakers)), 1)
 
 
 if __name__ == '__main__':

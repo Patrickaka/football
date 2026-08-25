@@ -1,4 +1,5 @@
 import logging
+import threading
 import time
 from urllib.parse import urlparse
 
@@ -28,6 +29,14 @@ class FetchClient:
         recovery_timeout=60,
         sleep_fn=time.sleep,
     ):
+        if max_retries < 1:
+            raise ValueError('max_retries must be >= 1, got %r' % (max_retries,))
+        if base_backoff < 0:
+            raise ValueError('base_backoff must be >= 0, got %r' % (base_backoff,))
+        if failure_threshold <= 0:
+            raise ValueError('failure_threshold must be > 0, got %r' % (failure_threshold,))
+        if recovery_timeout <= 0:
+            raise ValueError('recovery_timeout must be > 0, got %r' % (recovery_timeout,))
         self.transport = transport
         self.limiters = limiters
         self.snapshots = snapshots
@@ -37,6 +46,7 @@ class FetchClient:
         self.recovery_timeout = recovery_timeout
         self.sleep_fn = sleep_fn
         self._breakers = {}
+        self._breakers_guard = threading.Lock()
 
     def get(self, url, timeout=20):
         domain = urlparse(url).netloc
@@ -99,11 +109,12 @@ class FetchClient:
         raise FetchError(f'{url} 抓取失败：{reason}')
 
     def _breaker(self, domain):
-        breaker = self._breakers.get(domain)
-        if breaker is None:
-            breaker = CircuitBreaker(
-                failure_threshold=self.failure_threshold,
-                recovery_timeout=self.recovery_timeout,
-            )
-            self._breakers[domain] = breaker
-        return breaker
+        with self._breakers_guard:
+            breaker = self._breakers.get(domain)
+            if breaker is None:
+                breaker = CircuitBreaker(
+                    failure_threshold=self.failure_threshold,
+                    recovery_timeout=self.recovery_timeout,
+                )
+                self._breakers[domain] = breaker
+            return breaker
