@@ -15,7 +15,7 @@ app = create_app()
 def server_config():
     return {
         'host': os.getenv('FOOTBALL_HOST', '0.0.0.0'),
-        'port': int(os.getenv('FOOTBALL_PORT', '9000')),
+        'port': int(os.getenv('FOOTBALL_PORT', '9004')),
         'workers': 1,
         'log_level': os.getenv('LOG_LEVEL', 'info'),
     }

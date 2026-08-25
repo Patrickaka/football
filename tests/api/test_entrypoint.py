@@ -19,7 +19,7 @@ class EntrypointTests(unittest.TestCase):
         with mock.patch.dict('os.environ', {}, clear=True):
             config = server_config()
         self.assertEqual(config['host'], '0.0.0.0')
-        self.assertEqual(config['port'], 9000)
+        self.assertEqual(config['port'], 9004)
 
     def test_single_worker_due_to_memory_limit(self):
         from main import server_config
