@@ -60,6 +60,28 @@ class EvalSetShapeTests(unittest.TestCase):
     def test_lightgbm_none_stays_none(self):
         self.assertIsNone(lightgbm_eval_set(None))
 
+    def test_xgboost_rejects_bare_list_pair(self):
+        """[X, y]（列表而非元组）不能靠 isinstance(list) 猜成"已包装"，
+        否则会被静默当成 [(X,y_row0), ...] 之类的错误形状喂给 XGBoost——
+        与简报要修的 bug 是同一类风险，触发方式从元组换成了列表。"""
+        with self.assertRaises(ValueError):
+            xgboost_eval_set([[1], [0]])
+
+    def test_lightgbm_rejects_bare_list_pair(self):
+        with self.assertRaises(ValueError):
+            lightgbm_eval_set([[1], [0]])
+
+    def test_xgboost_accepts_empty_list(self):
+        self.assertEqual(xgboost_eval_set([]), [])
+
+    def test_xgboost_rejects_unsupported_type(self):
+        with self.assertRaises(ValueError):
+            xgboost_eval_set('not-an-eval-set')
+
+    def test_lightgbm_rejects_unsupported_type(self):
+        with self.assertRaises(ValueError):
+            lightgbm_eval_set(123)
+
 
 class BlendWeightsTests(unittest.TestCase):
     def test_weights_sum_to_one(self):
@@ -77,6 +99,26 @@ class BlendWeightsTests(unittest.TestCase):
 
     def test_all_zero_scores_fall_back_to_uniform(self):
         self.assertEqual(blend_weights([0, 0]), [0.5, 0.5])
+
+    def test_negative_score_is_clipped_not_negative_weight(self):
+        weights = blend_weights([-1, 2, 3])
+        self.assertEqual(weights[0], 0.0)
+        self.assertTrue(all(w >= 0 for w in weights))
+        self.assertAlmostEqual(sum(weights), 1.0)
+
+    def test_all_negative_scores_fall_back_to_uniform(self):
+        self.assertEqual(blend_weights([-1, -2, -3]), [1 / 3, 1 / 3, 1 / 3])
+
+    def test_single_score(self):
+        self.assertEqual(blend_weights([5]), [1.0])
+
+    def test_single_negative_score_falls_back_to_uniform(self):
+        self.assertEqual(blend_weights([-5]), [1.0])
+
+    def test_mixed_with_zero_score(self):
+        weights = blend_weights([0, 1, 2])
+        self.assertEqual(weights[0], 0.0)
+        self.assertAlmostEqual(sum(weights), 1.0)
 
 
 if __name__ == '__main__':

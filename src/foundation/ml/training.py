@@ -65,19 +65,40 @@ def lightgbm_eval_set(eval_set):
 
 
 def _as_pair_list(eval_set):
+    """把统一的 (X, y) 表示转成各库要求的 [(X, y)] 列表。
+
+    刻意不靠 list/tuple 类型来猜测调用方意图——[X, y] 与 [(X, y)] 在类型上
+    无法区分，猜错会静默把错误形状喂给训练器，正是本模块要消除的那类问题。
+    """
     if eval_set is None:
         return None
+    if isinstance(eval_set, tuple) and len(eval_set) == 2:
+        return [eval_set]
     if isinstance(eval_set, list):
-        return eval_set
-    return [eval_set]
+        if all(isinstance(item, tuple) and len(item) == 2 for item in eval_set):
+            return eval_set          # 已是 [(X, y), ...]
+        raise ValueError(
+            'eval_set 为 list 时必须是 [(X, y), ...] 形式；'
+            '单个验证集请传 (X, y) 元组，不要传 [X, y]'
+        )
+    raise ValueError(f'不支持的 eval_set 类型: {type(eval_set).__name__}')
 
 
 def blend_weights(scores):
-    """按验证得分归一化为融合权重。全零时退化为均匀分布。"""
+    """按验证得分归一化为融合权重。
+
+    负分截断为 0 再归一化：验证得分理论上非负（AUC/准确率类指标），但函数
+    接收外部输入，不应假设。截断而非报错，是因为个别模型跑出负分（用了
+    log-loss、相关系数等可能为负的指标，或模型本身表现差于基线）是训练期的
+    正常噪声，不代表调用方传参出错——直接拒绝会让上游融合流程为了一个模型
+    的低分而整体炸掉，代价大于把它的权重记为 0（等同于"不参与融合"）。
+    截断后全零（含空列表之外的情况）时退化为均匀分布。
+    """
     scores = list(scores)
     if not scores:
         return []
-    total = sum(scores)
+    clipped = [max(0.0, s) for s in scores]
+    total = sum(clipped)
     if total <= 0:
         return [1.0 / len(scores)] * len(scores)
-    return [s / total for s in scores]
+    return [s / total for s in clipped]
