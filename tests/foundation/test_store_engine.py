@@ -31,6 +31,14 @@ class MysqlUrlTests(unittest.TestCase):
             url = mysql_url_from_env()
         self.assertIn('p%40ss%2Fword', url)
 
+    def test_password_with_space_survives_round_trip(self):
+        from sqlalchemy.engine import make_url
+
+        secret = 'p@ss word/slash:colon'
+        with mock.patch.dict('os.environ', {'MYSQL_PASSWORD': secret}, clear=True):
+            url = mysql_url_from_env()
+        self.assertEqual(make_url(url).password, secret)
+
 
 class DatabaseTests(unittest.TestCase):
     def setUp(self):

@@ -1,6 +1,6 @@
 import os
 from contextlib import contextmanager
-from urllib.parse import quote_plus
+from urllib.parse import quote
 
 from sqlalchemy import Engine, create_engine
 
@@ -14,7 +14,7 @@ def mysql_url_from_env():
     host = os.getenv('MYSQL_HOST', '127.0.0.1')
     port = os.getenv('MYSQL_PORT', '3306')
     user = os.getenv('MYSQL_USER', 'root')
-    password = quote_plus(os.getenv('MYSQL_PASSWORD', ''))
+    password = quote(os.getenv('MYSQL_PASSWORD', ''), safe='')
     database = os.getenv('MYSQL_DB', 'football')
     charset = os.getenv('MYSQL_CHARSET', 'utf8mb4')
     return f'mysql+pymysql://{user}:{password}@{host}:{port}/{database}?charset={charset}'
