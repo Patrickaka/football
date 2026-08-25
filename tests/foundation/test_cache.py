@@ -200,6 +200,48 @@ class CacheTests(unittest.TestCase):
         self.assertIsNone(self.l1.get('k'))
         self.assertIsNone(self.l2.get('k'))
 
+    def test_set_writes_l1_even_when_l2_raises(self):
+        """L2 写入失败不应连累 L1：先写 L1、L2 异常被吞掉，退化为纯 L1，
+        而不是"两层都没写成，每次请求都重算且每次 500"。
+        """
+
+        class BrokenL2(MemoryBackend):
+            def set(self, key, value, ttl, now=None):
+                raise ConnectionError('redis down')
+
+        cache = Cache(l1=MemoryBackend(), l2=BrokenL2(), default_ttl=60)
+        cache.set('k', 'v', ttl=60)  # 不应抛出
+        entry = cache.l1.get('k')
+        self.assertIsNotNone(entry)
+        self.assertEqual(entry.value, 'v')
+
+    def test_invalidate_during_cold_start_single_flight_does_not_resurrect(self):
+        """冷启动单飞计算期间调用 invalidate，算完不应把失效前的值无条件写回。"""
+        compute_started = threading.Event()
+        proceed = threading.Event()
+
+        def slow_cold_compute():
+            compute_started.set()
+            proceed.wait(timeout=2)
+            return 'computed-value'
+
+        result_holder = []
+
+        def worker():
+            result_holder.append(self.cache.get('k', slow_cold_compute))
+
+        t = threading.Thread(target=worker)
+        t.start()
+        self.assertTrue(compute_started.wait(timeout=2))
+
+        self.cache.invalidate('k')
+        proceed.set()
+        t.join(timeout=2)
+
+        self.assertEqual(result_holder, ['computed-value'])
+        self.assertIsNone(self.l1.get('k'))
+        self.assertIsNone(self.l2.get('k'))
+
 
 if __name__ == '__main__':
     unittest.main()

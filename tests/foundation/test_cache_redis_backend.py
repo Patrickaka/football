@@ -68,5 +68,47 @@ class RedisBackendTests(unittest.TestCase):
         self.assertNotEqual(self.backend._k('lock:foo'), self.backend._lock_k('foo'))
 
 
+class RedisBackendRuntimeFaultTests(unittest.TestCase):
+    """回归测试：运行期 Redis 抖动/重启不应打穿到调用方——各方法必须
+    降级而不是让底层异常冒泡。启动时不可用已有防护（build_cache），
+    这里覆盖的是运行中途才出现故障的场景。
+    """
+
+    def setUp(self):
+        self.client = mock.MagicMock()
+        self.backend = RedisBackend(self.client, prefix='t:')
+
+    def test_get_swallows_client_exception_and_treated_as_miss(self):
+        self.client.get.side_effect = ConnectionError('redis down')
+        self.assertIsNone(self.backend.get('k'))
+
+    def test_set_swallows_client_exception_silently(self):
+        self.client.set.side_effect = ConnectionError('redis down')
+        self.backend.set('k', 'v', ttl=60, now=100.0)  # 不应抛出
+
+    def test_set_swallows_non_json_serialisable_value(self):
+        """np.int64/datetime 等非 JSON 可序列化的值会让 json.dumps 抛
+        TypeError；这属于 set 内部的失败，同样必须被吞掉。
+        """
+
+        class Unserialisable:
+            pass
+
+        self.backend.set('k', Unserialisable(), ttl=60, now=100.0)  # 不应抛出
+        self.client.set.assert_not_called()
+
+    def test_delete_swallows_client_exception_silently(self):
+        self.client.delete.side_effect = ConnectionError('redis down')
+        self.backend.delete('k')  # 不应抛出
+
+    def test_lock_swallows_client_exception_and_returns_false(self):
+        self.client.set.side_effect = ConnectionError('redis down')
+        self.assertFalse(self.backend.lock('k', timeout=30))
+
+    def test_unlock_swallows_client_exception_silently(self):
+        self.client.delete.side_effect = ConnectionError('redis down')
+        self.backend.unlock('k')  # 不应抛出
+
+
 if __name__ == '__main__':
     unittest.main()

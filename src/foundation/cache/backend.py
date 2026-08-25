@@ -19,6 +19,11 @@ class Entry:
 
 
 class CacheBackend(Protocol):
+    """缓存后端协议。契约：`set` 的 value 必须 JSON 可序列化——
+    pandas/numpy/datetime 等类型需调用方自行转换为原生类型
+    （如 int/float/str/list/dict）后再写入，本协议的实现不做隐式转换。
+    """
+
     def get(self, key: str) -> Optional[Entry]: ...
 
     def set(self, key: str, value: Any, ttl: float, now: Optional[float] = None) -> None: ...

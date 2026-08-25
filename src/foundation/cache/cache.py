@@ -12,6 +12,11 @@ class Cache:
     1. 所有读取走单飞，避免缓存过期时并发重算
     2. 过期数据先返回、后台刷新（SWR），请求线程不承担冷计算
     3. invalidate 一次贯穿两层
+
+    契约：compute_fn 返回值必须 JSON 可序列化——生产态 L2 是 Redis，
+    序列化边界在那一层。写入失败会被吞掉并退化为纯 L1（见 `set`
+    的实现说明），不会让请求失败，但也意味着不可序列化的值永远
+    进不了 L2、每次冷启动都要重新计算。
     """
 
     def __init__(self, l1, l2, default_ttl=300, lock_timeout=30):
@@ -42,10 +47,22 @@ class Cache:
         return self._compute_with_single_flight(key, compute_fn, ttl)
 
     def set(self, key, value, ttl=None):
+        """写入两层缓存。先写 L1 再写 L2：L1（进程内存）几乎不会失败，
+        L2（生产态是 Redis）可能因网络抖动、序列化失败等原因写入失败——
+        先写 L1 保证即便 L2 写入失败，调用方也能立刻从 L1 读到刚写入的
+        值，退化为纯 L1 缓存，而不是"两层都没写成，每次请求都重算"。
+
+        L2 写入额外包一层 try/except：RedisBackend 自身已经把底层
+        client 调用都护住了，这里是防御性的第二道保险，避免未来换用
+        一个没有做内部防护的 L2 后端时，一次写入失败打穿到调用方。
+        """
         ttl = self.default_ttl if ttl is None else ttl
         now = time.time()
-        self.l2.set(key, value, ttl, now=now)
         self.l1.set(key, value, ttl, now=now)
+        try:
+            self.l2.set(key, value, ttl, now=now)
+        except Exception:
+            log.warning('L2 写入失败，已退化为纯 L1: key=%s', key, exc_info=True)
 
     def invalidate(self, key):
         """清除该 key 的所有层缓存，并作废所有在途的后台刷新。
@@ -82,7 +99,13 @@ class Cache:
                     entry = self.l2.get(key)
                     if entry is not None and entry.is_fresh():
                         return entry.value
+                    with self._refresh_guard:
+                        epoch_at_start = self._epoch
                     value = compute_fn()
+                    with self._refresh_guard:
+                        if self._epoch != epoch_at_start:
+                            log.info('计算期间缓存已被失效，不写回: key=%s', key)
+                            return value
                     self.set(key, value, ttl)
                     return value
                 finally:
