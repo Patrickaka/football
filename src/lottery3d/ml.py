@@ -987,10 +987,12 @@ def train_single_model(X, y, model_name, sample_weight=None, eval_set=None):
                 random_state=42,
                 eval_metric='logloss',
                 verbosity=0,
-                early_stopping_rounds=20,
+                # early stopping 依赖验证集，无 eval_set 时传入会直接报错
+                early_stopping_rounds=20 if eval_set is not None else None,
             )
             if eval_set is not None:
-                model.fit(X, y, sample_weight=sample_weight, eval_set=eval_set)
+                # XGBoost 要求 eval_set 为 [(X, y)] 列表，调用方传入的是单个 (X, y) 元组
+                model.fit(X, y, sample_weight=sample_weight, eval_set=[eval_set])
             else:
                 model.fit(X, y, sample_weight=sample_weight)
             return model, "xgboost"
