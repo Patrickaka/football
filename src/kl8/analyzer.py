@@ -14,6 +14,7 @@ from pathlib import Path
 from src.common.paths import data_path
 from src.common.repositories import doc_store
 from src.common.logger import setup_logger
+from src.domain.numeric import statistics as stats
 
 log = setup_logger('kl8')
 from . import strategies as _strategies_mod
@@ -34,6 +35,12 @@ from .candidates import (
 from .records import (
     _build_recent_settlement_performance, _build_strategy_health, _checksum_numbers, _compute_next_issue, _compute_prediction_changes, _load_last_snapshot, _strategy_fingerprint, check_data_integrity, load_prize_table, normalize_record, save_conflict_to_queue,
 )
+
+# kl8 的号码空间与几个分区参数。写死在统计函数里的话，换一种彩票就用不上。
+KL8_SPACE = stats.NumberSpace(low=1, high=80)
+KL8_ZONE_SIZE = 5           # 16 个 5 码区，与 position_residual 粒度一致
+KL8_BIG_SMALL_THRESHOLD = 40  # 大于 40 为大；40 本身算小
+
 
 class KL8Analyzer:
     """快乐8预测分析器（v5: 严格三段式+预测就绪判断+纯参数化回测）"""
@@ -196,157 +203,45 @@ class KL8Analyzer:
     # ─── 统计计算 ───
 
     def update_statistics(self):
-        """更新所有统计量"""
+        """更新所有统计量。
+
+        具体算法都在 `domain/numeric/statistics.py`——它们对任何数字彩票
+        都是同一批概念（频率、遗漏、冷热、共现、跨期转移、区间分布），
+        变的只是号码空间。这里只负责把 kl8 的空间参数喂进去。
+        """
         if not self.history_data:
             self.statistics = {}
             return
 
-        n = len(self.history_data)
-        recent = min(n, KL8_DEFAULT_HISTORY)
+        recent = min(len(self.history_data), KL8_DEFAULT_HISTORY)
         recent_data = self.history_data[:recent]
+        draws = [record['numbers'] for record in recent_data]
 
-        freq = Counter()
-        for record in recent_data:
-            for num in record['numbers']:
-                freq[num] += 1
-
-        gap = {}
-        for num in range(1, 81):
-            gap[num] = 0
-            for record in recent_data:
-                if num in record['numbers']:
-                    break
-                gap[num] += 1
-
-        last_numbers = set(recent_data[0]['numbers']) if recent_data else set()
-
-        trend_freq = {}
-        if recent >= 40:
-            mid = recent // 2
-            first_half = recent_data[mid:]
-            second_half = recent_data[:mid]
-            first_freq = Counter()
-            for record in first_half:
-                for num in record['numbers']:
-                    first_freq[num] += 1
-            second_freq = Counter()
-            for record in second_half:
-                for num in record['numbers']:
-                    second_freq[num] += 1
-            for num in range(1, 81):
-                trend_freq[num] = second_freq.get(num, 0) - first_freq.get(num, 0)
-        else:
-            for num in range(1, 81):
-                trend_freq[num] = 0
-
-        pair_cooccurrence = {}
-        for record in recent_data:
-            nums = sorted(record['numbers'])
-            for i in range(len(nums)):
-                for j in range(i + 1, len(nums)):
-                    key = (nums[i], nums[j])
-                    pair_cooccurrence[key] = pair_cooccurrence.get(key, 0) + 1
-
-        avg_cooccurrence = {}
-        for num in range(1, 81):
-            cooc_sum = 0
-            cooc_count = 0
-            for other in range(1, 81):
-                if num != other:
-                    key = (min(num, other), max(num, other))
-                    cooc_sum += pair_cooccurrence.get(key, 0)
-                    cooc_count += 1
-            avg_cooccurrence[num] = cooc_sum / cooc_count if cooc_count > 0 else 0
-
-        # 跨期条件关联：历史按“较老一期 -> 紧接着的较新一期”统计。
-        # 对当前最新一期的20个触发号，估计每个候选号在下一期出现的概率。
-        # Beta(5, 15)收缩把小样本拉回公平基线0.25，避免偶然的1/1、2/2
-        # 被误判为强规律。这里与同期开奖的pair_cooccurrence含义不同。
-        transition_counts = defaultdict(Counter)
-        trigger_counts = Counter()
-        for older_idx in range(1, len(recent_data)):
-            source = set(recent_data[older_idx]['numbers'])
-            following = set(recent_data[older_idx - 1]['numbers'])
-            for trigger in source:
-                trigger_counts[trigger] += 1
-                for target in following:
-                    transition_counts[trigger][target] += 1
-
-        next_transition_probability = {}
-        next_transition_support = {}
-        for target in range(1, 81):
-            weighted_probability = 0.0
-            total_support = 0
-            for trigger in last_numbers:
-                support = trigger_counts.get(trigger, 0)
-                if support <= 0:
-                    continue
-                hits = transition_counts[trigger].get(target, 0)
-                posterior = (hits + 5.0) / (support + 20.0)
-                weighted_probability += posterior * support
-                total_support += support
-            next_transition_probability[target] = (
-                weighted_probability / total_support if total_support else 0.25
-            )
-            next_transition_support[target] = total_support
-
-        adjacent_freq = {}
-        for num in range(1, 81):
-            adj_nums = [n for n in [num-1, num+1] if 1 <= n <= 80]
-            adjacent_freq[num] = sum(freq.get(n, 0) for n in adj_nums) / len(adj_nums) if adj_nums else 0
+        freq = stats.number_frequency(draws, space=KL8_SPACE)
+        pairs = stats.pair_cooccurrence(draws)
+        transition, transition_support = stats.transition_probability(
+            draws, space=KL8_SPACE)
 
         self.statistics = {
             'frequency': freq,
-            'gap': gap,
-            'trend': trend_freq,
-            'pair_cooccurrence': pair_cooccurrence,
-            'avg_cooccurrence': avg_cooccurrence,
-            'next_transition_probability': next_transition_probability,
-            'next_transition_support': next_transition_support,
-            'adjacent_freq': adjacent_freq,
+            'gap': stats.gaps(draws, space=KL8_SPACE),
+            'trend': stats.trend(draws, space=KL8_SPACE),
+            'pair_cooccurrence': pairs,
+            'avg_cooccurrence': stats.average_cooccurrence(pairs, space=KL8_SPACE),
+            'next_transition_probability': transition,
+            'next_transition_support': transition_support,
+            'adjacent_freq': stats.adjacent_frequency(freq, space=KL8_SPACE),
             'total_periods': recent,
             'expected_freq': recent * KL8_DRAW_COUNT / KL8_NUM_RANGE,
             'expected_gap': KL8_EXPECTED_GAP,
-            'last_numbers': last_numbers,
-            'freq_by_zone': self._zone_frequency(recent_data),
-            'freq_by_road': self._road_frequency(recent_data),
-            'freq_by_odd_even': self._odd_even_frequency(recent_data),
-            'freq_by_big_small': self._big_small_frequency(recent_data),
+            'last_numbers': set(draws[0]) if draws else set(),
+            'freq_by_zone': stats.zone_frequency(draws, size=KL8_ZONE_SIZE,
+                                                 space=KL8_SPACE),
+            'freq_by_road': stats.road_frequency(draws),
+            'freq_by_odd_even': stats.parity_frequency(draws),
+            'freq_by_big_small': stats.high_low_frequency(
+                draws, threshold=KL8_BIG_SMALL_THRESHOLD),
         }
-
-    def _zone_frequency(self, data: List[Dict]) -> Dict:
-        """16个5码区的频率分布（与position_residual粒度一致）"""
-        zone_freq = defaultdict(int)
-        for record in data:
-            for num in record['numbers']:
-                zone = (num - 1) // 5 + 1
-                zone_freq[zone] += 1
-        return dict(zone_freq)
-
-    def _road_frequency(self, data: List[Dict]) -> Dict:
-        """012路频率分布"""
-        road_freq = defaultdict(int)
-        for record in data:
-            for num in record['numbers']:
-                road = num % 3
-                road_freq[road] += 1
-        return dict(road_freq)
-
-    def _odd_even_frequency(self, data: List[Dict]) -> Dict:
-        """奇偶频率分布"""
-        freq = defaultdict(int)
-        for record in data:
-            for num in record['numbers']:
-                freq['odd' if num % 2 == 1 else 'even'] += 1
-        return dict(freq)
-
-    def _big_small_frequency(self, data: List[Dict]) -> Dict:
-        """大小频率分布"""
-        freq = defaultdict(int)
-        for record in data:
-            for num in record['numbers']:
-                freq['big' if num > 40 else 'small'] += 1
-        return dict(freq)
 
     # ─── 对称评分函数 ───
 
