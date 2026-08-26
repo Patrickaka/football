@@ -40,6 +40,7 @@ class FetchClient:
         failure_threshold=5,
         recovery_timeout=60,
         sleep_fn=time.sleep,
+        breaker_key_fn=None,
     ):
         if max_retries < 1:
             raise ValueError('max_retries must be >= 1, got %r' % (max_retries,))
@@ -57,12 +58,17 @@ class FetchClient:
         self.failure_threshold = failure_threshold
         self.recovery_timeout = recovery_timeout
         self.sleep_fn = sleep_fn
+        # 熔断的粒度必须与**故障边界**一致，而限速的粒度对应的是对源站的
+        # 礼貌，两者不是一回事，所以分开。默认按域名；当同一域名下既有健康
+        # 路径又有必然失败的路径时（例如 okooo 的赛程页正常、详情页被 WAF
+        # 拦死），按域名熔断会让坏的那一半把好的一半一起打掉。
+        self.breaker_key_fn = breaker_key_fn or (lambda url: urlparse(url).netloc)
         self._breakers = {}
         self._breakers_guard = threading.Lock()
 
     def get(self, url, timeout=20):
         domain = urlparse(url).netloc
-        breaker = self._breaker(domain)
+        breaker = self._breaker(self.breaker_key_fn(url))
 
         if not breaker.allow():
             # 未被放行：本次调用没有发起任何真实请求，绝不能上报
@@ -78,6 +84,7 @@ class FetchClient:
         # 既打破 allow()/report 的一一配对，又会让失败计数虚高地反映"重试
         # 次数"而不是"失败请求次数"，扭曲 failure_threshold 的语义。
         succeeded = False
+        permanent = False
         try:
             last_error = None
             for attempt in range(self.max_retries):
@@ -87,10 +94,11 @@ class FetchClient:
                 try:
                     body = self.transport(url, timeout)
                 except PermanentFetchError as exc:
-                    # 确定性失败，重试只会把代价乘以重试次数。直接跳出，
-                    # 交给 finally 记一次失败——熔断照常推进。
-                    log.warning('确定性失败，不重试: url=%s error=%s', url, exc)
+                    # 确定性失败：不重试（重试只是把代价乘以重试次数），
+                    # 且直接让熔断开路——单次就是完整证据，不必攒够阈值。
+                    log.warning('确定性失败，直接开路: url=%s error=%s', url, exc)
                     last_error = exc
+                    permanent = True
                     break
                 except Exception as exc:
                     last_error = exc
@@ -115,6 +123,8 @@ class FetchClient:
         finally:
             if succeeded:
                 breaker.record_success()
+            elif permanent:
+                breaker.trip()
             else:
                 breaker.record_failure()
 
@@ -126,13 +136,13 @@ class FetchClient:
                 return cached
         raise FetchError(f'{url} 抓取失败：{reason}')
 
-    def _breaker(self, domain):
+    def _breaker(self, key):
         with self._breakers_guard:
-            breaker = self._breakers.get(domain)
+            breaker = self._breakers.get(key)
             if breaker is None:
                 breaker = CircuitBreaker(
                     failure_threshold=self.failure_threshold,
                     recovery_timeout=self.recovery_timeout,
                 )
-                self._breakers[domain] = breaker
+                self._breakers[key] = breaker
             return breaker

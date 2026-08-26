@@ -244,6 +244,77 @@ class WafIsPermanentTests(unittest.TestCase):
         self.assertEqual(len(self.calls), before, '熔断开路后仍然发了请求')
 
 
+class BreakerGranularityTests(unittest.TestCase):
+    """详情页的熔断不能把同域名的赛程页一起打掉。
+
+    **这是线上真实发生过的故障**：端点切换后，okooo 详情页连撞 WAF 触发
+    熔断，而熔断按域名建，于是同属 www.okooo.com 的赛程页也被短路——
+    接口返回 200、比赛数 0、走势全空，没有任何报错。赛程页自带的
+    rf_trend / dx_trend 是线上唯一活着的走势来源，代价是整份推荐直接空掉。
+    """
+
+    SCHEDULE = 'https://www.okooo.com/jingcailanqiu/hunhe/'
+    DETAIL = 'https://www.okooo.com/basketball/match/5381400/odds/'
+
+    def test_detail_and_schedule_use_different_breakers(self):
+        self.assertNotEqual(fetching.breaker_key(self.DETAIL),
+                            fetching.breaker_key(self.SCHEDULE))
+
+    def test_all_three_detail_kinds_share_one_breaker(self):
+        keys = {fetching.breaker_key(
+            f'https://www.okooo.com/basketball/match/5381400/{kind}/')
+            for kind in ('odds', 'ah', 'ou')}
+        self.assertEqual(len(keys), 1)
+
+    def test_other_hosts_keep_the_domain_as_key(self):
+        self.assertEqual(fetching.breaker_key('https://trade.500.com/jclq/'),
+                         'trade.500.com')
+
+    def test_lookalike_paths_are_not_treated_as_detail_pages(self):
+        for url in ('https://www.okooo.com/basketball/match/5381400/trends/',
+                    'https://www.okooo.com/basketball/league/486/',
+                    'https://evil.com/basketball/match/1/odds/'):
+            with self.subTest(url=url):
+                self.assertNotEqual(fetching.breaker_key(url),
+                                    'www.okooo.com#detail')
+
+    def test_blocked_details_do_not_short_circuit_the_schedule(self):
+        calls = []
+
+        def transport(url, timeout):
+            calls.append(url)
+            if '/basketball/match/' in url:
+                raise WafBlocked('okooo WAF 拦截')
+            return '赛程页正文'
+
+        client = build_fetch_client(transport=transport, sleep_fn=lambda _: None)
+        for _ in range(4):
+            with self.assertRaises(FetchError):
+                client.get(self.DETAIL)
+
+        self.assertEqual(client.get(self.SCHEDULE), '赛程页正文',
+                         '详情页的熔断把赛程页一起打掉了')
+
+    def test_one_waf_hit_opens_the_detail_breaker(self):
+        """撞一次就够。攒够 failure_threshold 再开路，等于把已知必败的请求
+        重复几遍——okooo 限速 0.4 rps，默认阈值 5 就是十几秒的冷启动。"""
+        calls = []
+
+        def transport(url, timeout):
+            calls.append(url)
+            raise WafBlocked('okooo WAF 拦截')
+
+        client = build_fetch_client(transport=transport, sleep_fn=lambda _: None)
+        with self.assertRaises(FetchError):
+            client.get(self.DETAIL)
+        self.assertEqual(len(calls), 1)
+
+        for kind in ('ah', 'ou'):
+            with self.assertRaises(FetchError):
+                client.get(f'https://www.okooo.com/basketball/match/5381400/{kind}/')
+        self.assertEqual(len(calls), 1, '熔断开路后仍在白跑请求')
+
+
 class UrllibGetEncodingTests(unittest.TestCase):
     """500.com 的页面是 gbk，必须解对，否则中文全变问号。
 

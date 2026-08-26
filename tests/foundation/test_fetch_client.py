@@ -136,15 +136,31 @@ class PermanentFailureTests(unittest.TestCase):
         self.assertEqual(client.get('https://a.com/x'), 'ok')
         self.assertEqual(len(self.transport.calls), 2)
 
-    def test_permanent_error_still_counts_towards_the_breaker(self):
-        """不重试不等于不计数——这类失败最该让熔断尽快开路。"""
+    def test_permanent_error_trips_the_breaker_immediately(self):
+        """确定性失败直接开路，不走「攒够 failure_threshold」那条路。
+
+        阈值的意义是「攒够证据再下结论」，它假设单次失败可能只是抖动。
+        而确定性失败本身就是完整证据——同样的请求再发一次还是同样结果，
+        继续攒只是把已知的失败重复几遍。
+        """
         breaker = SpyBreaker()
         client = self._client([PermanentFetchError('WAF')], max_retries=3)
         client._breakers['a.com'] = breaker
         with self.assertRaises(FetchError):
             client.get('https://a.com/x')
-        self.assertEqual(breaker.failure_calls, 1)
+        self.assertEqual(breaker.trip_calls, 1)
+        self.assertEqual(breaker.failure_calls, 0, '既开路又计数，等于报了两次')
         self.assertEqual(breaker.success_calls, 0)
+
+    def test_transient_failure_still_goes_through_the_threshold(self):
+        breaker = SpyBreaker()
+        client = self._client([IOError('a'), IOError('b'), IOError('c')],
+                              max_retries=3)
+        client._breakers['a.com'] = breaker
+        with self.assertRaises(FetchError):
+            client.get('https://a.com/x')
+        self.assertEqual(breaker.failure_calls, 1)
+        self.assertEqual(breaker.trip_calls, 0)
 
     def test_subclasses_are_treated_as_permanent(self):
         class Blocked(PermanentFetchError):
@@ -176,10 +192,14 @@ class SpyBreaker:
         self.allow_calls = 0
         self.success_calls = 0
         self.failure_calls = 0
+        self.trip_calls = 0
 
     def allow(self, now=None):
         self.allow_calls += 1
         return True
+
+    def trip(self, now=None):
+        self.trip_calls += 1
 
     def record_success(self):
         self.success_calls += 1
