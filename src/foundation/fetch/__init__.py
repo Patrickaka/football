@@ -3,7 +3,7 @@
 所有源站抓取必须走本层。旧实现无限速，直接导致 500.com 返回 503。
 """
 from .circuit import CircuitBreaker
-from .client import FetchClient, FetchError
+from .client import FetchClient, FetchError, PermanentFetchError
 from .rate_limit import DomainRateLimiters, RateLimiter
 from .snapshot import SnapshotStore
 
@@ -12,6 +12,7 @@ __all__ = [
     'DomainRateLimiters',
     'FetchClient',
     'FetchError',
+    'PermanentFetchError',
     'RateLimiter',
     'SnapshotStore',
 ]

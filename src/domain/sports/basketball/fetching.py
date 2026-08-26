@@ -18,7 +18,9 @@ import urllib.error
 import urllib.request
 from urllib.parse import urlparse
 
-from src.foundation.fetch import DomainRateLimiters, FetchClient
+from src.foundation.fetch import (
+    DomainRateLimiters, FetchClient, PermanentFetchError,
+)
 
 log = logging.getLogger('domain.basketball.fetching')
 
@@ -37,11 +39,15 @@ _UA = ('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 '
        '(KHTML, like Gecko) Chrome/120.0 Safari/537.36')
 
 
-class WafBlocked(Exception):
+class WafBlocked(PermanentFetchError):
     """识别到 WAF 拦截页。
 
     抛异常而非返回 None，是为了让它计入 FetchClient 的熔断——连续撞 WAF
     会开路，自然实现了旧代码里那个手写的「封锁 60 秒」，且不必自己维护计时器。
+
+    继承 PermanentFetchError 是因为 WAF 拦截是**确定性**的：同一个出口 IP
+    再试一次还是同样结果。当作暂时故障退避重试，只会把一次失败的代价乘以
+    重试次数——在 0.4 rps 的限速下这笔账很贵。
     """
 
 

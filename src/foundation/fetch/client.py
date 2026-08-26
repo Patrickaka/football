@@ -8,6 +8,18 @@ from .circuit import CircuitBreaker
 log = logging.getLogger('foundation.fetch')
 
 
+class PermanentFetchError(Exception):
+    """确定性的失败，重试没有意义。
+
+    退避重试假设失败是暂时的——网络抖动、对端瞬时过载。但有一类失败重试
+    多少次都是同样结果：被 WAF 拦、404、鉴权失败。对它们重试只是把一次
+    失败的代价乘以重试次数，在限速的域名上尤其昂贵。
+
+    抛出本类（或其子类）时，FetchClient 立刻放弃本次请求，但**仍然计入
+    熔断**——正是这类失败最该让熔断尽快开路。
+    """
+
+
 class FetchError(Exception):
     """抓取最终失败（重试耗尽、熔断开路，且无快照可兜底）。"""
 
@@ -74,6 +86,12 @@ class FetchClient:
                     self.sleep_fn(wait)
                 try:
                     body = self.transport(url, timeout)
+                except PermanentFetchError as exc:
+                    # 确定性失败，重试只会把代价乘以重试次数。直接跳出，
+                    # 交给 finally 记一次失败——熔断照常推进。
+                    log.warning('确定性失败，不重试: url=%s error=%s', url, exc)
+                    last_error = exc
+                    break
                 except Exception as exc:
                     last_error = exc
                     if attempt < self.max_retries - 1:
@@ -90,10 +108,10 @@ class FetchClient:
                         log.warning('快照保存失败，忽略：url=%s', url, exc_info=True)
                 return body
 
-            log.warning('抓取失败，重试耗尽: url=%s error=%s', url, last_error)
+            log.warning('抓取失败: url=%s error=%s', url, last_error)
             # 快照兜底返回的是历史缓存内容，不是这次请求真正成功，
             # succeeded 保持 False，finally 里仍会上报一次失败。
-            return self._fallback_or_raise(url, f'重试 {self.max_retries} 次仍失败: {last_error}')
+            return self._fallback_or_raise(url, f'{last_error}')
         finally:
             if succeeded:
                 breaker.record_success()
