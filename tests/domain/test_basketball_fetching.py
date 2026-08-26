@@ -8,7 +8,9 @@
 """
 import tempfile
 import unittest
+import unittest.mock
 
+from src.domain.sports.basketball import fetching
 from src.domain.sports.basketball.fetching import (
     OkoooTransport, WafBlocked, build_fetch_client, dispatch_transport,
 )
@@ -193,6 +195,66 @@ class OkoooTransportTests(unittest.TestCase):
         transport = OkoooTransport(session_factory=lambda: session,
                                    sleep_fn=lambda _: None)
         self.assertEqual(transport('https://www.okooo.com/x', 10), '中文内容')
+
+
+class UrllibGetEncodingTests(unittest.TestCase):
+    """500.com 的页面是 gbk，必须解对，否则中文全变问号。
+
+    迁移时这里写成了「按候选编码依次 decode(errors=\'replace\')，
+    失败就试下一个」——但 errors=\'replace\' **永远不会抛异常**，于是
+    第一个候选（utf-8）总是"成功"，gbk 回退一次都没走到。整页变成乱码，
+    正则一条也匹不上，接口返回 200 加空列表，看不出任何异常。
+
+    这个 bug 从抓取层迁移那批一直潜伏到端点切换才显形：那批的测试只覆盖了
+    澳客的 gb2312 解码，没有一条测 urllib_get；而它当时零消费者，
+    也就没有任何运行时信号。
+    """
+
+    def _transport(self, raw):
+        import urllib.request
+
+        class _Response:
+            def read(self):
+                return raw
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+        return unittest.mock.patch.object(
+            urllib.request, 'urlopen', lambda *a, **k: _Response())
+
+    def _get(self, raw, **kwargs):
+        with self._transport(raw):
+            return fetching.urllib_get('https://trade.500.com/jclq/', 10, **kwargs)
+
+    def test_gbk_page_is_decoded_correctly(self):
+        text = '周三301 美职女篮 金州女武神VS太阳'
+        self.assertEqual(self._get(text.encode('gbk')), text)
+
+    def test_utf8_page_is_decoded_correctly(self):
+        text = '周三301 美职女篮 金州女武神VS太阳'
+        self.assertEqual(self._get(text.encode('utf-8')), text)
+
+    def test_explicit_encoding_is_tried_first(self):
+        text = '中文内容'
+        self.assertEqual(self._get(text.encode('gb2312'), encoding='gb2312'), text)
+
+    def test_ascii_page_is_unaffected(self):
+        self.assertEqual(self._get(b'<html>plain ascii</html>'),
+                         '<html>plain ascii</html>')
+
+    def test_undecodable_bytes_degrade_instead_of_raising(self):
+        """哪条编码都解不出来时给出替换字符，不能让整次抓取失败。"""
+        result = self._get(b'\xff\xfe\x00\x01 tail')
+        self.assertIn('tail', result)
+
+    def test_unknown_encoding_name_falls_through(self):
+        text = '中文内容'
+        self.assertEqual(self._get(text.encode('gbk'), encoding='根本不存在的编码'),
+                         text)
 
 
 if __name__ == '__main__':
