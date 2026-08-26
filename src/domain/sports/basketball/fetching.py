@@ -60,14 +60,20 @@ def dispatch_transport(okooo, default):
 
 
 def urllib_get(url, timeout, encoding='utf-8', referer=None):
-    """500.com 系列。该站部分页面是 gbk/gb2312，故按候选编码依次尝试。
+    """500.com 系列。该站部分页面是 gbk/gb2312，按候选编码逐个判定。
 
-    **必须严格解码**（不带 errors）才能让「这个编码不对」表现为异常。
-    迁移时这里写成了 `decode(enc, errors='replace')`，而带 replace 的解码
-    永远不抛异常——第一个候选总是"成功"，回退一次都走不到。gbk 页面被当作
-    utf-8 解出整页乱码，正则一条也匹不上，接口返回 200 加空列表，不报任何错。
+    两条规则，缺一不可：
 
-    全部候选都失败时才降级到替换字符：拿到乱码总好过整次抓取失败。
+    1. **先严格解码**（不带 errors）。带 `errors='replace'` 的解码永远不抛
+       异常，写成那样的话第一个候选总是"成功"，回退一次都走不到。迁移时
+       正是这么写的，结果 gbk 页面被当作 utf-8 解出整页乱码——接口照样
+       返回 200，只是列表空的，不报任何错。
+
+    2. **全部严格解码失败时，选替换字符最少的那个**。线上真实页面就是这种：
+       gbk 编码但夹着几十个非法字节，四种候选一个都严格解不出来。此时若随便
+       挑一个（比如按 utf-8 降级），整页中文会变成问号；而按替换字符计数，
+       gbk 只需替换掉那几十个坏字节，utf-8 要替换掉每一个中文字，差距悬殊，
+       判别很稳。
     """
     headers = {'User-Agent': _UA}
     if referer:
@@ -75,14 +81,44 @@ def urllib_get(url, timeout, encoding='utf-8', referer=None):
     req = urllib.request.Request(url, headers=headers)
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         raw = resp.read()
+    return decode_page(raw, encoding, url)
 
-    for enc in (encoding, 'gbk', 'gb2312', 'utf-8'):
+
+def decode_page(raw, encoding='utf-8', url=''):
+    candidates = _dedupe((encoding, 'gbk', 'gb2312', 'utf-8'))
+
+    for candidate in candidates:
         try:
-            return raw.decode(enc)
+            return raw.decode(candidate)
         except (UnicodeDecodeError, LookupError):
             continue
-    log.warning('无法确定页面编码，按 utf-8 降级解码: %s', url)
-    return raw.decode('utf-8', errors='replace')
+
+    best, text = _fewest_replacements(raw, candidates)
+    log.warning('页面无法严格解码，按替换字符最少的 %s 降级: %s', best, url)
+    return text
+
+
+def _dedupe(values):
+    seen = []
+    for value in values:
+        if value not in seen:
+            seen.append(value)
+    return seen
+
+
+def _fewest_replacements(raw, candidates):
+    best_name, best_text, best_count = 'utf-8', None, None
+    for candidate in candidates:
+        try:
+            text = raw.decode(candidate, errors='replace')
+        except LookupError:
+            continue
+        count = text.count('\ufffd')
+        if best_count is None or count < best_count:
+            best_name, best_text, best_count = candidate, text, count
+    if best_text is None:
+        return 'utf-8', raw.decode('utf-8', errors='replace')
+    return best_name, best_text
 
 
 def build_fetch_client(transport, snapshots_root=None, max_retries=3,

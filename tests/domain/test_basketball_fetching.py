@@ -251,6 +251,33 @@ class UrllibGetEncodingTests(unittest.TestCase):
         result = self._get(b'\xff\xfe\x00\x01 tail')
         self.assertIn('tail', result)
 
+    def test_dirty_gbk_page_still_yields_readable_chinese(self):
+        """线上真实情况：500.com 的页面是 gbk，但夹着几十个非法字节，
+        **四种编码没有一种能严格解码成功**。
+
+        此时不能随便挑一个——按 utf-8 降级会把整页中文变成问号，正则一条
+        也匹不上，接口返回 200 加空列表。改成挑「替换字符最少」的那个：
+        gbk 只需替换掉那几十个坏字节，utf-8 则要替换掉每一个中文字。
+        """
+        page = ('周三301 美职女篮 金州女武神VS太阳 ' * 50).encode('gbk')
+        dirty = page[:100] + b'\xff\xfe' + page[100:]
+        result = self._get(dirty)
+        self.assertIn('美职女篮', result)
+        self.assertIn('金州女武神', result)
+
+    def test_dirty_utf8_page_is_not_mistaken_for_gbk(self):
+        """反向也要成立：脏的 utf-8 页面不能被判成 gbk。"""
+        page = ('周三301 美职女篮 金州女武神VS太阳 ' * 50).encode('utf-8')
+        dirty = page[:90] + b'\xff\xfe' + page[90:]
+        result = self._get(dirty)
+        self.assertIn('美职女篮', result)
+
+    def test_clean_page_still_wins_by_strict_decode(self):
+        """干净页面走严格解码，不进入「数替换字符」那条路。"""
+        text = '周三301 美职女篮'
+        self.assertEqual(self._get(text.encode('gbk')), text)
+        self.assertEqual(self._get(text.encode('utf-8')), text)
+
     def test_unknown_encoding_name_falls_through(self):
         text = '中文内容'
         self.assertEqual(self._get(text.encode('gbk'), encoding='根本不存在的编码'),
