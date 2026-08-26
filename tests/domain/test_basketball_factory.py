@@ -115,6 +115,27 @@ class TrackerWiringTests(_Base):
         self.assertIn('m', factory.build_odds_history_store(self.db).load())
 
 
+class MovementProviderWiringTests(_Base):
+    """走势构建器与采集器必须共用同一份快照仓储。各拿一份不会报错，
+    只会让「刚采到的快照」在同一次请求里读不出来。"""
+
+    MATCH = {'id': '2026-08-27_甲_乙', 'home': '甲', 'away': '乙',
+             'league': 'NBA', 'source': '500'}
+
+    def test_provider_reads_the_snapshots_it_just_captured(self):
+        factory.build_odds_history_store(self.db).save({
+            self.MATCH['id']: [
+                {'ts': '2026-08-26T09:00:00', 'spf_home': 2.00, 'spf_away': 1.80},
+                {'ts': '2026-08-26T11:30:00', 'spf_home': 1.70, 'spf_away': 2.10},
+            ]})
+        provider = factory.build_movement_provider(
+            self.db, self.transport, now_fn=lambda: NOW)
+        result = provider([dict(self.MATCH)], '500', '2026-08-27')
+        movement = result[self.MATCH['id']]['spf']
+        self.assertIsNotNone(movement, '走势构建器没读到快照仓储里的数据')
+        self.assertEqual(movement['side'], 'home')
+
+
 class TransportWiringTests(unittest.TestCase):
     def test_dispatches_by_hostname(self):
         okooo_calls, default_calls = [], []
@@ -130,6 +151,28 @@ class TransportWiringTests(unittest.TestCase):
 
     def test_build_transport_returns_a_callable_get(self):
         self.assertTrue(callable(factory.build_transport()))
+
+    def test_build_transport_dispatches_okooo_to_its_own_implementation(self):
+        """okooo 要 Session 预热与 gb2312 解码，用普通 urllib 打过去只会
+        拿到 WAF 页或乱码——而且不会报错。"""
+        from src.domain.sports.basketball import fetching
+
+        okooo_urls, default_urls = [], []
+
+        class _FakeOkoooTransport:
+            def __call__(self, url, timeout):
+                okooo_urls.append(url)
+                return 'okooo'
+
+        with mock.patch.object(fetching, 'OkoooTransport', _FakeOkoooTransport), \
+             mock.patch.object(fetching, 'urllib_get',
+                               lambda url, timeout: default_urls.append(url) or 'd'):
+            get = factory.build_transport()
+            get('https://www.okooo.com/jingcailanqiu/hunhe/')
+            get('https://trade.500.com/jclq/')
+
+        self.assertEqual(len(okooo_urls), 1, '澳客的请求没走专用实现')
+        self.assertEqual(len(default_urls), 1)
 
 
 if __name__ == '__main__':
