@@ -115,6 +115,45 @@ class TrackerWiringTests(_Base):
         self.assertIn('m', factory.build_odds_history_store(self.db).load())
 
 
+class RecorderWiringTests(_Base):
+    """结算的意义就是回喂 Elo 与校准器——接不上它们，记录就只是个日志。"""
+
+    def test_recorder_is_wired_with_elo_and_calibrator(self):
+        recorder = factory.build_recorder(self.db)
+        self.assertIsNotNone(recorder._elo)
+        self.assertIsNotNone(recorder._calibrator)
+
+    def test_recorder_is_absent_without_a_database(self):
+        self.assertIsNone(factory.build_recorder(None))
+
+    def test_prediction_service_gets_a_recorder_by_default(self):
+        service = factory.build_prediction_service(self.db, transport=self.transport)
+        self.assertIsNotNone(service._recorder)
+
+    def test_explicit_recorder_wins(self):
+        sentinel = mock.Mock()
+        service = factory.build_prediction_service(
+            self.db, transport=self.transport, recorder=sentinel)
+        self.assertIs(service._recorder, sentinel)
+
+    def test_settlement_reaches_the_calibrator_end_to_end(self):
+        """一条完整链路：记录 → 结算 → 校准器落库。中间断在哪一环都测不出来，
+        除非真的走一遍。"""
+        from src.domain.sports.basketball.calibration_store import CalibrationStore
+
+        recorder = factory.build_recorder(self.db)
+        recorder.save('2026-08-27', [{
+            'match': {'id': 'm1', 'home': '甲', 'away': '乙', 'league': 'NBA'},
+            'spf': {'available': True, 'recommendation': '主胜', 'playable': True,
+                    'home_prob': 0.62, 'away_prob': 0.38, 'confidence': 'high'},
+            'rqspf': None, 'dx': None,
+        }], 'v1')
+        outcome = recorder.settle('m1', 110, 90, 'NBA')
+        self.assertTrue(outcome['ok'])
+        self.assertEqual(outcome['calibration_samples'], 1)
+        self.assertTrue(CalibrationStore(self.db).load(), '校准样本没落库')
+
+
 class MovementProviderWiringTests(_Base):
     """走势构建器与采集器必须共用同一份快照仓储。各拿一份不会报错，
     只会让「刚采到的快照」在同一次请求里读不出来。"""

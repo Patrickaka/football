@@ -20,13 +20,14 @@ import logging
 
 from src.domain.sports.basketball.repository import (
     EloHistoryRepository, EloRatingRepository, EloRecentFormRepository,
-    OddsSnapshotRepository, create_all,
+    OddsSnapshotRepository, PredictionRecordRepository, create_all,
 )
 
 log = logging.getLogger('migrate.basketball')
 
 ELO_KEY = 'basketball_elo_ratings'
 ODDS_KEY = 'basketball_odds_history'
+RECORD_KEY = 'basketball_prediction_records'
 
 _SNAPSHOT_FIELDS = (
     'spf_home', 'spf_away', 'rqspf_home', 'rqspf_away',
@@ -105,6 +106,19 @@ def _odds_snapshot_rows(kv_loader):
     return rows
 
 
+def _prediction_record_rows(kv_loader):
+    """有序记录列表 → 每条一行，位置索引保序。
+
+    三个玩法与赛果是嵌套字典且字段随模型版本变化，存 JSON 原文。
+    """
+    from src.domain.sports.basketball.records import _record_to_row
+
+    records = kv_loader(RECORD_KEY, None) or []
+    if not isinstance(records, list):
+        return []
+    return [_record_to_row(seq, record) for seq, record in enumerate(records)]
+
+
 _PLAN = (
     ('bb_elo_rating', EloRatingRepository, _elo_rating_rows, ['team']),
     ('bb_elo_history', EloHistoryRepository, _elo_history_rows, ['team', 'recorded_at']),
@@ -112,6 +126,8 @@ _PLAN = (
      ['team', 'seq']),
     ('bb_odds_snapshot', OddsSnapshotRepository, _odds_snapshot_rows,
      ['match_key', 'seq']),
+    ('bb_prediction_record', PredictionRecordRepository, _prediction_record_rows,
+     ['seq']),
 )
 
 

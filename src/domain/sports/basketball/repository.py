@@ -12,15 +12,17 @@
 - 时间列一律存 ISO 8601 字符串而非数据库 DATETIME：跨 SQLite（测试）与
   MySQL（生产）行为一致，也与领域对象 to_dict() 的契约统一
 
-**尚未迁移**：`basketball_prediction_records`（41 条，match_id 不唯一、
-三类盘口字段不同、result 全空）的表结构依赖还不确定的查询模式，留到迁移
-records.py 时一并设计。`basketball_match_results` 与
-`basketball_prediction_history` 两个 key 在线上不存在，也无对应活代码，不建表。
+- 预测记录的三个玩法与赛果存 JSON 原文而非拆列：字段随模型版本演进
+  （线上同时存在两种形状），拆列会在每次模型迭代时逼着改表，而它们没有
+  任何查询需求
+
+`basketball_match_results` 与 `basketball_prediction_history` 两个 key 在线上
+不存在，也无对应活代码，不建表。
 
 `bb_calibration` 线上同样无数据，但 calibration.py 是活代码（分析流程在调用），
 迁移它就需要落点，故按其 stats 的实际结构建表——不是因为有数据要迁。
 """
-from sqlalchemy import Column, Float, Integer, MetaData, String, Table
+from sqlalchemy import Column, Float, Integer, MetaData, String, Table, Text
 
 from src.foundation.store import Repository
 
@@ -91,6 +93,34 @@ BB_ODDS_SNAPSHOT = Table(
 )
 
 
+BB_PREDICTION_RECORD = Table(
+    'bb_prediction_record', METADATA,
+    # 源结构是一个有序列表，`get_predictions(limit)` 取的是末尾 N 条、
+    # 超过上限时截掉开头——两者都依赖插入顺序，故用位置索引保序。
+    # 业务上的唯一键是 (date, match_id)（save_predictions 正是按它 upsert），
+    # 但 match_id 本身不唯一：线上 73 条记录只有 43 个不同的 match_id，
+    # 同一场比赛在不同日期、不同版本下会各留一条。
+    Column('seq', Integer, primary_key=True),
+    Column('date', String(16), nullable=False),
+    Column('match_id', String(128), nullable=False),
+    Column('num', String(32)),
+    Column('league', String(64)),
+    Column('home', String(64)),
+    Column('away', String(64)),
+    Column('time', String(32)),
+    Column('version', String(64)),
+    Column('created_at', String(32)),
+    # 三个玩法与赛果都是嵌套字典，且字段随模型版本演进（线上同时存在
+    # 2026-07-13-v2 与 2026-08-20-water-reverse-v3 两种形状）。拆成列会在
+    # 每次模型迭代时逼着改表，而这些字段没有任何查询需求——查询只按
+    # date 和「result 是否为空」。存 JSON 原文，一个字段都不丢。
+    Column('spf', Text),
+    Column('rqspf', Text),
+    Column('dx', Text),
+    Column('result', Text),
+)
+
+
 def create_all(db):
     """建表。生产环境首次部署与测试的 SQLite 内存库都用它。"""
     METADATA.create_all(db.engine)
@@ -114,3 +144,7 @@ class CalibrationRepository(Repository):
 
 class OddsSnapshotRepository(Repository):
     table = BB_ODDS_SNAPSHOT
+
+
+class PredictionRecordRepository(Repository):
+    table = BB_PREDICTION_RECORD

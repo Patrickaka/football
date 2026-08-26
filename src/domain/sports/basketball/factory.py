@@ -23,6 +23,9 @@ from src.domain.sports.basketball.elo_store import EloStore
 from src.domain.sports.basketball.movement_map import MovementMapBuilder
 from src.domain.sports.basketball.odds_history import OddsHistoryStore, OddsTracker
 from src.domain.sports.basketball.prediction import PredictionService
+from src.domain.sports.basketball.records import (
+    PredictionRecorder, PredictionRecordStore,
+)
 
 log = logging.getLogger('domain.basketball.factory')
 
@@ -81,10 +84,26 @@ def build_movement_provider(db, transport, now_fn=None):
         now_fn=now_fn)
 
 
+def build_recorder(db, now_fn=None):
+    """预测记录 + 结算。校准器与 Elo 一并注入——结算的意义就是回喂它们。
+
+    `db` 为 None 时返回 None：记录是旁路，没有库就不记，而不是让推荐失败。
+    """
+    if db is None:
+        return None
+    return PredictionRecorder(
+        PredictionRecordStore(db),
+        calibrator=BasketballCalibrator(store=CalibrationStore(db)),
+        elo=BasketballELORatingSystem(store=EloStore(db)),
+        now_fn=now_fn)
+
+
 def build_prediction_service(db, cache=None, transport=None, recorder=None,
                              ttl=None, now_fn=None, today_fn=None):
     transport = transport or build_transport()
     kwargs = {} if ttl is None else {'ttl': ttl}
+    if recorder is None:
+        recorder = build_recorder(db, now_fn=now_fn)
     return PredictionService(
         analyzer=build_analyzer(db),
         schedule_sources=build_schedule_sources(transport),
