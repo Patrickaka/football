@@ -147,6 +147,19 @@ class ChecksumIntegrityTests(_Base):
              'date': '', 'source': '', 'fetched_at': '', 'checksum': checksum},
             key_cols=['game', 'issue'])
 
+    def test_a_wrong_checksum_is_stored_as_is(self):
+        """落库时不重算校验码。
+
+        重算会让它永远自洽——上游给来一个错的，写进去就被"修好"了，
+        对账入口从此再也报不出任何问题。校验码的意义正是记录「当时上游
+        说号码是这样」，与我们自己算的对不上才有信息量。
+        """
+        wrong = Draw.parse({**REAL, 'checksum': 'deadbeefdead'})
+        self.store.save([wrong])
+        self.assertEqual(self.store.load()[0].checksum, 'deadbeefdead')
+        self.assertEqual([i.reason for i in self.store.find_corrupted()],
+                         ['checksum_mismatch'])
+
     def test_clean_store_has_no_issues(self):
         self.store.save([_draw('2026227')])
         self.assertEqual(self.store.find_corrupted(), [])
