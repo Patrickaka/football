@@ -23,9 +23,7 @@ from src.common.paths import data_path
 
 log = setup_logger('server')
 
-from .lazy_modules import (
-    _load_basketball_helpers,
-)
+from .basketball_service import get_context
 
 class BasketballApiMixin:
     def _basketball_payload(self, params):
@@ -39,8 +37,7 @@ class BasketballApiMixin:
             
             self._log.info(f'篮球推荐请求: date={date}, types={bet_types}, source={source}')
             
-            generate_basketball_recommendations, _, _ = _load_basketball_helpers()
-            result = generate_basketball_recommendations(
+            result = get_context().prediction.generate(
                 date=date, bet_types=bet_types, source=source, use_movement=True
             )
             
@@ -143,10 +140,7 @@ class BasketballApiMixin:
         """获取篮球比赛列表"""
         try:
             date = params.get('date', [None])[0]
-            
-            from src.basketball import fetch_basketball_schedule
-            matches = fetch_basketball_schedule(date=date)
-            
+            matches = get_context().prediction.fetch_schedule(date=date)
             return {'matches': matches}
         except Exception as e:
             self._log.error('篮球比赛列表获取失败', exc_info=True)
@@ -159,10 +153,11 @@ class BasketballApiMixin:
             date = params.get('date', [None])[0]
             threshold = float(params.get('threshold', [0.05])[0])
 
-            _, find_value_bets, _ = _load_basketball_helpers()
-            generate_basketball_recommendations, _, _ = _load_basketball_helpers()
-            recommendations = generate_basketball_recommendations(date=date)
-            value_bets = find_value_bets(recommendations.get('results', []), threshold=threshold)
+            from src.domain.sports.basketball.prediction import find_value_bets
+
+            recommendations = get_context().prediction.generate(date=date)
+            value_bets = find_value_bets(recommendations.get('results', []),
+                                         threshold=threshold)
 
             return {'result': value_bets}
         except Exception as e:
@@ -173,9 +168,11 @@ class BasketballApiMixin:
     def _basketball_track_payload(self, params):
         """触发一次实时赔率轮询，累积盘路快照。"""
         try:
-            from src.basketball.odds_movement import track_basketball_odds
             date = params.get('date', [None])[0]
-            count = track_basketball_odds(date)
+            tracker = get_context().tracker
+            if tracker is None:
+                return {'error': '赔率追踪不可用：数据库未连接'}
+            count = tracker.track(date)
             return {'result': {'tracked': count, 'date': date}}
         except Exception as e:
             self._log.error('篮球赔率追踪失败', exc_info=True)
@@ -185,11 +182,14 @@ class BasketballApiMixin:
     def _basketball_movement_payload(self, params):
         """汇总当前累积的赔率走势信号。"""
         try:
-            from src.basketball.odds_movement import get_odds_history
             match_id = params.get('match_id', [None])[0]
-            history = get_odds_history(match_id)
+            store = get_context().history
+            if store is None:
+                return {'error': '走势汇总不可用：数据库未连接'}
             if match_id:
-                return {'result': {'match_id': match_id, 'snapshots': history}}
+                return {'result': {'match_id': match_id,
+                                   'snapshots': store.history_for(match_id)}}
+            history = store.load()
             # 汇总每场的走势统计
             summary = []
             for mid, snaps in history.items():

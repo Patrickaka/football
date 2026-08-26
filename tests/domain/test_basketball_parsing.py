@@ -260,28 +260,68 @@ class MalformedRowTests(unittest.TestCase):
         self.assertIsNone(match['spf_away'])
 
 
-class KnownDefectTests(unittest.TestCase):
-    """把一处**已知缺陷**钉住，避免它在后续重构里被当成正常行为默认下来。
+class KickoffFromRealPageTests(unittest.TestCase):
+    """开赛过滤在 500 源上曾经完全失效，这里守住修复。
 
-    500 源页面的时间单元格是 `08-27 07:00`（带月日），而状态判定按
-    `%Y-%m-%d %H:%M` 解析 `f"{date} {time}"`，拼出来是
-    `2026-08-27 08-27 07:00`，必然 ValueError 并被静默吞掉。后果是
-    **500 源的开赛过滤从来没生效过**，所有场次恒为 not_started。
+    页面的时间单元格是 `08-27 07:00`（带月日），迁移前直接拿它去拼
+    `%Y-%m-%d %H:%M`，拼出 `2026-08-27 08-27 07:00`，必然 ValueError 且被
+    静默吞掉。后果是所有场次恒为 not_started，打完的比赛照样出现在推荐里。
 
-    本批不改它：改了就破坏差分测试这个唯一的正确性依据。修复排在端点
-    切换那一批，那时行为变化能在线上直接验证。
+    这条缺陷在解析器迁移那一批里被原样搬过来并写测试钉住（当时不能改：
+    差分测试是唯一的正确性依据），端点切换时一并修掉。
     """
 
-    def test_500_source_time_carries_month_day_and_defeats_the_filter(self):
+    def test_time_cell_still_carries_month_and_day(self):
+        """修复的前提。页面格式若改回纯时分，这里会先亮。"""
         matches = parsing.parse_schedule(JCLQ_HTML, '2026-08-27')
+        self.assertTrue(matches)
         self.assertTrue(all(' ' in m['time'] for m in matches),
-                        '页面时间格式变了，这处缺陷的前提需要重新确认')
-        long_past = datetime(2030, 1, 1)
-        parsing.annotate_status(matches, long_past)
-        self.assertTrue(all(m['status'] == 'not_started' for m in matches),
-                        '状态判定开始生效了——缺陷已被修，请同步删掉本测试')
-        self.assertEqual(len(parsing.select_upcoming(matches, long_past)),
+                        [m['time'] for m in matches])
+
+    def test_status_is_annotated_on_real_rows(self):
+        matches = parsing.parse_schedule(JCLQ_HTML, '2026-08-27')
+        parsing.annotate_status(matches, datetime(2030, 1, 1))
+        self.assertEqual({m['status'] for m in matches}, {'finished'},
+                         '开赛过滤仍未生效——时间解析又回到静默失败了')
+
+    def test_finished_matches_are_dropped_from_the_card(self):
+        matches = parsing.parse_schedule(JCLQ_HTML, '2026-08-27')
+        self.assertEqual(parsing.select_upcoming(matches, datetime(2030, 1, 1)), [])
+
+    def test_upcoming_matches_are_kept(self):
+        matches = parsing.parse_schedule(JCLQ_HTML, '2026-08-27')
+        self.assertEqual(len(parsing.select_upcoming(matches, datetime(2020, 1, 1))),
                          len(matches))
+
+    def test_divergence_from_legacy_is_explicit(self):
+        """与旧实现的**唯一**分歧，写出来免得它藏在差分测试的盲区里。
+
+        上面那几条差分测试用的时钟都落在比赛之前，两侧都判「未开赛」，
+        正好走不到分歧点。把时钟推到比赛之后，差别才显现：旧实现仍然
+        把打完的比赛当成未开赛返回，新实现把它们撤下。
+        """
+        after = datetime(2030, 1, 1)
+
+        class _Late(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return after
+
+        with mock.patch.object(legacy, 'fetch', lambda *a, **k: JCLQ_HTML), \
+             mock.patch.object(legacy, 'datetime', _Late):
+            legacy_result = legacy.fetch_basketball_schedule('2026-08-27')
+
+        fetcher = parsing.ScheduleFetcher(transport=lambda url: JCLQ_HTML,
+                                           now_fn=lambda: after)
+        self.assertTrue(legacy_result, '旧实现本该把打完的比赛也返回')
+        self.assertTrue(all(m['status'] == 'not_started' for m in legacy_result))
+        self.assertEqual(fetcher.fetch('2026-08-27'), [])
+
+    def test_plain_clock_without_month_day_still_works(self):
+        """澳客那边给的是纯 `07:00`，同一个函数两种输入都要认。"""
+        rows = [{'date': '2026-08-27', 'time': '07:00', 'status': 'not_started'}]
+        parsing.annotate_status(rows, datetime(2026, 8, 27, 12, 0))
+        self.assertEqual(rows[0]['status'], 'finished')
 
 
 class NoLegacyImportTests(unittest.TestCase):

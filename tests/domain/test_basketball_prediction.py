@@ -230,6 +230,39 @@ class GenerateParityTests(unittest.TestCase):
         self.assertNotIn('history_stats', payload)
 
 
+class FetchScheduleTests(unittest.TestCase):
+    """赛程列表端点：只取赛程、不做分析、不走缓存。"""
+
+    def test_returns_the_raw_schedule(self):
+        service = _service(recorder=RecordingRecorder())
+        self.assertEqual(service.fetch_schedule(DATE), MATCHES)
+
+    def test_defaults_to_today(self):
+        seen = []
+        service = PredictionService(
+            analyzer=_analyzer(),
+            schedule_sources={'500': lambda d: seen.append(d) or list(MATCHES)},
+            today_fn=lambda: DATE)
+        service.fetch_schedule()
+        self.assertEqual(seen, [DATE])
+
+    def test_does_not_use_the_cache(self):
+        """赛程比整份 payload 便宜得多，缓存只会让刚开售的场次晚几分钟出现。"""
+        calls = []
+        service = PredictionService(
+            analyzer=_analyzer(),
+            schedule_sources={'500': lambda d: calls.append(d) or list(MATCHES)},
+            cache=Cache(l1=MemoryBackend(), l2=MemoryBackend()),
+            today_fn=lambda: DATE)
+        service.fetch_schedule(DATE)
+        service.fetch_schedule(DATE)
+        self.assertEqual(len(calls), 2)
+
+    def test_source_falls_back_like_generate(self):
+        service = _service(recorder=RecordingRecorder())
+        self.assertEqual(service.fetch_schedule(DATE, source='okooo'), MATCHES)
+
+
 class FindValueBetsParityTests(unittest.TestCase):
     def _results(self):
         with _LegacyPatch():
