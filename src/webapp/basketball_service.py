@@ -12,7 +12,7 @@ import logging
 import threading
 
 from src.domain.sports.basketball import factory
-from src.foundation.tasks import TaskScheduler
+from src.webapp import background
 
 log = logging.getLogger('webapp.basketball')
 
@@ -22,7 +22,6 @@ ODDS_TRACKING_INTERVAL_MINUTES = 15
 
 _lock = threading.Lock()
 _context = None
-_scheduler = None
 
 
 class _Context:
@@ -77,51 +76,34 @@ def get_context():
     return _context
 
 
-def start_odds_tracking(interval_minutes=ODDS_TRACKING_INTERVAL_MINUTES):
-    """启动赔率快照的周期采样。
+def register_odds_tracking(interval_minutes=ODDS_TRACKING_INTERVAL_MINUTES):
+    """把赔率采样登记到进程级后台调度器。
 
     走势要靠一天里反复采样攒出来，只在有人请求时才采是不够的——夜里没人
     看的时候盘口照样在动，而那段变化恰恰是开盘到临场的主要部分。
 
-    重复调用只启动一次。采集失败不会终止后续周期（TaskScheduler 保证），
-    没有数据库时直接不启动——采集的全部意义就是落盘。
+    没有数据库时不登记——采集的全部意义就是落盘。
 
-    **装配必须在取锁之前完成。** `_lock` 是普通 Lock、不可重入，而
-    `get_context()` 自己也要拿它——在锁内调用它会死锁，且是持锁死锁：
-    此后每个走 `get_context()` 的请求都会一起卡住。这个错误上线过一次，
-    表现是五个端点全部 120 秒超时。
+    **装配必须在取锁之前完成。** `_lock` 不可重入，而 `get_context()` 自己
+    也要拿它；在锁内调用它会持锁死锁，此后每个请求都会一起卡住。这个错误
+    上线过一次，表现是五个端点全部 120 秒超时。
     """
-    global _scheduler
     tracker = get_context().tracker
-    with _lock:
-        if _scheduler is not None:
-            return _scheduler
-        if tracker is None:
-            log.warning('赔率采样未启动：数据库不可用')
-            return None
-        # 留 2 个 worker：周期任务会长期占住一个，只给 1 个的话调度器会
-        # 在启动时告警「一次性任务可能长时间得不到执行」——虽然这里目前
-        # 没有一次性任务，但那条告警是对的，不该靠「反正没有」把它压下去。
-        scheduler = TaskScheduler(max_workers=2)
-        scheduler.submit_periodic(
-            'basketball_odds_tracking',
-            lambda: tracker.track(None),
-            interval_seconds=max(60, int(interval_minutes) * 60))
-        scheduler.start()
-        _scheduler = scheduler
-        return scheduler
+    if tracker is None:
+        log.warning('赔率采样未登记：数据库不可用')
+        return False
+    return background.submit_periodic(
+        'basketball_odds_tracking', lambda: tracker.track(None),
+        interval_seconds=max(60, int(interval_minutes) * 60))
 
 
 def is_odds_tracking_running():
     """给健康检查用：真的在跑，而不只是对象存在。"""
-    return _scheduler is not None and _scheduler.is_running()
+    return background.is_running()
 
 
 def reset():
-    """测试用：丢弃已建好的单例并停掉周期任务。"""
-    global _context, _scheduler
+    """测试用：丢弃已建好的单例。后台调度器由 background.reset() 负责。"""
+    global _context
     with _lock:
-        if _scheduler is not None:
-            _scheduler.shutdown(wait=False)
-            _scheduler = None
         _context = None

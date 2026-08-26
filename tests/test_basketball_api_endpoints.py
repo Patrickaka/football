@@ -265,8 +265,12 @@ class OddsTrackingSchedulerTests(unittest.TestCase):
     """
 
     def setUp(self):
+        from src.webapp import background
+
         basketball_service.reset()
+        background.reset()
         self.addCleanup(basketball_service.reset)
+        self.addCleanup(background.reset)
 
     def _with_tracker(self, tracker):
         """打桩 `_build_context` 而不是 `get_context`。
@@ -299,49 +303,55 @@ class OddsTrackingSchedulerTests(unittest.TestCase):
         self.assertFalse(thread.is_alive(), f'{fn.__name__} 卡住了（疑似死锁）')
         return box.get('value')
 
-    def test_start_does_not_deadlock_on_a_cold_context(self):
-        """首次启动时上下文还没建好，这正是死锁发生的时机。"""
+    def test_register_does_not_deadlock_on_a_cold_context(self):
+        """首次登记时上下文还没建好，这正是死锁发生的时机。"""
         self._with_tracker(mock.Mock())
-        self.assertIsNotNone(self._call(basketball_service.start_odds_tracking))
+        self.assertTrue(self._call(basketball_service.register_odds_tracking))
 
-    def test_context_stays_reachable_after_start(self):
-        """死锁的后果不止是启动卡住——锁没释放，之后每个请求都会一起卡住。"""
+    def test_context_stays_reachable_after_register(self):
+        """死锁的后果不止是登记卡住——锁没释放，之后每个请求都会一起卡住。"""
         self._with_tracker(mock.Mock())
-        self._call(basketball_service.start_odds_tracking)
+        self._call(basketball_service.register_odds_tracking)
         self.assertIsNotNone(self._call(basketball_service.get_context))
 
-    def test_starts_a_running_periodic_task(self):
+    def test_registers_one_periodic_task(self):
+        from src.webapp import background
+
         self._with_tracker(mock.Mock())
-        scheduler = self._call(basketball_service.start_odds_tracking)
-        self.assertIsNotNone(scheduler)
-        self.assertTrue(scheduler.is_running())
-        self.assertEqual(scheduler.task_count(), 1)
+        self.assertTrue(self._call(basketball_service.register_odds_tracking))
+        self.assertEqual(background.task_count(), 1)
+
+    def test_registered_task_runs_after_start(self):
+        """登记了却不跑，是这类接线最典型的无声失败。"""
+        from src.webapp import background
+
+        tracker = mock.Mock()
+        ran = threading.Event()
+        tracker.track.side_effect = lambda date: ran.set()
+        self._with_tracker(tracker)
+        self._call(basketball_service.register_odds_tracking)
+        background.start()
+        self.assertTrue(ran.wait(timeout=5), '登记的采样任务没有被执行')
         self.assertTrue(basketball_service.is_odds_tracking_running())
 
-    def test_repeated_calls_start_only_one(self):
+    def test_repeated_registration_is_rejected(self):
         self._with_tracker(mock.Mock())
-        first = self._call(basketball_service.start_odds_tracking)
-        self.assertIs(self._call(basketball_service.start_odds_tracking), first)
+        self.assertTrue(self._call(basketball_service.register_odds_tracking))
+        self.assertFalse(self._call(basketball_service.register_odds_tracking))
 
-    def test_not_started_without_a_database(self):
+    def test_not_registered_without_a_database(self):
         """采集的全部意义就是落盘。没有库就别假装在采。"""
+        from src.webapp import background
+
         self._with_tracker(None)
-        self.assertIsNone(self._call(basketball_service.start_odds_tracking))
-        self.assertFalse(basketball_service.is_odds_tracking_running())
+        self.assertFalse(self._call(basketball_service.register_odds_tracking))
+        self.assertEqual(background.task_count(), 0)
 
     def test_interval_is_floored_at_one_minute(self):
         """采样间隔有下限：okooo 与 500 都有限速，采太密只是挤占抓取配额。"""
         self._with_tracker(mock.Mock())
-        scheduler = self._call(basketball_service.start_odds_tracking,
-                               interval_minutes=0)
-        self.assertTrue(scheduler.is_running())
-
-    def test_reset_stops_the_scheduler(self):
-        self._with_tracker(mock.Mock())
-        scheduler = self._call(basketball_service.start_odds_tracking)
-        basketball_service.reset()
-        self.assertFalse(scheduler.is_running())
-        self.assertFalse(basketball_service.is_odds_tracking_running())
+        self.assertTrue(self._call(basketball_service.register_odds_tracking,
+                                   interval_minutes=0))
 
 
 if __name__ == '__main__':
