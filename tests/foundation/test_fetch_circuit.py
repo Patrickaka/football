@@ -190,5 +190,31 @@ class CircuitBreakerTests(unittest.TestCase):
         self.assertEqual(cb.probe_timeout, 30)  # 未传时仍默认等于 recovery_timeout
 
 
+class TripTests(unittest.TestCase):
+    """trip()：立即开路，不等失败次数攒够。"""
+
+    def test_trip_opens_immediately(self):
+        breaker = CircuitBreaker(failure_threshold=5, recovery_timeout=60)
+        breaker.trip(now=1000)
+        self.assertEqual(breaker.state, 'open')
+        self.assertFalse(breaker.allow(now=1000))
+
+    def test_tripped_breaker_still_recovers_on_schedule(self):
+        """开路不是永久的——出口 IP 会变、封锁会撤，恢复窗口照常走。"""
+        breaker = CircuitBreaker(failure_threshold=5, recovery_timeout=60)
+        breaker.trip(now=1000)
+        self.assertFalse(breaker.allow(now=1059))
+        self.assertTrue(breaker.allow(now=1060))
+        self.assertEqual(breaker.state, 'half_open')
+
+    def test_success_after_trip_closes_again(self):
+        breaker = CircuitBreaker(failure_threshold=5, recovery_timeout=60)
+        breaker.trip(now=1000)
+        breaker.allow(now=1060)
+        breaker.record_success()
+        self.assertEqual(breaker.state, 'closed')
+        self.assertTrue(breaker.allow(now=1061))
+
+
 if __name__ == '__main__':
     unittest.main()

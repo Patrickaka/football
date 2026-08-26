@@ -14,6 +14,7 @@
 线上因此吃过 500.com 的大批 503。
 """
 import logging
+import re
 import urllib.error
 import urllib.request
 from urllib.parse import urlparse
@@ -127,6 +128,27 @@ def _fewest_replacements(raw, candidates):
     return best_name, best_text
 
 
+# 单场详情页：/basketball/match/<id>/odds|ah|ou/。这些页面在部分出口 IP 上
+# 被 WAF 拦死，而同域名的赛程页是通的——两者必须各用各的熔断器。
+_OKOOO_DETAIL_PATH = re.compile(r'^/basketball/match/\d+/(odds|ah|ou)/?$')
+_OKOOO_DETAIL_KEY = 'www.okooo.com#detail'
+
+
+def breaker_key(url):
+    """熔断键。默认按域名，但 okooo 的详情页单列。
+
+    澳客的赛程页正常、详情页被 WAF 拦死，两者同属 www.okooo.com。按域名
+    熔断的话，详情页连撞几次就会把赛程页一起打掉——而赛程页自带的
+    rf_trend / dx_trend 是线上唯一活着的走势来源，代价是整份推荐直接空掉。
+    这不是假设：端点切换后线上就是这么坏的，接口返回 200、比赛数 0。
+    """
+    parsed = urlparse(url)
+    host = (parsed.hostname or '').lower()
+    if host in OKOOO_HOSTS and _OKOOO_DETAIL_PATH.match(parsed.path or ''):
+        return _OKOOO_DETAIL_KEY
+    return parsed.netloc
+
+
 def build_fetch_client(transport, snapshots_root=None, max_retries=3,
                        failure_threshold=5, recovery_timeout=60,
                        sleep_fn=None):
@@ -149,6 +171,7 @@ def build_fetch_client(transport, snapshots_root=None, max_retries=3,
         'max_retries': max_retries,
         'failure_threshold': failure_threshold,
         'recovery_timeout': recovery_timeout,
+        'breaker_key_fn': breaker_key,
     }
     if sleep_fn is not None:
         kwargs['sleep_fn'] = sleep_fn

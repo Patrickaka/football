@@ -58,6 +58,21 @@ class CircuitBreaker:
             self._probe_started_at = None
             self.state = 'closed'
 
+    def trip(self, now=None):
+        """立即开路，不等失败次数攒够。
+
+        failure_threshold 的意义是「攒够证据再下结论」——它假设单次失败
+        可能只是抖动。但确定性失败（被 WAF 拦、404、鉴权失败）本身就是
+        完整证据：同样的请求再发一次还是同样结果。继续攒只是把已知的失败
+        重复几遍，在限速的域名上代价尤其大。
+        """
+        now = time.time() if now is None else now
+        with self._guard:
+            self.state = 'open'
+            self._opened_at = now
+            self._probe_started_at = None
+            self._failures = self.failure_threshold
+
     def record_failure(self, now=None):
         now = time.time() if now is None else now
         with self._guard:
