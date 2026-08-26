@@ -85,12 +85,17 @@ def start_odds_tracking(interval_minutes=ODDS_TRACKING_INTERVAL_MINUTES):
 
     重复调用只启动一次。采集失败不会终止后续周期（TaskScheduler 保证），
     没有数据库时直接不启动——采集的全部意义就是落盘。
+
+    **装配必须在取锁之前完成。** `_lock` 是普通 Lock、不可重入，而
+    `get_context()` 自己也要拿它——在锁内调用它会死锁，且是持锁死锁：
+    此后每个走 `get_context()` 的请求都会一起卡住。这个错误上线过一次，
+    表现是五个端点全部 120 秒超时。
     """
     global _scheduler
+    tracker = get_context().tracker
     with _lock:
         if _scheduler is not None:
             return _scheduler
-        tracker = get_context().tracker
         if tracker is None:
             log.warning('赔率采样未启动：数据库不可用')
             return None
