@@ -26,8 +26,10 @@ log = setup_logger('server')
 from .lazy_modules import (
     KL8RollingBacktest, get_kl8_analyzer, kl8_check_data_integrity, kl8_clear_cache, kl8_list_conflict_queue, kl8_list_recalculations, kl8_list_snapshots, kl8_run_prediction, validate_and_activate_strategy,
 )
+from . import kl8_cache
+from .shared_cache import get_cache as get_shared_cache
 from .caching import (
-    _CACHE, _serve_cached,
+    _CACHE, _current_kl8_predictor_version, _serve_cached,
 )
 from .jobs import (
     _get_kl8_parameter_search_job, _run_kl8_parameter_search_job, _save_kl8_parameter_search_report, _set_kl8_parameter_search_job,
@@ -37,9 +39,12 @@ class KL8ApiMixin:
     def _kl8_payload(self):
         """获取快乐8预测结果。
 
-        走统一的 _serve_cached：并发请求单飞（此前无锁，缓存一过期就每个请求
-        各算一遍，线上实测平均 6.05 秒），缓存陈旧时先返回旧值再后台刷新。
-        期号与版本校验在 _is_cache_payload_current 里完成。
+        走 foundation/cache：并发请求单飞，L2 是 Redis 因而**跨重启保留**。
+        迁移前这份缓存纯进程内存，每次部署清零，用户在发版后的第一个请求要等
+        5.6 秒（线上实测冷启动 3.5~5.6s，命中 0.01s）。
+
+        失效条件编进 key（最新期号 + 预测器版本），新开奖或版本变更自然产生
+        新 key——不必读回来再逐字段校验版本，那条路径本身就是错误来源。
         """
         def _compute():
             result = kl8_run_prediction(force_refresh=False)
@@ -48,13 +53,29 @@ class KL8ApiMixin:
             return result
 
         try:
-            data, error = _serve_cached('kl8', _compute)
-            if error:
-                return {'error': error}
+            data = kl8_cache.predict(
+                compute_fn=_compute,
+                latest_issue=self._kl8_latest_issue(),
+                version=_current_kl8_predictor_version(),
+                cache=get_shared_cache())
             return {'result': data}
         except Exception:
             self._log.error('快乐8预测失败', exc_info=True)
             return {'error': '快乐8预测失败'}
+
+    @staticmethod
+    def _kl8_latest_issue():
+        """最新一期期号。取不到就返回空字符串——调用方据此绕过缓存。
+
+        分析器是进程级单例，这里只是读它已经加载好的第一条，不触发任何抓取。
+        """
+        try:
+            analyzer = get_kl8_analyzer()
+            history = getattr(analyzer, 'history_data', None) or []
+            return history[0].get('issue', '') if history else ''
+        except Exception as exc:
+            log.warning('读取 kl8 最新期号失败，本次绕过缓存: %s', exc)
+            return ''
 
 
     def _kl8_refresh_payload(self):
