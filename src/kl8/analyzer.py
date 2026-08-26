@@ -15,7 +15,7 @@ from src.common.paths import data_path
 from src.common.repositories import doc_store
 from src.common.logger import setup_logger
 from src.domain.numeric import statistics as stats
-from src.domain.numeric.kl8 import scoring, voting
+from src.domain.numeric.kl8 import pools, scoring, voting
 
 log = setup_logger('kl8')
 from . import strategies as _strategies_mod
@@ -37,11 +37,12 @@ from .records import (
     _build_recent_settlement_performance, _build_strategy_health, _checksum_numbers, _compute_next_issue, _compute_prediction_changes, _load_last_snapshot, _strategy_fingerprint, check_data_integrity, load_prize_table, normalize_record, save_conflict_to_queue,
 )
 
-# 候选池整形的实现暂时还在 `candidates.py`（阶段 3-10 迁进领域层）。
-# 领域层不反向依赖旧代码，所以由这里注入。
+# 候选池整形已在领域层（3-10）。这里仍然显式注入而不是让 voting 直接
+# import：投票要的是「一种整形办法」，不是「kl8 的那一种」，
+# 换成别的彩票时换的就是这个参数。
 _POOL_SHAPER = voting.PoolShaper(
-    diversify=_diversify_candidate_pool,
-    select_final=_select_final_candidate_pool,
+    diversify=pools.diversify,
+    select_final=pools.select_final,
 )
 
 # kl8 的号码空间与几个分区参数。写死在统计函数里的话，换一种彩票就用不上。

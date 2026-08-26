@@ -12,9 +12,8 @@
 import hashlib
 import math
 
-from src.domain.numeric.statistics import NumberSpace
+from src.domain.numeric.kl8.space import SPACE
 
-SPACE = NumberSpace(low=1, high=80)
 ZONE_SIZE = 5        # 16 个 5 码区，与 position_residual 粒度一致
 CROSS_ROW_SIZE = 8   # 8 列 × 奇偶 = 每组 4 个号码
 BIG_SMALL_THRESHOLD = 40
