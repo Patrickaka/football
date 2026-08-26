@@ -83,16 +83,24 @@ def _elo_recent_form_rows(kv_loader):
 def _odds_snapshot_rows(kv_loader):
     """{match_key: [快照]} → 摊平成每条快照一行。
 
-    快照的 ts 字段作为 captured_at；三类盘口字段并非每次都齐全，缺的留空。
+    保序靠位置索引 seq 而非时间戳：源结构是列表，允许同一时刻出现两条，
+    拿时间戳当主键等于把它们静默合并掉。
+
+    observed_ts（盘口未变时「最后一次确认」的时刻）必须一并搬。首版按字段
+    白名单拷贝，白名单里漏了它，线上 171 条快照中的 119 条因此被无声丢弃。
     """
     blob = kv_loader(ODDS_KEY, None) or {}
     rows = []
     for match_key, snapshots in blob.items():
-        for snap in snapshots or []:
-            row = {'match_key': match_key, 'captured_at': snap.get('ts') or ''}
+        for seq, snap in enumerate(snapshots or []):
+            row = {
+                'match_key': match_key,
+                'seq': seq,
+                'captured_at': snap.get('ts') or '',
+                'observed_ts': snap.get('observed_ts'),
+            }
             for field in _SNAPSHOT_FIELDS:
-                if field in snap:
-                    row[field] = snap[field]
+                row[field] = snap.get(field)
             rows.append(row)
     return rows
 
@@ -103,7 +111,7 @@ _PLAN = (
     ('bb_elo_recent_form', EloRecentFormRepository, _elo_recent_form_rows,
      ['team', 'seq']),
     ('bb_odds_snapshot', OddsSnapshotRepository, _odds_snapshot_rows,
-     ['match_key', 'captured_at']),
+     ['match_key', 'seq']),
 )
 
 

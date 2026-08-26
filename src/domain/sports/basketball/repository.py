@@ -68,7 +68,16 @@ BB_ODDS_SNAPSHOT = Table(
     'bb_odds_snapshot', METADATA,
     # match_key 形如 '2026-07-23_水星_火花'（日期_主队_客队），是 kv_store 里的原始键
     Column('match_key', String(128), primary_key=True),
-    Column('captured_at', String(32), primary_key=True),
+    # 源结构是**列表**，用位置索引保序而不是拿时间戳当主键——与
+    # bb_elo_recent_form 同样的理由。最初用的是 (match_key, captured_at)，
+    # 那等于假设「同一场的两条快照时间戳必不相同」；真实数据里确实如此，
+    # 但这个假设一旦不成立就是静默丢行，而不是报错。列表本来就允许重复。
+    Column('seq', Integer, primary_key=True),
+    Column('captured_at', String(32), nullable=False),
+    # 盘口未变时不追加新快照，只把这一列往前推——它记的是「最后一次确认
+    # 仍然没变」的时刻。首次采集的快照没有它，故可空；不能与 captured_at
+    # 合并，两者语义不同：一个是变化发生的时刻，一个是最后确认的时刻。
+    Column('observed_ts', String(32)),
     Column('spf_home', Float),
     Column('spf_away', Float),
     Column('rqspf_home', Float),
