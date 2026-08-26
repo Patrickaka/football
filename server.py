@@ -106,8 +106,15 @@ def _start_background_sync():
     # 夜里没人看的时候盘口照样在动，而那段变化正是开盘到临场的主要部分，
     # 所以必须周期采样，不能只在有人请求时才采。
     try:
-        from src.webapp.basketball_service import start_odds_tracking
-        start_odds_tracking()
+        from src.webapp.basketball_service import (
+            ODDS_TRACKING_INTERVAL_MINUTES, start_odds_tracking,
+        )
+        # 用 server 自己的 logger 报告结果：领域层的 logger 没开 INFO，
+        # 那条日志在 journal 里看不见，运维就无从判断采样到底起没起来。
+        if start_odds_tracking() is not None:
+            log.info(f'篮球赔率自动采样已启动: 每 {ODDS_TRACKING_INTERVAL_MINUTES} 分钟')
+        else:
+            log.warning('篮球赔率自动采样未启动（数据库不可用）')
     except Exception as e:
         log.warning(f"启动篮球赔率追踪器失败: {e}")
 
