@@ -40,6 +40,14 @@ SNAPSHOT_SEQS = [
     [_snapshot(120, spf_home=None, spf_away=1.9),
      _snapshot(30, spf_home=1.95, spf_away=1.85),
      _snapshot(2, spf_home=1.75, spf_away=2.05)],
+    # 强度足够但变盘发生在很久以前：steam 要求「急」，只看强度不看新鲜度时
+    # 这种陈年大幅位移会被误判成急单。未到 240 分钟，所以也不是 stale——
+    # 必须靠 90 分钟这道窗口才能否掉它。
+    [_snapshot(200, spf_home=2.20, spf_away=1.70),
+     _snapshot(120, spf_home=1.60, spf_away=2.30)],
+    # 窗口内侧的相邻值，把 90 这个边界钉死
+    [_snapshot(150, spf_home=2.20, spf_away=1.70),
+     _snapshot(89, spf_home=1.60, spf_away=2.30)],
 ]
 
 HANDICAP_SEQS = [

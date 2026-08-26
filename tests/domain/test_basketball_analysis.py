@@ -138,7 +138,11 @@ ELO_SETUPS = [
     FakeElo(home_prob=0.5, margin=0.0, total=200.0, home_games=0, away_games=0),
 ]
 
-CALIBRATORS = [FakeCalibrator(1.0), FakeCalibrator(1.08), FakeCalibrator(0.93)]
+# 最后一个倍率会把校准值顶出 0.95 的上界。校准器是从历史准确率算出来的，
+# 样本少时可能给出接近 1 的离谱值，上界就是防它——不喂一个越界的样本，
+# 那道 clamp 改成多少都测不出来。
+CALIBRATORS = [FakeCalibrator(1.0), FakeCalibrator(1.08), FakeCalibrator(0.93),
+               FakeCalibrator(2.0)]
 
 
 class _ParityBase(unittest.TestCase):
