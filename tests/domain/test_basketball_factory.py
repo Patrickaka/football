@@ -136,6 +136,41 @@ class MovementProviderWiringTests(_Base):
         self.assertEqual(movement['side'], 'home')
 
 
+class DatabaseUnavailableTests(_Base):
+    """MySQL 连不上时必须降级，不能让端点整个失败。
+
+    迁移前 kv_store 在这种情况下会退回 JSON 文件——「少一点信息，
+    但仍然出结果」。这条降级路径不能在迁移中悄悄丢掉。
+    """
+
+    def test_analyzer_degrades_to_market_only(self):
+        result = factory.build_analyzer(None).analyze_spf(
+            {'home': 'A', 'away': 'B', 'league': 'NBA',
+             'spf_home': 1.8, 'spf_away': 2.0})
+        self.assertTrue(result['available'])
+        self.assertEqual(result['elo_trust'], 0.0)
+
+    def test_movement_provider_degrades_to_schedule_trends_only(self):
+        provider = factory.build_movement_provider(None, self.transport,
+                                                    now_fn=lambda: NOW)
+        result = provider([{'id': 'm', 'home': 'A', 'away': 'B', 'source': '500'}],
+                          '500', '2026-08-27')
+        self.assertEqual(result['m'], {'spf': None, 'rqspf': None, 'dx': None})
+
+    def test_prediction_service_still_produces_a_payload(self):
+        service = factory.build_prediction_service(None, transport=self.transport)
+        payload = service.generate(date='2026-08-27')
+        self.assertEqual(payload['count'], 0)
+
+    def test_odds_history_store_is_absent_rather_than_broken(self):
+        self.assertIsNone(factory.build_odds_history_store(None))
+
+    def test_tracker_is_absent_rather_than_broken(self):
+        """采集的全部意义就是落盘。给它一个空仓储只会在真正写入时才炸，
+        那时错误信息离原因已经很远了。"""
+        self.assertIsNone(factory.build_odds_tracker(None))
+
+
 class TransportWiringTests(unittest.TestCase):
     def test_dispatches_by_hostname(self):
         okooo_calls, default_calls = [], []

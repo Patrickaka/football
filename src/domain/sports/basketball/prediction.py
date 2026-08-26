@@ -67,6 +67,14 @@ class PredictionService:
         key = self._cache_key(date, bet_types, source, use_movement)
         return self._cache.get(key, compute, ttl=self._ttl)
 
+    def fetch_schedule(self, date=None, source=DEFAULT_SOURCE):
+        """只取赛程、不做分析。赛程列表端点用它。
+
+        不走缓存：它比整份 payload 便宜得多，而且调用方要的就是「现在
+        场上有哪些比赛」，缓存反而会让刚开售的场次晚几分钟出现。
+        """
+        return self._fetch_matches(date or self._today(), source)
+
     @staticmethod
     def _cache_key(date, bet_types, source, use_movement):
         """玩法排序后入 key：顺序不同但内容相同的请求算同一件事。"""

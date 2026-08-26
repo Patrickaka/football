@@ -42,7 +42,15 @@ def build_transport(snapshots_root=None):
 
 
 def build_analyzer(db):
-    """Elo 与校准器都要读库，读不到就退化为纯市场价格。"""
+    """Elo 与校准器都要读库。
+
+    `db` 允许为 None：数据库不可用时退化为纯市场价格，而不是让整个端点
+    失败。迁移前 kv_store 在 MySQL 连不上时会降级到 JSON 文件，同样是
+    「少一点信息，但仍然出结果」——这条降级路径不能在迁移中丢掉。
+    """
+    if db is None:
+        log.warning('数据库不可用，篮球分析退化为纯市场价格')
+        return BasketballAnalyzer(elo=None, calibrator=None)
     return BasketballAnalyzer(
         elo=BasketballELORatingSystem(store=EloStore(db)),
         calibrator=BasketballCalibrator(store=CalibrationStore(db)))
@@ -57,13 +65,17 @@ def build_schedule_sources(transport):
 
 
 def build_movement_provider(db, transport, now_fn=None):
-    """走势映射。它自己会在 500 源上先采一轮快照再算。"""
-    store = OddsHistoryStore(db)
+    """走势映射。它自己会在 500 源上先采一轮快照再算。
+
+    `db` 为 None 时快照那一路整体缺席，只剩澳客赛程页自带的盘路。
+    """
+    store = OddsHistoryStore(db) if db is not None else None
     schedules = build_schedule_sources(transport)
+    tracker = (OddsTracker(schedule_fetcher=schedules['500'], store=store,
+                           now_fn=now_fn) if store is not None else None)
     return MovementMapBuilder(
         history_store=store,
-        tracker=OddsTracker(schedule_fetcher=schedules['500'], store=store,
-                            now_fn=now_fn),
+        tracker=tracker,
         okooo_schedule=schedules['okooo'],
         bundle_fetcher=okooo_parsing.MarketBundleFetcher(transport=transport),
         now_fn=now_fn)
@@ -84,12 +96,19 @@ def build_prediction_service(db, cache=None, transport=None, recorder=None,
 
 
 def build_odds_tracker(db, transport=None, now_fn=None):
-    """单独暴露采集器：/api/basketball/track 端点直接触发它。"""
-    transport = transport or build_transport()
+    """单独暴露采集器：/api/basketball/track 端点直接触发它。
+
+    没有库就没有采集器——采集的全部意义就是落盘，给它一个空仓储只会
+    在真正写入时才炸，而那时错误信息离原因已经很远了。
+    """
+    store = build_odds_history_store(db)
+    if store is None:
+        return None
     return OddsTracker(
-        schedule_fetcher=parsing.ScheduleFetcher(transport=transport).fetch,
-        store=OddsHistoryStore(db), now_fn=now_fn)
+        schedule_fetcher=parsing.ScheduleFetcher(
+            transport=transport or build_transport()).fetch,
+        store=store, now_fn=now_fn)
 
 
 def build_odds_history_store(db):
-    return OddsHistoryStore(db)
+    return OddsHistoryStore(db) if db is not None else None
