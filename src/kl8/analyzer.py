@@ -15,6 +15,7 @@ from src.common.paths import data_path
 from src.common.repositories import doc_store
 from src.common.logger import setup_logger
 from src.domain.numeric import statistics as stats
+from src.domain.numeric.kl8 import scoring
 
 log = setup_logger('kl8')
 from . import strategies as _strategies_mod
@@ -254,229 +255,27 @@ class KL8Analyzer:
 
     # ─── 特征评分 ───
 
-    def _calculate_feature_score(self, num: int, repeat_direction: str = 'neutral',
-                                     repeat_avoid_score: float = 0.10,
-                                     repeat_non_avoid_score: float = 0.85,
-                                     repeat_follow_score: float = 0.90,
-                                     repeat_non_follow_score: float = 0.50,
-                                     frequency_mode: str = 'mean_reversion') -> Dict[str, float]:
-        """计算号码num的各特征得分
+    def _calculate_feature_score(self, num: int, **options) -> Dict[str, float]:
+        """号码 num 的各特征得分。算法在 `domain/numeric/kl8/scoring.py`。"""
+        return scoring.feature_scores(
+            num, self.statistics, based_on_issue=self._based_on_issue(), **options)
 
-        v8改动:
-        - position → position_residual: 区内频率 - 全局频率期望(剔除全局频率影响)
-        - road → road_residual: 路内频率 - 全局频率期望(剔除全局频率影响)
-        - repeat支持3种方向: neutral(0.5), avoid(上期0.10/非上期0.85), follow(上期0.90/非上期0.50)
-        """
-        scores = {}
-        stats = self.statistics
-        freq = stats['frequency']
-        gap = stats['gap']
-        expected_freq = stats['expected_freq']
-        expected_gap = stats['expected_gap']
-        last_nums = stats['last_numbers']
-        total = stats['total_periods']
-
-        # 1. 频率偏离度（全局冷热信号）
-        actual_freq = freq.get(num, 0)
-        deviation_ratio = actual_freq / max(expected_freq, 0.01)
-        
-        if frequency_mode == 'neutral':
-            scores['frequency'] = 0.50
-        elif frequency_mode == 'hot':
-            if deviation_ratio >= 1.0:
-                scores['frequency'] = 0.55 + 0.15 * (deviation_ratio - 1.0)
-            else:
-                scores['frequency'] = max(0.15, 0.55 * math.exp(-1.8 * (1.0 - deviation_ratio)))
-        else:
-            if deviation_ratio <= 1.0:
-                scores['frequency'] = 0.55 + 0.15 * (1.0 - deviation_ratio)
-            else:
-                scores['frequency'] = max(0.15, 0.55 * math.exp(-1.8 * (deviation_ratio - 1.0)))
-
-        # 2. 遗漏偏离度（间隔均值回归）。注意：当策略给 gap 赋权时，此分会进入
-        #    get_ensemble_ranking 的加权和并影响选号(参考策略即用它产生日间变化)。
-        #    对公平摇奖它与频率一样无预测 edge，仅改变"挑到哪些等概率号码"，不改变期望命中。
-        actual_gap_val = gap.get(num, 0)
-        gap_ratio = actual_gap_val / max(expected_gap, 0.01)
-        if gap_ratio <= 1.0:
-            scores['gap'] = 0.25 + 0.60 * (gap_ratio ** 0.7)
-        else:
-            scores['gap'] = 0.85 - 0.45 * (1.0 - math.exp(-(gap_ratio - 1.0) * 0.8))
-
-        # 3. 区内残差(position_residual): 该号频率 - 区内平均频率 / 全局平均频率
-        #    剔除全局频率后，只保留"该号码在区内是否超出全局平均水平"的残差信号
-        #    v9.3: 从10码区改为5码区，更细粒度
-        zone = (num - 1) // 5 + 1
-        zone_nums = [z for z in range(((zone-1)*5)+1, zone*5+1)]
-        num_freq = freq.get(num, 0)
-        global_avg = expected_freq
-        zone_total = sum(freq.get(z, 0) for z in zone_nums)
-        zone_avg = zone_total / len(zone_nums)
-        if global_avg > 0:
-            zone_deviation = zone_avg - global_avg
-            num_residual = num_freq - zone_avg
-            residual_ratio = num_residual / max(global_avg, 0.01)
-            if residual_ratio <= 0:
-                scores['position_residual'] = 0.55 + 0.25 * min(1.0, abs(residual_ratio))
-            else:
-                scores['position_residual'] = max(0.15, 0.55 * math.exp(-1.5 * residual_ratio))
-        else:
-            scores['position_residual'] = 0.50
-
-        # 3.5 行列交叉残差(position_residual_cross): 8码区 × 奇偶交叉分组（每组4个号码）
-        row = (num - 1) // 8 + 1
-        parity = 'odd' if num % 2 == 1 else 'even'
-        cross_nums = []
-        for z in range(1, 81):
-            z_row = (z - 1) // 8 + 1
-            z_parity = 'odd' if z % 2 == 1 else 'even'
-            if z_row == row and z_parity == parity:
-                cross_nums.append(z)
-        cross_total = sum(freq.get(z, 0) for z in cross_nums)
-        cross_avg = cross_total / len(cross_nums) if cross_nums else global_avg
-        if global_avg > 0:
-            cross_residual = num_freq - cross_avg
-            cross_ratio = cross_residual / max(global_avg, 0.01)
-            if cross_ratio <= 0:
-                scores['position_residual_cross'] = 0.55 + 0.20 * min(1.0, abs(cross_ratio))
-            else:
-                scores['position_residual_cross'] = max(0.15, 0.55 * math.exp(-1.5 * cross_ratio))
-        else:
-            scores['position_residual_cross'] = 0.50
-
-        # 4. 路内残差(road_residual): 同理，剔除全局频率
-        road = num % 3
-        road_nums = [r for r in range(1, 81) if r % 3 == road]
-        road_total = sum(freq.get(r, 0) for r in road_nums)
-        road_avg = road_total / len(road_nums)
-        if global_avg > 0:
-            road_deviation = road_avg - global_avg
-            num_road_residual = num_freq - road_avg
-            residual_ratio = num_road_residual / max(global_avg, 0.01)
-            if residual_ratio <= 0:
-                scores['road_residual'] = 0.55 + 0.20 * min(1.0, abs(residual_ratio))
-            else:
-                scores['road_residual'] = max(0.15, 0.55 * math.exp(-1.5 * residual_ratio))
-        else:
-            scores['road_residual'] = 0.50
-
-        # 5. 趋势特征(trend): 后半段频率 - 前半段频率，上升趋势加分、下降趋势降分
-        trend = stats.get('trend', {}).get(num, 0)
-        trend_max = max(1, total // 4)
-        trend_ratio = trend / max(trend_max, 1)
-        if trend_ratio >= 0:
-            scores['trend'] = 0.55 + 0.30 * min(1.0, trend_ratio)
-        else:
-            scores['trend'] = max(0.20, 0.55 * math.exp(-2.0 * abs(trend_ratio)))
-
-        # 5.5 组合共现特征(pair_cooccurrence): 号码与其他号码的平均共现频率
-        avg_cooc = stats.get('avg_cooccurrence', {}).get(num, 0)
-        max_avg_cooc = max(stats.get('avg_cooccurrence', {}).values(), default=1)
-        cooc_ratio = avg_cooc / max(max_avg_cooc, 0.01)
-        scores['pair_cooccurrence'] = 0.50 + 0.30 * cooc_ratio
-
-        # 5.6 跨期带出(next_transition)：当前20个号码出现后，历史下一期中
-        # 候选号出现的收缩条件概率。0.25为中性，限制到[0.15, 0.85]，防止
-        # 稀疏关联压倒其余特征。重号A->A也自然包含在此统计中。
-        transition_prob = stats.get('next_transition_probability', {}).get(num, 0.25)
-        transition_lift = (transition_prob - 0.25) / 0.25
-        scores['next_transition'] = max(0.15, min(0.85, 0.50 + 0.35 * transition_lift))
-
-        # 6. 和值特征 -- 停用
-        scores['sum'] = 0.5
-
-        # 7. 区位近期开出率 -- 停用(追上期模式不优于随机)
-        scores['zone'] = 0.5
-
-        # 8. 重号(v8: 支持3种候选方向)
-        if repeat_direction == 'avoid':
-            scores['repeat'] = repeat_avoid_score if num in last_nums else repeat_non_avoid_score
-        elif repeat_direction == 'follow':
-            scores['repeat'] = repeat_follow_score if num in last_nums else repeat_non_follow_score
-        else:
-            scores['repeat'] = 0.50
-
-        # 9. 邻号(adjacent): 号码相邻号码的平均频率
-        adj_freq = stats.get('adjacent_freq', {}).get(num, 0)
-        max_adj_freq = max(stats.get('adjacent_freq', {}).values(), default=1)
-        adj_ratio = adj_freq / max(max_adj_freq, 0.01)
-        scores['adjacent'] = 0.50 + 0.30 * adj_ratio
-
-        # 10. 奇偶(odd_even): 号码所在奇偶组的频率偏离
-        parity = 'odd' if num % 2 == 1 else 'even'
-        parity_freq = stats.get('freq_by_odd_even', {}).get(parity, 0)
-        total_odd_even = sum(stats.get('freq_by_odd_even', {}).values()) or 1
-        parity_ratio = parity_freq / max(total_odd_even, 0.01)
-        if parity_ratio >= 0.5:
-            scores['odd_even'] = 0.50 + 0.30 * (parity_ratio - 0.5) * 2
-        else:
-            scores['odd_even'] = 0.50 - 0.30 * (0.5 - parity_ratio) * 2
-
-        # 11. 大小(big_small): 号码所在大小组的频率偏离
-        size = 'big' if num > 40 else 'small'
-        size_freq = stats.get('freq_by_big_small', {}).get(size, 0)
-        total_big_small = sum(stats.get('freq_by_big_small', {}).values()) or 1
-        size_ratio = size_freq / max(total_big_small, 0.01)
-        if size_ratio >= 0.5:
-            scores['big_small'] = 0.50 + 0.30 * (size_ratio - 0.5) * 2
-        else:
-            scores['big_small'] = 0.50 - 0.30 * (0.5 - size_ratio) * 2
-
-        based_on_issue = self.history_data[0].get('issue', '') if self.history_data else ''
-        seed_key = f'kl8_seeded_random_v1_{based_on_issue}_{num}'
-        scores['seeded_random'] = int(
-            hashlib.sha256(seed_key.encode()).hexdigest()[:12],
-            16,
-        ) / float(0xFFFFFFFFFFFF)
-
-        return scores
+    def _based_on_issue(self) -> str:
+        """当前最新一期期号。种子随机分靠它做到「同期稳定、跨期变化」。"""
+        return self.history_data[0].get('issue', '') if self.history_data else ''
 
     # ─── 排名模型（v5: 纯参数化，接受外部feature_weights）───
 
-    def get_ensemble_ranking(self, top_n: int = 20, feature_weights: Optional[Dict[str, float]] = None,
-                              repeat_direction: str = 'neutral',
-                              repeat_avoid_score: float = 0.10,
-                              repeat_non_avoid_score: float = 0.85,
-                              repeat_follow_score: float = 0.90,
-                              repeat_non_follow_score: float = 0.50,
-                              frequency_mode: str = 'mean_reversion') -> List[Dict]:
-        """综合特征评分排名
+    def get_ensemble_ranking(self, top_n: int = 20,
+                             feature_weights: Optional[Dict[str, float]] = None,
+                             **options) -> List[Dict]:
+        """按加权和排名。权重缺省时取全局活跃权重。
 
-        v8改动:
-        - feature_weights 支持 position_residual/road_residual（残差特征）
-        - repeat_direction 参数支持 neutral/avoid/follow
+        权重从哪儿来是配置问题，留在这里；怎么算分是领域问题，在 scoring 里。
         """
-        # 使用传入权重或全局活跃权重
-        weights = feature_weights or get_active_feature_weights()
-
-        # v5: 如果没有有效权重（全部为0），返回空列表
-        has_weight = any(w > 0 for w in weights.values())
-        if not has_weight:
-            return []  # 无信号时不返回[1..20]
-
-        ranking = []
-        for num in range(1, 81):
-            scores = self._calculate_feature_score(
-                num,
-                repeat_direction=repeat_direction,
-                repeat_avoid_score=repeat_avoid_score,
-                repeat_non_avoid_score=repeat_non_avoid_score,
-                repeat_follow_score=repeat_follow_score,
-                repeat_non_follow_score=repeat_non_follow_score,
-                frequency_mode=frequency_mode,
-            )
-            total_score = sum(
-                scores.get(k, 0) * weights.get(k, 0) for k in scores
-            )
-            ranking.append({
-                'num': num,
-                'ranking_score': total_score,
-                'score_type': 'heuristic_rank',
-                'is_probability': False,
-                'scores': scores,
-            })
-        ranking.sort(key=lambda x: (-x['ranking_score'], x['num']))
-        return ranking[:top_n]
+        return scoring.ensemble_ranking(
+            self.statistics, feature_weights or get_active_feature_weights(),
+            top_n=top_n, based_on_issue=self._based_on_issue(), **options)
 
     # ─── 贝叶斯模型 ───
 
