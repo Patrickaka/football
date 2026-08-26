@@ -211,10 +211,36 @@ class BehaviourTests(unittest.TestCase):
         self.assertEqual(fallback['spf']['side'], 'home')
 
     def test_snapshots_fill_gaps_left_by_okooo(self):
-        """澳客只给了让分与大小分，胜负那一路要用快照补上。"""
-        result = _Deps().builder()(FIVE_HUNDRED_MATCHES, '500', self.DATE)
+        """澳客给不出胜负那一路时，用自己的快照补上。
+
+        详情页被 WAF 拦是线上常态，所以这条补齐路径才是线上真正在走的那条
+        ——用带 ml 的 bundle 去测，走的是「本来就有」而不是「补上了」。
+        """
+        blocked = {mid: {'ml': {'available': False}, 'ah': {'available': False},
+                         'ou': {'available': False}} for mid in BUNDLES}
+        result = _Deps(bundles=blocked).builder()(
+            FIVE_HUNDRED_MATCHES, '500', self.DATE)
         matched = result['2026-08-27_金州女武神_太阳']
+        self.assertTrue(matched['rqspf']['available'], '让分该来自澳客赛程页')
         self.assertTrue(matched['spf']['available'], 'spf 没有被快照补齐')
+        self.assertEqual(matched['spf']['kind'], 'ml')
+
+    def test_cross_source_matching_needs_both_teams(self):
+        """只比主队会把同一支主队的两场比赛混为一谈——同一天主客双赛
+        并不罕见（分区赛会、连续两日同一主场）。"""
+        okooo = [
+            dict(OKOOO_MATCHES[0], id='A', home='金州女武神[西2]', away='太阳'),
+            dict(OKOOO_MATCHES[0], id='B', home='金州女武神[西2]', away='风暴',
+                 rf_trend={'direction': 'away_backing', 'strength': 0.9,
+                           'home_move': 0.2, 'away_move': -0.2,
+                           'line_move': 0.0, 'samples': 9}),
+        ]
+        matches = [dict(FIVE_HUNDRED_MATCHES[0], home='金州女武神', away='风暴',
+                        id='2026-08-27_金州女武神_风暴')]
+        result = _Deps(okooo_matches=okooo).builder()(matches, '500', self.DATE)
+        movement = result['2026-08-27_金州女武神_风暴']
+        self.assertEqual(movement['rqspf']['side'], 'away',
+                         '匹配到了同一主队的另一场比赛')
 
     def test_detail_failure_keeps_the_schedule_trends(self):
         """**与旧实现刻意不同的一处。**
