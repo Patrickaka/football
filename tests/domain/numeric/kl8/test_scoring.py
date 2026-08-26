@@ -142,6 +142,36 @@ class FrequencyModeTests(unittest.TestCase):
                            self._frequency(hot, 'mean_reversion'))
 
 
+class TransitionClampTests(unittest.TestCase):
+    """跨期带出夹在 [0.15, 0.85] 之间。
+
+    这条钳位在真实数据上从不触发——历史概率都落在中间。但它防的正是
+    「稀疏关联」：某个号码在极少的样本里恰好每次都跟着开出，条件概率会冲到
+    接近 1，不夹住的话这一项会压倒其余十几个特征。所以只能构造。
+    """
+
+    def _score(self, probability):
+        stats = dict(STATS, next_transition_probability={7: probability})
+        return feature_scores(7, stats, based_on_issue=ISSUE)['next_transition']
+
+    def test_extreme_high_is_capped(self):
+        self.assertEqual(self._score(1.0), 0.85)
+
+    def test_the_floor_is_only_reached_at_probability_zero(self):
+        """下界对合法概率**不会真正触发**：概率最低是 0，对应 lift = -1，
+        算出来正好是 0.15。它是防御性的，真正会绑住的是上界。
+        写清楚比硬凑一个触发它的用例诚实。"""
+        self.assertAlmostEqual(self._score(0.0), 0.15)
+
+    def test_baseline_maps_to_neutral(self):
+        self.assertAlmostEqual(self._score(0.25), 0.50)
+
+    def test_inside_the_band_is_untouched(self):
+        """带内不动——钳位不该顺手压扁正常范围的信号。"""
+        self.assertGreater(self._score(0.30), 0.50)
+        self.assertLess(self._score(0.30), 0.85)
+
+
 class SeededRandomTests(unittest.TestCase):
     """种子随机：同一期内稳定、跨期变化。用来给并列打破僵局。"""
 
@@ -160,6 +190,50 @@ class SeededRandomTests(unittest.TestCase):
     def test_stays_within_the_unit_interval(self):
         values = [self._seeded(n, '2026225') for n in range(1, 81)]
         self.assertTrue(all(0.0 <= v <= 1.0 for v in values), values[:5])
+
+
+class AnalyzerWiringTests(unittest.TestCase):
+    """分析器接线：期号必须从**最新一期**取并传下去。
+
+    上面那些用例都直接给 `feature_scores` 传期号，绕开了分析器——接错了
+    测不出来。而接错的后果是种子随机分不再随期变化（传空）或者一直用最旧
+    一期（取错下标），两种都让「同期稳定、跨期变化」失效，且不会报错。
+    """
+
+    def _analyzer(self, history=None):
+        from src.kl8.analyzer import KL8Analyzer
+
+        analyzer = KL8Analyzer.__new__(KL8Analyzer)
+        analyzer.history_data = history if history is not None else HISTORY
+        analyzer.statistics = {}
+        analyzer.update_statistics()
+        return analyzer
+
+    def test_based_on_issue_is_the_newest(self):
+        analyzer = self._analyzer()
+        self.assertEqual(analyzer._based_on_issue(), HISTORY[0]['issue'])
+        self.assertNotEqual(analyzer._based_on_issue(), HISTORY[-1]['issue'])
+
+    def test_empty_history_yields_no_issue(self):
+        analyzer = self._analyzer(history=[])
+        self.assertEqual(analyzer._based_on_issue(), '')
+
+    def test_ranking_uses_the_newest_issue(self):
+        """用只看种子随机的权重，排名就完全由期号决定——接错立刻显形。"""
+        analyzer = self._analyzer()
+        actual = analyzer.get_ensemble_ranking(
+            top_n=10, feature_weights={'seeded_random': 1.0})
+        expected = ensemble_ranking(
+            analyzer.statistics, {'seeded_random': 1.0}, top_n=10,
+            based_on_issue=HISTORY[0]['issue'])
+        self.assertEqual([r['num'] for r in actual], [r['num'] for r in expected])
+
+    def test_feature_scores_use_the_newest_issue(self):
+        analyzer = self._analyzer()
+        self.assertEqual(
+            analyzer._calculate_feature_score(7)['seeded_random'],
+            feature_scores(7, analyzer.statistics,
+                           based_on_issue=HISTORY[0]['issue'])['seeded_random'])
 
 
 class EnsembleRankingGoldenTests(unittest.TestCase):
