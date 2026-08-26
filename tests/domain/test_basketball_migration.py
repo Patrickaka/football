@@ -36,9 +36,11 @@ _FAKE_KV = {
             {'ts': '2026-07-22T11:38:12.250497', 'spf_home': 1.81, 'spf_away': 1.6,
              'rqspf_home': 1.7, 'rqspf_away': 1.7, 'dx_over': 1.66, 'dx_under': 1.74,
              'handicap': '-1.5', 'total_line': 177.5},
+            # 盘口未变时追踪只推进 observed_ts，线上 171 条里 119 条带它
             {'ts': '2026-07-22T14:39:56.285547', 'spf_home': 1.86, 'spf_away': 1.56,
              'rqspf_home': 1.72, 'rqspf_away': 1.68, 'dx_over': 1.7, 'dx_under': 1.7,
-             'handicap': '-1.5', 'total_line': 177.5},
+             'handicap': '-1.5', 'total_line': 177.5,
+             'observed_ts': '2026-07-22T16:10:01.000000'},
         ],
         '2026-07-24_天猫_太阳': [
             {'ts': '2026-07-23T09:00:00.000000', 'spf_home': 2.1, 'spf_away': 1.7,
@@ -89,11 +91,33 @@ class MigrationTests(unittest.TestCase):
     def test_snapshot_content_matches_source(self):
         migrate(_loader, self.db)
         rows = OddsSnapshotRepository(self.db).find_by(
-            match_key='2026-07-23_水星_火花', order_by='captured_at')
+            match_key='2026-07-23_水星_火花', order_by='seq')
         self.assertEqual(len(rows), 2)
         self.assertAlmostEqual(rows[0]['spf_home'], 1.81)
         self.assertEqual(rows[0]['handicap'], '-1.5')
         self.assertAlmostEqual(rows[1]['spf_home'], 1.86)
+
+    def test_observed_ts_is_migrated(self):
+        """首版按字段白名单拷贝，白名单里漏了 observed_ts——线上 119 条
+        因此被无声丢弃。丢了不报错，只是往后再也分不清一条陈旧快照是
+        刚被确认过还是真的很久没人看了。"""
+        migrate(_loader, self.db)
+        rows = OddsSnapshotRepository(self.db).find_by(
+            match_key='2026-07-23_水星_火花', order_by='seq')
+        self.assertIsNone(rows[0]['observed_ts'])
+        self.assertEqual(rows[1]['observed_ts'], '2026-07-22T16:10:01.000000')
+
+    def test_snapshot_order_is_preserved_by_position(self):
+        """保序靠 seq。源结构是列表，允许同一时刻两条，拿时间戳当主键
+        会把第二条静默合并掉。"""
+        same_ts = dict(_FAKE_KV, **{'basketball_odds_history': {
+            'm': [{'ts': '2026-07-22T11:00:00', 'spf_home': 1.8},
+                  {'ts': '2026-07-22T11:00:00', 'spf_home': 1.6}]}})
+        stats = migrate(lambda key, default=None: same_ts.get(key, default), self.db)
+        self.assertEqual(stats['bb_odds_snapshot']['migrated'], 2)
+        rows = OddsSnapshotRepository(self.db).find_by(match_key='m', order_by='seq')
+        self.assertEqual([r['seq'] for r in rows], [0, 1])
+        self.assertEqual([r['spf_home'] for r in rows], [1.8, 1.6])
 
     def test_history_event_is_preserved(self):
         migrate(_loader, self.db)

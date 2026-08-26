@@ -99,16 +99,19 @@ class EloRecentFormRepositoryTests(_Base):
 class OddsSnapshotRepositoryTests(_Base):
     SAMPLE = {
         'match_key': '2026-07-23_水星_火花',
+        'seq': 0,
         'captured_at': '2026-07-22T11:38:12.250497',
+        'observed_ts': None,
         'spf_home': 1.81, 'spf_away': 1.6,
         'rqspf_home': 1.7, 'rqspf_away': 1.7,
         'dx_over': 1.66, 'dx_under': 1.74,
         'handicap': '-1.5', 'total_line': 177.5,
     }
+    KEYS = ['match_key', 'seq']
 
     def test_stores_all_three_market_types(self):
         repo = OddsSnapshotRepository(self.db)
-        repo.upsert(self.SAMPLE, key_cols=['match_key', 'captured_at'])
+        repo.upsert(self.SAMPLE, key_cols=self.KEYS)
         row = repo.find_all()[0]
         self.assertAlmostEqual(row['spf_home'], 1.81)
         self.assertAlmostEqual(row['rqspf_home'], 1.7)
@@ -117,30 +120,46 @@ class OddsSnapshotRepositoryTests(_Base):
     def test_handicap_stays_a_string(self):
         """让分盘可能出现非纯数值写法，转数值会丢信息。"""
         repo = OddsSnapshotRepository(self.db)
-        repo.upsert(self.SAMPLE, key_cols=['match_key', 'captured_at'])
+        repo.upsert(self.SAMPLE, key_cols=self.KEYS)
         self.assertEqual(repo.find_all()[0]['handicap'], '-1.5')
 
-    def test_composite_key_allows_multiple_snapshots(self):
+    def test_observed_ts_is_stored(self):
+        """盘口未变时只推进这一列。首版表结构没有它，迁移把 171 条里的
+        119 条无声丢掉了。"""
         repo = OddsSnapshotRepository(self.db)
-        for captured in ('2026-07-22T11:38:12.250497', '2026-07-22T14:39:56.285547'):
-            repo.upsert({**self.SAMPLE, 'captured_at': captured},
-                        key_cols=['match_key', 'captured_at'])
+        repo.upsert({**self.SAMPLE, 'observed_ts': '2026-07-22T16:10:01'},
+                    key_cols=self.KEYS)
+        self.assertEqual(repo.find_all()[0]['observed_ts'], '2026-07-22T16:10:01')
+
+    def test_position_key_allows_multiple_snapshots(self):
+        repo = OddsSnapshotRepository(self.db)
+        for seq in (0, 1):
+            repo.upsert({**self.SAMPLE, 'seq': seq}, key_cols=self.KEYS)
         self.assertEqual(repo.count(), 2)
+
+    def test_two_snapshots_sharing_a_timestamp_both_survive(self):
+        """主键建在位置上而不是时间戳上，正是为了这种情况：源结构是列表，
+        允许同一时刻两条，拿时间戳当主键会把第二条静默覆盖掉。"""
+        repo = OddsSnapshotRepository(self.db)
+        for seq, home in ((0, 1.81), (1, 1.60)):
+            repo.upsert({**self.SAMPLE, 'seq': seq, 'spf_home': home},
+                        key_cols=self.KEYS)
+        self.assertEqual(repo.count(), 2)
+        self.assertEqual(sorted(r['spf_home'] for r in repo.find_all()), [1.6, 1.81])
 
     def test_same_key_overwrites(self):
         repo = OddsSnapshotRepository(self.db)
-        repo.upsert(self.SAMPLE, key_cols=['match_key', 'captured_at'])
-        repo.upsert({**self.SAMPLE, 'spf_home': 1.86},
-                    key_cols=['match_key', 'captured_at'])
+        repo.upsert(self.SAMPLE, key_cols=self.KEYS)
+        repo.upsert({**self.SAMPLE, 'spf_home': 1.86}, key_cols=self.KEYS)
         self.assertEqual(repo.count(), 1)
         self.assertAlmostEqual(repo.find_all()[0]['spf_home'], 1.86)
 
     def test_missing_market_columns_are_allowed(self):
         """并非每次快照三类盘口都齐全，缺的列应可为空而不是报错。"""
         repo = OddsSnapshotRepository(self.db)
-        repo.upsert({'match_key': 'k', 'captured_at': 't',
+        repo.upsert({'match_key': 'k', 'seq': 0, 'captured_at': 't',
                      'spf_home': 1.8, 'spf_away': 2.0},
-                    key_cols=['match_key', 'captured_at'])
+                    key_cols=self.KEYS)
         row = repo.find_all()[0]
         self.assertIsNone(row['dx_over'])
 
