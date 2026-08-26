@@ -15,7 +15,7 @@ from src.common.paths import data_path
 from src.common.repositories import doc_store
 from src.common.logger import setup_logger
 from src.domain.numeric import statistics as stats
-from src.domain.numeric.kl8 import scoring
+from src.domain.numeric.kl8 import scoring, voting
 
 log = setup_logger('kl8')
 from . import strategies as _strategies_mod
@@ -35,6 +35,13 @@ from .candidates import (
 )
 from .records import (
     _build_recent_settlement_performance, _build_strategy_health, _checksum_numbers, _compute_next_issue, _compute_prediction_changes, _load_last_snapshot, _strategy_fingerprint, check_data_integrity, load_prize_table, normalize_record, save_conflict_to_queue,
+)
+
+# 候选池整形的实现暂时还在 `candidates.py`（阶段 3-10 迁进领域层）。
+# 领域层不反向依赖旧代码，所以由这里注入。
+_POOL_SHAPER = voting.PoolShaper(
+    diversify=_diversify_candidate_pool,
+    select_final=_select_final_candidate_pool,
 )
 
 # kl8 的号码空间与几个分区参数。写死在统计函数里的话，换一种彩票就用不上。
@@ -277,95 +284,7 @@ class KL8Analyzer:
             self.statistics, feature_weights or get_active_feature_weights(),
             top_n=top_n, based_on_issue=self._based_on_issue(), **options)
 
-    # ─── 贝叶斯模型 ───
-
-    def _model_bayesian(self, top_n: int = 20) -> List[int]:
-        """贝叶斯概率模型 -- 目前停用
-
-        v8修正:
-        - 先验均值从0.5修正为0.25（符合80选20的理论开出率）
-        - 使用 Beta(5, 15) 先验，均值=5/20=0.25
-        - 启用前需做概率校准和样本外验证
-        """
-        stats = self.statistics
-        freq = stats['frequency']
-        total = stats['total_periods']
-
-        # v8: Beta(5, 15) 先验，均值=0.25
-        prior_alpha = 5
-        prior_beta = 15
-        prior_strength = prior_alpha + prior_beta  # = 20
-
-        scores = {}
-        for num in range(1, 81):
-            count = freq.get(num, 0)
-            # 后验均值 = (count + alpha) / (total + alpha + beta)
-            base_prob = (count + prior_alpha) / (total + prior_strength)
-
-            # 均值回归因子：偏离理论率0.25越多，回归越强
-            deviation_ratio = base_prob / 0.25  # 理论率=0.25
-            reversion_factor = 1.0 / (1.0 + 0.6 * max(0, deviation_ratio - 1.0))
-            if deviation_ratio < 1.0:
-                reversion_factor = min(1.5, 1.0 + 0.5 * (1.0 - deviation_ratio))
-
-            scores[num] = base_prob * reversion_factor
-
-        return sorted(scores.keys(), key=lambda n: (-scores[n], n))[:top_n]
-
-    # ─── 马尔可夫模型（确定性哈希打破并列）───
-
-    def _model_markov(self, top_n: int = 20) -> List[int]:
-        """一阶马尔可夫转移模型 -- 目前停用"""
-        if len(self.history_data) < 3:
-            return []
-
-        transition_counts = defaultdict(lambda: defaultdict(int))
-        for i in range(len(self.history_data) - 1):
-            current = set(self.history_data[i]['numbers'])
-            prev = set(self.history_data[i + 1]['numbers'])
-            for num in prev:
-                if num in current:
-                    transition_counts[num]['repeat'] += 1
-                else:
-                    transition_counts[num]['skip'] += 1
-
-        last_nums = set(self.history_data[0]['numbers'])
-        based_on_issue = self.history_data[0]['issue']
-
-        scores = {}
-        for num in range(1, 81):
-            base_score = 0.25
-            if num in last_nums:
-                repeat_rate = transition_counts[num]['repeat'] / max(
-                    transition_counts[num]['repeat'] + transition_counts[num]['skip'], 1)
-                base_score = max(0.15, repeat_rate)
-            tie_break = int(hashlib.sha256(f'{based_on_issue}_{num}'.encode()).hexdigest()[:8], 16) / 0xFFFFFFFF
-            scores[num] = base_score + tie_break * 0.001
-
-        return sorted(scores.keys(), key=lambda n: (-scores[n], n))[:top_n]
-
-    # ─── 排名模型(独立) ───
-
-    def _model_rank(self, top_n: int = 20, feature_weights: Optional[Dict[str, float]] = None,
-                     repeat_direction: str = 'neutral',
-                     repeat_avoid_score: float = 0.10,
-                     repeat_non_avoid_score: float = 0.85,
-                     repeat_follow_score: float = 0.90,
-                     repeat_non_follow_score: float = 0.50,
-                     frequency_mode: str = 'mean_reversion') -> List[int]:
-        """纯排名模型"""
-        ranking = self.get_ensemble_ranking(
-            top_n=top_n, feature_weights=feature_weights,
-            repeat_direction=repeat_direction,
-            repeat_avoid_score=repeat_avoid_score,
-            repeat_non_avoid_score=repeat_non_avoid_score,
-            repeat_follow_score=repeat_follow_score,
-            repeat_non_follow_score=repeat_non_follow_score,
-            frequency_mode=frequency_mode,
-        )
-        return [r['num'] for r in ranking]
-
-    # ─── 多模型投票（v5: 纯参数化 + 预测就绪判断）───
+    # ─── 多模型投票 ───
 
     def multi_model_voting(
         self,
@@ -383,158 +302,30 @@ class KL8Analyzer:
         frequency_mode: str = 'mean_reversion',
         final_selection_mode: str = 'balanced',
     ) -> Dict:
-        """多模型集成投票
+        """跑投票管道。权重缺省时取全局活跃权重。
 
-        v8改动:
-        - 传递 repeat_direction 到 get_ensemble_ranking
+        权重从哪儿来、版本号是什么，都是配置问题，留在这里；怎么投、
+        怎么定候选池，是领域问题，在 `domain/numeric/kl8/voting` 里。
         """
-        fw = feature_weights or get_active_feature_weights()
-        mw = model_weights or get_active_model_weights()
-
-        # ── 预测就绪判断 ──
-        has_rank_feature = any(w > 0 for w in fw.values())
-        rank_weight = mw.get('rank', 0.0)
-        bayesian_weight = mw.get('bayesian', 0.0)
-        markov_weight = mw.get('markov', 0.0)
-
-        rank_ready = rank_weight > 0 and has_rank_feature
-        bayesian_ready = bayesian_weight > 0
-        markov_ready = markov_weight > 0
-
-        if not (rank_ready or bayesian_ready or markov_ready):
-            return {
-                'selected': [],
-                'candidates': [],
-                'votes': {},
-                'status': 'no_validated_signal',
-                'message': '暂无通过回测验证的有效特征，不输出号码推荐',
-                'version': KL8_PREDICTOR_VERSION,
-            }
-
-        votes = defaultdict(float)
-        model_top_n = min(KL8_NUM_RANGE, max(top_n, 40))
-
-        # 懒加载: 只计算启用模型
-        if rank_ready:
-            model_result = self._model_rank(
-                top_n=model_top_n, feature_weights=fw,
-                repeat_direction=repeat_direction,
-                repeat_avoid_score=repeat_avoid_score,
-                repeat_non_avoid_score=repeat_non_avoid_score,
-                repeat_follow_score=repeat_follow_score,
-                repeat_non_follow_score=repeat_non_follow_score,
-                frequency_mode=frequency_mode,
-            )
-            for rank, num in enumerate(model_result):
-                vote_weight = (1.0 - (rank / max(len(model_result), 1))) * rank_weight
-                votes[num] += vote_weight
-
-        if bayesian_ready:
-            model_result = self._model_bayesian(top_n=model_top_n)
-            for rank, num in enumerate(model_result):
-                vote_weight = (1.0 - (rank / max(len(model_result), 1))) * bayesian_weight
-                votes[num] += vote_weight
-
-        if markov_ready:
-            model_result = self._model_markov(top_n=model_top_n)
-            for rank, num in enumerate(model_result):
-                vote_weight = (1.0 - (rank / max(len(model_result), 1))) * markov_weight
-                votes[num] += vote_weight
-
-        candidates = sorted(votes.items(), key=lambda x: (-x[1], x[0]))
-        if pool_diversify:
-            candidate_pool = _diversify_candidate_pool(
-                candidates,
-                max(top_n, 7),
-                self.statistics.get('last_numbers', set()),
-                max_last_numbers=pool_max_last_numbers,
-            )
-        else:
-            candidate_pool = candidates[:max(top_n, 7)]
-        final_pool, selected_mode = _select_final_candidate_pool(
-            candidate_pool,
-            pick_n,
-            self.statistics.get('last_numbers', set()),
-            max_last_numbers=pool_max_last_numbers,
-            selection_mode=final_selection_mode,
-        )
-        selected = [num for num, _ in final_pool]
-
-        return {
-            'selected': selected,
-            'candidates': candidate_pool,
-            'selected_pool': final_pool,
-            'votes': dict(votes),
-            'diversified': pool_diversify,
-            'pool_max_last_numbers': pool_max_last_numbers,
-            'final_selection_mode': selected_mode,
-            'raw_candidate_count': len(candidates),
-            'version': KL8_PREDICTOR_VERSION,
-        }
-
-    # ─── 选5复式7码 ───
-
-    def get_fu_shi_7(
-        self,
-        feature_weights: Optional[Dict[str, float]] = None,
-        model_weights: Optional[Dict[str, float]] = None,
-        repeat_direction: str = 'neutral',
-        repeat_avoid_score: float = 0.10,
-        repeat_non_avoid_score: float = 0.85,
-        repeat_follow_score: float = 0.90,
-        repeat_non_follow_score: float = 0.50,
-        pool_diversify: bool = True,
-        pool_max_last_numbers: Optional[int] = None,
-    ) -> Dict:
-        """选5复式7码"""
-        vote_result = self.multi_model_voting(
-            pick_n=7, top_n=7,
-            feature_weights=feature_weights,
-            model_weights=model_weights,
-            repeat_direction=repeat_direction,
-            repeat_avoid_score=repeat_avoid_score,
-            repeat_non_avoid_score=repeat_non_avoid_score,
-            repeat_follow_score=repeat_follow_score,
-            repeat_non_follow_score=repeat_non_follow_score,
+        return voting.vote(
+            self.statistics,
+            feature_weights or get_active_feature_weights(),
+            model_weights or get_active_model_weights(),
+            _POOL_SHAPER,
+            version=KL8_PREDICTOR_VERSION,
+            based_on_issue=self._based_on_issue(),
+            pick_n=pick_n,
+            top_n=top_n,
             pool_diversify=pool_diversify,
             pool_max_last_numbers=pool_max_last_numbers,
-            frequency_mode='mean_reversion',
-        )
-
-        if vote_result.get('status') == 'no_validated_signal':
-            return {
-                'top7_numbers': [],
-                'total_combinations': 0,
-                'combinations': [],
-                'version': KL8_PREDICTOR_VERSION,
-                'source': 'multi_model_voting',
-                'status': 'no_validated_signal',
-                'message': vote_result.get('message', ''),
-            }
-
-        top7 = vote_result['selected']
-        combo_list = [sorted(c) for c in combinations(top7, 5)]
-
-        ranking_full = self.get_ensemble_ranking(
-            top_n=7,
-            feature_weights=feature_weights,
+            final_selection_mode=final_selection_mode,
             repeat_direction=repeat_direction,
             repeat_avoid_score=repeat_avoid_score,
             repeat_non_avoid_score=repeat_non_avoid_score,
             repeat_follow_score=repeat_follow_score,
             repeat_non_follow_score=repeat_non_follow_score,
+            frequency_mode=frequency_mode,
         )
-        top7_details = [r for r in ranking_full if r['num'] in top7]
-        top7_details.sort(key=lambda x: (-x['ranking_score'], x['num']))
-
-        return {
-            'top7_numbers': top7,
-            'top7_scores': [r['ranking_score'] for r in top7_details],
-            'total_combinations': len(combo_list),
-            'combinations': combo_list,
-            'version': KL8_PREDICTOR_VERSION,
-            'source': 'multi_model_voting',
-        }
 
     # ─── 预测快照 ───
 
