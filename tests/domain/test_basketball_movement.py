@@ -170,6 +170,19 @@ def _movements():
                 'signal_conflict': True, 'water_side': 'over',
                 'line_side': 'under', 'signal_agreement': False,
                 'line_move': 1.0, 'home_move': -0.1, 'away_move': 0.05})
+    # 其余否决条件全部通过、只差强度——INFERENCE_MIN_STRENGTH 是唯一
+    # 能否决它的门槛，缺了这一条那个阈值改成 0 都测不出来。
+    for strength in (0.0, 0.1, 0.2499, 0.25):
+        out.append({'available': True, 'side': 'home', 'strength': strength,
+                    'samples': 5, 'stale': False, 'steam': False,
+                    'signal_conflict': False, 'water_side': 'home',
+                    'line_side': 'flat', 'signal_agreement': False,
+                    'line_move': 0.0, 'home_move': -0.05, 'away_move': 0.02})
+        out.append({'available': True, 'side': 'under', 'strength': strength,
+                    'samples': 5, 'stale': False, 'steam': False,
+                    'signal_conflict': False, 'water_side': 'under',
+                    'line_side': 'flat', 'signal_agreement': False,
+                    'line_move': 0.0, 'home_move': 0.02, 'away_move': -0.05})
     return out
 
 
