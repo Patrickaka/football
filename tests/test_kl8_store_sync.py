@@ -199,3 +199,78 @@ class FetchPathWiringTests(unittest.TestCase):
 
         self.assertIsNotNone(result, '镜像失败把抓取一起拖垮了')
         self.assertEqual(len(result), 1)
+
+
+class LoadFromStoreTests(_Base):
+    def test_returns_records_in_the_legacy_shape(self):
+        """旧代码认的是字典，不是 Draw 对象。形状不对不会报错，
+        只会让 normalize_record 全部返回 None，历史静默变成空。"""
+        store_sync.mirror_to_store([_record('2026227')])
+        records = store_sync.load_from_store()
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0]['issue'], '2026227')
+        self.assertEqual(records[0]['numbers'], VALID)
+        self.assertEqual(records[0]['source'], 'api_huiniao')
+
+    def test_returns_newest_first(self):
+        store_sync.mirror_to_store([_record('2026100'), _record('2026227', OTHER)])
+        self.assertEqual([r['issue'] for r in store_sync.load_from_store()],
+                         ['2026227', '2026100'])
+
+    def test_empty_store(self):
+        self.assertEqual(store_sync.load_from_store(), [])
+
+
+class LoadFailureTests(unittest.TestCase):
+    def test_store_failure_returns_empty_not_raises(self):
+        """分析器是多源合并，少一个来源应当自动退回其余来源，
+        而不是让整个预测链路停摆。"""
+        with mock.patch.object(store_sync, '_open_store',
+                               side_effect=RuntimeError('连不上')):
+            self.assertEqual(store_sync.load_from_store(), [])
+
+
+class AnalyzerSourceTests(unittest.TestCase):
+    """分析器把库作为第一来源。
+
+    接错了不会报错——它会安静地只用 JSON 文件，于是这一批做的事等于没做，
+    而且要等到文件与库分叉之后才看得出来。
+    """
+
+    def _analyzer(self, store_records, file_records):
+        import json
+        import tempfile
+        from pathlib import Path
+
+        from src.kl8.analyzer import KL8Analyzer
+
+        with tempfile.TemporaryDirectory() as tmp:
+            history = Path(tmp) / 'kl8_history.json'
+            history.write_text(json.dumps({'results': file_records}),
+                               encoding='utf-8')
+            with mock.patch('src.kl8.store_sync.load_from_store',
+                            lambda: store_records), \
+                 mock.patch('src.kl8.analyzer.doc_store') as doc:
+                doc._fallback_load_all.return_value = []
+                return KL8Analyzer(history_file=str(history))
+
+    def test_store_records_reach_the_analyzer(self):
+        analyzer = self._analyzer([_record('2026227')], [])
+        self.assertEqual([r['issue'] for r in analyzer.history_data], ['2026227'])
+
+    def test_file_still_serves_as_a_fallback(self):
+        """库为空时照旧用文件——降级路径不能在迁移里丢掉。"""
+        analyzer = self._analyzer([], [_record('2026227')])
+        self.assertEqual([r['issue'] for r in analyzer.history_data], ['2026227'])
+
+    def test_sources_are_merged(self):
+        analyzer = self._analyzer([_record('2026227')], [_record('2026226', OTHER)])
+        self.assertEqual([r['issue'] for r in analyzer.history_data],
+                         ['2026227', '2026226'])
+
+    def test_conflict_keeps_the_store_value(self):
+        """库排在最前，冲突时保留它的值——抓取路径每次都会镜像进来，
+        它是唯一保证完整的那个来源。"""
+        analyzer = self._analyzer([_record('2026227', VALID)],
+                                  [_record('2026227', OTHER)])
+        self.assertEqual(analyzer.history_data[0]['numbers'], VALID)

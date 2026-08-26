@@ -64,6 +64,22 @@ def mirror_to_store(records):
     return stats
 
 
+def load_from_store():
+    """从库里读回开奖记录，转成旧代码用的字典形状。
+
+    库不可用时返回空列表而不是抛错——分析器是多源合并，少一个来源应当
+    自动退回其余来源，而不是让整个预测链路停摆。这条降级路径在迁移期尤其
+    重要：新来源刚接上，出问题的概率比老来源高。
+    """
+    try:
+        draws = _open_store().load()
+    except Exception as exc:
+        log.warning('从库读取开奖数据失败，本次退回其它来源: %s', exc)
+        return []
+    log.info('快乐8: 库中加载了 %d 期有效数据', len(draws))
+    return [draw.to_dict() for draw in draws]
+
+
 def reconcile(records):
     """比对文件与库，返回不一致项的描述；空列表表示一致。
 
