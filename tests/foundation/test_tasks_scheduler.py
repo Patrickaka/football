@@ -108,3 +108,62 @@ class TaskSchedulerTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class PeriodicTaskTests(unittest.TestCase):
+    def test_periodic_task_runs_repeatedly(self):
+        runs = []
+        scheduler = TaskScheduler(max_workers=2)
+        scheduler.submit_periodic('tick', lambda: runs.append(1), interval_seconds=0.05)
+        scheduler.start()
+        time.sleep(0.28)
+        scheduler.shutdown(wait=True)
+        self.assertGreaterEqual(len(runs), 3, f'0.28s 内至少应跑 3 次，实际 {len(runs)}')
+
+    def test_periodic_task_stops_after_shutdown(self):
+        runs = []
+        scheduler = TaskScheduler(max_workers=2)
+        scheduler.submit_periodic('tick', lambda: runs.append(1), interval_seconds=0.05)
+        scheduler.start()
+        time.sleep(0.15)
+        scheduler.shutdown(wait=True)
+        settled = len(runs)
+        time.sleep(0.2)
+        self.assertEqual(len(runs), settled, 'shutdown 后不得继续执行')
+
+    def test_periodic_failure_does_not_stop_subsequent_runs(self):
+        runs = []
+
+        def flaky():
+            runs.append(1)
+            if len(runs) == 1:
+                raise RuntimeError('first run fails')
+
+        scheduler = TaskScheduler(max_workers=2)
+        scheduler.submit_periodic('flaky', flaky, interval_seconds=0.05)
+        scheduler.start()
+        time.sleep(0.28)
+        scheduler.shutdown(wait=True)
+        self.assertGreaterEqual(len(runs), 3, '单次失败不得终止后续周期')
+        self.assertEqual(scheduler.results()['flaky']['status'], 'ok',
+                         '最近一次成功后状态应为 ok')
+
+    def test_periodic_rejects_non_positive_interval(self):
+        scheduler = TaskScheduler(max_workers=1)
+        for bad in (0, -1):
+            with self.assertRaises(ValueError):
+                scheduler.submit_periodic('t', lambda: None, interval_seconds=bad)
+
+    def test_periodic_shares_duplicate_name_check_with_submit(self):
+        scheduler = TaskScheduler(max_workers=1)
+        scheduler.submit('dup', lambda: None)
+        with self.assertRaises(ValueError):
+            scheduler.submit_periodic('dup', lambda: None, interval_seconds=1)
+
+    def test_results_records_run_count(self):
+        scheduler = TaskScheduler(max_workers=2)
+        scheduler.submit_periodic('tick', lambda: None, interval_seconds=0.05)
+        scheduler.start()
+        time.sleep(0.18)
+        scheduler.shutdown(wait=True)
+        self.assertGreaterEqual(scheduler.results()['tick']['runs'], 2)
