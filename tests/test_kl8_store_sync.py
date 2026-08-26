@@ -268,6 +268,30 @@ class AnalyzerSourceTests(unittest.TestCase):
         self.assertEqual([r['issue'] for r in analyzer.history_data],
                          ['2026227', '2026226'])
 
+    def test_store_source_failure_does_not_break_loading(self):
+        """库这一路整体炸掉（比如 import 失败）时，分析器仍要能靠文件起来。
+
+        `load_from_store` 自己已经吞了异常，所以这层外围守卫平时根本不触发
+        ——只有让它真的抛，才测得出它在不在。
+        """
+        import json
+        import tempfile
+        from pathlib import Path
+
+        from src.kl8.analyzer import KL8Analyzer
+
+        with tempfile.TemporaryDirectory() as tmp:
+            history = Path(tmp) / 'kl8_history.json'
+            history.write_text(json.dumps({'results': [_record('2026227')]}),
+                               encoding='utf-8')
+            with mock.patch('src.kl8.store_sync.load_from_store',
+                            side_effect=RuntimeError('这一路整体挂了')), \
+                 mock.patch('src.kl8.analyzer.doc_store') as doc:
+                doc._fallback_load_all.return_value = []
+                analyzer = KL8Analyzer(history_file=str(history))
+
+        self.assertEqual([r['issue'] for r in analyzer.history_data], ['2026227'])
+
     def test_conflict_keeps_the_store_value(self):
         """库排在最前，冲突时保留它的值——抓取路径每次都会镜像进来，
         它是唯一保证完整的那个来源。"""
