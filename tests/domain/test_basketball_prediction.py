@@ -245,6 +245,47 @@ class FindValueBetsParityTests(unittest.TestCase):
     def test_empty_results(self):
         self.assertEqual(find_value_bets([]), [])
 
+    def test_edge_exactly_at_threshold_is_excluded(self):
+        """边际恰好等于阈值时不入选。真实数据几乎不会正好撞上，
+        所以这条边界只能构造——不构造的话把 `<=` 写成 `<` 也测不出来。
+
+        概率取 0.75 而不是 0.55：0.55-0.5 在二进制下是 0.05000000000000004，
+        压根不等于阈值，构造出来的边界是假的。0.75-0.5 才是精确的 0.25。
+        """
+        results = [_value_bet_result('t1', spf_prob=0.75)]
+        self.assertEqual(find_value_bets(results, 0.25), [])
+        self.assertEqual(find_value_bets(results, 0.25),
+                         legacy.find_value_bets(results, 0.25))
+        self.assertEqual(len(find_value_bets(results, 0.2499)), 1)
+
+    def test_sharp_confirmation_outranks_a_larger_bare_edge(self):
+        """聪明钱确认的增益只用于排序。差距小于增益时，被确认的那注要排前面
+        ——排序键少了 movement_edge 就会退化成纯按边际排。"""
+        results = [
+            _value_bet_result('t2', spf_prob=0.60, sharp=False),
+            _value_bet_result('t3', spf_prob=0.58, sharp=True),
+        ]
+        bets = find_value_bets(results, 0.05)
+        self.assertEqual([b['match'] for b in bets],
+                         ['t3 主 vs t3 客', 't2 主 vs t2 客'])
+        self.assertEqual(bets, legacy.find_value_bets(results, 0.05))
+
+
+def _value_bet_result(tag, spf_prob, sharp=False, playable=True):
+    """构造一条只含胜负盘的分析结果，概率与聪明钱标记可控。"""
+    return {
+        'match': {'home': f'{tag} 主', 'away': f'{tag} 客', 'league': 'NBA',
+                  'handicap': -3.5, 'total_line': 220.5},
+        'spf': {
+            'available': True, 'playable': playable, 'official': playable,
+            'home_prob': spf_prob, 'away_prob': round(1 - spf_prob, 4),
+            'recommendation': '主胜', 'confidence': 'high',
+            'sharp_confirmed': sharp, 'line_movement': None,
+        },
+        'rqspf': None,
+        'dx': None,
+    }
+
 
 class JsonContractTests(unittest.TestCase):
     """裁决 C：进缓存的值必须是纯 JSON。
