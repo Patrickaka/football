@@ -6,7 +6,8 @@ match_key 的 '日期_主队_客队' 格式。
 import unittest
 
 from src.domain.sports.basketball.repository import (
-    EloHistoryRepository, EloRatingRepository, OddsSnapshotRepository, create_all,
+    EloHistoryRepository, EloRatingRepository, EloRecentFormRepository,
+    OddsSnapshotRepository, create_all,
 )
 from src.foundation.store import Database, make_engine
 
@@ -62,6 +63,39 @@ class EloHistoryRepositoryTests(_Base):
                          ['2026-07-13T11:49:48', '2026-07-20T10:00:00'])
 
 
+class EloRecentFormRepositoryTests(_Base):
+    """近 N 场胜负记录。源数据是无时间戳的数值列表，故用 seq 保序。"""
+
+    def test_keeps_order_by_seq(self):
+        repo = EloRecentFormRepository(self.db)
+        for seq, result in enumerate([1.0, 0.0, 1.0]):
+            repo.upsert({'team': '火花', 'seq': seq, 'result': result},
+                        key_cols=['team', 'seq'])
+        rows = repo.find_by(order_by='seq', team='火花')
+        self.assertEqual([r['result'] for r in rows], [1.0, 0.0, 1.0])
+
+    def test_teams_are_isolated(self):
+        repo = EloRecentFormRepository(self.db)
+        repo.upsert({'team': '火花', 'seq': 0, 'result': 1.0}, key_cols=['team', 'seq'])
+        repo.upsert({'team': '梦想', 'seq': 0, 'result': 0.0}, key_cols=['team', 'seq'])
+        self.assertEqual(len(repo.find_by(team='火花')), 1)
+        self.assertEqual(repo.count(), 2)
+
+    def test_replacing_a_team_form_removes_old_entries(self):
+        """近 N 场是截断列表而非追加流水：新列表变短时旧条目必须消失，
+        否则会残留出一条比实际更长的历史。"""
+        repo = EloRecentFormRepository(self.db)
+        for seq in range(5):
+            repo.upsert({'team': '火花', 'seq': seq, 'result': 1.0},
+                        key_cols=['team', 'seq'])
+        repo.delete_by(team='火花')
+        for seq, result in enumerate([0.0, 1.0]):
+            repo.upsert({'team': '火花', 'seq': seq, 'result': result},
+                        key_cols=['team', 'seq'])
+        rows = repo.find_by(order_by='seq', team='火花')
+        self.assertEqual([r['result'] for r in rows], [0.0, 1.0])
+
+
 class OddsSnapshotRepositoryTests(_Base):
     SAMPLE = {
         'match_key': '2026-07-23_水星_火花',
@@ -113,7 +147,8 @@ class OddsSnapshotRepositoryTests(_Base):
 
 class AllRepositoriesTests(_Base):
     def test_every_table_is_created_and_empty(self):
-        for cls in (EloRatingRepository, EloHistoryRepository, OddsSnapshotRepository):
+        for cls in (EloRatingRepository, EloHistoryRepository,
+                    EloRecentFormRepository, OddsSnapshotRepository):
             self.assertEqual(cls(self.db).count(), 0, f'{cls.__name__} 建表失败')
 
     def test_delete_by_without_filters_is_rejected(self):
