@@ -10,6 +10,7 @@ rf_trend / dx_trend（让分与大小分走势）是活的。代码照迁，事�
 """
 import gzip
 import pathlib
+import re
 import unittest
 from datetime import datetime
 from unittest import mock
@@ -164,6 +165,151 @@ def _legacy_raw_rows(date):
         if parsed:
             rows.append(parsed)
     return rows
+
+
+def _real_row(match_id=SAMPLE_MATCH_ID):
+    """从真实页面里取出一整行，供派生合成用例。
+
+    合成整行 HTML 不现实——一行有 11 个单元格、每个都有自己的 class 约定。
+    以真实行为模板做定点改动，既保证结构真实，又能造出真实页面里当天
+    恰好没有的形态（无 title 的队名、属性反序的让分、已完场等）。
+    """
+    import re
+
+    tables = re.findall(r'<table[^>]*>(.*?)</table>', HUNHE_HTML, re.S)
+    main = max(tables, key=len)
+    for attrs, body in re.findall(r'<tr([^>]*)>(.*?)</tr>', main, re.S):
+        if 'alltrObj' in attrs and f'/basketball/match/{match_id}/' in body:
+            return attrs, body
+    raise AssertionError(f'夹具里找不到 {match_id} 这一行')
+
+
+def _page_of(rows):
+    body = ''.join(f'<tr{attrs}>{html}</tr>' for attrs, html in rows)
+    return ('<html><table>短表</table>'
+            f'<table class="main">{body}</table></html>')
+
+
+class DerivedRowTests(unittest.TestCase):
+    """真实页面当天只有一种形态，每条兜底分支都没走到。这些用例从真实行
+    派生出那些形态——它们在别的日子是常态（完场、无 title 的队名等）。"""
+
+    def setUp(self):
+        self.attrs, self.row = _real_row()
+
+    def _parse(self, row=None, attrs=None, date='2026-08-27'):
+        return new.parse_schedule(
+            _page_of([(attrs if attrs is not None else self.attrs,
+                       row if row is not None else self.row)]), date)
+
+    def test_template_row_is_the_control(self):
+        matches = self._parse()
+        self.assertEqual(len(matches), 1)
+        self.assertEqual(matches[0]['home'], '金州女武神')
+
+    def test_row_without_match_row_class_is_a_date_header(self):
+        """没有 alltrObj 的行是日期分组表头，它携带的日期要被记下来，
+        而不是被当成一场比赛。"""
+        header = ' class="dateGroup"'
+        matches = new.parse_schedule(
+            _page_of([(header, '<td>2026-09-09</td>'), (self.attrs, self.row)]),
+            '2026-08-27')
+        self.assertEqual(len(matches), 1, '表头行被当成比赛了')
+
+    def test_group_date_is_used_when_the_row_has_no_full_datetime(self):
+        stripped = self.row.replace('2026-08-27', '')
+        matches = new.parse_schedule(
+            _page_of([(' class="dateGroup"', '<td>2026-09-09</td>'),
+                      (self.attrs, stripped)]),
+            '2026-08-27')
+        self.assertEqual(matches[0]['date'], '2026-09-09')
+
+    def test_team_names_fall_back_to_plain_text_and_drop_brackets(self):
+        """队名的 title 属性偶尔缺失，此时只能从纯文本取，而纯文本里
+        带着 `[西2]` 这样的排名标记，必须剥掉。"""
+        without_titles = re.sub(r'title="[^"]*"', '', self.row)
+        match = self._parse(row=without_titles)[0]
+        self.assertNotIn('[', match['home'])
+        self.assertNotIn('[', match['away'])
+        self.assertIn('金州女', match['home'])
+
+    def test_handicap_attributes_in_reverse_order(self):
+        """rflist 与 class 的先后在页面上出现过两种排法，只认一种会让
+        让分盘口整个丢失。"""
+        expected = self._parse()[0]
+        reversed_row = _move_rflist_to_front(self.row)
+        self.assertNotEqual(reversed_row, self.row, '模板里没有可调换的属性对')
+        self.assertLess(reversed_row.index('rflist='),
+                        reversed_row.index('rfsfrfzObj'),
+                        'rflist 没被挪到 class 前面，这条用例没造出反序')
+        actual = self._parse(row=reversed_row)[0]
+        self.assertEqual(actual['handicap'], expected['handicap'])
+        self.assertEqual(actual['rf_history'], expected['rf_history'])
+
+    def test_finished_match_on_the_requested_date_is_dropped(self):
+        """当天已完场的比赛必须按比分剔除。只靠开赛时刻判断的话，
+        次日清晨的完场记录会被当成未开赛留下来。"""
+        finished_row = self.row.replace('<td class="scoretd">-</td>',
+                                        '<td class="scoretd">88-90</td>')
+        if finished_row == self.row:
+            finished_row = re.sub(r'(<td[^>]*>)\s*-\s*(</td>)', r'\g<1>88-90\g<2>',
+                                  self.row, count=1)
+        matches = new.parse_schedule(_page_of([(self.attrs, finished_row)]),
+                                     '2026-08-27')
+        self.assertTrue(any(m['status'] == 'finished' for m in matches),
+                        '没造出完场行，这条用例是空跑')
+        live = new.select_live(matches, '2026-08-27', NOW)
+        self.assertEqual(live, [], '已完场的比赛没被剔除')
+
+    def test_kickoff_moment_counts_as_in_progress(self):
+        """分界取 `<=`：恰好到点就算已开赛。"""
+        matches = self._parse()
+        kickoff = datetime(2026, 8, 27, 7, 0)
+        self.assertEqual(new.select_live(list(matches), '2026-08-27', kickoff), [])
+        one_second_before = datetime(2026, 8, 27, 6, 59, 59)
+        self.assertEqual(
+            len(new.select_live(list(matches), '2026-08-27', one_second_before)), 1)
+
+
+def _move_rflist_to_front(row):
+    """把让分 span 的 rflist 属性挪到 class 之前，造出页面上那另一种排法。
+
+    真实行里两个属性中间还隔着 onMouseOver 等，所以不能靠相邻替换。
+    """
+    span = re.search(r'<span([^>]*rfsfrfzObj[^>]*)>', row)
+    if not span:
+        return row
+    attrs = span.group(1)
+    rflist = re.search(r'\s*rflist="[^"]*"', attrs)
+    if not rflist:
+        return row
+    reordered = rflist.group(0).strip() + ' ' + attrs.replace(rflist.group(0), '')
+    return row.replace(span.group(0), f'<span {reordered}>', 1)
+
+
+class BookRowRangeTests(unittest.TestCase):
+    """各家行靠数值区间定位真正的数据段。区间放宽后会从行首的序号里
+    取到假数据——真实页面里恰好取不到，因为序号都在区间外。"""
+
+    def _row(self, numbers):
+        cells = ''.join(f'<td><span>{n}</span></td>' for n in numbers)
+        return f'<tr><td><a href="/ah/change/99/">变</a></td>{cells}</tr>'
+
+    def test_handicap_range_rejects_out_of_scale_lines(self):
+        """让分盘口不会有 200 分。区间失守时这行会被当成有效数据。"""
+        row = self._row([1.90, 200, 1.90, 1.85, 205, 1.95, 1.90, 13.5, 1.90,
+                         1.88, 13.5, 1.92])
+        books = new.parse_book_rows(row, 'ah')
+        self.assertEqual([b['line_init'] for b in books], [13.5])
+
+    def test_total_range_rejects_out_of_scale_lines(self):
+        row = ('<tr><td><a href="/ou/change/99/">变</a></td>'
+               + ''.join(f'<td><span>{n}</span></td>'
+                         for n in [1.90, 3.5, 1.90, 1.85, 4.5, 1.95,
+                                   1.90, 150.5, 1.90, 1.88, 152.5, 1.92])
+               + '</tr>')
+        books = new.parse_book_rows(row, 'ou')
+        self.assertEqual([b['line_init'] for b in books], [150.5])
 
 
 class BookRowParityTests(unittest.TestCase):
