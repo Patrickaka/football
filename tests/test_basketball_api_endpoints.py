@@ -5,6 +5,7 @@
 不少、错误路径仍然返回 `{'error': ...}` 而不是抛出去。
 """
 import logging
+import threading
 import unittest
 from unittest import mock
 
@@ -268,16 +269,50 @@ class OddsTrackingSchedulerTests(unittest.TestCase):
         self.addCleanup(basketball_service.reset)
 
     def _with_tracker(self, tracker):
+        """打桩 `_build_context` 而不是 `get_context`。
+
+        差别很关键：打桩 `get_context` 会把真正的取锁路径整个绕过去，
+        而那里正好藏过一个持锁死锁——`start_odds_tracking` 在锁内调用
+        `get_context()`，后者要拿同一把不可重入的锁。那个 bug 上线过一次，
+        五个端点全部 120 秒超时，而当时的测试全绿。
+        """
         ctx = mock.Mock()
         ctx.tracker = tracker
-        patcher = mock.patch.object(basketball_service, 'get_context',
+        patcher = mock.patch.object(basketball_service, '_build_context',
                                     lambda: ctx)
         patcher.start()
         self.addCleanup(patcher.stop)
 
+    def _call(self, fn, *args, **kwargs):
+        """带超时地调用。
+
+        这一整组用例都可能撞上持锁死锁，而**挂住的测试是坏测试**——它把
+        「有 bug」伪装成「跑得慢」，在 CI 上表现为整个任务超时，没人能一眼
+        看出是哪里坏了。所以统一走后台线程 + 超时断言。
+        """
+        box = {}
+        thread = threading.Thread(
+            target=lambda: box.setdefault('value', fn(*args, **kwargs)),
+            daemon=True)
+        thread.start()
+        thread.join(timeout=5)
+        self.assertFalse(thread.is_alive(), f'{fn.__name__} 卡住了（疑似死锁）')
+        return box.get('value')
+
+    def test_start_does_not_deadlock_on_a_cold_context(self):
+        """首次启动时上下文还没建好，这正是死锁发生的时机。"""
+        self._with_tracker(mock.Mock())
+        self.assertIsNotNone(self._call(basketball_service.start_odds_tracking))
+
+    def test_context_stays_reachable_after_start(self):
+        """死锁的后果不止是启动卡住——锁没释放，之后每个请求都会一起卡住。"""
+        self._with_tracker(mock.Mock())
+        self._call(basketball_service.start_odds_tracking)
+        self.assertIsNotNone(self._call(basketball_service.get_context))
+
     def test_starts_a_running_periodic_task(self):
         self._with_tracker(mock.Mock())
-        scheduler = basketball_service.start_odds_tracking()
+        scheduler = self._call(basketball_service.start_odds_tracking)
         self.assertIsNotNone(scheduler)
         self.assertTrue(scheduler.is_running())
         self.assertEqual(scheduler.task_count(), 1)
@@ -285,24 +320,25 @@ class OddsTrackingSchedulerTests(unittest.TestCase):
 
     def test_repeated_calls_start_only_one(self):
         self._with_tracker(mock.Mock())
-        first = basketball_service.start_odds_tracking()
-        self.assertIs(basketball_service.start_odds_tracking(), first)
+        first = self._call(basketball_service.start_odds_tracking)
+        self.assertIs(self._call(basketball_service.start_odds_tracking), first)
 
     def test_not_started_without_a_database(self):
         """采集的全部意义就是落盘。没有库就别假装在采。"""
         self._with_tracker(None)
-        self.assertIsNone(basketball_service.start_odds_tracking())
+        self.assertIsNone(self._call(basketball_service.start_odds_tracking))
         self.assertFalse(basketball_service.is_odds_tracking_running())
 
     def test_interval_is_floored_at_one_minute(self):
         """采样间隔有下限：okooo 与 500 都有限速，采太密只是挤占抓取配额。"""
         self._with_tracker(mock.Mock())
-        scheduler = basketball_service.start_odds_tracking(interval_minutes=0)
+        scheduler = self._call(basketball_service.start_odds_tracking,
+                               interval_minutes=0)
         self.assertTrue(scheduler.is_running())
 
     def test_reset_stops_the_scheduler(self):
         self._with_tracker(mock.Mock())
-        scheduler = basketball_service.start_odds_tracking()
+        scheduler = self._call(basketball_service.start_odds_tracking)
         basketball_service.reset()
         self.assertFalse(scheduler.is_running())
         self.assertFalse(basketball_service.is_odds_tracking_running())
