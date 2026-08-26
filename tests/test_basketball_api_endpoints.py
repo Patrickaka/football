@@ -201,11 +201,15 @@ class MovementEndpointTests(_Base):
         store.history_for.side_effect = lambda mid: list(SNAPSHOTS.get(mid, []))
         return store
 
-    def test_single_match_returns_its_snapshots(self):
-        self._with(_context(history=self._store()))
+    def test_single_match_returns_only_that_match_snapshots(self):
+        """断言内容而不是条数：全量字典恰好也有两个键，只比长度分辨不出
+        「这一场的快照」和「所有场次的字典」。"""
+        store = self._store()
+        self._with(_context(history=store))
         result = self.handler._basketball_movement_payload({'match_id': ['m1']})
         self.assertEqual(result['result']['match_id'], 'm1')
-        self.assertEqual(len(result['result']['snapshots']), 2)
+        self.assertEqual(result['result']['snapshots'], SNAPSHOTS['m1'])
+        store.load.assert_not_called()
 
     def test_summary_reports_the_move_per_match(self):
         self._with(_context(history=self._store()))
