@@ -228,12 +228,14 @@ class BehaviourTests(unittest.TestCase):
     def test_cross_source_matching_needs_both_teams(self):
         """只比主队会把同一支主队的两场比赛混为一谈——同一天主客双赛
         并不罕见（分区赛会、连续两日同一主场）。"""
+        # 目标场次的对手是风暴。把它放在前面、另一场放后面：只比主队时
+        # 两场会落到同一个键上，后写的那场覆盖前一场，于是拿到错的那份走势。
         okooo = [
-            dict(OKOOO_MATCHES[0], id='A', home='金州女武神[西2]', away='太阳'),
             dict(OKOOO_MATCHES[0], id='B', home='金州女武神[西2]', away='风暴',
                  rf_trend={'direction': 'away_backing', 'strength': 0.9,
                            'home_move': 0.2, 'away_move': -0.2,
                            'line_move': 0.0, 'samples': 9}),
+            dict(OKOOO_MATCHES[0], id='A', home='金州女武神[西2]', away='太阳'),
         ]
         matches = [dict(FIVE_HUNDRED_MATCHES[0], home='金州女武神', away='风暴',
                         id='2026-08-27_金州女武神_风暴')]
