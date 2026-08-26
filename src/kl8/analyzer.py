@@ -861,31 +861,13 @@ class KL8Analyzer:
             seen.add(nums)
             variants.append((label, pool[:target_size]))
 
-        add('concentrated', candidates[:target_size])
-        add('balanced', _diversify_candidate_pool(
-            candidates,
-            target_size,
-            last_numbers,
-            max_last_numbers=repeat_cap,
-        ))
-        add('repeat_follow', _diversify_candidate_pool(
-            candidates,
-            target_size,
-            last_numbers,
-            max_last_numbers=min(target_size, repeat_cap + 1),
-        ))
-        add('low_repeat', _diversify_candidate_pool(
-            candidates,
-            target_size,
-            last_numbers,
-            max_last_numbers=max(0, repeat_cap - 1),
-        ))
-        add('prize_floor', _prize_floor_candidate_pool(
-            candidates,
-            target_size,
-            last_numbers,
-            max_last_numbers=repeat_cap,
-        ))
+        # 每种模式的重号上限该加还是该减，由 `pools.MODE_BUILDERS` 说了算。
+        # 在这里把那套加减重写一遍，等于给同一条规则开第二个定义——而两处
+        # 走偏了不会报错，只会让这两个入口给出不一样的推荐。
+        for label in ('concentrated', 'balanced', 'repeat_follow',
+                      'low_repeat', 'prize_floor'):
+            add(label, pools.build_pool(label, candidates, target_size,
+                                        last_numbers, repeat_cap))
 
         zone_spread_nums = []
         zone_counts = Counter()
@@ -1230,39 +1212,15 @@ class KL8Analyzer:
             return {}
 
         last_numbers = self.statistics.get('last_numbers', set())
-        concentrated = sorted(num for num, _ in candidates[:target_size])
-        high_tier_chase = sorted(
-            num for num, _ in _high_tier_chase_candidate_pool(
-                candidates,
-                target_size,
-                last_numbers,
-                max_last_numbers=repeat_cap,
-            )
-        )
-        balanced = sorted(
-            num for num, _ in _diversify_candidate_pool(
-                candidates,
-                target_size,
-                last_numbers,
-                max_last_numbers=repeat_cap,
-            )
-        )
-        low_repeat = sorted(
-            num for num, _ in _diversify_candidate_pool(
-                candidates,
-                target_size,
-                last_numbers,
-                max_last_numbers=max(0, repeat_cap - 1),
-            )
-        )
-        repeat_follow = sorted(
-            num for num, _ in _diversify_candidate_pool(
-                candidates,
-                target_size,
-                last_numbers,
-                max_last_numbers=min(target_size, repeat_cap + 1),
-            )
-        )
+        def pool_numbers(mode):
+            return sorted(num for num, _ in pools.build_pool(
+                mode, candidates, target_size, last_numbers, repeat_cap))
+
+        concentrated = pool_numbers('concentrated')
+        high_tier_chase = pool_numbers('high_tier_chase')
+        balanced = pool_numbers('balanced')
+        low_repeat = pool_numbers('low_repeat')
+        repeat_follow = pool_numbers('repeat_follow')
         zone_spread = sorted(num for num, _ in _zone_spread_candidate_pool(candidates, target_size))
         prize_floor = sorted(
             num for num, _ in _prize_floor_candidate_pool(

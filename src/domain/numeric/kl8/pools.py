@@ -61,7 +61,8 @@ def adaptive_repeat_cap(history_data, target_size, lookback=REPEAT_LOOKBACK):
     把上期开出的强号全扔掉。
     """
     base_cap = default_repeat_cap(target_size)
-    if target_size <= 0 or len(history_data or []) < 2:
+    # 只判选号数：历史不足时 `_adjacent_overlaps` 自然返回空，下一个分支就接住了
+    if target_size <= 0:
         return base_cap
 
     overlaps = _adjacent_overlaps(history_data, lookback)
@@ -69,9 +70,18 @@ def adaptive_repeat_cap(history_data, target_size, lookback=REPEAT_LOOKBACK):
         return base_cap
 
     mean_overlap = sum(overlaps) / len(overlaps)
-    ratio = max(MIN_REPEAT_RATIO,
-                min(MAX_REPEAT_RATIO, BASE_REPEAT_RATIO + _ratio_adjustment(mean_overlap)))
+    ratio = ratio_within_band(BASE_REPEAT_RATIO + _ratio_adjustment(mean_overlap))
     return max(1, min(target_size, math.ceil(target_size * ratio)))
+
+
+def ratio_within_band(ratio):
+    """把重号占比夹回允许区间。
+
+    当前的档位表只会产出 0.30~0.55，夹不夹都一样——**但夹的是档位表改错时
+    的后果**，而那正是不会报错、只会让推荐悄悄偏掉的那类改动。所以它有自己
+    的用例（整条路径走不出界，只能直接喂）。
+    """
+    return max(MIN_REPEAT_RATIO, min(MAX_REPEAT_RATIO, ratio))
 
 
 def _ratio_adjustment(mean_overlap):
@@ -168,8 +178,12 @@ def diversify(candidates, target_size, last_numbers=None, max_last_numbers=None)
     """票数优先，再限制区间、012 路与重号的扎堆程度。
 
     kl8 本来就常带出上期的号，所以这里不追求回避重号，只是不让任何一种集中
-    走到极端。**票数仍是第一优先**——被上限挡下的高分号进「保护区」，
-    补位时优先回来，不会因为一次撞限就永远出局。
+    走到极端。**票数仍是第一优先**——被上限挡下的号不丢弃，攒起来在位置不够
+    时按原顺序补回，不会因为一次撞限就永远出局。
+
+    **候选必须已按票数降序**（`voting` 保证）。迁移前这里把撞限的号按「与
+    最高分差一成以内」分成保护区与放弃区再重排——输入有序时两区本就是有序
+    拼接，重排是空转，分档也从不改变任何一次输出。
     """
     if target_size <= 0 or not candidates:
         return []
@@ -179,12 +193,9 @@ def diversify(candidates, target_size, last_numbers=None, max_last_numbers=None)
     max_road = max(3, math.ceil(target_size / 3) + 1)
     max_repeat = _resolved_cap(target_size, max_last_numbers)
 
-    selected, protected, deferred = [], [], []
+    selected, blocked = [], []
     zone_counts, road_counts = Counter(), Counter()
     repeat_count = 0
-    best_score = float(candidates[0][1])
-    # 与最高分差一成以内的算「保护区」：它们只是撞了结构上限，不是分低
-    score_floor = best_score * 0.90 if best_score > 0 else best_score - 0.10
 
     for num, score in candidates:
         zone, road = _zone_of(num), _road_of(num)
@@ -199,15 +210,10 @@ def diversify(candidates, target_size, last_numbers=None, max_last_numbers=None)
             repeat_count += int(is_repeat)
             if len(selected) >= target_size:
                 return selected
-        elif score >= score_floor:
-            protected.append((num, score))
         else:
-            deferred.append((num, score))
+            blocked.append((num, score))
 
-    # 补位前重排：保护区与放弃区是分别攒的，直接拼起来顺序就乱了，
-    # 高分号会排在低分号后面。
-    fallback = sorted(protected + deferred, key=lambda item: (-item[1], item[0]))
-    return _fill_up(selected, fallback, target_size)
+    return _fill_up(selected, blocked, target_size)
 
 
 def zone_spread(candidates, target_size, last_numbers=None, max_last_numbers=None):

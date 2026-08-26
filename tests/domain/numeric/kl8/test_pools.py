@@ -262,11 +262,19 @@ class RepeatCapTests(unittest.TestCase):
         self.assertGreater(high, low)
 
     def test_cap_stays_within_the_allowed_ratio_band(self):
-        """上下界都要有样本，只测界内的话钳位接反了也发现不了。"""
+        """界限写死在断言里，不引用被测常量——引用的话改坏常量断言会跟着挪。"""
         for overlap in (0, 1, 5, 10, 20):
             cap = pools.adaptive_repeat_cap(self._history(overlap), 20)
-            self.assertGreaterEqual(cap, 20 * pools.MIN_REPEAT_RATIO)
-            self.assertLessEqual(cap, 20 * pools.MAX_REPEAT_RATIO)
+            self.assertGreaterEqual(cap, 5)    # 20 * 0.25
+            self.assertLessEqual(cap, 11)      # 20 * 0.55
+
+    def test_ratio_band_clamps_both_ends(self):
+        """当前档位表产不出界外的值，所以只能直接喂——它守的是档位表被改坏。"""
+        self.assertEqual(pools.ratio_within_band(0.10), 0.25)
+        self.assertEqual(pools.ratio_within_band(0.90), 0.55)
+
+    def test_ratio_band_leaves_in_band_values_alone(self):
+        self.assertEqual(pools.ratio_within_band(0.40), 0.40)
 
     def test_too_little_history_falls_back_to_the_static_cap(self):
         for history in ([], HISTORY[:1]):
@@ -307,6 +315,25 @@ class CleanPickTests(unittest.TestCase):
         """只测上界的话，下界写错了也发现不了。"""
         self.assertEqual(pools.clean_pick_numbers([SPACE.low, SPACE.high], 2),
                          [SPACE.low, SPACE.high])
+
+
+class ShapeSwapWindowTests(unittest.TestCase):
+    """替补只在靠前的一段候选里找。放开窗口，低分号会仅凭形态挤进来。"""
+
+    def _candidates(self):
+        """靠前的号全挤在头两个大区，形态好的号故意排在窗口之外。"""
+        head = [(n, 0.90 - i * 0.0001) for i, n in enumerate(range(1, 41))]
+        tail = [(n, 0.80 - i * 0.0001) for i, n in enumerate(range(41, 81))]
+        return head + tail
+
+    def test_swaps_stay_inside_the_window(self):
+        pool = pools.shape_balanced(self._candidates(), 6, set(), max_last_numbers=3)
+        self.assertEqual([num for num, _ in pool], [1, 2, 21, 22, 41, 42])
+
+    def test_window_widens_with_the_pick_size(self):
+        """窗口是 max(选号数*5, 30)：选 8 时能够到第 40 名，选 6 时够不到。"""
+        pool = pools.shape_balanced(self._candidates(), 8, set(), max_last_numbers=3)
+        self.assertEqual([num for num, _ in pool], [1, 2, 4, 21, 22, 41, 42, 43])
 
 
 class ShapePenaltyTests(unittest.TestCase):
