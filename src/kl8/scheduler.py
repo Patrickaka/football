@@ -403,122 +403,37 @@ def run_verified_strategy_selection_if_needed():
     clear_cache()
 
 
-def start_kl8_scheduler(interval_hours: int = 1):
-    """启动快乐8定时调度 — 三个独立任务
+# 三个周期任务的间隔（秒）
+REFRESH_INTERVAL_HOURS = 1      # 实时更新开奖、结算、预测
+BACKFILL_INTERVAL_SECONDS = 600  # 分批补历史数据
+VERIFY_INTERVAL_SECONDS = 7200   # 策略验证（内部再判断是否真的需要跑）
 
-    v9.2改动:
-    - 任务1: refresh_kl8_and_predict（实时更新+结算+预测，每小时）
-    - 任务2: backfill_kl8_history_step（分批补数，每10分钟）
-    - 任务3: run_verified_strategy_selection_if_needed（验证策略，补数完成后触发）
 
-    参数:
-        interval_hours: 检查间隔（小时），默认1
+def register_kl8_tasks(submit, interval_hours=REFRESH_INTERVAL_HOURS):
+    """把快乐8的三个周期任务登记到进程级调度器。
+
+    迁移前这里用 APScheduler，另带一条「未安装则起三个裸线程」的降级分支。
+    换成 `foundation/tasks` 之后两条路都不需要了——它本来就是线程实现，
+    没有可选依赖。
+
+    APScheduler 那边配的 `max_instances=1` 与 `coalesce=True`，在
+    `TaskScheduler` 里是**结构上天然成立**的：每个周期任务独占一个 worker、
+    顺序执行，下一轮在上一轮返回之后才开始，重叠无从发生。
+
+    一处语义差别值得记下来：APScheduler 的 interval 是「从启动时刻起每 N 秒」，
+    而这里是「上一轮结束后再等 N 秒」。任务耗时会累积成漂移。这三个都是
+    「检查一下、需要才做」的任务，漂移无害；换成对时刻敏感的任务时要重新考虑。
+
+    首次执行由调度器在 worker 线程里完成，不再阻塞启动流程——迁移前那两次
+    「启动时立即同步一次」是同步调用，会把 server 的启动卡住十几秒。
     """
-    interval_seconds = interval_hours * 3600
-
-    # 启动时立即执行一次实时更新
-    log.info('快乐8调度器启动，立即执行首次同步')
-    try:
-        refresh_kl8_and_predict()
-    except Exception as e:
-        log.error(f'快乐8首次同步异常: {e}')
-
-    # 启动时也立即执行一次补数检查
-    try:
-        backfill_kl8_history_step()
-    except Exception as e:
-        log.error(f'快乐8首次补数检查异常: {e}')
-
-    try:
-        from apscheduler.schedulers.background import BackgroundScheduler
-
-        scheduler = BackgroundScheduler(timezone='Asia/Shanghai')
-
-        # 任务1: 实时更新开奖数据、结算、预测
-        scheduler.add_job(
-            refresh_kl8_and_predict,
-            trigger='interval',
-            hours=interval_hours,
-            id='kl8_auto_refresh',
-            replace_existing=True,
-            max_instances=1,
-            coalesce=True,
-            misfire_grace_time=300,
-        )
-
-        # 任务2: 分批补数（每10分钟）
-        scheduler.add_job(
-            backfill_kl8_history_step,
-            trigger='interval',
-            minutes=10,
-            id='kl8_history_backfill',
-            replace_existing=True,
-            max_instances=1,
-            coalesce=True,
-        )
-
-        # 任务3: 策略验证（每2小时检查一次，但只在需要时才执行）
-        scheduler.add_job(
-            run_verified_strategy_selection_if_needed,
-            trigger='interval',
-            hours=2,
-            id='kl8_strategy_verification',
-            replace_existing=True,
-            max_instances=1,
-            coalesce=True,
-        )
-
-        scheduler.start()
-        log.info(
-            f'快乐8 APScheduler 调度器已启动:'
-            f' 任务1=每{interval_hours}小时更新,'
-            f' 任务2=每10分钟补数,'
-            f' 任务3=每2小时验证策略'
-        )
-        return scheduler
-
-    except ImportError:
-        log.warning('APScheduler 未安装，快乐8使用简单线程调度')
-
-        import threading
-        import time
-
-        def _loop_refresh():
-            while True:
-                time.sleep(interval_seconds)
-                try:
-                    refresh_kl8_and_predict()
-                except Exception as e:
-                    log.error(f'快乐8定时调度异常: {e}')
-
-        def _loop_backfill():
-            while True:
-                time.sleep(600)  # 10分钟
-                try:
-                    backfill_kl8_history_step()
-                except Exception as e:
-                    log.error(f'快乐8补数调度异常: {e}')
-
-        def _loop_verify():
-            while True:
-                time.sleep(7200)  # 2小时
-                try:
-                    run_verified_strategy_selection_if_needed()
-                except Exception as e:
-                    log.error(f'快乐8验证调度异常: {e}')
-
-        thread_refresh = threading.Thread(target=_loop_refresh, daemon=True, name='KL8RefreshThread')
-        thread_backfill = threading.Thread(target=_loop_backfill, daemon=True, name='KL8BackfillThread')
-        thread_verify = threading.Thread(target=_loop_verify, daemon=True, name='KL8VerifyThread')
-
-        thread_refresh.start()
-        thread_backfill.start()
-        thread_verify.start()
-
-        log.info(
-            f'快乐8简单线程调度器已启动:'
-            f' 更新={interval_hours}小时,'
-            f' 补数=10分钟,'
-            f' 验证=2小时'
-        )
-        return (thread_refresh, thread_backfill, thread_verify)
+    tasks = (
+        ('kl8_auto_refresh', refresh_kl8_and_predict, interval_hours * 3600),
+        ('kl8_history_backfill', backfill_kl8_history_step, BACKFILL_INTERVAL_SECONDS),
+        ('kl8_strategy_verification', run_verified_strategy_selection_if_needed,
+         VERIFY_INTERVAL_SECONDS),
+    )
+    registered = [name for name, fn, interval in tasks
+                  if submit(name, fn, interval)]
+    log.info('快乐8后台任务已登记: %s', ', '.join(registered) or '（无）')
+    return registered

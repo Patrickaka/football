@@ -94,29 +94,39 @@ def _start_background_sync():
     except Exception as e:
         log.warning(f"启动后台同步失败: {e}")
 
-    # 快乐8定时调度（每小时检查新期号）
+    # 后台周期任务统一登记到一个调度器，登记完再一次性启动。
+    # 迁移前它们分散在三处（kl8 用 APScheduler、篮球采样自建调度器、
+    # 另有裸线程），没有任何一个地方能回答「现在后台在跑什么」。
+    from src.webapp import background
+
     try:
-        from src.kl8.scheduler import start_kl8_scheduler
-        start_kl8_scheduler(interval_hours=1)
-        log.info('快乐8定时调度器已启动')
+        from src.kl8.scheduler import register_kl8_tasks
+        register_kl8_tasks(background.submit_periodic, interval_hours=1)
     except Exception as e:
-        log.warning(f"启动快乐8调度器失败: {e}")
+        log.warning(f"登记快乐8后台任务失败: {e}")
 
     # 篮球盘口/水位自动采样，为开盘 -> 即时盘反推持续积累真实快照。
     # 夜里没人看的时候盘口照样在动，而那段变化正是开盘到临场的主要部分，
     # 所以必须周期采样，不能只在有人请求时才采。
     try:
         from src.webapp.basketball_service import (
-            ODDS_TRACKING_INTERVAL_MINUTES, start_odds_tracking,
+            ODDS_TRACKING_INTERVAL_MINUTES, register_odds_tracking,
         )
         # 用 server 自己的 logger 报告结果：领域层的 logger 没开 INFO，
-        # 那条日志在 journal 里看不见，运维就无从判断采样到底起没起来。
-        if start_odds_tracking() is not None:
-            log.info(f'篮球赔率自动采样已启动: 每 {ODDS_TRACKING_INTERVAL_MINUTES} 分钟')
+        # 那条日志在 journal 里看不见，运维就无从判断采样到底登记上没有。
+        if register_odds_tracking():
+            log.info(f'篮球赔率采样已登记: 每 {ODDS_TRACKING_INTERVAL_MINUTES} 分钟')
         else:
-            log.warning('篮球赔率自动采样未启动（数据库不可用）')
+            log.warning('篮球赔率采样未登记（数据库不可用）')
     except Exception as e:
-        log.warning(f"启动篮球赔率追踪器失败: {e}")
+        log.warning(f"登记篮球赔率采样失败: {e}")
+
+    # 全部登记完毕，启动唯一的后台调度器
+    try:
+        background.start()
+        log.info(f'后台调度器已启动: {background.task_count()} 个周期任务')
+    except Exception as e:
+        log.warning(f"启动后台调度器失败: {e}")
 
     # 3D 缓存预热：启动后台线程提前算好规则 + ML 结果，用户永不承担冷计算
     threading.Thread(target=_warm_3d_caches, daemon=True, name='Warm3DThread').start()
