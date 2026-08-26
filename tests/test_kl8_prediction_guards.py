@@ -1,7 +1,10 @@
 import unittest
 import json
 import tempfile
+from contextlib import contextmanager
 from pathlib import Path
+
+from src.domain.numeric.kl8 import scoring
 
 import src.kl8 as kl8_module
 from src.kl8 import config as kl8_config
@@ -26,6 +29,30 @@ from src.kl8 import (
     resolve_play_strategy,
     _simulate_multi_slip_coverage,
 )
+
+
+def _voting_analyzer():
+    """只为投票而生的分析器：统计量与期号手工给定，不碰历史加载。"""
+    analyzer = KL8Analyzer.__new__(KL8Analyzer)
+    analyzer.statistics = {'last_numbers': set(range(1, 21))}
+    analyzer.history_data = []
+    return analyzer
+
+
+@contextmanager
+def _fake_ranking(rank_fn):
+    """把排名换成给定的号码顺序。
+
+    排名本身有黄金文件与专门的用例（`tests/domain/numeric/kl8/test_scoring.py`），
+    这里打桩是为了把断言钉在投票与整形上，而不是跟着评分曲线一起漂。
+    """
+    original = scoring.ensemble_ranking
+    scoring.ensemble_ranking = lambda statistics, weights, top_n=20, **kwargs: [
+        {'num': num} for num in rank_fn(top_n)]
+    try:
+        yield
+    finally:
+        scoring.ensemble_ranking = original
 
 
 def _record(issue: int):
@@ -479,24 +506,15 @@ class KL8PredictionGuardTests(unittest.TestCase):
         self.assertEqual(result['quality']['selection_mode'], 'prize_floor')
 
     def test_multi_model_voting_uses_broader_diversified_pool(self):
-        analyzer = KL8Analyzer.__new__(KL8Analyzer)
-        analyzer.statistics = {'last_numbers': set(range(1, 21))}
-
-        original = KL8Analyzer._model_rank
-
-        def fake_rank(self, top_n=20, **kwargs):
-            return list(range(1, top_n + 1))
-
-        try:
-            KL8Analyzer._model_rank = fake_rank
-            result = analyzer.multi_model_voting(
+        # 打桩打在排名上：排名有自己的黄金文件与用例，这里要测的是
+        # 「拿到一份排名之后」投票和整形做了什么。
+        with _fake_ranking(lambda top_n: list(range(1, top_n + 1))):
+            result = _voting_analyzer().multi_model_voting(
                 pick_n=7,
                 top_n=7,
                 feature_weights={'frequency': 1.0},
                 model_weights={'rank': 1.0},
             )
-        finally:
-            KL8Analyzer._model_rank = original
 
         self.assertTrue(result['diversified'])
         self.assertEqual(result['raw_candidate_count'], 40)
@@ -504,14 +522,10 @@ class KL8PredictionGuardTests(unittest.TestCase):
         self.assertLessEqual(sum(1 for n in result['selected'] if n <= 20), 3)
 
     def test_multi_model_voting_raw_rank_primary_keeps_true_top_numbers(self):
-        analyzer = KL8Analyzer.__new__(KL8Analyzer)
-        analyzer.statistics = {'last_numbers': set(range(1, 21))}
-        original = KL8Analyzer._model_rank
         ranked = [41, 42, 43, 44, 45] + list(range(1, 41))
 
-        try:
-            KL8Analyzer._model_rank = lambda self, top_n=20, **kwargs: ranked[:top_n]
-            result = analyzer.multi_model_voting(
+        with _fake_ranking(lambda top_n: ranked[:top_n]):
+            result = _voting_analyzer().multi_model_voting(
                 pick_n=5,
                 top_n=20,
                 feature_weights={'frequency': 1.0},
@@ -519,8 +533,6 @@ class KL8PredictionGuardTests(unittest.TestCase):
                 pool_diversify=False,
                 final_selection_mode='concentrated',
             )
-        finally:
-            KL8Analyzer._model_rank = original
 
         self.assertFalse(result['diversified'])
         self.assertEqual(result['selected'], ranked[:5])

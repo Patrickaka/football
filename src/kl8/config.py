@@ -121,10 +121,13 @@ FEATURE_CONFIG['seeded_random'] = {
     'desc': 'deterministic random baseline for validation controls',
 }
 
+# 只剩排名模型。贝叶斯与马尔可夫在 2026-08-26 删除：线上 23564 条策略试验、
+# 381 份预测快照里，它们的权重无一例外是 0，`enabled` 也一直是 False。
+# 各处策略字典里仍写着 `'bayesian': 0.0, 'markov': 0.0`——那是试验记录表里
+# 23564 行的既有形状，改它会让新旧记录对不上。权重为零可以容忍，
+# 非零会被 `domain/numeric/kl8/voting` 拒绝，不会静默按剩下的模型出号。
 MODEL_CONFIG = {
-    'bayesian': {'enabled': False, 'weight': 0.0, 'desc': '停用: 倾向热号,与排名频率冷号方向相反'},
-    'rank':     {'enabled': True, 'weight': 1.0, 'desc': '排名模型(使用hot模式)'},
-    'markov':   {'enabled': False, 'weight': 0.0, 'desc': '停用: 低号码偏差,未出现号码全0.25'},
+    'rank': {'enabled': True, 'weight': 1.0, 'desc': '排名模型(使用hot模式)'},
 }
 
 # ─── v6 策略注册表（按玩法分别配置，取代全局FEATURE_CONFIG的预测权重）───
