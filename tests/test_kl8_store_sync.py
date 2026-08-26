@@ -35,6 +35,33 @@ class _Base(unittest.TestCase):
         self.addCleanup(patcher.stop)
 
 
+class StoreBindingTests(unittest.TestCase):
+    """`_open_store()` 必须绑到 kl8 这个彩种上。
+
+    上面那些用例把 `_open_store` 整个换掉了，于是彩种名从未被用到——
+    写成别的彩种照样全绿，而线上表现是「数据写进去了，就是读不出来」。
+    打桩要打在被测路径之外，打在路径上就等于把路径删了。
+    """
+
+    def test_opens_the_kl8_game(self):
+        engine = make_engine('sqlite+pysqlite:///:memory:')
+        with mock.patch('src.foundation.store.make_engine', lambda url: engine), \
+             mock.patch('src.foundation.store.mysql_url_from_env',
+                        lambda: 'sqlite+pysqlite:///:memory:'):
+            store = store_sync._open_store()
+        self.assertEqual(store.game, 'kl8')
+
+    def test_mirrored_draws_land_in_the_kl8_game(self):
+        """端到端：镜像写进去的记录，用 game='kl8' 的仓储必须读得出来。"""
+        db = Database(make_engine('sqlite+pysqlite:///:memory:'))
+        create_all(db)
+        with mock.patch('src.foundation.store.make_engine', lambda url: db.engine), \
+             mock.patch('src.foundation.store.mysql_url_from_env',
+                        lambda: 'sqlite+pysqlite:///:memory:'):
+            store_sync.mirror_to_store([_record('2026227')])
+        self.assertEqual(DrawStore(db, game='kl8').count(), 1)
+
+
 class MirrorTests(_Base):
     def test_writes_new_draws(self):
         stats = store_sync.mirror_to_store([_record('2026227'), _record('2026226', OTHER)])
