@@ -12,11 +12,17 @@ import logging
 import threading
 
 from src.domain.sports.basketball import factory
+from src.foundation.tasks import TaskScheduler
 
 log = logging.getLogger('webapp.basketball')
 
+# 赔率采样间隔。快于 15 分钟意义不大——盘口本身没那么频繁地动，
+# 而 okooo 与 500 都有限速，采太密只是白白挤占抓取配额。
+ODDS_TRACKING_INTERVAL_MINUTES = 15
+
 _lock = threading.Lock()
 _context = None
+_scheduler = None
 
 
 class _Context:
@@ -71,8 +77,44 @@ def get_context():
     return _context
 
 
-def reset():
-    """测试用：丢弃已建好的单例。"""
-    global _context
+def start_odds_tracking(interval_minutes=ODDS_TRACKING_INTERVAL_MINUTES):
+    """启动赔率快照的周期采样。
+
+    走势要靠一天里反复采样攒出来，只在有人请求时才采是不够的——夜里没人
+    看的时候盘口照样在动，而那段变化恰恰是开盘到临场的主要部分。
+
+    重复调用只启动一次。采集失败不会终止后续周期（TaskScheduler 保证），
+    没有数据库时直接不启动——采集的全部意义就是落盘。
+    """
+    global _scheduler
     with _lock:
+        if _scheduler is not None:
+            return _scheduler
+        tracker = get_context().tracker
+        if tracker is None:
+            log.warning('赔率采样未启动：数据库不可用')
+            return None
+        scheduler = TaskScheduler(max_workers=1)
+        scheduler.submit_periodic(
+            'basketball_odds_tracking',
+            lambda: tracker.track(None),
+            interval_seconds=max(60, int(interval_minutes) * 60))
+        scheduler.start()
+        _scheduler = scheduler
+        log.info('篮球赔率自动采样已启动: 每 %d 分钟', interval_minutes)
+        return scheduler
+
+
+def is_odds_tracking_running():
+    """给健康检查用：真的在跑，而不只是对象存在。"""
+    return _scheduler is not None and _scheduler.is_running()
+
+
+def reset():
+    """测试用：丢弃已建好的单例并停掉周期任务。"""
+    global _context, _scheduler
+    with _lock:
+        if _scheduler is not None:
+            _scheduler.shutdown(wait=False)
+            _scheduler = None
         _context = None

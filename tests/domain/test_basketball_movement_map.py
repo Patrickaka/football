@@ -11,10 +11,10 @@ import unittest
 from datetime import datetime
 from unittest import mock
 
-import src.basketball as legacy_pkg
-from src.basketball import odds_movement as legacy
-from src.basketball import okooo as legacy_okooo
 from src.domain.sports.basketball.movement_map import MovementMapBuilder, normalize_team
+from tests.domain.golden import as_json, load
+
+GOLDEN = load('movement_map')
 
 NOW = datetime(2026, 8, 26, 12, 0, 0)
 
@@ -117,62 +117,25 @@ class _Deps:
             bundle_fetcher=mock.Mock(fetch_many=self.fetch_bundles),
             now_fn=lambda: NOW)
 
-    def legacy_patches(self):
-        return [
-            mock.patch.object(legacy, 'datetime', _FrozenDatetime),
-            mock.patch.object(legacy, 'track_basketball_odds', self.track),
-            mock.patch.object(legacy, 'get_odds_history', self.load_history),
-            mock.patch.object(legacy_okooo, 'fetch_okooo_basketball_schedule',
-                              self.okooo_schedule),
-            mock.patch.object(legacy_okooo, 'prefetch_market_bundles',
-                              self.fetch_bundles),
-        ]
-
-
-def _legacy_map(deps, matches, source, date):
-    patches = deps.legacy_patches()
-    for patch in patches:
-        patch.start()
-    try:
-        return legacy_pkg._build_movement_map([dict(m) for m in matches],
-                                              source, date)
-    finally:
-        for patch in patches:
-            patch.stop()
-
-
-class ParityTests(unittest.TestCase):
+class GoldenTests(unittest.TestCase):
     DATE = '2026-08-27'
+    # (黄金键, 比赛列表, 数据源, 依赖配置)
+    CASES = [
+        ('okooo', OKOOO_MATCHES, 'okooo', {}),
+        ('500', FIVE_HUNDRED_MATCHES, '500', {}),
+        ('500_no_okooo', FIVE_HUNDRED_MATCHES, '500', {'okooo_raises': True}),
+        ('500_no_snapshots', FIVE_HUNDRED_MATCHES, '500', {'snapshots': {}}),
+        ('okooo_blocked_details', OKOOO_MATCHES, 'okooo', {'bundle_raises': True}),
+        ('500_track_failed', FIVE_HUNDRED_MATCHES, '500', {'track_raises': True}),
+        ('empty_500', [], '500', {}),
+        ('empty_okooo', [], 'okooo', {}),
+    ]
 
-    def _compare(self, matches, source, **kwargs):
-        deps_new = _Deps(**kwargs)
-        deps_old = _Deps(**kwargs)
-        expected = _legacy_map(deps_old, matches, source, self.DATE)
-        actual = deps_new.builder()(matches, source, self.DATE)
-        self.assertEqual(actual, expected)
-        return actual
-
-    def test_okooo_source_matches_legacy(self):
-        self._compare(OKOOO_MATCHES, 'okooo')
-
-    def test_500_source_matches_legacy(self):
-        self._compare(FIVE_HUNDRED_MATCHES, '500')
-
-    def test_500_source_without_okooo_matches_legacy(self):
-        self._compare(FIVE_HUNDRED_MATCHES, '500', okooo_raises=True)
-
-    def test_500_source_without_snapshots_matches_legacy(self):
-        self._compare(FIVE_HUNDRED_MATCHES, '500', snapshots={})
-
-    def test_okooo_source_with_blocked_details_matches_legacy(self):
-        self._compare(OKOOO_MATCHES, 'okooo', bundle_raises=True)
-
-    def test_tracking_failure_matches_legacy(self):
-        self._compare(FIVE_HUNDRED_MATCHES, '500', track_raises=True)
-
-    def test_no_matches_matches_legacy(self):
-        self._compare([], '500')
-        self._compare([], 'okooo')
+    def test_every_source_combination(self):
+        for name, matches, source, kwargs in self.CASES:
+            with self.subTest(case=name):
+                actual = _Deps(**kwargs).builder()(matches, source, self.DATE)
+                self.assertEqual(as_json(actual), GOLDEN[name])
 
 
 class BehaviourTests(unittest.TestCase):

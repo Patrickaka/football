@@ -168,19 +168,6 @@ def _load_beidan_helpers():
         raise
 
 
-def _load_basketball_helpers():
-    try:
-        from src.basketball import (
-            generate_basketball_recommendations,
-            find_value_bets,
-            summarize_basketball_history,
-        )
-        return generate_basketball_recommendations, find_value_bets, summarize_basketball_history
-    except Exception as exc:
-        log.error(f"加载篮球模块失败: {exc}")
-        raise
-
-
 backtest = None
 
 

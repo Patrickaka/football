@@ -106,6 +106,51 @@ class TaskSchedulerTests(unittest.TestCase):
         self.assertEqual(scheduler.results()['dup']['value'], 'first')
 
 
+class IsRunningTests(unittest.TestCase):
+    """健康检查要问的是「后台任务真的在跑吗」。
+
+    只判断「调度器对象存在」的话，那个判断永远为真——它不是信号，
+    是会让人误以为一切正常的那种噪声。
+    """
+
+    def test_not_running_before_start(self):
+        self.assertFalse(TaskScheduler().is_running())
+
+    def test_running_after_start(self):
+        scheduler = TaskScheduler()
+        scheduler.start()
+        self.addCleanup(scheduler.shutdown, wait=False)
+        self.assertTrue(scheduler.is_running())
+
+    def test_not_running_after_shutdown(self):
+        scheduler = TaskScheduler()
+        scheduler.start()
+        scheduler.shutdown(wait=False)
+        self.assertFalse(scheduler.is_running())
+
+
+class TaskCountTests(unittest.TestCase):
+    """区分「没有任务要跑」和「有任务却没在跑」。"""
+
+    def test_starts_at_zero(self):
+        self.assertEqual(TaskScheduler().task_count(), 0)
+
+    def test_counts_both_kinds(self):
+        scheduler = TaskScheduler()
+        scheduler.submit('once', lambda: None)
+        scheduler.submit_periodic('loop', lambda: None, interval_seconds=60)
+        self.assertEqual(scheduler.task_count(), 2)
+
+    def test_survives_start(self):
+        """start() 会清空待跑列表，登记数不能跟着清零——否则运行中的调度器
+        看起来就像「没有任务」。"""
+        scheduler = TaskScheduler()
+        scheduler.submit_periodic('loop', lambda: None, interval_seconds=60)
+        scheduler.start()
+        self.addCleanup(scheduler.shutdown, wait=False)
+        self.assertEqual(scheduler.task_count(), 1)
+
+
 if __name__ == '__main__':
     unittest.main()
 

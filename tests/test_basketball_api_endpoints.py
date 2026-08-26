@@ -253,5 +253,60 @@ class ContextTests(unittest.TestCase):
         self.assertIsNotNone(ctx.prediction)
 
 
+class OddsTrackingSchedulerTests(unittest.TestCase):
+    """赔率快照的周期采样。
+
+    走势要靠一天里反复采样攒出来。夜里没人看的时候盘口照样在动，而那段
+    变化正是开盘到临场的主要部分——只在有人请求时才采是攒不出来的。
+
+    迁移过程中这条一度差点丢掉：旧的采样器由 `server.py` 启动，而我按
+    `src/` 目录下的 grep 判断它「没有调用方」，差点当作死代码删掉。
+    """
+
+    def setUp(self):
+        basketball_service.reset()
+        self.addCleanup(basketball_service.reset)
+
+    def _with_tracker(self, tracker):
+        ctx = mock.Mock()
+        ctx.tracker = tracker
+        patcher = mock.patch.object(basketball_service, 'get_context',
+                                    lambda: ctx)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_starts_a_running_periodic_task(self):
+        self._with_tracker(mock.Mock())
+        scheduler = basketball_service.start_odds_tracking()
+        self.assertIsNotNone(scheduler)
+        self.assertTrue(scheduler.is_running())
+        self.assertEqual(scheduler.task_count(), 1)
+        self.assertTrue(basketball_service.is_odds_tracking_running())
+
+    def test_repeated_calls_start_only_one(self):
+        self._with_tracker(mock.Mock())
+        first = basketball_service.start_odds_tracking()
+        self.assertIs(basketball_service.start_odds_tracking(), first)
+
+    def test_not_started_without_a_database(self):
+        """采集的全部意义就是落盘。没有库就别假装在采。"""
+        self._with_tracker(None)
+        self.assertIsNone(basketball_service.start_odds_tracking())
+        self.assertFalse(basketball_service.is_odds_tracking_running())
+
+    def test_interval_is_floored_at_one_minute(self):
+        """采样间隔有下限：okooo 与 500 都有限速，采太密只是挤占抓取配额。"""
+        self._with_tracker(mock.Mock())
+        scheduler = basketball_service.start_odds_tracking(interval_minutes=0)
+        self.assertTrue(scheduler.is_running())
+
+    def test_reset_stops_the_scheduler(self):
+        self._with_tracker(mock.Mock())
+        scheduler = basketball_service.start_odds_tracking()
+        basketball_service.reset()
+        self.assertFalse(scheduler.is_running())
+        self.assertFalse(basketball_service.is_odds_tracking_running())
+
+
 if __name__ == '__main__':
     unittest.main()

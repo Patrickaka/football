@@ -13,13 +13,15 @@ import unittest
 from datetime import datetime
 from unittest import mock
 
-from src.basketball import records as legacy
 from src.domain.sports.basketball.records import (
     MAX_RECORDS, PredictionRecorder, PredictionRecordStore, evaluate_markets,
     summarize,
 )
 from src.domain.sports.basketball.repository import create_all
 from src.foundation.store import Database, make_engine
+from tests.domain.golden import as_json, load
+
+GOLDEN = load('records')
 
 NOW = datetime(2026, 8, 26, 12, 0, 0)
 NOW_ISO = NOW.isoformat()
@@ -74,21 +76,6 @@ UNAVAILABLE = {
            'total_line': 190.5, 'over_prob': 0.48, 'under_prob': 0.52,
            'confidence': 'low'},
 }
-
-
-class _FakeKv:
-    def __init__(self, initial=None):
-        self.data = {'basketball_prediction_records': list(initial or [])}
-
-    def load(self, key, default=None):
-        import copy
-
-        return copy.deepcopy(self.data.get(key, default))
-
-    def save(self, key, value):
-        import copy
-
-        self.data[key] = copy.deepcopy(value)
 
 
 class _FakeCalibrator:
@@ -186,72 +173,39 @@ class StoreRoundTripTests(_Base):
         self.assertEqual(self.store.load(), [])
 
 
-class SaveParityTests(_Base):
-    """与旧 save_predictions 的差分。"""
-
-    def _legacy(self, date, results, version, initial=None):
-        kv = _FakeKv(initial)
-        with mock.patch.object(legacy, 'kv_store', kv), \
-             mock.patch.object(legacy, 'datetime', _FrozenDatetime):
-            legacy.save_predictions(date, results, version)
-        return kv.data['basketball_prediction_records']
-
-    def _compare(self, date, results, version='v1', initial=None):
-        self.store.save(list(initial or []))
-        self._recorder().save(date, results, version)
-        self.assertEqual(self.store.load(),
-                         self._legacy(date, results, version, initial))
-
-    def test_first_save_matches_legacy(self):
-        self._compare('2026-08-27', [ANALYSIS, UNAVAILABLE])
+class SaveBehaviourTests(_Base):
+    def test_first_save_records_every_match(self):
+        self._recorder().save('2026-08-27', [ANALYSIS, UNAVAILABLE], 'v1')
+        self.assertEqual([r['match_id'] for r in self.store.load()],
+                         ['2026-08-27_甲_乙', '2026-08-27_丙_丁'])
 
     def test_second_save_overwrites_the_same_day(self):
-        self.store.save([])
         self._recorder().save('2026-08-27', [ANALYSIS], 'v1')
         first = self.store.load()
         self._recorder().save('2026-08-27', [ANALYSIS], 'v2')
         self.assertEqual(len(self.store.load()), len(first))
         self.assertEqual(self.store.load()[0]['version'], 'v2')
 
-    def test_overwrite_matches_legacy(self):
-        initial = self._legacy('2026-08-27', [ANALYSIS], 'v1')
-        self._compare('2026-08-27', [ANALYSIS], 'v2', initial=initial)
-
     def test_different_day_appends(self):
-        initial = self._legacy('2026-08-26', [ANALYSIS], 'v1')
-        self._compare('2026-08-27', [ANALYSIS], 'v1', initial=initial)
+        recorder = self._recorder()
+        recorder.save('2026-08-26', [ANALYSIS], 'v1')
+        recorder.save('2026-08-27', [ANALYSIS], 'v1')
+        self.assertEqual([r['date'] for r in self.store.load()],
+                         ['2026-08-26', '2026-08-27'])
 
-    def test_empty_results_matches_legacy(self):
-        self._compare('2026-08-27', [], 'v1', initial=[REAL_RECORD])
+    def test_empty_results_change_nothing(self):
+        self.store.save([REAL_RECORD])
+        self._recorder().save('2026-08-27', [], 'v1')
+        self.assertEqual(self.store.load(), [REAL_RECORD])
 
-
-class OfficialDefaultTests(_Base):
-    """`official` 缺省时跟随 `playable`。
-
-    早期版本的分析结果没有 official 字段，那时「可玩」就等于「计入准确率」。
-    缺省写死 True 的话，那些历史上被跳过的场次会在统计里凭空变成官方推荐。
-    """
-
-    def test_official_defaults_to_playable(self):
-        legacy_shape = {
-            'match': {'id': 'old', 'home': '甲', 'away': '乙', 'league': 'NBA'},
-            'spf': {'available': True, 'recommendation': '主胜',
-                    'playable': False, 'home_prob': 0.55, 'away_prob': 0.45},
-            'rqspf': None, 'dx': None,
-        }
-        self._recorder().save('2026-08-27', [legacy_shape], 'old-version')
-        self.assertFalse(self.store.load()[0]['spf']['official'])
-
-    def test_explicit_official_wins_over_playable(self):
-        conflicting = {
-            'match': {'id': 'x', 'home': '甲', 'away': '乙', 'league': 'NBA'},
-            'spf': {'available': True, 'recommendation': '主胜',
-                    'playable': True, 'official': False,
-                    'home_prob': 0.55, 'away_prob': 0.45},
-            'rqspf': None, 'dx': None,
-        }
-        self._recorder().save('2026-08-27', [conflicting], 'v1')
-        self.assertFalse(self.store.load()[0]['spf']['official'])
+    def test_unavailable_market_is_still_recorded(self):
+        """缺赔率的玩法也要留痕：日后回看时「当时没开盘」和「当时没预测」
+        是两件事。"""
+        self._recorder().save('2026-08-27', [UNAVAILABLE], 'v1')
+        record = self.store.load()[0]
+        self.assertFalse(record['spf']['available'])
+        self.assertIsNone(record['rqspf'])
+        self.assertFalse(record['dx']['playable'])
 
 
 class SettledResultPreservationTests(_Base):
@@ -319,7 +273,7 @@ class QueryTests(_Base):
                          ['a', 'b'])
 
 
-class EvaluateMarketsParityTests(unittest.TestCase):
+class EvaluateMarketsGoldenTests(unittest.TestCase):
     RECORDS = [
         REAL_RECORD,
         {'spf': {'available': True, 'playable': True, 'recommendation': '主胜'},
@@ -344,12 +298,12 @@ class EvaluateMarketsParityTests(unittest.TestCase):
     SCORES = [(100, 95), (95, 100), (100, 100), (105, 95), (103, 97),
               (100, 100), (0, 0), (110, 90)]
 
-    def test_matches_legacy(self):
-        for record in self.RECORDS:
+    def test_every_record_and_score(self):
+        for i, record in enumerate(self.RECORDS):
             for home, away in self.SCORES:
                 with self.subTest(rec=record.get('match_id'), score=(home, away)):
-                    self.assertEqual(evaluate_markets(record, home, away),
-                                     legacy._evaluate_markets(record, home, away))
+                    self.assertEqual(as_json(evaluate_markets(record, home, away)),
+                                     GOLDEN[f'eval:{i}:{home}:{away}'])
 
     def test_push_is_void_not_a_loss(self):
         """让分正好打平、总分正好等于盘口，本就没有输赢。
@@ -373,8 +327,9 @@ class EvaluateMarketsParityTests(unittest.TestCase):
         self.assertFalse(hits['dx_void'])
 
 
-class SummarizeParityTests(unittest.TestCase):
-    def _records(self):
+class SummarizeGoldenTests(unittest.TestCase):
+    @staticmethod
+    def records():
         base = dict(ANALYSIS)
         record = {
             'date': '2026-08-27', 'match_id': 'm1', 'league': 'NBA',
@@ -389,16 +344,13 @@ class SummarizeParityTests(unittest.TestCase):
             dict(record, match_id='open', result=None),
         ]
 
-    def test_matches_legacy(self):
-        records = self._records()
-        with mock.patch.object(legacy, 'kv_store', _FakeKv(records)):
-            expected = legacy.get_prediction_stats()
-        self.assertEqual(summarize(records), expected)
+    def test_full_statistics(self):
+        self.assertEqual(as_json(summarize(self.records())), GOLDEN['summarize'])
 
     def test_water_inference_is_tracked_separately(self):
         """走势反推翻转过模型方向的那些单独统计——这套信号有没有用，
         只能靠它自己的命中率回答。"""
-        stats = summarize(self._records())
+        stats = summarize(self.records())
         # 三条已结算记录的 rqspf 都带 movement_led，且让分是 -3.5 半球盘、
         # 不可能打平，所以三条全部计入
         self.assertEqual(stats['water_inference']['rqspf']['total'], 3)
@@ -406,14 +358,14 @@ class SummarizeParityTests(unittest.TestCase):
                          'dx 那条没有 movement_led，不该计入')
 
     def test_void_does_not_count_towards_accuracy(self):
-        stats = summarize(self._records())
+        stats = summarize(self.records())
         self.assertEqual(stats['spf']['void'], 1)
         self.assertEqual(stats['spf']['total'], 2)
 
     def test_unplayable_markets_are_not_official_predictions(self):
         """不可玩的玩法既不判命中，也不该计进「官方推荐」的分母——
         它压根没出票。"""
-        playable = self._records()[0]
+        playable = self.records()[0]
         unplayable = dict(playable, match_id='skipped', spf=dict(
             playable['spf'], playable=False, official=False,
             skip_reason='low_confidence'))

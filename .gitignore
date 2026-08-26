@@ -24,6 +24,9 @@ data/dynamic_threshold_config.json
 data/lottery_history.json
 data/pailie5_history.json
 data/doc_store_*.json
+# 写入过程中的半成品。原本只忽略了 .json，.tmp 变体一直是「未忽略的
+# 未跟踪文件」，一次 `git add -A` 就会把 60 万行临时数据提进来。
+data/doc_store_*.json.tmp
 data/kv_store_fallback.json
 
 # 预测缓存（运行时生成，重启自动重建）

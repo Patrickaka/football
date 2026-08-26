@@ -1,18 +1,18 @@
 """三个分析函数（胜负 / 让分胜负 / 大小分）迁入领域层。
 
-主体仍是差分测试（裁决 D）。与走势那批不同的是，分析函数依赖 Elo 与校准器，
-而旧实现在函数体内 `from .elo import get_elo_system` 取全局单例——那个单例会
-真的去读 kv_store。所以差分的前提是**两侧注入同一组假依赖**：旧实现打桩它的
-单例工厂，新实现直接构造注入。这样两份代码面对的是同一份 Elo 输出，差异只可能
-来自算法本身。
+主体原本是与旧实现的差分测试，旧实现删除后改为对**黄金文件**断言
+（见 `tests/domain/golden.py`）。黄金值由当时已通过逐字差分的实现生成。
+
+覆盖的是 4 组 Elo × 4 个校准器 × 8 场比赛 × 11 种走势的全组合。这个组合数
+不是为了好看：变异验证里有四处逃逸正是被其中的边角组合捕获的。
 """
 import unittest
 from unittest import mock
 
-import src.basketball as legacy
-from src.basketball import calibration as legacy_calibration
-from src.basketball import elo as legacy_elo
 from src.domain.sports.basketball.analysis import BasketballAnalyzer
+from tests.domain.golden import as_json, load
+
+GOLDEN = load('analysis')
 
 
 class FakeElo:
@@ -145,40 +145,36 @@ CALIBRATORS = [FakeCalibrator(1.0), FakeCalibrator(1.08), FakeCalibrator(0.93),
                FakeCalibrator(2.0)]
 
 
-class _ParityBase(unittest.TestCase):
-    def _compare(self, method_name, legacy_fn):
-        for elo in ELO_SETUPS:
-            for calibrator in CALIBRATORS:
+class _GoldenBase(unittest.TestCase):
+    def _check(self, method_name):
+        for ei, elo in enumerate(ELO_SETUPS):
+            for ci, calibrator in enumerate(CALIBRATORS):
                 analyzer = BasketballAnalyzer(elo=elo, calibrator=calibrator)
-                for match in MATCHES:
-                    for movement in MOVEMENTS:
+                for mi, match in enumerate(MATCHES):
+                    for vi, movement in enumerate(MOVEMENTS):
                         with self.subTest(mid=match['id'],
                                           side=(movement or {}).get('side'),
                                           games=elo.home_games,
                                           factor=calibrator.factor):
-                            with mock.patch.object(
-                                    legacy_elo, 'get_elo_system', lambda: elo), \
-                                 mock.patch.object(
-                                     legacy_calibration, 'get_calibrator',
-                                     lambda: calibrator):
-                                expected = legacy_fn(match, movement)
-                            actual = getattr(analyzer, method_name)(match, movement)
-                            self.assertEqual(actual, expected)
+                            self.assertEqual(
+                                as_json(getattr(analyzer, method_name)(
+                                    match, movement)),
+                                GOLDEN[f'{method_name}:{ei}:{ci}:{mi}:{vi}'])
 
 
-class AnalyzeSpfParityTests(_ParityBase):
-    def test_matches_legacy(self):
-        self._compare('analyze_spf', legacy.analyze_spf)
+class AnalyzeSpfGoldenTests(_GoldenBase):
+    def test_all_combinations(self):
+        self._check('analyze_spf')
 
 
-class AnalyzeRqspfParityTests(_ParityBase):
-    def test_matches_legacy(self):
-        self._compare('analyze_rqspf', legacy.analyze_rqspf)
+class AnalyzeRqspfGoldenTests(_GoldenBase):
+    def test_all_combinations(self):
+        self._check('analyze_rqspf')
 
 
-class AnalyzeDaxiaoParityTests(_ParityBase):
-    def test_matches_legacy(self):
-        self._compare('analyze_daxiao', legacy.analyze_daxiao)
+class AnalyzeDaxiaoGoldenTests(_GoldenBase):
+    def test_all_combinations(self):
+        self._check('analyze_daxiao')
 
 
 class DependencyFailureTests(unittest.TestCase):

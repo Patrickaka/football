@@ -26,11 +26,26 @@ from datetime import datetime, timedelta
 from typing import List, Dict, Tuple
 
 sys.path.insert(0, '.')
-from src.basketball.elo import (
-    get_elo_system, INITIAL_ELO, HOME_ADVANTAGE,
-    _sanitize_team_name, BB_ELO_KEY
+from src.domain.sports.basketball.elo import (
+    BasketballELORatingSystem, HOME_ADVANTAGE, INITIAL_ELO, _sanitize_team_name,
 )
-from src.common import kv_store
+from src.domain.sports.basketball.elo_store import EloStore
+from src.foundation.store import Database, make_engine, mysql_url_from_env
+
+_elo_system = None
+
+
+def get_elo_system():
+    """本工具进程内的 Elo 单例。
+
+    评分与历史落在 foundation/store，与线上服务读的是同一张表——这正是
+    预填充的意义：跑完之后线上立刻就能用上这批评分。
+    """
+    global _elo_system
+    if _elo_system is None:
+        db = Database(make_engine(mysql_url_from_env()))
+        _elo_system = BasketballELORatingSystem(store=EloStore(db))
+    return _elo_system
 
 
 # ==================== 数据源 ====================
