@@ -60,7 +60,15 @@ def dispatch_transport(okooo, default):
 
 
 def urllib_get(url, timeout, encoding='utf-8', referer=None):
-    """500.com 系列。保留原有的多编码回退——该站部分页面是 gbk/gb2312。"""
+    """500.com 系列。该站部分页面是 gbk/gb2312，故按候选编码依次尝试。
+
+    **必须严格解码**（不带 errors）才能让「这个编码不对」表现为异常。
+    迁移时这里写成了 `decode(enc, errors='replace')`，而带 replace 的解码
+    永远不抛异常——第一个候选总是"成功"，回退一次都走不到。gbk 页面被当作
+    utf-8 解出整页乱码，正则一条也匹不上，接口返回 200 加空列表，不报任何错。
+
+    全部候选都失败时才降级到替换字符：拿到乱码总好过整次抓取失败。
+    """
     headers = {'User-Agent': _UA}
     if referer:
         headers['Referer'] = referer
@@ -70,10 +78,10 @@ def urllib_get(url, timeout, encoding='utf-8', referer=None):
 
     for enc in (encoding, 'gbk', 'gb2312', 'utf-8'):
         try:
-            return raw.decode(enc, errors='replace').encode(
-                'utf-8', errors='replace').decode('utf-8')
+            return raw.decode(enc)
         except (UnicodeDecodeError, LookupError):
             continue
+    log.warning('无法确定页面编码，按 utf-8 降级解码: %s', url)
     return raw.decode('utf-8', errors='replace')
 
 
