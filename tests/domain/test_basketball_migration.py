@@ -119,6 +119,36 @@ class MigrationTests(unittest.TestCase):
         self.assertEqual([r['seq'] for r in rows], [0, 1])
         self.assertEqual([r['spf_home'] for r in rows], [1.8, 1.6])
 
+    def test_rerun_after_the_source_shrinks_leaves_no_ghosts(self):
+        """源变短之后重跑，库里不能留下已经消失的行。
+
+        本次线上重跑就撞上了：快照源 172 条而库里 174 条，多出来的两条是
+        上一轮迁移的残留。源数据全是「当前完整状态」而非增量流水——Elo 的
+        评分表、截断的快照列表、封顶 500 条的预测记录都会变短，逐行 upsert
+        只新增和更新，消失的行就变成幽灵。
+        """
+        migrate(_loader, self.db)
+        before = OddsSnapshotRepository(self.db).count()
+
+        shrunk = dict(_FAKE_KV)
+        shrunk['basketball_odds_history'] = {
+            '2026-07-23_水星_火花':
+                _FAKE_KV['basketball_odds_history']['2026-07-23_水星_火花'][:1]}
+        migrate(lambda key, default=None: shrunk.get(key, default), self.db)
+
+        after = OddsSnapshotRepository(self.db).count()
+        self.assertLess(after, before)
+        self.assertEqual(after, 1)
+
+    def test_rerun_is_idempotent(self):
+        migrate(_loader, self.db)
+        first = {t: r(self.db).count() for t, r in (
+            ('snap', OddsSnapshotRepository), ('rating', EloRatingRepository))}
+        migrate(_loader, self.db)
+        second = {t: r(self.db).count() for t, r in (
+            ('snap', OddsSnapshotRepository), ('rating', EloRatingRepository))}
+        self.assertEqual(first, second)
+
     def test_history_event_is_preserved(self):
         migrate(_loader, self.db)
         rows = EloHistoryRepository(self.db).find_by(

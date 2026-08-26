@@ -134,18 +134,24 @@ _PLAN = (
 def migrate(kv_loader, db, dry_run=False):
     """迁移并返回 {表名: {'migrated': n, 'skipped': n}}。
 
-    用 upsert 而非 insert_many，保证可重复执行——迁移脚本中途失败后重跑
-    是常态，不该因为主键冲突而卡住。
+    **整表替换**（清空再写）而不是逐行 upsert。两个理由：
+
+    1. 源数据全是「当前完整状态」而非增量流水——Elo 的评分表、截断的快照
+       列表、封顶 500 条的预测记录，都会变短。upsert 只会新增和更新，
+       源里已经消失的行会留在库里变成幽灵。本次重跑就撞上了：快照源 172 条
+       而库里 174 条，多出来的两条是上一轮迁移的残留。
+    2. 这样才真正可重复执行——跑一次和跑十次结果相同，中途失败后重跑
+       不需要先手动清理。
     """
     stats = {}
-    for table_name, repo_cls, extract, key_cols in _PLAN:
+    for table_name, repo_cls, extract, _key_cols in _PLAN:
         rows = extract(kv_loader)
         stats[table_name] = {'migrated': len(rows), 'skipped': 0}
         if dry_run:
             continue
         repo = repo_cls(db)
-        for row in rows:
-            repo.upsert(row, key_cols=key_cols)
+        repo.delete_all()
+        repo.insert_many(rows)
     return stats
 
 

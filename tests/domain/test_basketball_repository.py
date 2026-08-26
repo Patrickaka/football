@@ -5,6 +5,8 @@ match_key 的 '日期_主队_客队' 格式。
 """
 import unittest
 
+from sqlalchemy import Integer
+
 from src.domain.sports.basketball.repository import (
     EloHistoryRepository, EloRatingRepository, EloRecentFormRepository,
     OddsSnapshotRepository, create_all,
@@ -162,6 +164,35 @@ class OddsSnapshotRepositoryTests(_Base):
                     key_cols=self.KEYS)
         row = repo.find_all()[0]
         self.assertIsNone(row['dx_over'])
+
+
+class PrimaryKeyDeclarationTests(unittest.TestCase):
+    """单列整数主键必须显式关掉自增。
+
+    **这是线上真实丢过数据的地方。** SQLAlchemy 把单列整数主键默认当成
+    自增列，MySQL 于是把 `seq=0` 理解成「给我下一个自增值」而不是字面量 0：
+    第一行被改写成 1，随后真正的 seq=1 那行把它覆盖掉，45 条源数据静默
+    变成 44 条。SQLite 没有这个行为，所以整套测试全绿、只有生产会丢。
+
+    所以这条断言查的是**表定义**而不是行为——行为在测试用的 SQLite 上
+    根本复现不出来。
+    """
+
+    def test_single_column_integer_keys_disable_autoincrement(self):
+        from src.domain.sports.basketball import repository
+
+        for table in repository.METADATA.tables.values():
+            primary_keys = list(table.primary_key.columns)
+            if len(primary_keys) != 1:
+                continue
+            column = primary_keys[0]
+            if not isinstance(column.type, Integer):
+                continue
+            with self.subTest(table=table.name, column=column.name):
+                self.assertFalse(
+                    column.autoincrement,
+                    f'{table.name}.{column.name} 是单列整数主键却没关自增，'
+                    f'MySQL 上 0 会被改写')
 
 
 class AllRepositoriesTests(_Base):

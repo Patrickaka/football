@@ -100,7 +100,13 @@ BB_PREDICTION_RECORD = Table(
     # 业务上的唯一键是 (date, match_id)（save_predictions 正是按它 upsert），
     # 但 match_id 本身不唯一：线上 73 条记录只有 43 个不同的 match_id，
     # 同一场比赛在不同日期、不同版本下会各留一条。
-    Column('seq', Integer, primary_key=True),
+    # autoincrement=False 是必需的，不是风格问题：SQLAlchemy 会把**单列
+    # 整数主键**默认当成自增列，MySQL 于是把 seq=0 视为「给我下一个自增值」
+    # 而不是字面量 0。第一行 seq=0 被改写成 1，随后真正的 seq=1 那行走
+    # upsert 的 update 分支把它覆盖掉——45 条源数据静默变成 44 条。
+    # SQLite 没有这个行为，所以测试全绿、只有生产会丢数据。
+    # 其余几张表是复合主键，不触发这条默认规则。
+    Column('seq', Integer, primary_key=True, autoincrement=False),
     Column('date', String(16), nullable=False),
     Column('match_id', String(128), nullable=False),
     Column('num', String(32)),
