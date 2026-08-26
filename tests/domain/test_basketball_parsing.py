@@ -169,6 +169,16 @@ class StatusFilterTests(unittest.TestCase):
         kept = parsing.select_upcoming(rows, NOW)
         self.assertEqual([r['home'] for r in kept], ['A', 'C'])
 
+    def test_kickoff_moment_itself_counts_as_started(self):
+        """分界取 `>`：恰好到点的那一场已经开赛，要撤下；下一分钟的留着。"""
+        at_kickoff = {'date': '2026-08-26', 'time': '12:00', 'home': 'Z',
+                      'status': 'not_started'}
+        one_minute_later = {'date': '2026-08-26', 'time': '12:01', 'home': 'W',
+                            'status': 'not_started'}
+        self.assertEqual(
+            parsing.select_upcoming([at_kickoff, one_minute_later], NOW),
+            [one_minute_later])
+
     def test_unparsable_time_keeps_the_row(self):
         """时间格式不认识时不猜、不丢——宁可多显示一场，也不静默吞掉。"""
         rows = [{'date': '2026-08-26', 'time': '不是时间', 'home': 'X',
@@ -176,6 +186,75 @@ class StatusFilterTests(unittest.TestCase):
         parsing.annotate_status(rows, NOW)
         self.assertEqual(rows[0].get('status'), 'not_started')
         self.assertEqual(parsing.select_upcoming(rows, NOW), rows)
+
+
+def _row(cells):
+    return '<tr>' + ''.join(f'<td>{c}</td>' for c in cells) + '</tr>'
+
+
+def _spans(*values):
+    return ''.join(f'<span>{v}</span>' for v in values)
+
+
+def _page(*rows):
+    return '<html><body><table>' + ''.join(rows) + '</table></body></html>'
+
+
+GOOD_CELLS = ['周三301', '美职女篮', '08-27 07:00', '[主]甲队VS乙队[客]',
+              _spans('1.80', '2.00'), _spans('1.90', '-3.5', '1.90'),
+              _spans('1.85', '210.5', '1.95')]
+
+
+class MalformedRowTests(unittest.TestCase):
+    """真实页面只覆盖了「一切正常」这一种行。表头、广告、脏数据这些
+    每天都会出现的行，只能合成——它们正是每一道守卫存在的理由。"""
+
+    def _parse(self, cells):
+        return parsing.parse_schedule(_page(_row(cells)), '2026-08-27')
+
+    def test_good_row_is_the_control(self):
+        self.assertEqual(len(self._parse(GOOD_CELLS)), 1)
+
+    def test_row_with_too_few_cells_is_skipped(self):
+        self.assertEqual(self._parse(GOOD_CELLS[:6]), [])
+
+    def test_numeric_first_cell_is_not_a_match(self):
+        """表头与统计行的首格是纯数字或空。期号必然以中文或字母开头，
+        这道校验去掉后它们会被当成比赛。"""
+        for num in ('123', '', '   ', '2026-08-27'):
+            with self.subTest(num=num):
+                self.assertEqual(self._parse([num] + GOOD_CELLS[1:]), [])
+
+    def test_all_three_versus_markers_are_recognised(self):
+        for marker, expect_home in (('VS', '甲队'), ('vs', '甲队'), ('对', '甲队')):
+            with self.subTest(marker=marker):
+                cells = list(GOOD_CELLS)
+                cells[3] = f'[主]甲队{marker}乙队[客]'
+                matches = self._parse(cells)
+                self.assertEqual(len(matches), 1, f'分隔符 {marker} 没被认出来')
+                self.assertEqual(matches[0]['home'], expect_home)
+
+    def test_row_without_versus_marker_is_skipped(self):
+        cells = list(GOOD_CELLS)
+        cells[3] = '甲队 乙队'
+        self.assertEqual(self._parse(cells), [])
+
+    def test_row_that_raises_mid_parse_is_skipped_not_fatal(self):
+        """`1.2.3` 能通过 isdigit 检查却过不了 float——脏数据要吞掉这一行，
+        而不是让整页解析失败。"""
+        cells = list(GOOD_CELLS)
+        cells[4] = _spans('1.2.3', '2.00')
+        good = _row(GOOD_CELLS)
+        page = _page(_row(cells), good)
+        matches = parsing.parse_schedule(page, '2026-08-27')
+        self.assertEqual(len(matches), 1, '脏行没被跳过，或把好行一起带走了')
+
+    def test_missing_odds_stay_none(self):
+        cells = list(GOOD_CELLS)
+        cells[4] = ''
+        match = self._parse(cells)[0]
+        self.assertIsNone(match['spf_home'])
+        self.assertIsNone(match['spf_away'])
 
 
 class KnownDefectTests(unittest.TestCase):
