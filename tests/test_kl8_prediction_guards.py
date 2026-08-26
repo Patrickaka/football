@@ -5,7 +5,6 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from src.domain.numeric.kl8 import pools, scoring
-from src.kl8 import analyzer as kl8_analyzer
 
 import src.kl8 as kl8_module
 from src.kl8 import config as kl8_config
@@ -74,9 +73,17 @@ class CandidateVariantGuardTests(unittest.TestCase):
         self.analyzer.update_statistics()
         self.candidates = [(n, 0.9 - i * 0.01) for i, n in enumerate(range(1, 41))]
 
+    # 模式名写死在这里，不引用被测常量——引用的话从常量里删掉一种模式，
+    # 断言会跟着一起少一项，改坏了照样全绿。
+    EXPECTED_VARIANTS = {'high_tier_chase', 'balanced', 'concentrated', 'low_repeat',
+                         'repeat_follow', 'zone_spread', 'prize_floor', 'shape_balanced'}
+    EXPECTED_RECALC_VARIANTS = ['concentrated', 'balanced', 'repeat_follow',
+                                'low_repeat', 'prize_floor', 'zone_spread',
+                                'shape_balanced']
+
     def test_every_named_variant_is_built(self):
         variants = self.analyzer._candidate_variants(self.candidates, 6, 3)
-        self.assertEqual(set(variants), set(kl8_analyzer.CANDIDATE_VARIANTS))
+        self.assertEqual(set(variants), self.EXPECTED_VARIANTS)
 
     def test_each_variant_has_the_requested_pick_size(self):
         for label, nums in self.analyzer._candidate_variants(self.candidates, 6, 3).items():
@@ -88,7 +95,7 @@ class CandidateVariantGuardTests(unittest.TestCase):
         """与 `pools.build_pool` 逐个对齐——两处走偏了不会报错。"""
         last = self.analyzer.statistics.get('last_numbers', set())
         variants = self.analyzer._candidate_variants(self.candidates, 6, 3)
-        for label in kl8_analyzer.CANDIDATE_VARIANTS:
+        for label in sorted(self.EXPECTED_VARIANTS):
             with self.subTest(variant=label):
                 expected = sorted(num for num, _ in pools.build_pool(
                     label, self.candidates, 6, last, 3))
@@ -120,13 +127,13 @@ class CandidateVariantGuardTests(unittest.TestCase):
             self.analyzer._best_exclude_recalculation_pool(self.candidates, 6, 3)
         finally:
             pools.build_pool = original
-        self.assertEqual(seen, list(kl8_analyzer.EXCLUDE_RECALC_VARIANTS))
+        self.assertEqual(seen, self.EXPECTED_RECALC_VARIANTS)
 
     def test_exclude_recalculation_returns_a_full_pick(self):
         pool, quality = self.analyzer._best_exclude_recalculation_pool(
             self.candidates, 6, 3)
         self.assertEqual(len(pool), 6)
-        self.assertIn(quality.get('selection_mode'), kl8_analyzer.EXCLUDE_RECALC_VARIANTS)
+        self.assertIn(quality.get('selection_mode'), self.EXPECTED_RECALC_VARIANTS)
 
     def test_exclude_recalculation_honours_an_explicit_mode(self):
         pool, quality = self.analyzer._best_exclude_recalculation_pool(
