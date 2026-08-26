@@ -79,6 +79,15 @@ MATCHES = [
      'handicap': None, 'dx_over': 1.72, 'dx_under': 2.08, 'total_line': 150.5},
     {'id': 'm5', 'home': 'C 队', 'away': 'D 队', 'league': 'NCAAB',
      'spf_home': 1.90, 'rqspf_away': 1.90, 'dx_under': 1.90, 'total_line': 140.5},
+    # 盘口高出联赛均值 15 分：大小分那条「偏离超过 5 分就向回归方向让一点」
+    # 的先验有升/降两个方向，只测降的一侧，把升的阈值改成 50 都测不出来。
+    {'id': 'm6', 'home': 'E 队', 'away': 'F 队', 'league': 'NBA',
+     'spf_home': 1.80, 'spf_away': 2.00, 'rqspf_home': 1.88, 'rqspf_away': 1.92,
+     'handicap': -2.5, 'dx_over': 1.90, 'dx_under': 1.90, 'total_line': 235.0},
+    # 恰好等于均值：两条分支都不该走
+    {'id': 'm7', 'home': 'G 队', 'away': 'H 队', 'league': 'CBA',
+     'spf_home': 2.00, 'spf_away': 1.80, 'rqspf_home': 1.90, 'rqspf_away': 1.90,
+     'handicap': 1.5, 'dx_over': 1.95, 'dx_under': 1.85, 'total_line': 190.0},
 ]
 
 MOVEMENTS = [
