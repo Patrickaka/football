@@ -15,7 +15,7 @@ from src.common.paths import data_path
 from src.common.repositories import doc_store
 from src.common.logger import setup_logger
 from src.domain.numeric import statistics as stats
-from src.domain.numeric.kl8 import scoring, voting
+from src.domain.numeric.kl8 import pools, scoring, voting
 
 log = setup_logger('kl8')
 from . import strategies as _strategies_mod
@@ -37,11 +37,20 @@ from .records import (
     _build_recent_settlement_performance, _build_strategy_health, _checksum_numbers, _compute_next_issue, _compute_prediction_changes, _load_last_snapshot, _strategy_fingerprint, check_data_integrity, load_prize_table, normalize_record, save_conflict_to_queue,
 )
 
-# 候选池整形的实现暂时还在 `candidates.py`（阶段 3-10 迁进领域层）。
-# 领域层不反向依赖旧代码，所以由这里注入。
+# 两个入口各自要展示哪几种候选形态。写成常量而不是散在函数里，是因为
+# 「有哪些模式」与「每种怎么建」应当只有一处定义——建法在
+# `pools.MODE_BUILDERS`，选哪几种在这里。
+CANDIDATE_VARIANTS = ('high_tier_chase', 'balanced', 'concentrated', 'low_repeat',
+                      'repeat_follow', 'zone_spread', 'prize_floor', 'shape_balanced')
+EXCLUDE_RECALC_VARIANTS = ('concentrated', 'balanced', 'repeat_follow', 'low_repeat',
+                           'prize_floor', 'zone_spread', 'shape_balanced')
+
+# 候选池整形已在领域层（3-10）。这里仍然显式注入而不是让 voting 直接
+# import：投票要的是「一种整形办法」，不是「kl8 的那一种」，
+# 换成别的彩票时换的就是这个参数。
 _POOL_SHAPER = voting.PoolShaper(
-    diversify=_diversify_candidate_pool,
-    select_final=_select_final_candidate_pool,
+    diversify=pools.diversify,
+    select_final=pools.select_final,
 )
 
 # kl8 的号码空间与几个分区参数。写死在统计函数里的话，换一种彩票就用不上。
@@ -860,55 +869,12 @@ class KL8Analyzer:
             seen.add(nums)
             variants.append((label, pool[:target_size]))
 
-        add('concentrated', candidates[:target_size])
-        add('balanced', _diversify_candidate_pool(
-            candidates,
-            target_size,
-            last_numbers,
-            max_last_numbers=repeat_cap,
-        ))
-        add('repeat_follow', _diversify_candidate_pool(
-            candidates,
-            target_size,
-            last_numbers,
-            max_last_numbers=min(target_size, repeat_cap + 1),
-        ))
-        add('low_repeat', _diversify_candidate_pool(
-            candidates,
-            target_size,
-            last_numbers,
-            max_last_numbers=max(0, repeat_cap - 1),
-        ))
-        add('prize_floor', _prize_floor_candidate_pool(
-            candidates,
-            target_size,
-            last_numbers,
-            max_last_numbers=repeat_cap,
-        ))
-
-        zone_spread_nums = []
-        zone_counts = Counter()
-        max_zone = max(1, math.ceil(target_size / 16))
-        for num, _ in candidates[:max(target_size * 4, 20)]:
-            zone = (num - 1) // 5 + 1
-            if zone_counts[zone] >= max_zone:
-                continue
-            zone_spread_nums.append(num)
-            zone_counts[zone] += 1
-            if len(zone_spread_nums) >= target_size:
-                break
-        for num, _ in candidates:
-            if len(zone_spread_nums) >= target_size:
-                break
-            if num not in zone_spread_nums:
-                zone_spread_nums.append(num)
-        add('zone_spread', [(num, score_lookup.get(num, 0.0)) for num in zone_spread_nums])
-        add('shape_balanced', _shape_balanced_candidate_pool(
-            candidates,
-            target_size,
-            last_numbers,
-            max_last_numbers=repeat_cap,
-        ))
+        # 每种模式的重号上限该加还是该减，由 `pools.MODE_BUILDERS` 说了算。
+        # 在这里把那套加减重写一遍，等于给同一条规则开第二个定义——而两处
+        # 走偏了不会报错，只会让这两个入口给出不一样的推荐。
+        for label in EXCLUDE_RECALC_VARIANTS:
+            add(label, pools.build_pool(label, candidates, target_size,
+                                        last_numbers, repeat_cap))
 
         scored = []
         for label, pool in variants:
@@ -1229,66 +1195,10 @@ class KL8Analyzer:
             return {}
 
         last_numbers = self.statistics.get('last_numbers', set())
-        concentrated = sorted(num for num, _ in candidates[:target_size])
-        high_tier_chase = sorted(
-            num for num, _ in _high_tier_chase_candidate_pool(
-                candidates,
-                target_size,
-                last_numbers,
-                max_last_numbers=repeat_cap,
-            )
-        )
-        balanced = sorted(
-            num for num, _ in _diversify_candidate_pool(
-                candidates,
-                target_size,
-                last_numbers,
-                max_last_numbers=repeat_cap,
-            )
-        )
-        low_repeat = sorted(
-            num for num, _ in _diversify_candidate_pool(
-                candidates,
-                target_size,
-                last_numbers,
-                max_last_numbers=max(0, repeat_cap - 1),
-            )
-        )
-        repeat_follow = sorted(
-            num for num, _ in _diversify_candidate_pool(
-                candidates,
-                target_size,
-                last_numbers,
-                max_last_numbers=min(target_size, repeat_cap + 1),
-            )
-        )
-        zone_spread = sorted(num for num, _ in _zone_spread_candidate_pool(candidates, target_size))
-        prize_floor = sorted(
-            num for num, _ in _prize_floor_candidate_pool(
-                candidates,
-                target_size,
-                last_numbers,
-                max_last_numbers=repeat_cap,
-            )
-        )
-        shape_balanced = sorted(
-            num for num, _ in _shape_balanced_candidate_pool(
-                candidates,
-                target_size,
-                last_numbers,
-                max_last_numbers=repeat_cap,
-            )
-        )
-
         return {
-            'high_tier_chase': high_tier_chase,
-            'balanced': balanced,
-            'concentrated': concentrated,
-            'low_repeat': low_repeat,
-            'repeat_follow': repeat_follow,
-            'zone_spread': zone_spread,
-            'prize_floor': prize_floor,
-            'shape_balanced': shape_balanced,
+            label: sorted(num for num, _ in pools.build_pool(
+                label, candidates, target_size, last_numbers, repeat_cap))
+            for label in CANDIDATE_VARIANTS
         }
 
     # ─── 综合预测（v9.1: 各玩法独立候选池 + 本期变化对比）───

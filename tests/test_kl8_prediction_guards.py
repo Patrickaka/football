@@ -4,7 +4,7 @@ import tempfile
 from contextlib import contextmanager
 from pathlib import Path
 
-from src.domain.numeric.kl8 import scoring
+from src.domain.numeric.kl8 import pools, scoring
 
 import src.kl8 as kl8_module
 from src.kl8 import config as kl8_config
@@ -53,6 +53,93 @@ def _fake_ranking(rank_fn):
         yield
     finally:
         scoring.ensemble_ranking = original
+
+
+class CandidateVariantGuardTests(unittest.TestCase):
+    """两个入口展示的候选形态。
+
+    迁移前这两处各自重写了一遍「每种模式的重号上限该加 1 还是减 1」，还把
+    `zone_spread` 整段抄了一份。现在都走 `pools.build_pool`，**这组用例是它们
+    唯一的守卫**——之前一条都没有，改错了不会报错，只会让两个入口给出
+    不一样的推荐。
+    """
+
+    def setUp(self):
+        self.analyzer = KL8Analyzer.__new__(KL8Analyzer)
+        self.analyzer.history_data = [_record(i) for i in range(1, 61)]
+        self.analyzer.using_simulated_data = False
+        self.analyzer.history_file = ''
+        self.analyzer._data_mtime = 0
+        self.analyzer.update_statistics()
+        self.candidates = [(n, 0.9 - i * 0.01) for i, n in enumerate(range(1, 41))]
+
+    # 模式名写死在这里，不引用被测常量——引用的话从常量里删掉一种模式，
+    # 断言会跟着一起少一项，改坏了照样全绿。
+    EXPECTED_VARIANTS = {'high_tier_chase', 'balanced', 'concentrated', 'low_repeat',
+                         'repeat_follow', 'zone_spread', 'prize_floor', 'shape_balanced'}
+    EXPECTED_RECALC_VARIANTS = ['concentrated', 'balanced', 'repeat_follow',
+                                'low_repeat', 'prize_floor', 'zone_spread',
+                                'shape_balanced']
+
+    def test_every_named_variant_is_built(self):
+        variants = self.analyzer._candidate_variants(self.candidates, 6, 3)
+        self.assertEqual(set(variants), self.EXPECTED_VARIANTS)
+
+    def test_each_variant_has_the_requested_pick_size(self):
+        for label, nums in self.analyzer._candidate_variants(self.candidates, 6, 3).items():
+            with self.subTest(variant=label):
+                self.assertEqual(len(nums), 6)
+                self.assertEqual(sorted(nums), nums)
+
+    def test_variants_match_the_shared_pool_builders(self):
+        """与 `pools.build_pool` 逐个对齐——两处走偏了不会报错。"""
+        last = self.analyzer.statistics.get('last_numbers', set())
+        variants = self.analyzer._candidate_variants(self.candidates, 6, 3)
+        for label in sorted(self.EXPECTED_VARIANTS):
+            with self.subTest(variant=label):
+                expected = sorted(num for num, _ in pools.build_pool(
+                    label, self.candidates, 6, last, 3))
+                self.assertEqual(variants[label], expected)
+
+    def test_concentrated_variant_is_the_plain_top_of_the_pool(self):
+        variants = self.analyzer._candidate_variants(self.candidates, 6, 3)
+        self.assertEqual(variants['concentrated'],
+                         sorted(num for num, _ in self.candidates[:6]))
+
+    def test_low_repeat_keeps_no_more_repeats_than_repeat_follow(self):
+        """这两个接反了，推荐会系统性偏向或偏离上期的号，而且不报错。"""
+        last = set(self.analyzer.statistics.get('last_numbers', set()))
+        variants = self.analyzer._candidate_variants(self.candidates, 8, 3)
+        low = sum(1 for n in variants['low_repeat'] if n in last)
+        follow = sum(1 for n in variants['repeat_follow'] if n in last)
+        self.assertLessEqual(low, follow)
+
+    def test_empty_candidates_yield_no_variants(self):
+        self.assertEqual(self.analyzer._candidate_variants([], 6, 3), {})
+        self.assertEqual(self.analyzer._candidate_variants(self.candidates, 0, 3), {})
+
+    def test_exclude_recalculation_tries_every_named_variant(self):
+        seen = []
+        original = pools.build_pool
+        try:
+            pools.build_pool = lambda mode, *a, **k: (seen.append(mode)
+                                                      or original(mode, *a, **k))
+            self.analyzer._best_exclude_recalculation_pool(self.candidates, 6, 3)
+        finally:
+            pools.build_pool = original
+        self.assertEqual(seen, self.EXPECTED_RECALC_VARIANTS)
+
+    def test_exclude_recalculation_returns_a_full_pick(self):
+        pool, quality = self.analyzer._best_exclude_recalculation_pool(
+            self.candidates, 6, 3)
+        self.assertEqual(len(pool), 6)
+        self.assertIn(quality.get('selection_mode'), self.EXPECTED_RECALC_VARIANTS)
+
+    def test_exclude_recalculation_honours_an_explicit_mode(self):
+        pool, quality = self.analyzer._best_exclude_recalculation_pool(
+            self.candidates, 6, 3, selection_mode='zone_spread')
+        self.assertEqual(quality.get('requested_selection_mode'), 'zone_spread')
+        self.assertEqual(len(pool), 6)
 
 
 def _record(issue: int):
