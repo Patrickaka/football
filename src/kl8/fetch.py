@@ -264,9 +264,25 @@ def save_kl8_data(data: List[Dict]) -> Optional[List[Dict]]:
             temp_path.unlink()
         return None
 
+    # 镜像进 foundation/store。迁移之后开奖数据有两个写入方，不接上的话
+    # 库里的数据会越来越旧且没有任何报错。失败只告警——抓取是主链路，
+    # 落库是旁路，不该让后者的可用性绑架前者。
+    _mirror_to_store(merged_list)
+
     # 数据更新后必须清除预测缓存
     clear_cache()
     return merged_list
+
+
+def _mirror_to_store(merged_list):
+    try:
+        from .store_sync import mirror_to_store
+
+        stats = mirror_to_store(merged_list)
+        if stats.get('written'):
+            log.info('开奖数据已镜像入库: 新增 %d 期', stats['written'])
+    except Exception as e:
+        log.warning(f'开奖数据镜像入库失败（不影响抓取）: {e}')
 
 
 def _is_data_fresh(path: Path) -> bool:
