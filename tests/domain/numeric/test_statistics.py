@@ -103,6 +103,20 @@ class NumberFrequencyTests(unittest.TestCase):
         freq = number_frequency(RECENT, space=KL8)
         self.assertEqual(sum(freq.values()), sum(len(d) for d in RECENT))
 
+    def test_numbers_outside_the_space_are_dropped(self):
+        """越界号码不进频率表。
+
+        一条被改坏的开奖记录可能带着 81 号；让它流进频率表，下游按号码
+        索引时会拿到一个本不该存在的键，而不会报错。`Draw` 在构造处就会
+        拒掉这种记录，这里是第二道闸——统计函数直接吃号码列表，绕开了那道闸。
+        """
+        self.assertEqual(number_frequency([[1, 81, 0, 80]], space=KL8),
+                         {1: 1, 80: 1})
+
+    def test_without_a_space_nothing_is_dropped(self):
+        """不给空间时不过滤——回测切片有时用的是自定义号码集。"""
+        self.assertEqual(number_frequency([[1, 81]]), {1: 1, 81: 1})
+
     def test_unseen_numbers_are_absent_not_zero(self):
         """只出现过的号码才有键——补零会让「没开过」与「开过 0 次」混为一谈，
         而后者根本不存在。"""
