@@ -7,7 +7,7 @@ kv_store 是「MySQL + JSON 文件降级」，foundation/store 声明「MySQL �
 kv_loader 做成可注入参数而非直接 import kv_store：否则测试必须连真实 MySQL，
 违反「测试禁止依赖外部服务」的约束。
 
-本脚本只迁 elo 与 odds_history。prediction_records 的表结构依赖尚不确定的
+本脚本迁 elo（ratings / history / recent_form）与 odds_history。prediction_records 的表结构依赖尚不确定的
 查询模式，留到迁移 records.py 时一并处理；calibration_db / match_results /
 prediction_history 三个 key 在线上不存在。
 
@@ -19,7 +19,8 @@ prediction_history 三个 key 在线上不存在。
 import logging
 
 from src.domain.sports.basketball.repository import (
-    EloHistoryRepository, EloRatingRepository, OddsSnapshotRepository, create_all,
+    EloHistoryRepository, EloRatingRepository, EloRecentFormRepository,
+    OddsSnapshotRepository, create_all,
 )
 
 log = logging.getLogger('migrate.basketball')
@@ -63,6 +64,22 @@ def _elo_history_rows(kv_loader):
     return rows
 
 
+def _elo_recent_form_rows(kv_loader):
+    """{'recent_form': {队名: [胜负数值]}} → 每场一行，用位置索引保序。
+
+    线上当前全为空列表（所有球队只有 initialized 事件、尚无真实比赛），
+    但这是活字段——update_ratings 每场都会追加、_form_factor 读近 5 场
+    算胜率并影响预测概率，所以必须迁，不能因为当前为空就跳过。
+    """
+    blob = kv_loader(ELO_KEY, None) or {}
+    recent_form = blob.get('recent_form') or {}
+    rows = []
+    for team, results in recent_form.items():
+        for seq, result in enumerate(results or []):
+            rows.append({'team': team, 'seq': seq, 'result': float(result)})
+    return rows
+
+
 def _odds_snapshot_rows(kv_loader):
     """{match_key: [快照]} → 摊平成每条快照一行。
 
@@ -83,6 +100,8 @@ def _odds_snapshot_rows(kv_loader):
 _PLAN = (
     ('bb_elo_rating', EloRatingRepository, _elo_rating_rows, ['team']),
     ('bb_elo_history', EloHistoryRepository, _elo_history_rows, ['team', 'recorded_at']),
+    ('bb_elo_recent_form', EloRecentFormRepository, _elo_recent_form_rows,
+     ['team', 'seq']),
     ('bb_odds_snapshot', OddsSnapshotRepository, _odds_snapshot_rows,
      ['match_key', 'captured_at']),
 )

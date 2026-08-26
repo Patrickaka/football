@@ -3,7 +3,10 @@
 表结构依据 2026-08-26 从线上 kv_store 读到的**真实数据结构**设计，不是按
 迁移前的猜测。三处与直觉不同的地方：
 
-- Elo 的 ratings 只有评分数值，没有对局数；history 是独立的变更流水
+- Elo 的 ratings 只有评分数值，没有对局数（games_played 由 history 中
+  非 initialized 的条目数算出）；history 是独立的变更流水
+- recent_form 是近 N 场胜负的数值列表，无时间戳，故用位置索引 seq 保序；
+  它是截断列表而非追加流水，写入时须先清空该队旧条目再整体写入
 - 盘口快照有三类（spf 胜负 / rqspf 让分 / dx 大小分），字段各不相同，
   同一条快照里三类同时存在，故放在一张宽表而非拆三张
 - 时间列一律存 ISO 8601 字符串而非数据库 DATETIME：跨 SQLite（测试）与
@@ -35,6 +38,14 @@ BB_ELO_HISTORY = Table(
     Column('event', String(64), nullable=False, default=''),
 )
 
+BB_ELO_RECENT_FORM = Table(
+    'bb_elo_recent_form', METADATA,
+    Column('team', String(64), primary_key=True),
+    # 源数据是无时间戳的数值列表（近 N 场胜负），故用位置索引保序。
+    Column('seq', Integer, primary_key=True),
+    Column('result', Float, nullable=False),
+)
+
 BB_ODDS_SNAPSHOT = Table(
     'bb_odds_snapshot', METADATA,
     # match_key 形如 '2026-07-23_水星_火花'（日期_主队_客队），是 kv_store 里的原始键
@@ -64,6 +75,10 @@ class EloRatingRepository(Repository):
 
 class EloHistoryRepository(Repository):
     table = BB_ELO_HISTORY
+
+
+class EloRecentFormRepository(Repository):
+    table = BB_ELO_RECENT_FORM
 
 
 class OddsSnapshotRepository(Repository):

@@ -6,7 +6,8 @@ import unittest
 
 from scripts.migrate.basketball_kv_to_store import migrate, verify
 from src.domain.sports.basketball.repository import (
-    EloHistoryRepository, EloRatingRepository, OddsSnapshotRepository, create_all,
+    EloHistoryRepository, EloRatingRepository, EloRecentFormRepository,
+    OddsSnapshotRepository, create_all,
 )
 from src.foundation.store import Database, make_engine
 
@@ -25,7 +26,9 @@ _FAKE_KV = {
                  'event': 'match'},
             ],
         },
-        'recent_form': {'火花': [], '梦想': [], '水星': []},
+        # 线上当前全为空，但这是活字段：update_ratings 会追加、
+        # _form_factor 读它算胜率。样例里给水星填上数据以覆盖非空路径。
+        'recent_form': {'火花': [], '梦想': [], '水星': [1.0, 0.0, 1.0]},
         'updated_at': '2026-08-20T15:19:51.145713',
     },
     'basketball_odds_history': {
@@ -97,6 +100,17 @@ class MigrationTests(unittest.TestCase):
         rows = EloHistoryRepository(self.db).find_by(
             team='水星', order_by='recorded_at')
         self.assertEqual([r['event'] for r in rows], ['initialized', 'match'])
+
+    def test_migrates_recent_form_with_order(self):
+        stats = migrate(_loader, self.db)
+        self.assertEqual(stats['bb_elo_recent_form']['migrated'], 3)
+        rows = EloRecentFormRepository(self.db).find_by(order_by='seq', team='水星')
+        self.assertEqual([r['result'] for r in rows], [1.0, 0.0, 1.0])
+
+    def test_empty_recent_form_contributes_no_rows(self):
+        """全空的队不产生行，但也不该报错。"""
+        migrate(_loader, self.db)
+        self.assertEqual(len(EloRecentFormRepository(self.db).find_by(team='火花')), 0)
 
     def test_verify_passes_after_migration(self):
         migrate(_loader, self.db)
