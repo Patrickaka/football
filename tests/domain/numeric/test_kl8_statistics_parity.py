@@ -8,6 +8,7 @@
 「统计层迁入 domain/numeric」之前的版本）。抄写而非 import，是因为原实现
 已经被替换掉了——留在测试里的这份副本就是那一刻行为的存档。
 """
+import gzip
 import json
 import pathlib
 import unittest
@@ -18,11 +19,16 @@ from src.kl8.config import (
     KL8_DEFAULT_HISTORY, KL8_DRAW_COUNT, KL8_EXPECTED_GAP, KL8_NUM_RANGE,
 )
 
-DATA = pathlib.Path(__file__).resolve().parents[3] / 'data' / 'kl8_history.json'
+# 夹具取自线上真实历史的最近 300 期（gzip，10KB），**提交进仓库**。
+# 原先直接读 `data/kl8_history.json`，而那个文件在 .gitignore 里——本地跑得
+# 好好的，CI 上直接 FileNotFoundError。测试不该依赖未跟踪的本地数据。
+DATA = (pathlib.Path(__file__).resolve().parents[2]
+        / 'fixtures' / 'numeric' / 'kl8_history.json.gz')
 
 
 def _history():
-    raw = json.loads(DATA.read_text(encoding='utf-8'))
+    with gzip.open(DATA, 'rt', encoding='utf-8') as fh:
+        raw = json.load(fh)
     return raw['results'] if isinstance(raw, dict) else raw
 
 
