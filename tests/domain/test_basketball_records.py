@@ -164,6 +164,15 @@ class StoreRoundTripTests(_Base):
         self.assertEqual([r['match_id'] for r in self.store.load()],
                          [f'm{i}' for i in range(5)])
 
+    def test_order_follows_position_not_any_field(self):
+        """按 seq 取回，而不是按记录里的任何字段。构造成日期倒序，
+        按 date 排就会把顺序整个翻过来。"""
+        records = [dict(REAL_RECORD, date=f'2026-07-{20 - i:02d}',
+                        match_id=f'm{i}') for i in range(4)]
+        self.store.save(records)
+        self.assertEqual([r['match_id'] for r in self.store.load()],
+                         ['m0', 'm1', 'm2', 'm3'])
+
     def test_same_match_id_on_different_dates_both_survive(self):
         """线上 73 条只有 43 个不同的 match_id——唯一键是 (date, match_id)。"""
         records = [dict(REAL_RECORD, date='2026-07-13'),
@@ -214,6 +223,35 @@ class SaveParityTests(_Base):
 
     def test_empty_results_matches_legacy(self):
         self._compare('2026-08-27', [], 'v1', initial=[REAL_RECORD])
+
+
+class OfficialDefaultTests(_Base):
+    """`official` 缺省时跟随 `playable`。
+
+    早期版本的分析结果没有 official 字段，那时「可玩」就等于「计入准确率」。
+    缺省写死 True 的话，那些历史上被跳过的场次会在统计里凭空变成官方推荐。
+    """
+
+    def test_official_defaults_to_playable(self):
+        legacy_shape = {
+            'match': {'id': 'old', 'home': '甲', 'away': '乙', 'league': 'NBA'},
+            'spf': {'available': True, 'recommendation': '主胜',
+                    'playable': False, 'home_prob': 0.55, 'away_prob': 0.45},
+            'rqspf': None, 'dx': None,
+        }
+        self._recorder().save('2026-08-27', [legacy_shape], 'old-version')
+        self.assertFalse(self.store.load()[0]['spf']['official'])
+
+    def test_explicit_official_wins_over_playable(self):
+        conflicting = {
+            'match': {'id': 'x', 'home': '甲', 'away': '乙', 'league': 'NBA'},
+            'spf': {'available': True, 'recommendation': '主胜',
+                    'playable': True, 'official': False,
+                    'home_prob': 0.55, 'away_prob': 0.45},
+            'rqspf': None, 'dx': None,
+        }
+        self._recorder().save('2026-08-27', [conflicting], 'v1')
+        self.assertFalse(self.store.load()[0]['spf']['official'])
 
 
 class SettledResultPreservationTests(_Base):
@@ -371,6 +409,18 @@ class SummarizeParityTests(unittest.TestCase):
         stats = summarize(self._records())
         self.assertEqual(stats['spf']['void'], 1)
         self.assertEqual(stats['spf']['total'], 2)
+
+    def test_unplayable_markets_are_not_official_predictions(self):
+        """不可玩的玩法既不判命中，也不该计进「官方推荐」的分母——
+        它压根没出票。"""
+        playable = self._records()[0]
+        unplayable = dict(playable, match_id='skipped', spf=dict(
+            playable['spf'], playable=False, official=False,
+            skip_reason='low_confidence'))
+        with_all = summarize([playable])['official_predictions']
+        with_skipped = summarize([unplayable])['official_predictions']
+        self.assertEqual(with_all - with_skipped, 1,
+                         '不可玩的胜负盘被算进官方推荐了')
 
 
 class SettleTests(_Base):
