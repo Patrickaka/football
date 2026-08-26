@@ -155,9 +155,14 @@ class OkoooTransportTests(unittest.TestCase):
         self.assertEqual(len(session.calls), 4, '第二次不应重复预热')
 
     def test_waf_page_raises_instead_of_returning_none(self):
-        """旧代码返回 None 并自己记 60 秒封锁；现在抛异常交给熔断处理。"""
+        """旧代码返回 None 并自己记 60 秒封锁；现在抛异常交给熔断处理。
+
+        要连撞两次才抛：第一次只说明当前 Session 被标记了，换一个再试
+        才分得清「Session 老化」和「这个出口 IP 真的进不去」。
+        """
         waf = _FakeResponse('<html>aliyun_waf<title></title></html>')
-        session = _FakeSession([_FakeResponse('home'), _FakeResponse('hunhe'), waf])
+        session = _FakeSession([_FakeResponse('home'), _FakeResponse('hunhe'), waf,
+                                _FakeResponse('home'), _FakeResponse('hunhe'), waf])
         transport = OkoooTransport(session_factory=lambda: session,
                                    sleep_fn=lambda _: None)
         with self.assertRaises(WafBlocked):
@@ -170,6 +175,7 @@ class OkoooTransportTests(unittest.TestCase):
 
         def factory():
             s = _FakeSession([_FakeResponse('home'), _FakeResponse('hunhe'), waf])
+            s.responses.append(waf)
             sessions.append(s)
             return s
 
@@ -178,7 +184,8 @@ class OkoooTransportTests(unittest.TestCase):
             transport('https://www.okooo.com/x', 10)
         with self.assertRaises(WafBlocked):
             transport('https://www.okooo.com/y', 10)
-        self.assertEqual(len(sessions), 2, '撞 WAF 后应重建 session')
+        # 每次调用内部会重建一次再试，两次调用共四个 session
+        self.assertEqual(len(sessions), 4, '撞 WAF 后应重建 session')
 
     def test_non_200_raises(self):
         """非 200 抛异常，让 FetchClient 的重试与熔断接管。"""
@@ -187,6 +194,33 @@ class OkoooTransportTests(unittest.TestCase):
         transport = OkoooTransport(session_factory=lambda: session,
                                    sleep_fn=lambda _: None)
         with self.assertRaises(IOError):
+            transport('https://www.okooo.com/x', 10)
+
+    def test_waf_triggers_one_session_rebuild_before_giving_up(self):
+        """WAF 拦截不完全是确定性的：Session 用久了会被标记，换一个往往就通。
+
+        端点切换当天线上就栽在这里——把 WAF 一律当确定性失败、一次都不重试，
+        等于掐掉了这条自愈路径，赛程页被拦后熔断立刻开路，接口返回 0 场比赛。
+        """
+        waf = '<html>aliyun_waf<title></title></html>'
+        session = _FakeSession([_FakeResponse('home'), _FakeResponse('hunhe'),
+                                _FakeResponse(waf),
+                                _FakeResponse('home'), _FakeResponse('hunhe'),
+                                _FakeResponse('正常内容')])
+        transport = OkoooTransport(session_factory=lambda: session,
+                                   sleep_fn=lambda _: None)
+        self.assertEqual(transport('https://www.okooo.com/x', 10), '正常内容')
+
+    def test_two_consecutive_waf_hits_are_permanent(self):
+        """换过 Session 还被拦，说明不是 Session 的问题——该让熔断接手了。"""
+        waf = '<html>aliyun_waf<title></title></html>'
+        session = _FakeSession([_FakeResponse('home'), _FakeResponse('hunhe'),
+                                _FakeResponse(waf),
+                                _FakeResponse('home'), _FakeResponse('hunhe'),
+                                _FakeResponse(waf)])
+        transport = OkoooTransport(session_factory=lambda: session,
+                                   sleep_fn=lambda _: None)
+        with self.assertRaises(WafBlocked):
             transport('https://www.okooo.com/x', 10)
 
     def test_decodes_as_gb2312(self):
