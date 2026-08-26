@@ -14,8 +14,11 @@
 
 **尚未迁移**：`basketball_prediction_records`（41 条，match_id 不唯一、
 三类盘口字段不同、result 全空）的表结构依赖还不确定的查询模式，留到迁移
-records.py 时一并设计。`basketball_calibration_db`、`basketball_match_results`、
-`basketball_prediction_history` 三个 key 在线上不存在，不预先建表。
+records.py 时一并设计。`basketball_match_results` 与
+`basketball_prediction_history` 两个 key 在线上不存在，也无对应活代码，不建表。
+
+`bb_calibration` 线上同样无数据，但 calibration.py 是活代码（分析流程在调用），
+迁移它就需要落点，故按其 stats 的实际结构建表——不是因为有数据要迁。
 """
 from sqlalchemy import Column, Float, Integer, MetaData, String, Table
 
@@ -44,6 +47,21 @@ BB_ELO_RECENT_FORM = Table(
     # 源数据是无时间戳的数值列表（近 N 场胜负），故用位置索引保序。
     Column('seq', Integer, primary_key=True),
     Column('result', Float, nullable=False),
+)
+
+BB_CALIBRATION = Table(
+    'bb_calibration', METADATA,
+    # bucket 形如 'spf|NBA|medium'，三段式：bet_type|league|confidence，
+    # '*' 表通配（level 2 通配 league、level 3 再通配 confidence）。
+    # 不拆成三列：调用方 get_stats 是全量加载后在内存里 split 过滤，
+    # 不走数据库查询，拆开只增加写入成本。
+    Column('bucket', String(128), primary_key=True),
+    Column('count', Integer, nullable=False, default=0),
+    Column('weighted_count', Float, nullable=False, default=0.0),
+    Column('success', Integer, nullable=False, default=0),
+    Column('weighted_success', Float, nullable=False, default=0.0),
+    Column('predicted_sum', Float, nullable=False, default=0.0),
+    Column('weighted_predicted_sum', Float, nullable=False, default=0.0),
 )
 
 BB_ODDS_SNAPSHOT = Table(
@@ -79,6 +97,10 @@ class EloHistoryRepository(Repository):
 
 class EloRecentFormRepository(Repository):
     table = BB_ELO_RECENT_FORM
+
+
+class CalibrationRepository(Repository):
+    table = BB_CALIBRATION
 
 
 class OddsSnapshotRepository(Repository):
