@@ -53,6 +53,19 @@ class KL8Analyzer:
 
         source_records = {}
 
+        # 来源0: foundation/store。放在最前是因为抓取路径每次都会镜像进来，
+        # 它是唯一保证完整的那个；库不可用时下面两个来源照常兜底。
+        store_records = {}
+        try:
+            from .store_sync import load_from_store
+
+            for r in load_from_store():
+                normed = normalize_record(r, keep_meta=True)
+                if normed:
+                    store_records[normed['issue']] = normed
+        except Exception as e:
+            log.warning(f'快乐8: 库加载失败: {e}')
+
         # 来源1: doc_store
         try:
             raw_records = doc_store._fallback_load_all('kl8_history')
@@ -115,7 +128,9 @@ class KL8Analyzer:
 
         # 合并两个来源，按期号去重，冲突时报错不覆盖
         merged = {}
-        for source_name, records in [('doc_store', source_records), ('json', file_records)]:
+        for source_name, records in [('store', store_records),
+                                     ('doc_store', source_records),
+                                     ('json', file_records)]:
             for issue, record in records.items():
                 if issue in merged:
                     old = merged[issue]
