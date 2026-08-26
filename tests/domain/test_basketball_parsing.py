@@ -6,6 +6,7 @@
 差分测试仍是主体：旧解析器要到端点切换才删，对同一份 HTML 跑新旧两份、
 断言输出逐字相等。
 """
+import gzip
 import pathlib
 import unittest
 from datetime import datetime
@@ -15,7 +16,9 @@ import src.basketball as legacy
 from src.domain.sports.basketball import parsing
 
 FIXTURES = pathlib.Path(__file__).resolve().parents[1] / 'fixtures' / 'basketball'
-JCLQ_HTML = (FIXTURES / 'jclq_500.html').read_text(encoding='utf-8')
+# 夹具按 gzip 存放：真实页面 80KB 起步，压缩后不到四分之一，
+# 而解析必须对完整页面做——截断片段会把「正则匹到了别处」这类问题掩盖掉。
+JCLQ_HTML = gzip.open(FIXTURES / 'jclq_500.html.gz', 'rt', encoding='utf-8').read()
 NOW = datetime(2026, 8, 26, 12, 0, 0)
 
 
