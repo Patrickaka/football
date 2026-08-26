@@ -220,6 +220,28 @@ class OkoooTransport:
         return session
 
     def __call__(self, url, timeout):
+        """撞到 WAF 时先换一次 Session 再试，两次都被拦才认定为永久失败。
+
+        WAF 的拦截**不完全是确定性的**：长驻进程里的 Session 用久了会被
+        标记，此时换一个干净 Session 往往立刻就通。所以「重建后再试一次」
+        与「原样重试一次」是两回事——前者是真正不同的尝试。
+
+        端点切换当天线上就栽在这里：把 WAF 一律当作确定性失败、一次都不
+        重试，等于掐掉了这条自愈路径。赛程页因为 Session 老化被拦，熔断
+        立刻开路 60 秒，接口返回 200 加 0 场比赛。
+
+        Session 的生命周期是本 transport 自己的事，不该外泄给 FetchClient
+        的重试循环——那一层管的是「对端是否暂时不可用」，管不到这里。
+        """
+        try:
+            return self._fetch_once(url, timeout)
+        except WafBlocked:
+            log.info('okooo 撞 WAF，换一个 Session 重试: %s', url)
+
+        # 上一次失败已经把 Session 丢掉了，这次会重新预热一个
+        return self._fetch_once(url, timeout)
+
+    def _fetch_once(self, url, timeout):
         session = self._ensure_session()
         resp = session.get(url, timeout=timeout)
 
@@ -233,7 +255,7 @@ class OkoooTransport:
             text = resp.content.decode('gb2312', errors='replace')
 
         if 'aliyun_waf' in text and '<title></title>' in text:
-            # 该 session 已被污染，丢弃后下次重建。
+            # 该 Session 已被污染，丢掉，下次调用会重建
             self._session = None
             raise WafBlocked(f'okooo WAF 拦截: {url}')
 
