@@ -197,6 +197,53 @@ class OkoooTransportTests(unittest.TestCase):
         self.assertEqual(transport('https://www.okooo.com/x', 10), '中文内容')
 
 
+class WafIsPermanentTests(unittest.TestCase):
+    """撞 WAF 不重试。
+
+    迁移时用 FetchClient 的熔断替换了旧代码手写的「撞 WAF 就跳过 60 秒」
+    开关。熔断确实能做同一件事，但它要 failure_threshold 次失败才开路，
+    而每次失败还要先重试 max_retries 遍——在 okooo 的 0.4 rps 限速下，
+    这笔账让冷启动从 0.4 秒涨到 5 秒。WAF 拦截是确定性的（同一出口 IP
+    再试还是同样结果），不该走退避重试那条路。
+    """
+
+    def _client(self, **kwargs):
+        self.calls = []
+
+        def transport(url, timeout):
+            self.calls.append(url)
+            raise WafBlocked('okooo WAF 拦截')
+
+        self.slept = []
+        return build_fetch_client(transport=transport, sleep_fn=self.slept.append,
+                                  **kwargs)
+
+    def test_waf_page_is_fetched_once_not_three_times(self):
+        client = self._client(max_retries=3)
+        with self.assertRaises(FetchError):
+            client.get('https://www.okooo.com/basketball/match/1/odds/')
+        self.assertEqual(len(self.calls), 1)
+
+    def test_waf_page_does_not_burn_backoff_sleeps(self):
+        client = self._client(max_retries=3)
+        with self.assertRaises(FetchError):
+            client.get('https://www.okooo.com/basketball/match/1/odds/')
+        self.assertEqual([s for s in self.slept if s >= 0.5], [],
+                         '为一次注定失败的请求白等了退避')
+
+    def test_breaker_still_opens_after_enough_waf_hits(self):
+        """不重试不等于不计数——连撞几次照样开路，这正是旧代码那个
+        手写 60 秒计时器要达到的效果。"""
+        client = self._client(max_retries=3, failure_threshold=2)
+        for _ in range(2):
+            with self.assertRaises(FetchError):
+                client.get('https://www.okooo.com/basketball/match/1/odds/')
+        before = len(self.calls)
+        with self.assertRaises(FetchError):
+            client.get('https://www.okooo.com/basketball/match/1/odds/')
+        self.assertEqual(len(self.calls), before, '熔断开路后仍然发了请求')
+
+
 class UrllibGetEncodingTests(unittest.TestCase):
     """500.com 的页面是 gbk，必须解对，否则中文全变问号。
 

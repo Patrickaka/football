@@ -6,7 +6,9 @@ from unittest import mock
 from urllib.parse import urlparse
 
 from src.foundation.fetch.circuit import CircuitBreaker
-from src.foundation.fetch.client import FetchClient, FetchError
+from src.foundation.fetch.client import (
+    FetchClient, FetchError, PermanentFetchError,
+)
 from src.foundation.fetch.rate_limit import DomainRateLimiters
 from src.foundation.fetch.snapshot import SnapshotStore
 
@@ -96,6 +98,75 @@ class FetchClientTests(unittest.TestCase):
         client.get('https://a.com/x')
         client.get('https://a.com/x')
         self.assertTrue(any(s > 0 for s in self.slept))
+
+
+class PermanentFailureTests(unittest.TestCase):
+    """确定性失败不重试。
+
+    退避重试假设失败是暂时的。有一类失败重试多少次都是同样结果——被 WAF
+    拦、404、鉴权失败。对它们重试只是把一次失败的代价乘以重试次数，
+    在限速的域名上尤其昂贵：篮球的 okooo 限到 0.4 rps，一次无谓的三连重试
+    就要多花好几秒。
+    """
+
+    def setUp(self):
+        self.slept = []
+        self.limiters = DomainRateLimiters(default_rate=1000, burst=1000)
+
+    def _client(self, responses, **kwargs):
+        self.transport = RecordingTransport(responses)
+        return FetchClient(transport=self.transport, limiters=self.limiters,
+                           sleep_fn=self.slept.append, **kwargs)
+
+    def test_permanent_error_is_not_retried(self):
+        client = self._client([PermanentFetchError('WAF'), 'ok'], max_retries=3)
+        with self.assertRaises(FetchError):
+            client.get('https://a.com/x')
+        self.assertEqual(len(self.transport.calls), 1, '确定性失败被重试了')
+
+    def test_permanent_error_does_not_sleep_for_backoff(self):
+        client = self._client([PermanentFetchError('WAF')], max_retries=3)
+        with self.assertRaises(FetchError):
+            client.get('https://a.com/x')
+        self.assertEqual(self.slept, [], '为一次注定失败的请求白等了退避')
+
+    def test_transient_error_is_still_retried(self):
+        """只对确定性失败短路，普通故障的重试不受影响。"""
+        client = self._client([IOError('抖了一下'), 'ok'], max_retries=3)
+        self.assertEqual(client.get('https://a.com/x'), 'ok')
+        self.assertEqual(len(self.transport.calls), 2)
+
+    def test_permanent_error_still_counts_towards_the_breaker(self):
+        """不重试不等于不计数——这类失败最该让熔断尽快开路。"""
+        breaker = SpyBreaker()
+        client = self._client([PermanentFetchError('WAF')], max_retries=3)
+        client._breakers['a.com'] = breaker
+        with self.assertRaises(FetchError):
+            client.get('https://a.com/x')
+        self.assertEqual(breaker.failure_calls, 1)
+        self.assertEqual(breaker.success_calls, 0)
+
+    def test_subclasses_are_treated_as_permanent(self):
+        class Blocked(PermanentFetchError):
+            pass
+
+        client = self._client([Blocked('WAF'), 'ok'], max_retries=3)
+        with self.assertRaises(FetchError):
+            client.get('https://a.com/x')
+        self.assertEqual(len(self.transport.calls), 1)
+
+    def test_permanent_error_still_falls_back_to_a_snapshot(self):
+        import tempfile
+
+        from src.foundation.fetch import SnapshotStore
+
+        with tempfile.TemporaryDirectory() as root:
+            snapshots = SnapshotStore(root)
+            snapshots.save('https://a.com/x', '旧的一份')
+            client = FetchClient(transport=RecordingTransport(
+                [PermanentFetchError('WAF')]), limiters=self.limiters,
+                snapshots=snapshots, sleep_fn=self.slept.append)
+            self.assertEqual(client.get('https://a.com/x'), '旧的一份')
 
 
 class SpyBreaker:
