@@ -37,6 +37,14 @@ from .records import (
     _build_recent_settlement_performance, _build_strategy_health, _checksum_numbers, _compute_next_issue, _compute_prediction_changes, _load_last_snapshot, _strategy_fingerprint, check_data_integrity, load_prize_table, normalize_record, save_conflict_to_queue,
 )
 
+# 两个入口各自要展示哪几种候选形态。写成常量而不是散在函数里，是因为
+# 「有哪些模式」与「每种怎么建」应当只有一处定义——建法在
+# `pools.MODE_BUILDERS`，选哪几种在这里。
+CANDIDATE_VARIANTS = ('high_tier_chase', 'balanced', 'concentrated', 'low_repeat',
+                      'repeat_follow', 'zone_spread', 'prize_floor', 'shape_balanced')
+EXCLUDE_RECALC_VARIANTS = ('concentrated', 'balanced', 'repeat_follow', 'low_repeat',
+                           'prize_floor', 'zone_spread', 'shape_balanced')
+
 # 候选池整形已在领域层（3-10）。这里仍然显式注入而不是让 voting 直接
 # import：投票要的是「一种整形办法」，不是「kl8 的那一种」，
 # 换成别的彩票时换的就是这个参数。
@@ -864,34 +872,9 @@ class KL8Analyzer:
         # 每种模式的重号上限该加还是该减，由 `pools.MODE_BUILDERS` 说了算。
         # 在这里把那套加减重写一遍，等于给同一条规则开第二个定义——而两处
         # 走偏了不会报错，只会让这两个入口给出不一样的推荐。
-        for label in ('concentrated', 'balanced', 'repeat_follow',
-                      'low_repeat', 'prize_floor'):
+        for label in EXCLUDE_RECALC_VARIANTS:
             add(label, pools.build_pool(label, candidates, target_size,
                                         last_numbers, repeat_cap))
-
-        zone_spread_nums = []
-        zone_counts = Counter()
-        max_zone = max(1, math.ceil(target_size / 16))
-        for num, _ in candidates[:max(target_size * 4, 20)]:
-            zone = (num - 1) // 5 + 1
-            if zone_counts[zone] >= max_zone:
-                continue
-            zone_spread_nums.append(num)
-            zone_counts[zone] += 1
-            if len(zone_spread_nums) >= target_size:
-                break
-        for num, _ in candidates:
-            if len(zone_spread_nums) >= target_size:
-                break
-            if num not in zone_spread_nums:
-                zone_spread_nums.append(num)
-        add('zone_spread', [(num, score_lookup.get(num, 0.0)) for num in zone_spread_nums])
-        add('shape_balanced', _shape_balanced_candidate_pool(
-            candidates,
-            target_size,
-            last_numbers,
-            max_last_numbers=repeat_cap,
-        ))
 
         scored = []
         for label, pool in variants:
@@ -1212,42 +1195,10 @@ class KL8Analyzer:
             return {}
 
         last_numbers = self.statistics.get('last_numbers', set())
-        def pool_numbers(mode):
-            return sorted(num for num, _ in pools.build_pool(
-                mode, candidates, target_size, last_numbers, repeat_cap))
-
-        concentrated = pool_numbers('concentrated')
-        high_tier_chase = pool_numbers('high_tier_chase')
-        balanced = pool_numbers('balanced')
-        low_repeat = pool_numbers('low_repeat')
-        repeat_follow = pool_numbers('repeat_follow')
-        zone_spread = sorted(num for num, _ in _zone_spread_candidate_pool(candidates, target_size))
-        prize_floor = sorted(
-            num for num, _ in _prize_floor_candidate_pool(
-                candidates,
-                target_size,
-                last_numbers,
-                max_last_numbers=repeat_cap,
-            )
-        )
-        shape_balanced = sorted(
-            num for num, _ in _shape_balanced_candidate_pool(
-                candidates,
-                target_size,
-                last_numbers,
-                max_last_numbers=repeat_cap,
-            )
-        )
-
         return {
-            'high_tier_chase': high_tier_chase,
-            'balanced': balanced,
-            'concentrated': concentrated,
-            'low_repeat': low_repeat,
-            'repeat_follow': repeat_follow,
-            'zone_spread': zone_spread,
-            'prize_floor': prize_floor,
-            'shape_balanced': shape_balanced,
+            label: sorted(num for num, _ in pools.build_pool(
+                label, candidates, target_size, last_numbers, repeat_cap))
+            for label in CANDIDATE_VARIANTS
         }
 
     # ─── 综合预测（v9.1: 各玩法独立候选池 + 本期变化对比）───

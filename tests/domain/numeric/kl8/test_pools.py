@@ -335,6 +335,12 @@ class ShapeSwapWindowTests(unittest.TestCase):
         pool = pools.shape_balanced(self._candidates(), 8, set(), max_last_numbers=3)
         self.assertEqual([num for num, _ in pool], [1, 2, 4, 21, 22, 41, 42, 43])
 
+    def test_window_multiplier_reaches_past_the_flat_minimum(self):
+        """选 12 时 5 倍能够到第 60 名、3 倍只到第 36 名——倍数改小就够不着了。"""
+        pool = pools.shape_balanced(self._candidates(), 12, set(), max_last_numbers=3)
+        self.assertEqual([num for num, _ in pool],
+                         [1, 2, 4, 21, 22, 23, 41, 42, 43, 44, 46, 61])
+
 
 class ShapePenaltyTests(unittest.TestCase):
 
