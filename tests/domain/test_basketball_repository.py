@@ -1,9 +1,12 @@
+"""表结构依据线上 kv_store 的真实数据（2026-08-26 读取），非迁移前的猜测。
+
+样例值直接取自线上：Elo 初始分 1500、盘口快照的九个字段、
+match_key 的 '日期_主队_客队' 格式。
+"""
 import unittest
 
 from src.domain.sports.basketball.repository import (
-    CalibrationRepository, EloRepository, MatchResultRepository,
-    OddsHistoryRepository, PredictionHistoryRepository,
-    PredictionRecordRepository, create_all,
+    EloHistoryRepository, EloRatingRepository, OddsSnapshotRepository, create_all,
 )
 from src.foundation.store import Database, make_engine
 
@@ -14,83 +17,108 @@ class _Base(unittest.TestCase):
         create_all(self.db)
 
 
-class EloRepositoryTests(_Base):
+class EloRatingRepositoryTests(_Base):
     def test_upsert_then_read(self):
-        repo = EloRepository(self.db)
-        repo.upsert({'team': 'Lakers', 'rating': 1520.0, 'games': 3,
-                     'updated_at': '2026-08-26T10:00:00'}, key_cols=['team'])
-        rows = repo.find_by(team='Lakers')
+        repo = EloRatingRepository(self.db)
+        repo.upsert({'team': '火花', 'rating': 1500.0,
+                     'updated_at': '2026-08-20T15:19:51.145713'}, key_cols=['team'])
+        rows = repo.find_by(team='火花')
         self.assertEqual(len(rows), 1)
-        self.assertAlmostEqual(rows[0]['rating'], 1520.0)
+        self.assertAlmostEqual(rows[0]['rating'], 1500.0)
 
     def test_upsert_updates_existing_team(self):
-        repo = EloRepository(self.db)
-        row = {'team': 'Lakers', 'rating': 1500.0, 'games': 1,
-               'updated_at': '2026-08-26T10:00:00'}
+        repo = EloRatingRepository(self.db)
+        row = {'team': '火花', 'rating': 1500.0, 'updated_at': '2026-08-20T15:19:51'}
         repo.upsert(row, key_cols=['team'])
-        repo.upsert({**row, 'rating': 1540.0, 'games': 2}, key_cols=['team'])
+        repo.upsert({**row, 'rating': 1523.5}, key_cols=['team'])
         rows = repo.find_all()
         self.assertEqual(len(rows), 1)
-        self.assertAlmostEqual(rows[0]['rating'], 1540.0)
+        self.assertAlmostEqual(rows[0]['rating'], 1523.5)
 
     def test_unknown_column_is_rejected(self):
-        repo = EloRepository(self.db)
+        """源数据里没有 games 字段，误加会被拦下而不是静默丢弃。"""
+        repo = EloRatingRepository(self.db)
         with self.assertRaises(ValueError):
-            repo.upsert({'team': 'Lakers', 'rating': 1500.0, 'games': 1,
-                         'updated_at': 'x', 'typo': 1}, key_cols=['team'])
+            repo.upsert({'team': '火花', 'rating': 1500.0,
+                         'updated_at': 'x', 'games': 3}, key_cols=['team'])
 
 
-class OddsHistoryRepositoryTests(_Base):
+class EloHistoryRepositoryTests(_Base):
+    def test_same_team_keeps_multiple_entries(self):
+        repo = EloHistoryRepository(self.db)
+        for at, event in (('2026-07-13T11:49:48.763564', 'initialized'),
+                          ('2026-07-20T10:00:00.000000', 'match')):
+            repo.upsert({'team': '火花', 'recorded_at': at, 'rating': 1500.0,
+                         'event': event}, key_cols=['team', 'recorded_at'])
+        self.assertEqual(repo.count(), 2)
+
+    def test_history_is_ordered_by_time(self):
+        repo = EloHistoryRepository(self.db)
+        for at in ('2026-07-20T10:00:00', '2026-07-13T11:49:48'):
+            repo.upsert({'team': '火花', 'recorded_at': at, 'rating': 1500.0,
+                         'event': 'x'}, key_cols=['team', 'recorded_at'])
+        rows = repo.find_by(order_by='recorded_at', team='火花')
+        self.assertEqual([r['recorded_at'] for r in rows],
+                         ['2026-07-13T11:49:48', '2026-07-20T10:00:00'])
+
+
+class OddsSnapshotRepositoryTests(_Base):
+    SAMPLE = {
+        'match_key': '2026-07-23_水星_火花',
+        'captured_at': '2026-07-22T11:38:12.250497',
+        'spf_home': 1.81, 'spf_away': 1.6,
+        'rqspf_home': 1.7, 'rqspf_away': 1.7,
+        'dx_over': 1.66, 'dx_under': 1.74,
+        'handicap': '-1.5', 'total_line': 177.5,
+    }
+
+    def test_stores_all_three_market_types(self):
+        repo = OddsSnapshotRepository(self.db)
+        repo.upsert(self.SAMPLE, key_cols=['match_key', 'captured_at'])
+        row = repo.find_all()[0]
+        self.assertAlmostEqual(row['spf_home'], 1.81)
+        self.assertAlmostEqual(row['rqspf_home'], 1.7)
+        self.assertAlmostEqual(row['dx_over'], 1.66)
+
+    def test_handicap_stays_a_string(self):
+        """让分盘可能出现非纯数值写法，转数值会丢信息。"""
+        repo = OddsSnapshotRepository(self.db)
+        repo.upsert(self.SAMPLE, key_cols=['match_key', 'captured_at'])
+        self.assertEqual(repo.find_all()[0]['handicap'], '-1.5')
+
     def test_composite_key_allows_multiple_snapshots(self):
-        repo = OddsHistoryRepository(self.db)
-        for captured in ('2026-08-26T10:00:00', '2026-08-26T10:15:00'):
-            repo.upsert({'match_id': 'bb-1', 'captured_at': captured,
-                         'home_odds': 1.8, 'away_odds': 2.0, 'source': '500'},
-                        key_cols=['match_id', 'captured_at'])
+        repo = OddsSnapshotRepository(self.db)
+        for captured in ('2026-07-22T11:38:12.250497', '2026-07-22T14:39:56.285547'):
+            repo.upsert({**self.SAMPLE, 'captured_at': captured},
+                        key_cols=['match_key', 'captured_at'])
         self.assertEqual(repo.count(), 2)
 
     def test_same_key_overwrites(self):
-        repo = OddsHistoryRepository(self.db)
-        row = {'match_id': 'bb-1', 'captured_at': '2026-08-26T10:00:00',
-               'home_odds': 1.8, 'away_odds': 2.0, 'source': '500'}
-        repo.upsert(row, key_cols=['match_id', 'captured_at'])
-        repo.upsert({**row, 'home_odds': 1.9}, key_cols=['match_id', 'captured_at'])
+        repo = OddsSnapshotRepository(self.db)
+        repo.upsert(self.SAMPLE, key_cols=['match_key', 'captured_at'])
+        repo.upsert({**self.SAMPLE, 'spf_home': 1.86},
+                    key_cols=['match_key', 'captured_at'])
         self.assertEqual(repo.count(), 1)
-        self.assertAlmostEqual(repo.find_all()[0]['home_odds'], 1.9)
+        self.assertAlmostEqual(repo.find_all()[0]['spf_home'], 1.86)
 
-    def test_find_by_match_returns_all_snapshots_in_order(self):
-        repo = OddsHistoryRepository(self.db)
-        for captured in ('2026-08-26T10:15:00', '2026-08-26T10:00:00'):
-            repo.upsert({'match_id': 'bb-1', 'captured_at': captured,
-                         'home_odds': 1.8, 'away_odds': 2.0, 'source': '500'},
-                        key_cols=['match_id', 'captured_at'])
-        rows = repo.find_by(order_by='captured_at', match_id='bb-1')
-        self.assertEqual([r['captured_at'] for r in rows],
-                         ['2026-08-26T10:00:00', '2026-08-26T10:15:00'])
-
-
-class PredictionHistoryRepositoryTests(_Base):
-    def test_payload_roundtrips_as_json_string(self):
-        import json
-        repo = PredictionHistoryRepository(self.db)
-        payload = json.dumps({'picks': ['home'], 'prob': 0.61}, ensure_ascii=False)
-        repo.upsert({'match_id': 'bb-1', 'predicted_at': '2026-08-26T10:00:00',
-                     'payload': payload, 'league': 'NBA'},
-                    key_cols=['match_id', 'predicted_at'])
+    def test_missing_market_columns_are_allowed(self):
+        """并非每次快照三类盘口都齐全，缺的列应可为空而不是报错。"""
+        repo = OddsSnapshotRepository(self.db)
+        repo.upsert({'match_key': 'k', 'captured_at': 't',
+                     'spf_home': 1.8, 'spf_away': 2.0},
+                    key_cols=['match_key', 'captured_at'])
         row = repo.find_all()[0]
-        self.assertEqual(json.loads(row['payload'])['prob'], 0.61)
+        self.assertIsNone(row['dx_over'])
 
 
 class AllRepositoriesTests(_Base):
     def test_every_table_is_created_and_empty(self):
-        for cls in (EloRepository, CalibrationRepository, OddsHistoryRepository,
-                    PredictionRecordRepository, MatchResultRepository,
-                    PredictionHistoryRepository):
+        for cls in (EloRatingRepository, EloHistoryRepository, OddsSnapshotRepository):
             self.assertEqual(cls(self.db).count(), 0, f'{cls.__name__} 建表失败')
 
     def test_delete_by_without_filters_is_rejected(self):
         """继承自 Repository 的护栏：零参数 delete_by 会删空整表。"""
-        repo = EloRepository(self.db)
+        repo = EloRatingRepository(self.db)
         with self.assertRaises(ValueError):
             repo.delete_by()
 
