@@ -103,10 +103,11 @@ def _start_background_sync():
         log.warning(f"启动快乐8调度器失败: {e}")
 
     # 篮球盘口/水位自动采样，为开盘 -> 即时盘反推持续积累真实快照。
+    # 夜里没人看的时候盘口照样在动，而那段变化正是开盘到临场的主要部分，
+    # 所以必须周期采样，不能只在有人请求时才采。
     try:
-        from src.basketball.odds_movement import start_basketball_odds_scheduler
-        start_basketball_odds_scheduler(interval_minutes=15)
-        log.info('篮球赔率自动追踪器已启动')
+        from src.webapp.basketball_service import start_odds_tracking
+        start_odds_tracking()
     except Exception as e:
         log.warning(f"启动篮球赔率追踪器失败: {e}")
 

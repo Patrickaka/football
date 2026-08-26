@@ -15,16 +15,14 @@ import time
 import unittest
 from unittest import mock
 
-import src.basketball as legacy
-from src.basketball import calibration as legacy_calibration
-from src.basketball import elo as legacy_elo
-from src.basketball import okooo as legacy_okooo
-from src.basketball import records as legacy_records
 from src.domain.sports.basketball.analysis import BasketballAnalyzer
 from src.domain.sports.basketball.prediction import (
     PredictionService, find_value_bets,
 )
 from src.foundation.cache import Cache, MemoryBackend
+from tests.domain.golden import as_json, load
+
+GOLDEN = load('prediction')
 
 DATE = '2026-08-27'
 
@@ -62,7 +60,7 @@ MOVEMENT_MAP = {
                   'kind': 'ou', 'opening_line': 210.5, 'current_line': 212.5}},
 }
 
-VERSION = legacy.BASKETBALL_VERSION
+VERSION = '2026-08-20-water-reverse-v3'
 HISTORY_STATS = {'total': 12, 'hit': 7}
 
 
@@ -125,50 +123,7 @@ def _service(cache=None, matches=None, movement_map=None, recorder=None,
     )
 
 
-class _LegacyPatch:
-    """让旧实现吃到与新实现完全相同的外部输入。"""
-
-    def __init__(self, matches=None, movement_map=None, okooo_matches=None):
-        self.matches = MATCHES if matches is None else matches
-        self.movement_map = MOVEMENT_MAP if movement_map is None else movement_map
-        self.okooo_matches = okooo_matches
-        self.saved = []
-
-    def __enter__(self):
-        def okooo_schedule(date):
-            if self.okooo_matches is None:
-                raise RuntimeError('澳客不可用')
-            return list(self.okooo_matches)
-
-        self._patches = [
-            mock.patch.object(legacy, 'fetch_basketball_schedule',
-                              lambda date=None: list(self.matches)),
-            mock.patch.object(legacy, '_build_movement_map',
-                              lambda ms, src, d: dict(self.movement_map)),
-            mock.patch.object(legacy_okooo, 'fetch_okooo_basketball_schedule',
-                              okooo_schedule),
-            mock.patch.object(legacy_records, 'save_predictions',
-                              lambda d, r, v: self.saved.append((d, len(r), v))),
-            mock.patch.object(legacy_records, 'get_prediction_stats',
-                              lambda: dict(HISTORY_STATS)),
-            mock.patch.object(legacy.time, 'strftime', lambda fmt: DATE),
-            # 旧实现在函数体里取 Elo/校准器的全局单例，那个单例会真的读库。
-            # 不打桩的话两侧吃到的不是同一份输入，差分就无从谈起。
-            mock.patch.object(legacy_elo, 'get_elo_system', lambda: ELO),
-            mock.patch.object(legacy_calibration, 'get_calibrator',
-                              lambda: CALIBRATOR),
-        ]
-        for patch in self._patches:
-            patch.start()
-        return self
-
-    def __exit__(self, *exc):
-        for patch in self._patches:
-            patch.stop()
-        return False
-
-
-class GenerateParityTests(unittest.TestCase):
+class GenerateGoldenTests(unittest.TestCase):
     CASES = [
         {},
         {'date': DATE},
@@ -180,32 +135,22 @@ class GenerateParityTests(unittest.TestCase):
         {'source': '未知源'},
     ]
 
-    def test_payload_matches_legacy(self):
-        for case in self.CASES:
+    def test_payload(self):
+        for i, case in enumerate(self.CASES):
             with self.subTest(**case):
-                recorder = RecordingRecorder()
-                with _LegacyPatch() as patched:
-                    expected = legacy.generate_basketball_recommendations(**case)
-                actual = _service(recorder=recorder).generate(**case)
-                self.assertEqual(actual, expected)
-                self.assertEqual(recorder.saved, patched.saved)
+                actual = _service(recorder=RecordingRecorder()).generate(**case)
+                self.assertEqual(as_json(actual), GOLDEN[f'payload:{i}'])
 
     def test_okooo_source_used_when_available(self):
         okooo_matches = [dict(MATCHES[0], id='ok1', source='okooo')]
-        with _LegacyPatch(okooo_matches=okooo_matches):
-            expected = legacy.generate_basketball_recommendations(source='okooo')
         actual = _service(okooo_matches=okooo_matches,
                           recorder=RecordingRecorder()).generate(source='okooo')
-        self.assertEqual(actual, expected)
         self.assertEqual(actual['results'][0]['match']['id'], 'ok1')
 
-    def test_empty_schedule_matches_legacy(self):
-        with _LegacyPatch(matches=[]) as patched:
-            expected = legacy.generate_basketball_recommendations()
+    def test_empty_schedule(self):
         recorder = RecordingRecorder()
         actual = _service(matches=[], recorder=recorder).generate()
-        self.assertEqual(actual, expected)
-        self.assertEqual(recorder.saved, patched.saved)
+        self.assertEqual(as_json(actual), GOLDEN['payload:empty'])
         self.assertEqual(recorder.saved, [], '无比赛时不该写入预测记录')
 
     def test_movement_provider_failure_falls_back_to_no_movement(self):
@@ -263,17 +208,16 @@ class FetchScheduleTests(unittest.TestCase):
         self.assertEqual(service.fetch_schedule(DATE, source='okooo'), MATCHES)
 
 
-class FindValueBetsParityTests(unittest.TestCase):
+class FindValueBetsGoldenTests(unittest.TestCase):
     def _results(self):
-        with _LegacyPatch():
-            return legacy.generate_basketball_recommendations()['results']
+        return _service(recorder=RecordingRecorder()).generate()['results']
 
-    def test_matches_legacy(self):
+    def test_every_threshold(self):
         results = self._results()
         for threshold in (-1.0, 0.0, 0.01, 0.05, 0.2, 0.9):
             with self.subTest(threshold=threshold):
-                self.assertEqual(find_value_bets(results, threshold),
-                                 legacy.find_value_bets(results, threshold))
+                self.assertEqual(as_json(find_value_bets(results, threshold)),
+                                 GOLDEN[f'value:{threshold}'])
 
     def test_empty_results(self):
         self.assertEqual(find_value_bets([]), [])
@@ -287,8 +231,6 @@ class FindValueBetsParityTests(unittest.TestCase):
         """
         results = [_value_bet_result('t1', spf_prob=0.75)]
         self.assertEqual(find_value_bets(results, 0.25), [])
-        self.assertEqual(find_value_bets(results, 0.25),
-                         legacy.find_value_bets(results, 0.25))
         self.assertEqual(len(find_value_bets(results, 0.2499)), 1)
 
     def test_sharp_confirmation_outranks_a_larger_bare_edge(self):
@@ -301,7 +243,6 @@ class FindValueBetsParityTests(unittest.TestCase):
         bets = find_value_bets(results, 0.05)
         self.assertEqual([b['match'] for b in bets],
                          ['t3 主 vs t3 客', 't2 主 vs t2 客'])
-        self.assertEqual(bets, legacy.find_value_bets(results, 0.05))
 
 
 def _value_bet_result(tag, spf_prob, sharp=False, playable=True):

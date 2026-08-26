@@ -25,6 +25,9 @@ class TaskScheduler:
         self._results = {}
         self._executor = None
         self._started = False
+        # start() 会清空待跑列表，所以登记数要单独留一份——健康检查要区分
+        # 「没有任务要跑」和「有任务却没在跑」，前者是正常的空闲。
+        self._task_count = 0
         self._stop = threading.Event()
         self._guard = threading.Lock()
 
@@ -36,6 +39,7 @@ class TaskScheduler:
                 raise ValueError('任务名重复: %r' % (name,))
             self._pending_names.add(name)
             self._pending.append((priority, len(self._pending), name, fn))
+            self._task_count += 1
 
     def submit_periodic(self, name, fn, interval_seconds, priority=5):
         """登记周期任务：start() 后按间隔重复执行，shutdown() 时停止。
@@ -53,6 +57,7 @@ class TaskScheduler:
                 raise ValueError('任务名重复: %r' % (name,))
             self._pending_names.add(name)
             self._periodic.append((name, fn, interval_seconds, priority))
+            self._task_count += 1
 
     def start(self):
         with self._guard:
@@ -75,6 +80,23 @@ class TaskScheduler:
             self._executor.submit(self._run_periodic, name, fn, interval)
         for _, _, name, fn in tasks:
             self._executor.submit(self._run, name, fn)
+
+    def is_running(self):
+        """已 start() 且尚未 shutdown()。
+
+        健康检查要问的是「后台任务真的在跑吗」，而不是「调度器对象存在吗」。
+        后者永远为真，把它当健康信号等于没有信号。
+        """
+        return self._started and not self._stop.is_set()
+
+    def task_count(self):
+        """登记过的任务数（含已启动的）。
+
+        健康检查靠它区分「没有任务要跑」与「有任务却没在跑」——前者是正常的
+        空闲，后者才是故障。不区分的话，一个还没接后台任务的服务会天天报
+        degraded，久而久之这个信号就没人看了。
+        """
+        return self._task_count
 
     def shutdown(self, wait=True):
         self._stop.set()

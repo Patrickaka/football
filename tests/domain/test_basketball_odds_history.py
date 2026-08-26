@@ -14,13 +14,14 @@ import unittest
 from datetime import datetime
 from unittest import mock
 
-import src.basketball as legacy_pkg
-from src.basketball import odds_movement as legacy
 from src.domain.sports.basketball.odds_history import (
     HISTORY_CAP, OddsHistoryStore, OddsTracker,
 )
 from src.domain.sports.basketball.repository import create_all
 from src.foundation.store import Database, make_engine
+from tests.domain.golden import as_json, load
+
+GOLDEN = load('odds_history')
 
 NOW = datetime(2026, 8, 26, 12, 0, 0)
 NOW_ISO = NOW.isoformat()
@@ -81,6 +82,13 @@ class StoreRoundTripTests(_Base):
         self.assertNotIn('observed_ts', loaded['2026-07-23_天猫_风暴'][0],
                          '没有 observed_ts 的快照不该凭空多出这个键')
 
+    def test_numeric_handicap_is_normalised_to_text(self):
+        """让分列是字符串。上游偶尔给来数值，落库后读回就变了类型——
+        两次采集因此永远判定「变了」，每轮都追加一条新快照。"""
+        self.store.save({'m': [{'ts': '2026-08-26T09:00:00', 'handicap': -3.5,
+                                'spf_home': 1.8, 'spf_away': 2.0}]})
+        self.assertEqual(self.store.load()['m'][0]['handicap'], '-3.5')
+
     def test_handicap_stays_a_string(self):
         """线上 handicap 是 '+9.5' 这样的带符号字符串，转成数值会丢掉符号语义。"""
         self.store.save(REAL_HISTORY)
@@ -132,68 +140,51 @@ class StoreRoundTripTests(_Base):
         self.assertEqual(self.store.history_for('不存在'), [])
 
 
-class TrackerParityTests(_Base):
-    """与旧的 track_basketball_odds 差分。两侧喂同一份赛程与同一个时钟。"""
+class TrackerGoldenTests(_Base):
+    # (黄金键, 赛程, 已有历史)
+    CASES = [
+        ('first', MATCHES, {}),
+        ('on_top_of_history', MATCHES, REAL_HISTORY),
+        ('empty_schedule', [], REAL_HISTORY),
+    ]
 
-    def _legacy_track(self, matches, history, date=None):
-        saved = {}
+    def test_every_capture_scenario(self):
+        for name, matches, history in self.CASES:
+            with self.subTest(case=name):
+                self.store.save(history)
+                count = _tracker_for(self.store, matches).track('2026-08-27')
+                self.assertEqual(
+                    as_json({'count': count, 'history': self.store.load()}),
+                    GOLDEN[name])
 
-        class _FakeKv:
-            @staticmethod
-            def load(key, default=None):
-                return {k: [dict(s) for s in v] for k, v in history.items()}
-
-            @staticmethod
-            def save(key, value):
-                saved.update({'key': key, 'value': value})
-
-        class _FrozenDatetime(datetime):
-            @classmethod
-            def now(cls, tz=None):
-                return NOW
-
-        with mock.patch.object(legacy, 'kv_store', _FakeKv), \
-             mock.patch.object(legacy, 'datetime', _FrozenDatetime), \
-             mock.patch.object(legacy_pkg, 'fetch_basketball_schedule',
-                               lambda d=None: [dict(m) for m in matches]):
-            count = legacy.track_basketball_odds(date)
-        # 没落盘时结果就是入参本身——拿 {} 去比会把「原样保留」误判成「清空了」
-        return count, saved.get('value', history)
-
-    def _tracker(self, matches, fail=False):
-        def fetch(date=None):
-            if fail:
-                raise IOError('源站挂了')
-            return [dict(m) for m in matches]
-
-        return OddsTracker(schedule_fetcher=fetch, store=self.store,
-                           now_fn=lambda: NOW)
-
-    def _run_both(self, matches, history):
-        self.store.save(history)
-        count = self._tracker(matches).track('2026-08-27')
-        legacy_count, legacy_history = self._legacy_track(matches, history,
-                                                          '2026-08-27')
-        return (count, self.store.load()), (legacy_count, legacy_history)
-
-    def test_first_capture_matches_legacy(self):
-        self.assertEqual(*self._run_both(MATCHES, {}))
-
-    def test_capture_on_top_of_existing_history_matches_legacy(self):
-        self.assertEqual(*self._run_both(MATCHES, REAL_HISTORY))
-
-    def test_repeated_identical_capture_matches_legacy(self):
-        first = {m['id']: [{'ts': '2026-08-26T09:00:00',
-                            **{k: m.get(k) for k in _FIELDS}}]
-                 for m in MATCHES if m.get('id')}
-        self.assertEqual(*self._run_both(MATCHES, first))
-
-    def test_empty_schedule_matches_legacy(self):
-        self.assertEqual(*self._run_both([], REAL_HISTORY))
+    def test_repeated_identical_capture(self):
+        """连采两轮、盘口没动：第二轮只推进 observed_ts，不该追加快照。"""
+        tracker = _tracker_for(self.store, MATCHES)
+        tracker.track('2026-08-27')
+        first = self.store.load()
+        tracker.track('2026-08-27')
+        second = self.store.load()
+        self.assertEqual({k: len(v) for k, v in second.items()},
+                         {k: len(v) for k, v in first.items()})
 
 
 _FIELDS = ('spf_home', 'spf_away', 'rqspf_home', 'rqspf_away',
            'dx_over', 'dx_under', 'handicap', 'total_line')
+
+
+def _memory_store():
+    db = Database(make_engine('sqlite+pysqlite:///:memory:'))
+    create_all(db)
+    return OddsHistoryStore(db)
+
+
+def _tracker_for(store, matches, fail=False):
+    def fetch(date=None):
+        if fail:
+            raise IOError('源站挂了')
+        return [dict(m) for m in matches]
+
+    return OddsTracker(schedule_fetcher=fetch, store=store, now_fn=lambda: NOW)
 
 
 def _snap(ts, **odds):
@@ -218,6 +209,16 @@ class TrackerBehaviourTests(_Base):
     def test_all_empty_snapshot_is_not_stored(self):
         self._tracker(MATCHES).track('2026-08-27')
         self.assertNotIn('2026-08-27_无赔率_对手', self.store.load())
+
+    def test_numeric_handicap_does_not_defeat_deduplication(self):
+        """入参给数值、库里存字符串时，去重仍要认得出「没变」。"""
+        match = dict(MATCHES[0], handicap=-3.5)
+        tracker = self._tracker([match])
+        tracker.track('2026-08-27')
+        tracker.track('2026-08-27')
+        history = self.store.load()[match['id']]
+        self.assertEqual(len(history), 1, '类型不一致导致每轮都追加了快照')
+        self.assertEqual(history[0]['observed_ts'], NOW_ISO)
 
     def test_unchanged_odds_update_observed_ts_instead_of_appending(self):
         """盘口没动时不追加新快照，只把「最后确认时刻」往前推。

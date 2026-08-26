@@ -12,8 +12,10 @@ import unittest
 from datetime import datetime
 from unittest import mock
 
-import src.basketball as legacy
 from src.domain.sports.basketball import parsing
+from tests.domain.golden import as_json, load
+
+GOLDEN = load('parsing_500')
 
 FIXTURES = pathlib.Path(__file__).resolve().parents[1] / 'fixtures' / 'basketball'
 # 夹具按 gzip 存放：真实页面 80KB 起步，压缩后不到四分之一，
@@ -28,28 +30,22 @@ class _FrozenDatetime(datetime):
         return NOW
 
 
-def _legacy_schedule(date, html=JCLQ_HTML):
-    with mock.patch.object(legacy, 'fetch', lambda *a, **k: html), \
-         mock.patch.object(legacy, 'datetime', _FrozenDatetime):
-        return legacy.fetch_basketball_schedule(date)
-
-
-class RealPageParityTests(unittest.TestCase):
+class RealPageGoldenTests(unittest.TestCase):
     DATES = ['2026-08-26', '2026-08-27', '2027-01-05']
 
-    def test_parsed_matches_equal_legacy(self):
+    def test_parsed_rows(self):
         for date in self.DATES:
             with self.subTest(date=date):
-                self.assertEqual(
-                    parsing.parse_schedule(JCLQ_HTML, date),
-                    _legacy_rows(date))
+                self.assertEqual(as_json(parsing.parse_schedule(JCLQ_HTML, date)),
+                                 GOLDEN[f'rows:{date}'])
 
-    def test_full_fetch_equals_legacy(self):
+    def test_full_fetch(self):
         for date in self.DATES:
             with self.subTest(date=date):
                 fetcher = parsing.ScheduleFetcher(
                     transport=lambda url: JCLQ_HTML, now_fn=lambda: NOW)
-                self.assertEqual(fetcher.fetch(date), _legacy_schedule(date))
+                self.assertEqual(as_json(fetcher.fetch(date)),
+                                 GOLDEN[f'fetch:{date}'])
 
     def test_real_page_yields_the_expected_card(self):
         """把真实页面的解析结果钉死，正则被改动时能立刻看出差别。"""
@@ -68,18 +64,6 @@ class RealPageParityTests(unittest.TestCase):
         self.assertEqual(first['id'], '2026-08-27_金州女武神_太阳')
         self.assertEqual(matches[1]['spf_home'], 2.55)
         self.assertEqual(matches[1]['spf_away'], 1.27)
-
-
-def _legacy_rows(date):
-    """旧实现没有独立的解析入口，用「时间冻结在很久以前」拿到未经状态过滤的行。"""
-    class _Ancient(datetime):
-        @classmethod
-        def now(cls, tz=None):
-            return datetime(2000, 1, 1)
-
-    with mock.patch.object(legacy, 'fetch', lambda *a, **k: JCLQ_HTML), \
-         mock.patch.object(legacy, 'datetime', _Ancient):
-        return legacy.fetch_basketball_schedule(date)
 
 
 class TomorrowFallbackTests(unittest.TestCase):
@@ -111,21 +95,18 @@ class TomorrowFallbackTests(unittest.TestCase):
         self.assertTrue(matches)
         self.assertTrue(all(m['date'].startswith('2026-') for m in matches))
 
-    def test_fallback_path_equals_legacy(self):
-        """回退路径在旧实现里是**另一份抄写**，必须单独差分——主路径相等
-        不能证明它也相等。"""
+    def test_fallback_yields_the_same_rows_as_the_direct_path(self):
+        """回退路径在旧实现里是**另一份抄写**，合并成一份之后，这条用例
+        守住的是「回退和直取给出同一份结果」。"""
         def html_for(url):
             return self.EMPTY if 'date=2026-08-26' in url else JCLQ_HTML
 
-        with mock.patch.object(
-                legacy, 'fetch',
-                lambda url, encoding='utf-8', referer=None: html_for(url)), \
-             mock.patch.object(legacy, 'datetime', _FrozenDatetime):
-            expected = legacy.fetch_basketball_schedule('2026-08-26')
-
-        fetcher = parsing.ScheduleFetcher(transport=html_for, now_fn=lambda: NOW)
-        self.assertEqual(fetcher.fetch('2026-08-26'), expected)
-        self.assertTrue(expected, '回退没取到任何场次，这条差分是空跑')
+        via_fallback = parsing.ScheduleFetcher(
+            transport=html_for, now_fn=lambda: NOW).fetch('2026-08-26')
+        direct = parsing.ScheduleFetcher(
+            transport=lambda url: JCLQ_HTML, now_fn=lambda: NOW).fetch('2026-08-27')
+        self.assertTrue(via_fallback, '回退没取到任何场次，这条用例是空跑')
+        self.assertEqual(via_fallback, direct)
 
     def test_no_fallback_when_today_has_matches(self):
         requested = []
@@ -293,28 +274,16 @@ class KickoffFromRealPageTests(unittest.TestCase):
         self.assertEqual(len(parsing.select_upcoming(matches, datetime(2020, 1, 1))),
                          len(matches))
 
-    def test_divergence_from_legacy_is_explicit(self):
-        """与旧实现的**唯一**分歧，写出来免得它藏在差分测试的盲区里。
+    def test_finished_card_is_dropped_entirely(self):
+        """迁移前这里是坏的：时间格带月日导致 strptime 恒抛 ValueError 并被
+        静默吞掉，所有场次恒为 not_started，打完的比赛照样出现在推荐里。
 
-        上面那几条差分测试用的时钟都落在比赛之前，两侧都判「未开赛」，
-        正好走不到分歧点。把时钟推到比赛之后，差别才显现：旧实现仍然
-        把打完的比赛当成未开赛返回，新实现把它们撤下。
+        黄金文件里的用例时钟都落在比赛之前、两侧都判「未开赛」，正好走不到
+        这个分歧点——所以单列一条，把时钟推到比赛之后。
         """
         after = datetime(2030, 1, 1)
-
-        class _Late(datetime):
-            @classmethod
-            def now(cls, tz=None):
-                return after
-
-        with mock.patch.object(legacy, 'fetch', lambda *a, **k: JCLQ_HTML), \
-             mock.patch.object(legacy, 'datetime', _Late):
-            legacy_result = legacy.fetch_basketball_schedule('2026-08-27')
-
         fetcher = parsing.ScheduleFetcher(transport=lambda url: JCLQ_HTML,
                                            now_fn=lambda: after)
-        self.assertTrue(legacy_result, '旧实现本该把打完的比赛也返回')
-        self.assertTrue(all(m['status'] == 'not_started' for m in legacy_result))
         self.assertEqual(fetcher.fetch('2026-08-27'), [])
 
     def test_plain_clock_without_month_day_still_works(self):

@@ -22,6 +22,11 @@ HISTORY_CAP = 240
 
 SNAPSHOT_FIELDS = ('spf_home', 'spf_away', 'rqspf_home', 'rqspf_away',
                    'dx_over', 'dx_under', 'handicap', 'total_line')
+# 让分盘存字符串：线上是 '+9.5' 这种带符号写法，转成数值会丢掉符号语义。
+# 但上游偶尔会给来数值，落库后读回就变成了字符串——两次采集因此永远判定
+# 「变了」，每轮都追加一条新快照，走势的新鲜度随之失真。所以在**构造快照
+# 时**就统一成字符串，让「写进去的」和「读出来的」是同一个东西。
+_TEXT_FIELDS = ('handicap',)
 
 
 class OddsHistoryStore:
@@ -75,7 +80,7 @@ def _snapshot_to_row(match_key, seq, snapshot):
         'observed_ts': snapshot.get('observed_ts'),
     }
     for field in SNAPSHOT_FIELDS:
-        row[field] = snapshot.get(field)
+        row[field] = _normalize(field, snapshot.get(field))
     return row
 
 
@@ -119,7 +124,8 @@ class OddsTracker:
             return 0
 
         snapshot = {'ts': now_iso,
-                    **{field: match.get(field) for field in SNAPSHOT_FIELDS}}
+                    **{field: _normalize(field, match.get(field))
+                       for field in SNAPSHOT_FIELDS}}
         if not any(snapshot[field] is not None for field in SNAPSHOT_FIELDS):
             return 0
 
@@ -131,6 +137,13 @@ class OddsTracker:
             if len(sequence) > self._cap:
                 sequence[:] = sequence[-self._cap:]
         return 1
+
+
+def _normalize(field, value):
+    """按落库后的类型规范化，保证「写进去的」与「读出来的」可比。"""
+    if value is None or field not in _TEXT_FIELDS:
+        return value
+    return str(value)
 
 
 def _same_odds(previous, current):

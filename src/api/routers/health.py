@@ -40,11 +40,21 @@ def _probe_database(db):
 
 
 def _probe_tasks(scheduler):
-    """仅探测 TaskScheduler 是否已装配到 app.state，不代表调度器已 start()
-    或后台任务本身健康——本阶段 TaskScheduler 刻意不 start()（无待跑任务），
-    'tasks': 'ok' 只表示"对象存在"，不要误读成"后台任务系统正在运行"。
+    """探测调度器是否**真的在跑**，而不只是对象存在。
+
+    首版只判断 `scheduler is not None`，那个判断永远为真——它不是信号，
+    是会让人误以为一切正常的噪声。第一个真实后台任务（篮球赔率采样）
+    上线时一并升级。
+
+    「没有任务要跑」与「有任务却没在跑」要分开：前者是正常的空闲，后者才是
+    故障。不分开的话，一个还没接后台任务的服务会天天报 degraded，
+    久而久之这个信号就没人看了。
     """
     try:
-        return 'ok' if scheduler is not None else 'error'
+        if scheduler is None:
+            return 'error'
+        if scheduler.task_count() == 0:
+            return 'ok'
+        return 'ok' if scheduler.is_running() else 'degraded'
     except Exception:
         return 'error'

@@ -29,9 +29,26 @@ class HealthTests(unittest.TestCase):
         self.assertIn('database', payload['components'])
 
     def test_healthz_reports_tasks_component_ok(self):
+        """当前这个 app 没有登记任何后台任务——「没有任务要跑」是正常空闲。"""
         payload = self.client.get('/healthz').json()
         self.assertIn('tasks', payload['components'])
         self.assertEqual(payload['components']['tasks'], 'ok')
+        self.assertEqual(self.app.state.tasks.task_count(), 0)
+
+    def test_registered_but_unstarted_tasks_report_degraded(self):
+        """有任务却没在跑才是故障。首版探针只判断对象存在，这种情况照报 ok。"""
+        from src.api.routers.health import _probe_tasks
+        from src.foundation.tasks import TaskScheduler
+
+        idle = TaskScheduler()
+        self.assertEqual(_probe_tasks(idle), 'ok')
+
+        idle.submit_periodic('x', lambda: None, interval_seconds=60)
+        self.assertEqual(_probe_tasks(idle), 'degraded')
+
+        idle.start()
+        self.addCleanup(idle.shutdown, wait=False)
+        self.assertEqual(_probe_tasks(idle), 'ok')
 
     def test_healthz_reports_tasks_component_error_when_missing(self):
         """让 _probe_tasks 走 error 分支：只有 tasks 键真正为 None 时才会

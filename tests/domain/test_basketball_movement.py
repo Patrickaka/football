@@ -1,17 +1,20 @@
 """赔率走势的纯计算部分迁入领域层。
 
-本文件的主体是**差分测试**（裁决 D）：旧实现 `src/basketball/odds_movement.py`
-在 2-7 之前仍然在线，对同一组输入同时跑新旧两份、断言输出逐字相等，比任何
-手写断言都更能证明迁移没有改变行为。手写断言只用来覆盖差分测不到的地方
-——注入的时钟（裁决 E）与旧实现里靠 import 才能触发的分支。
+主体原本是与旧实现的差分测试。旧实现删除后改为对**黄金文件**断言——
+黄金值由当时已通过逐字差分的实现生成，记录的仍是迁移前的行为。
+见 `tests/domain/golden.py`。
+
+手写断言覆盖黄金文件之外的地方：注入的时钟（裁决 E）、边界值、
+以及每条守卫存在的理由。
 """
 import unittest
 from datetime import datetime, timedelta
 from unittest import mock
 
-from src.basketball import odds_movement as legacy
-from src.basketball import okooo as legacy_okooo
 from src.domain.sports.basketball import movement as new
+from tests.domain.golden import as_json, load
+
+GOLDEN = load('movement')
 
 NOW = datetime(2026, 8, 26, 12, 0, 0)
 
@@ -95,38 +98,34 @@ class _FrozenDatetime(datetime):
         return NOW
 
 
-class MovementFromSnapshotsParityTests(unittest.TestCase):
-    """裁决 E：新实现注入时钟，旧实现靠打桩冻结，两者才可比。"""
+class MovementFromSnapshotsGoldenTests(unittest.TestCase):
+    """裁决 E：注入时钟是这些用例能复现的前提。"""
 
-    def _legacy(self, *args, **kwargs):
-        with mock.patch.object(legacy, 'datetime', _FrozenDatetime):
-            return legacy._movement_from_snapshots(*args, **kwargs)
-
-    def test_moneyline_sequences_match_legacy(self):
-        for seq in SNAPSHOT_SEQS:
+    def test_moneyline_sequences(self):
+        for i, seq in enumerate(SNAPSHOT_SEQS):
             with self.subTest(n=len(seq)):
                 self.assertEqual(
-                    new.movement_from_snapshots(
-                        seq, 'spf_home', 'spf_away', now_fn=lambda: NOW),
-                    self._legacy(seq, 'spf_home', 'spf_away'))
+                    as_json(new.movement_from_snapshots(
+                        seq, 'spf_home', 'spf_away', now_fn=lambda: NOW)),
+                    GOLDEN[f'snap:ml:{i}'])
 
-    def test_handicap_sequences_match_legacy(self):
-        for seq in HANDICAP_SEQS:
+    def test_handicap_sequences(self):
+        for i, seq in enumerate(HANDICAP_SEQS):
             with self.subTest(seq=seq[-1]['handicap']):
                 self.assertEqual(
-                    new.movement_from_snapshots(
+                    as_json(new.movement_from_snapshots(
                         seq, 'rqspf_home', 'rqspf_away', 'handicap', 'ah',
-                        now_fn=lambda: NOW),
-                    self._legacy(seq, 'rqspf_home', 'rqspf_away', 'handicap', 'ah'))
+                        now_fn=lambda: NOW)),
+                    GOLDEN[f'snap:ah:{i}'])
 
-    def test_total_sequences_match_legacy(self):
-        for seq in TOTAL_SEQS:
+    def test_total_sequences(self):
+        for i, seq in enumerate(TOTAL_SEQS):
             with self.subTest(over=seq[-1]['dx_over']):
                 self.assertEqual(
-                    new.movement_from_snapshots(
+                    as_json(new.movement_from_snapshots(
                         seq, 'dx_over', 'dx_under', 'total_line', 'ou',
-                        now_fn=lambda: NOW),
-                    self._legacy(seq, 'dx_over', 'dx_under', 'total_line', 'ou'))
+                        now_fn=lambda: NOW)),
+                    GOLDEN[f'snap:ou:{i}'])
 
     def test_now_fn_defaults_to_wall_clock(self):
         """默认不注入时，仍要按真实时间算——注入只是可选的测试接缝。"""
@@ -150,23 +149,22 @@ class MovementFromSnapshotsParityTests(unittest.TestCase):
             late['last_move_age_min'] - early['last_move_age_min'], 60.0)
 
 
-class NormalizeTrendParityTests(unittest.TestCase):
-    def test_all_trend_shapes_match_legacy(self):
-        for trend in TRENDS:
+class NormalizeTrendGoldenTests(unittest.TestCase):
+    def test_all_trend_shapes(self):
+        for i, trend in enumerate(TRENDS):
             for kind in KINDS:
                 with self.subTest(direction=(trend or {}).get('direction'), kind=kind):
-                    self.assertEqual(
-                        new.normalize_okooo_trend(trend, kind),
-                        legacy._normalize_okooo_trend(trend, kind))
+                    self.assertEqual(as_json(new.normalize_okooo_trend(trend, kind)),
+                                     GOLDEN[f'trend:{i}:{kind}'])
 
 
 def _movements():
     out = [None, {}, {'available': False}]
     for trend in TRENDS:
         for kind in KINDS:
-            mv = legacy._normalize_okooo_trend(trend, kind)
-            if mv:
-                out.append(mv)
+            movement = new.normalize_okooo_trend(trend, kind)
+            if movement:
+                out.append(movement)
     out.append({'available': True, 'side': 'home', 'strength': 0.9,
                 'samples': 8, 'stale': True, 'steam': True,
                 'signal_conflict': False, 'water_side': 'home',
@@ -194,63 +192,66 @@ def _movements():
     return out
 
 
-class InferenceParityTests(unittest.TestCase):
-    def test_infer_matches_legacy(self):
-        for mv in _movements():
+class InferenceGoldenTests(unittest.TestCase):
+    def test_infer(self):
+        for i, movement in enumerate(_movements()):
             for market in ('rqspf', 'dx', 'spf'):
-                with self.subTest(side=(mv or {}).get('side'), market=market):
+                with self.subTest(side=(movement or {}).get('side'), market=market):
                     self.assertEqual(
-                        new.infer_market_from_movement(mv, market),
-                        legacy.infer_market_from_movement(mv, market))
+                        as_json(new.infer_market_from_movement(movement, market)),
+                        GOLDEN[f'infer:{i}:{market}'])
 
-    def test_apply_market_inference_matches_legacy(self):
-        for mv in _movements():
+    def test_apply_market_inference(self):
+        for i, movement in enumerate(_movements()):
             for market in ('rqspf', 'dx'):
                 for p in (0.35, 0.5, 0.58, 0.72):
-                    with self.subTest(side=(mv or {}).get('side'), market=market, p=p):
+                    with self.subTest(side=(movement or {}).get('side'),
+                                      market=market, p=p):
                         self.assertEqual(
-                            new.apply_market_inference(p, 1 - p, mv, market),
-                            legacy.apply_market_inference(p, 1 - p, mv, market))
+                            as_json(new.apply_market_inference(
+                                p, 1 - p, movement, market)),
+                            GOLDEN[f'apply_inf:{i}:{market}:{p}'])
 
 
-class ApplyMovementParityTests(unittest.TestCase):
-    def test_adjust_two_way_by_trend_matches_legacy(self):
-        for trend in TRENDS:
+class ApplyMovementGoldenTests(unittest.TestCase):
+    def test_adjust_two_way_by_trend(self):
+        for i, trend in enumerate(TRENDS):
             for kind in KINDS:
                 t = dict(trend, kind=kind) if trend else trend
                 for p in (0.4, 0.5, 0.65):
-                    with self.subTest(direction=(trend or {}).get('direction'), kind=kind):
+                    with self.subTest(direction=(trend or {}).get('direction'),
+                                      kind=kind, p=p):
                         self.assertEqual(
-                            new.adjust_two_way_by_trend(p, 1 - p, t),
-                            legacy_okooo.adjust_two_way_by_trend(p, 1 - p, t))
+                            as_json(new.adjust_two_way_by_trend(p, 1 - p, t)),
+                            GOLDEN[f'adjust:{i}:{kind}:{p}'])
 
-    def test_apply_movement_matches_legacy(self):
-        for mv in _movements():
+    def test_apply_movement(self):
+        for i, movement in enumerate(_movements()):
             for p in (0.42, 0.5, 0.61):
-                with self.subTest(side=(mv or {}).get('side'), p=p):
+                with self.subTest(side=(movement or {}).get('side'), p=p):
                     self.assertEqual(
-                        new.apply_movement(p, 1 - p, mv),
-                        legacy.apply_movement(p, 1 - p, mv))
+                        as_json(new.apply_movement(p, 1 - p, movement)),
+                        GOLDEN[f'apply_mv:{i}:{p}'])
 
-    def test_movement_to_trend_matches_legacy(self):
-        for mv in _movements():
-            with self.subTest(side=(mv or {}).get('side')):
-                self.assertEqual(new.movement_to_trend(mv),
-                                 legacy.movement_to_trend(mv))
+    def test_movement_to_trend(self):
+        for i, movement in enumerate(_movements()):
+            with self.subTest(side=(movement or {}).get('side')):
+                self.assertEqual(as_json(new.movement_to_trend(movement)),
+                                 GOLDEN[f'to_trend:{i}'])
 
 
-class SharpConfirmationParityTests(unittest.TestCase):
+class SharpConfirmationGoldenTests(unittest.TestCase):
     RECOMMENDATIONS = ('主胜', '客胜', '让胜', '让负', '大分', '小分', '说不好', None)
 
-    def test_matches_legacy(self):
-        for mv in _movements():
+    def test_all_recommendations(self):
+        for i, movement in enumerate(_movements()):
             for rec in self.RECOMMENDATIONS:
-                with self.subTest(side=(mv or {}).get('side'), rec=rec):
-                    self.assertEqual(new.sharp_confirmation(mv, rec),
-                                     legacy.sharp_confirmation(mv, rec))
+                with self.subTest(side=(movement or {}).get('side'), rec=rec):
+                    self.assertEqual(as_json(new.sharp_confirmation(movement, rec)),
+                                     GOLDEN[f'sharp:{i}:{rec}'])
 
 
-class BuildMovementForMatchParityTests(unittest.TestCase):
+class BuildMovementForMatchGoldenTests(unittest.TestCase):
     HISTORY = {'m1': SNAPSHOT_SEQS[5], 'm2': HANDICAP_SEQS[0]}
 
     MATCHES = [
@@ -269,41 +270,40 @@ class BuildMovementForMatchParityTests(unittest.TestCase):
          'ou': {'available': False}},
     ]
 
-    def test_matches_legacy(self):
-        for match in self.MATCHES:
-            for bundle in self.BUNDLES:
-                for history in (None, {}, self.HISTORY):
+    def test_every_source_combination(self):
+        for mi, match in enumerate(self.MATCHES):
+            for bi, bundle in enumerate(self.BUNDLES):
+                for hi, history in enumerate((None, {}, self.HISTORY)):
                     with self.subTest(mid=match['id'], src=match['source'],
                                       bundle=bool(bundle), hist=bool(history)):
-                        with mock.patch.object(legacy, 'datetime', _FrozenDatetime):
-                            expected = legacy.build_movement_for_match(
-                                match, kv_history=history, okooo_bundle=bundle)
                         self.assertEqual(
-                            new.build_movement_for_match(
+                            as_json(new.build_movement_for_match(
                                 match, history=history, okooo_bundle=bundle,
-                                now_fn=lambda: NOW),
-                            expected)
+                                now_fn=lambda: NOW)),
+                            GOLDEN[f'build:{mi}:{bi}:{hi}'])
 
 
-class DescribeMarketMovementParityTests(unittest.TestCase):
-    def _cases(self):
-        mvs = _movements()
+class DescribeMarketMovementGoldenTests(unittest.TestCase):
+    @staticmethod
+    def cases():
+        movements = _movements()
         cases = [({}, {}), (None, None)]
-        for mv in mvs[3:9]:
+        for movement in movements[3:9]:
             cases.append((
-                {'spf': mv, 'rqspf': mvs[4], 'dx': None},
+                {'spf': movement, 'rqspf': movements[4], 'dx': None},
                 {'spf': {'line_movement': {'confirmed': True}},
                  'rqspf': {'line_movement': {'confirmed': False}}},
             ))
-            cases.append(({'spf': mv}, {}))
-            cases.append(({'dx': mv}, {'dx': {'line_movement': None}}))
+            cases.append(({'spf': movement}, {}))
+            cases.append(({'dx': movement}, {'dx': {'line_movement': None}}))
         return cases
 
-    def test_matches_legacy(self):
-        for movements, bets in self._cases():
+    def test_all_combinations(self):
+        for i, (movements, bets) in enumerate(self.cases()):
             with self.subTest(keys=sorted((movements or {}))):
-                self.assertEqual(new.describe_market_movement(movements, bets),
-                                 legacy.describe_market_movement(movements, bets))
+                self.assertEqual(
+                    as_json(new.describe_market_movement(movements, bets)),
+                    GOLDEN[f'describe:{i}'])
 
 
 class NoLegacyImportTests(unittest.TestCase):
