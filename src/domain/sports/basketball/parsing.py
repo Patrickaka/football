@@ -26,6 +26,9 @@ _TAG = re.compile(r'<[^>]*>')
 _NUM_START = re.compile(r'^[一-龥a-zA-Z]')
 _HOME_PREFIX = re.compile(r'^\[\w+\d*\]')
 _AWAY_SUFFIX = re.compile(r'\[\w+\d*\]$')
+# 时间单元格是 `08-27 07:00`（带月日），日期部分已经并进了 match['date']，
+# 判断开赛时刻只需要其中的时分。
+_CLOCK = re.compile(r'(\d{1,2}:\d{2})')
 
 _MIN_CELLS = 7
 _VS_MARKERS = ('VS', 'vs', '对')
@@ -162,8 +165,19 @@ def select_upcoming(matches, now):
 
 
 def _kickoff(match):
+    """从 date + 时间单元格算出开赛时刻。
+
+    时间单元格的形状是 `08-27 07:00`，直接拿去拼 `%Y-%m-%d %H:%M` 会得到
+    `2026-08-27 08-27 07:00`，必然 ValueError。迁移前正是这么写的，异常又被
+    静默吞掉，于是 500 源的开赛过滤**从来没有生效过**：所有场次恒为
+    not_started，已经打完的比赛照样出现在推荐列表里。只取其中的时分即可。
+    """
+    clock = _CLOCK.search(str(match.get('time') or ''))
+    if not clock:
+        return None
     try:
-        return datetime.strptime(f"{match['date']} {match['time']}", '%Y-%m-%d %H:%M')
+        return datetime.strptime(f"{match['date']} {clock.group(1)}",
+                                 '%Y-%m-%d %H:%M')
     except (ValueError, KeyError, TypeError):
         return None
 
