@@ -149,9 +149,20 @@ class QueryTests(_Base):
         self.assertEqual(self.store.by_play_type('不存在'), [])
 
     def test_by_play_type_is_ordered_by_test_time(self):
-        """FDR 校正取「刚添加的那条」是按位置索引拿的，顺序不稳就会取错。"""
-        self.assertEqual([t['tested_at'] for t in self.store.by_play_type('select_3')],
-                         ['2026-06-26T14:07:25', '2026-06-26T14:07:26'])
+        """FDR 校正取「刚添加的那条」是按位置索引拿的，顺序不稳就会取错，
+        算出来的校正 p 值会安静地对应到另一条策略上。
+
+        strategy_id 与 tested_at 刻意反向：主键顺序是
+        (strategy_id, ..., tested_at)，不显式按时间排的话，返回的就是
+        主键顺序——在这组数据上恰好是倒过来的。
+        """
+        store = TrialStore(self.db, game='ordering')
+        store.append_many([
+            _trial(strategy_id='zzz', tested_at='2026-06-26T14:07:01'),
+            _trial(strategy_id='aaa', tested_at='2026-06-26T14:07:99'),
+        ])
+        self.assertEqual([t['tested_at'] for t in store.by_play_type('select_3')],
+                         ['2026-06-26T14:07:01', '2026-06-26T14:07:99'])
 
     def test_p_values_shortcut(self):
         self.assertEqual(self.store.p_values('select_3'), [0.1, 0.2])

@@ -65,14 +65,37 @@ class MigrateTests(_Base):
         self.assertEqual(self.store.count(), 1)
 
     def test_batching_writes_everything(self):
-        """整批一次 executemany 会把参数拼成极长的 SQL，MySQL 的
-        max_allowed_packet 顶不住，所以要分批——分批不能丢数据。"""
+        """分批不能丢数据。"""
         path = self._file([_trial(tested_at=f'2026-06-26T14:{i // 60:02d}:{i % 60:02d}')
                            for i in range(250)])
         stats = migrate(path, self.db, batch_size=37)
         self.assertEqual(stats['written'], 250)
         self.assertEqual(self.store.count(), 250)
         self.assertEqual(verify(path, self.db), [])
+
+    def test_writes_are_actually_split_into_batches(self):
+        """整批一次 executemany 会把参数拼成极长的 SQL，MySQL 的
+        max_allowed_packet 顶不住。
+
+        这条断言查的是**调用结构**而不是结果——SQLite 对参数长度没有限制，
+        不分批照样写得进去，行为上分辨不出来。与「单列整数主键必须关自增」
+        是同一类：依赖数据库方言的约束，只能从代码结构上守。
+        """
+        from unittest import mock
+
+        path = self._file([_trial(tested_at=f'2026-06-26T14:00:{i:02d}')
+                           for i in range(10)])
+        sizes = []
+        real = TrialStore.append_many
+
+        def spy(self, trials):
+            trials = list(trials)
+            sizes.append(len(trials))
+            return real(self, trials)
+
+        with mock.patch.object(TrialStore, 'append_many', spy):
+            migrate(path, self.db, batch_size=4)
+        self.assertEqual(sizes, [4, 4, 2], '没有按批切分')
 
 
 class VerifyTests(_Base):
@@ -81,6 +104,16 @@ class VerifyTests(_Base):
         migrate(path, self.db)
         bigger = self._file([_trial(), _trial(tested_at='2026-06-26T14:07:26')])
         self.assertTrue(verify(bigger, self.db))
+
+    def test_detects_a_swapped_key_when_counts_match(self):
+        """条数对得上、但某一条的键换了。只比条数看不出来——两边都是 2 条。"""
+        path = self._file([_trial(tested_at='2026-06-26T14:07:25'),
+                           _trial(tested_at='2026-06-26T14:07:26')])
+        migrate(path, self.db)
+        swapped = self._file([_trial(tested_at='2026-06-26T14:07:25'),
+                              _trial(tested_at='2026-06-26T14:07:99')])
+        problems = verify(swapped, self.db)
+        self.assertTrue(any('库中缺少' in p for p in problems), problems)
 
     def test_detects_changed_p_value(self):
         """只比条数会漏掉「条数对得上但 p 值被改过」——p 值是 FDR 校正的
