@@ -56,6 +56,8 @@ data/lottery3d_recent_recommend.json
 # 快乐8策略持久化（测试/线上运行时写入）
 data/kl8_active_strategies.json
 data/kl8_strategy_trials.json
+# 号码冲突的人工审核队列，跑分析器就会生成
+data/kl8_conflict_queue.json
 
 # CatBoost 训练产物
 catboost_info/
