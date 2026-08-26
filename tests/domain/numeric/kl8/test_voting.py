@@ -234,6 +234,24 @@ class TallyTests(unittest.TestCase):
         self.assertEqual(voting._tally([], 1.0), {})
 
 
+class CandidateOrderTests(unittest.TestCase):
+    """候选顺序。整条管道跑不出并列（单模型的票数两两不同），所以直接喂票数。"""
+
+    def test_more_votes_comes_first(self):
+        ordered = voting._order_candidates({7: 0.2, 3: 0.9, 5: 0.5})
+        self.assertEqual([num for num, _ in ordered], [3, 5, 7])
+
+    def test_ties_break_by_number_ascending(self):
+        """并列的打破方式必须可复现，否则同一份输入两次运行会给出不同的号。"""
+        ordered = voting._order_candidates({9: 0.5, 2: 0.5, 40: 0.5})
+        self.assertEqual([num for num, _ in ordered], [2, 9, 40])
+
+    def test_votes_outrank_numbers(self):
+        """号码小但票少的不该插队——否则排名就白算了。"""
+        ordered = voting._order_candidates({1: 0.1, 80: 0.9})
+        self.assertEqual([num for num, _ in ordered], [80, 1])
+
+
 class PoolShapingTests(unittest.TestCase):
     """整形是注入进来的，投票必须把参数原样递过去。"""
 
@@ -299,6 +317,7 @@ class RankingWidthTests(unittest.TestCase):
         self.assertEqual(self._raw_count(60), 60)
 
     def test_ranking_never_exceeds_the_number_space(self):
+        """要多宽都超不出 1..80——这条由号码空间兜着，投票不必再夹一层。"""
         from src.domain.numeric.kl8 import scoring
         self.assertEqual(self._raw_count(500), scoring.SPACE.size)
 

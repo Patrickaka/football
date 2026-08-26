@@ -24,7 +24,8 @@ KNOWN_MODELS = ('rank',)
 NO_SIGNAL_STATUS = 'no_validated_signal'
 NO_SIGNAL_MESSAGE = '暂无通过回测验证的有效特征，不输出号码推荐'
 
-# 投票用的排名长度。比请求的池子宽，让整形有得挑；上限是号码空间本身。
+# 投票用的排名长度。比请求的池子宽，让整形有得挑。不必再夹一层号码空间
+# 上限——排名本身就只在 1..80 里取，要多少都超不出去。
 MIN_MODEL_TOP_N = 40
 # 候选池至少这么大。7 是复式玩法的最小池，比它还小就没有整形余地了。
 MIN_POOL_SIZE = 7
@@ -71,6 +72,17 @@ def _tally(ranked_numbers, weight):
             for rank, num in enumerate(ranked_numbers)}
 
 
+def _order_candidates(votes):
+    """票多的在前，票数相同的按号码升序。
+
+    只剩一个模型时票数两两不同，并列走不到——但顺序是这一步对外的承诺，
+    而不是「碰巧只有一个模型」的副产品。所以它有自己的用例
+    （整条管道跑不出并列，只能直接喂）。加回第二个模型时票数会相加，
+    并列立刻就会出现。
+    """
+    return sorted(votes.items(), key=lambda item: (-item[1], item[0]))
+
+
 def vote(statistics, feature_weights, model_weights, shaper, *,
          version, based_on_issue='', pick_n=5, top_n=20,
          pool_diversify=True, pool_max_last_numbers=None,
@@ -88,13 +100,13 @@ def vote(statistics, feature_weights, model_weights, shaper, *,
     if not (rank_weight > 0 and has_feature):
         return _no_signal(version)
 
-    model_top_n = min(scoring.SPACE.size, max(top_n, MIN_MODEL_TOP_N))
+    model_top_n = max(top_n, MIN_MODEL_TOP_N)
     ranking = scoring.ensemble_ranking(
         statistics, feature_weights, top_n=model_top_n,
         based_on_issue=based_on_issue, **ranking_options)
     votes = _tally([item['num'] for item in ranking], rank_weight)
 
-    candidates = sorted(votes.items(), key=lambda item: (-item[1], item[0]))
+    candidates = _order_candidates(votes)
     pool_size = max(top_n, MIN_POOL_SIZE)
     last_numbers = statistics.get('last_numbers', set())
     if pool_diversify:
