@@ -24,29 +24,11 @@ class _Context:
         self.db = db
         self.cache = cache
         self.transport = transport
+        self.recorder = factory.build_recorder(db)
         self.prediction = factory.build_prediction_service(
-            db, cache=cache, transport=transport, recorder=_Recorder())
+            db, cache=cache, transport=transport, recorder=self.recorder)
         self.tracker = factory.build_odds_tracker(db, transport=transport)
         self.history = factory.build_odds_history_store(db)
-
-
-class _Recorder:
-    """预测记录仍落在旧的 kv_store 上。
-
-    领域层只认 save / stats 两个方法，所以这里做一层薄适配；等 records.py
-    迁完，把它换成真正的实现即可，领域层一行不用改。写失败只告警——
-    记录是旁路，不该影响推荐本身。
-    """
-
-    def save(self, date, results, version):
-        from src.basketball.records import save_predictions
-
-        save_predictions(date, results, version)
-
-    def stats(self):
-        from src.basketball.records import get_prediction_stats
-
-        return get_prediction_stats()
 
 
 def _build_context():
