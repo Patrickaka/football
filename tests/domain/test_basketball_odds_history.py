@@ -113,6 +113,19 @@ class StoreRoundTripTests(_Base):
         self.store.save(trimmed)
         self.assertEqual(self.store.load(), trimmed)
 
+    def test_rows_are_ordered_by_position_not_insertion(self):
+        """按 seq 排序取回。不排序时 SQLite 恰好按插入顺序返回，正好掩盖
+        这个问题——必须让插入顺序与 seq 顺序不一致才测得出来。"""
+        from src.domain.sports.basketball.repository import OddsSnapshotRepository
+
+        repo = OddsSnapshotRepository(self.db)
+        for seq, home in ((2, 1.5), (0, 1.8), (1, 1.6)):
+            repo.upsert({'match_key': 'm', 'seq': seq,
+                         'captured_at': f'2026-08-26T1{seq}:00:00',
+                         'spf_home': home}, key_cols=['match_key', 'seq'])
+        self.assertEqual([s['spf_home'] for s in self.store.load()['m']],
+                         [1.8, 1.6, 1.5])
+
     def test_history_for_one_match(self):
         self.store.save(REAL_HISTORY)
         self.assertEqual(len(self.store.history_for('2026-07-23_水星_火花')), 2)
@@ -230,15 +243,32 @@ class TrackerBehaviourTests(_Base):
         self.assertEqual(len(history), 2)
         self.assertEqual(history[-1]['spf_home'], 1.60)
 
-    def test_history_is_capped(self):
-        """单场历史有上限，否则一个赛季下来会无限膨胀。"""
-        long_history = {'2026-08-27_甲_乙': [
-            _snap(f'2026-08-01T{i:04d}', spf_home=1.5 + i * 0.01, spf_away=2.0)
-            for i in range(HISTORY_CAP + 10)
+    def test_history_is_capped_and_keeps_the_newest(self):
+        """上限用显式传入的值，不用被测模块的常量——拿常量当期望，把常量
+        改坏时期望跟着变，这条测试就永远是绿的。
+
+        留下的必须是**最新**的那些：走势只看首尾与最后一次变化，砍掉新的
+        等于把刚发生的变盘丢了。
+        """
+        cap = 5
+        old = {'2026-08-27_甲_乙': [
+            _snap(f'2026-08-01T00:00:{i:02d}', spf_home=1.5 + i * 0.01, spf_away=2.0)
+            for i in range(cap + 3)
         ]}
-        self.store.save(long_history)
-        self._tracker([MATCHES[0]]).track('2026-08-27')
-        self.assertEqual(len(self.store.load()['2026-08-27_甲_乙']), HISTORY_CAP)
+        self.store.save(old)
+        tracker = OddsTracker(schedule_fetcher=lambda d=None: [dict(MATCHES[0])],
+                              store=self.store, now_fn=lambda: NOW, cap=cap)
+        tracker.track('2026-08-27')
+        kept = self.store.load()['2026-08-27_甲_乙']
+        self.assertEqual(len(kept), cap)
+        self.assertEqual(kept[-1]['ts'], NOW_ISO, '本轮新快照没留下')
+        self.assertEqual([s['ts'] for s in kept[:-1]],
+                         [s['ts'] for s in old['2026-08-27_甲_乙'][-(cap - 1):]],
+                         '截断砍掉的是新快照而不是旧的')
+
+    def test_default_cap_is_240(self):
+        """默认上限单独钉住，和上面那条一起：一条测行为，一条测取值。"""
+        self.assertEqual(HISTORY_CAP, 240)
 
     def test_fetch_failure_returns_zero_and_keeps_history(self):
         self.store.save(REAL_HISTORY)
@@ -249,6 +279,17 @@ class TrackerBehaviourTests(_Base):
         self.store.save(REAL_HISTORY)
         self.assertEqual(self._tracker([]).track('2026-08-27'), 0)
         self.assertEqual(self.store.load(), REAL_HISTORY)
+
+    def test_empty_schedule_does_not_rewrite_the_table(self):
+        """没有比赛就不该落盘。save 是整体替换（清空再写），白跑一次等于
+        把整张表删掉重建——内容看不出差别，代价是实打实的。"""
+        writes = []
+        store = mock.Mock()
+        store.load.return_value = {}
+        store.save.side_effect = lambda h: writes.append(h)
+        OddsTracker(schedule_fetcher=lambda d=None: [], store=store,
+                    now_fn=lambda: NOW).track('2026-08-27')
+        self.assertEqual(writes, [])
 
 
 class NoLegacyImportTests(unittest.TestCase):
