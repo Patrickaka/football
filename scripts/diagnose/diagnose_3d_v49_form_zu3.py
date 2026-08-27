@@ -74,7 +74,7 @@ def main():
 
         # 组六四码（仅组六期计条件命中）
         z6_score = zu6_digit_scores(train)
-        z6_four = pick_zu6_four(z6_score, numbers=train)
+        z6_four = pick_zu6_four(z6_score)
         _, z6_combos = zu6_notes_from_digits(z6_four)
         if actual_form == 'zu6':
             z6s = ''.join(map(str, sorted(actual)))

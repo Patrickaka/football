@@ -18,7 +18,7 @@ class Lottery3DZu6Tests(unittest.TestCase):
             history.append(hot if i % 2 else tuple(reversed(hot)))
 
         scores = lottery3d.zu6_digit_scores(history)
-        pool = lottery3d.pick_zu6_four(scores, numbers=history)
+        pool = lottery3d.pick_zu6_four(scores)
 
         self.assertEqual(pool, [0, 1, 2, 3])
 

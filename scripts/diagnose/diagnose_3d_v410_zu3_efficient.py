@@ -64,7 +64,7 @@ def main():
 
         # 联合：组六四码（8元）+ 组三 K 对子（4K 元）
         z6_score = zu6_digit_scores(train)
-        z6_four = pick_zu6_four(z6_score, numbers=train)
+        z6_four = pick_zu6_four(z6_score)
         _, z6_combos = zu6_notes_from_digits(z6_four)
         joint_total += 1
         z6s = ''.join(map(str, sorted(actual)))

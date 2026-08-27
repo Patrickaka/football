@@ -159,8 +159,8 @@ def backtest(numbers, trials=BACKTEST_TRIALS, window_weights=None):
             zu6_draws += 1
             actual_set = set(actual)
             z6_sc = zu6_digit_scores(train, ww, dynamic=meta.get("dynamic"))
-            z4 = set(pick_zu6_four(z6_sc, numbers=train))
-            z5 = set(pick_zu6_pool(z6_sc, pool_size=ZU6_POOL_SIZE, numbers=train))
+            z4 = set(pick_zu6_four(z6_sc))
+            z5 = set(pick_zu6_pool(z6_sc, pool_size=ZU6_POOL_SIZE))
             if actual_set <= z4:
                 zu6_four_hit += 1
             if actual_set <= z5:

@@ -219,7 +219,7 @@ def run_prediction(data=None, force_refresh=False, enable_backtest=False,
             if not (isinstance(e, dict) and e.get("period") == current_period_zu6)
         ]
         zu6_score = recent_zu6_digit_penalty(zu6_score, recent_zu6)
-    zu6_four = pick_zu6_four(zu6_score, numbers=numbers)
+    zu6_four = pick_zu6_four(zu6_score)
     _, z6_straight = zu6_notes_from_digits(zu6_four)
     save_recent_zu6_four(periods[-1] if periods else None, zu6_four)
     # v4.9/v4.10: 组三推荐（四组对子）——动态形态分析的组三侧，概率透明标注

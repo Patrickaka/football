@@ -73,8 +73,7 @@ def run_current(numbers, test_indices, sums_list, spans_list):
         if not p:
             continue
         score, pf, train = p
-        sel = list(L.pick_zu6_pool(score, None, pool_size=4, use_kill=False,
-                                    numbers=train, pair_freq=pf))
+        sel = list(L.pick_zu6_pool(score, None, pool_size=4, use_kill=False))
         d = numbers[idx]
         if zu6_4hit(sel, d):
             hits += 1
@@ -225,7 +224,7 @@ def run_multi(numbers, test_indices, sums_list, spans_list, n_groups=3):
         score, pf, train = p
         groups=[]; seen=set()
 
-        g1=tuple(L.pick_zu6_pool(score,None,pool_size=4,use_kill=False,numbers=train,pair_freq=pf))
+        g1=tuple(L.pick_zu6_pool(score, None, pool_size=4, use_kill=False))
         if len(g1)==4: groups.append(g1); seen.add(g1)
 
         freq=Counter(d for n in train[-20:] for d in n)
