@@ -39,3 +39,27 @@ def as_json(value):
     同样的序列化，比的才是「内容」而不是「Python 类型」。
     """
     return json.loads(json.dumps(value, ensure_ascii=False, sort_keys=True))
+
+
+def as_comparable(value, ndigits=10):
+    """把结果规范化成**能与黄金文件逐条比对**的形状。
+
+    比 `as_json` 多做两件事，都是 3D 的特征层逼出来的：
+
+    - **元组键**：二阶马尔可夫的键是 `(前两期, 前一期)`。JSON 不允许非字符串
+      的键，`json.dumps` 会直接抛错，所以统一转成字符串。
+    - **浮点取整**：指数加权、频率这类量在不同求和顺序下末位可能差一个 ulp。
+      不取整的话，一次纯粹的结构调整也会让黄金比对整片变红，那就分不清
+      「结果变了」和「加法顺序变了」。取到第 10 位远严于任何有意义的变化。
+
+    生成黄金文件与比对黄金文件**必须走同一个函数**——两边各写一套规范化，
+    比的就不再是同一个东西了。
+    """
+    if isinstance(value, dict):
+        return {str(k): as_comparable(v, ndigits)
+                for k, v in sorted(value.items(), key=lambda item: str(item[0]))}
+    if isinstance(value, (list, tuple)):
+        return [as_comparable(v, ndigits) for v in value]
+    if isinstance(value, float):
+        return round(value, ndigits)
+    return value
