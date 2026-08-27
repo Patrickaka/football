@@ -635,8 +635,6 @@ def run_prediction(data=None, force_refresh=False, enable_backtest=False,
     result["strategy_recommendations"] = generate_strategy_recommendations(
         rule_only_detail,
         ml_list,
-        danma,
-        kill,
     )
     
     # 添加策略模式选择
@@ -674,7 +672,7 @@ def run_prediction(data=None, force_refresh=False, enable_backtest=False,
     }
     
     # 添加资金建议
-    budget_info = recommend_budget_level(model_lift, stability, recent_hit_rate)
+    budget_info = recommend_budget_level(model_lift, recent_hit_rate)
     result["budget_recommendation"] = budget_info
     
     # 添加自动推荐注数
