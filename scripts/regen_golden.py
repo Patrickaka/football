@@ -208,3 +208,9 @@ dump('lottery3d_prediction', {k: as_comparable(v) for k, v in l3d_pred_entries()
 from tests.domain.numeric.lottery3d.test_backtest import golden_entries as l3d_bt_entries
 
 dump('lottery3d_backtest', {k: as_comparable(v) for k, v in l3d_bt_entries()})
+
+
+# ---- lottery3d ML 层 ----
+from tests.domain.numeric.lottery3d.test_ml import golden_entries as l3d_ml_entries
+
+dump('lottery3d_ml', {k: as_comparable(v) for k, v in l3d_ml_entries()})

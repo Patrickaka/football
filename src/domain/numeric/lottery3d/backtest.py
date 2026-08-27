@@ -325,3 +325,50 @@ def objective(result, metric=CANONICAL_TOP_RATE, composite_weights=None):
     if metric not in result:
         raise ValueError(f'未知 metric: {metric}')
     return result[metric]
+
+
+class TopKBacktest:
+    """按若干个 TopK 门槛统计命中，外加实际号码的名次。
+
+    与 `RankingBacktest` 的分工：那个服务规则模型，要分 raw/served 两条池子、
+    还要统计组六四码；这里只有一条排名，因为 ML 模型的输出就是一条——
+    **合并成一个类会让两边都长出一半用不上的参数**。
+    """
+
+    def __init__(self, tiers, miss_rank=MISS_RANK):
+        self.tiers = tiers
+        self.hits = {tier: 0 for tier in tiers}
+        self.ranks = []
+        self.miss_rank = miss_rank
+
+    @property
+    def trials(self):
+        """实际评估的期数。训练不出模型的那些期被跳过，不该进分母。"""
+        return len(self.ranks)
+
+    def observe(self, actual, ranked):
+        key = as_key(actual)
+        self.ranks.append(rank_of(key, ranked, self.miss_rank))
+        for tier in self.tiers:
+            if key in ranked[:tier]:
+                self.hits[tier] += 1
+
+    def summarise(self):
+        total = self.trials
+        ordered = sorted(self.ranks)
+        result = {
+            'trials': total,
+            # 与 trials 同值。两个名字都在历史记录里，谁也不知道哪个先被读
+            'evaluated': total,
+            'actual_rank_avg': round(sum(self.ranks) / total, 1) if total else 0.0,
+            'actual_rank_median': ordered[len(ordered) // 2] if ordered else 0,
+        }
+        for tier in self.tiers:
+            result[f'top{tier}_hit'] = self.hits[tier]
+            result[f'top{tier}_rate'] = round(self.hits[tier] / total, 4) if total else 0
+        return result
+
+
+def tier_baseline(tier):
+    """某个 TopK 门槛下随机命中的概率：K 注覆盖 1000 注里的 K 注。"""
+    return tier / (DIGIT_SPACE.size ** POSITIONS)
