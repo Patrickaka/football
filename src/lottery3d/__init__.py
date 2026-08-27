@@ -78,6 +78,6 @@ from .backtest import (
     _sample_random_weights, _mutate_weights, search_weights, print_search_report,
 )
 from .prediction import (
-    _prediction_cache, _cache_time, _is_today_cache, clear_cache, _transition_for_api,
+    _transition_for_api,
     assess_data_quality, is_ml_prediction_cache_valid, run_prediction, print_report, main,
 )

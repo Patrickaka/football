@@ -41,144 +41,63 @@ from .backtest import (
     backtest, permutation_test, print_search_report, search_weights,
 )
 
-_prediction_cache = None
+# ─── 领域层适配 ───
+#
+# 展示层的取舍与四舍五入在 `domain/numeric/lottery3d/presentation.py`，
+# 数据与缓存的可用性判断在 `quality.py`。这里只把配置常量与时钟喂进去。
+
+from src.domain.numeric.lottery3d import presentation as _view
+from src.domain.numeric.lottery3d import quality as _quality
+from src.domain.numeric.lottery3d.space import POSITION_NAMES
+
+POS_NAMES = POSITION_NAMES
+# 遗漏超过这么多期才值得单独列出来。十个数字全列的话那张表没有信息量——
+# 遗漏三五期是常态。
+LONG_MISS_THRESHOLD = 8
+TOP_DIGITS_PER_POSITION = 5
+TOP_MISS_PER_POSITION = 3
+TOP_HOT_DIGITS = 5
+TOP_SUM_TAILS = 5
 
 
-_cache_time = 0
-
-
-def _is_today_cache(cache_timestamp):
-    """检查缓存是否是今天的（按自然天判断）"""
-    if cache_timestamp is None or cache_timestamp == 0:
-        return False
-    
-    import datetime
-    cache_date = datetime.date.fromtimestamp(cache_timestamp)
-    today = datetime.date.today()
-    return cache_date == today
-
-
-def clear_cache():
-    """清除缓存"""
-    global _prediction_cache, _cache_time
-    _prediction_cache = None
-    _cache_time = 0
-    log.info("3D模块缓存已清除")
-
-
-def _transition_for_api(lag1, dynamic, pos_names=("百", "十", "个")):
-    """序列化上期→本期转移统计与动态权重"""
-    dyn_out = {}
-    for k, v in dynamic.items():
-        if isinstance(v, list):
-            dyn_out[k] = [round(x, 3) for x in v]
-        else:
-            dyn_out[k] = round(v, 3)
-    return {
-        "pairs_analyzed": lag1["pairs"],
-        "pos_repeat_rate": [
-            {
-                "name": pos_names[i],
-                "rate": round(lag1["pos_repeat_rate"][i], 4),
-                "vs_random": round(lag1["pos_repeat_rate"][i] / RANDOM_POS_REPEAT, 2),
-            }
-            for i in range(3)
-        ],
-        "repeat_dist": {f"{k}位同": round(v * 100, 1) for k, v in lag1["repeat_dist"].items()},
-        "digit_reuse_rate": round(lag1["digit_reuse_rate"], 4),
-        "full_repeat_rate": round(lag1["full_repeat_rate"], 4),
-        "same_set_rate": round(lag1["same_set_rate"], 4),
-        "ge2_overlap_rate": round(lag1["ge2_overlap_rate"], 4),
-        "dynamic": dyn_out,
-    }
+def _transition_for_api(lag1, dynamic, pos_names=POS_NAMES):
+    return _view.transition_view(lag1, dynamic, pos_names, RANDOM_POS_REPEAT)
 
 
 def assess_data_quality(data):
-    """Return a compact quality summary for the history used by the 3D models."""
-    periods = [str(x[0]) for x in data if x]
-    dates = [str(x[1]) for x in data if len(x) > 1]
-    duplicate_periods = len(periods) - len(set(periods))
-    numeric_gaps = 0
-
-    for prev, curr in zip(periods, periods[1:]):
-        try:
-            prev_year, prev_seq = int(prev[:4]), int(prev[4:])
-            curr_year, curr_seq = int(curr[:4]), int(curr[4:])
-        except Exception:
-            continue
-        if curr_year == prev_year and curr_seq - prev_seq != 1:
-            numeric_gaps += 1
-        elif curr_year == prev_year + 1 and curr_seq != 1:
-            numeric_gaps += 1
-
-    warnings = []
-    if len(periods) < MIN_DATA_PERIODS_FOR_ML_FUSION:
-        warnings.append("history_too_short_for_ml_fusion")
-    if duplicate_periods:
-        warnings.append("duplicate_periods")
-    if numeric_gaps:
-        warnings.append("period_gaps")
-
-    return {
-        "periods": len(periods),
-        "first_period": periods[0] if periods else None,
-        "last_period": periods[-1] if periods else None,
-        "first_date": dates[0] if dates else None,
-        "last_date": dates[-1] if dates else None,
-        "duplicate_periods": duplicate_periods,
-        "period_gaps": numeric_gaps,
-        "ml_fusion_allowed": (
-            len(periods) >= MIN_DATA_PERIODS_FOR_ML_FUSION
-            and duplicate_periods == 0
-            and numeric_gaps == 0
-        ),
-        "warnings": warnings,
-    }
+    """历史数据的质量摘要。"""
+    return _quality.assess_history(
+        [str(row[0]) for row in data if row],
+        [str(row[1]) for row in data if len(row) > 1],
+        MIN_DATA_PERIODS_FOR_ML_FUSION)
 
 
 def is_ml_prediction_cache_valid(cache, current_period):
-    """Guard against stale ML predictions being reused after data/model changes."""
-    if not cache or cache.get("base_period") != current_period:
-        return False
-    if cache.get("model_version") != ML_MODEL_VERSION:
-        return False
-
-    created_at = cache.get("created_at")
-    if created_at:
-        try:
-            created_ts = time.mktime(time.strptime(created_at, "%Y-%m-%d %H:%M:%S"))
-            if time.time() - created_ts > ML_CACHE_MAX_AGE_SECONDS:
-                return False
-        except Exception:
-            return False
-    return True
+    """ML 预测缓存还能不能用。时钟由这里给——读时钟是副作用。"""
+    return _quality.is_cache_valid(
+        cache, current_period, ML_MODEL_VERSION, ML_CACHE_MAX_AGE_SECONDS,
+        time.time(),
+        lambda stamp: time.mktime(time.strptime(stamp, '%Y-%m-%d %H:%M:%S')))
 
 
 def run_prediction(data=None, force_refresh=False, enable_backtest=False,
                    enable_permutation=False, compute_weights=False,
-                   use_prediction_cache=False, train_ml_if_stale=True):
+                   train_ml_if_stale=True):
     """运行预测，返回 JSON 可序列化 dict；data 为 None 时自动抓取。
-    
+
+    **签名比迁移前少了 `use_prediction_cache`**：它默认 False 且没有任何
+    调用方传过 True，而结果照样每次都写进一个模块级缓存——**只写不读**。
+    连同那个缓存与它的 `clear_cache`（同样零调用方）一起删了。
+    接口层自己有缓存（`webapp/caching.py`），这一层不必再存一份。
+
     Args:
         data: 可选的数据列表，如果为 None 则自动抓取
-        force_refresh: 是否强制刷新缓存（默认 False，使用缓存）
+        force_refresh: 是否强制刷新抓取缓存
         enable_backtest: 是否启用回测（默认 False，大幅提升速度）
-        enable_permutation: 是否启用排列测试（默认 False，仅在 enable_backtest=True 时生效）
-        compute_weights: 是否重新计算窗口权重（默认 False，使用缓存或默认权重，提升速度）
-        use_prediction_cache: 是否使用预测结果缓存（默认 False，避免页面整天显示相同结果）
-        train_ml_if_stale: ML缓存失效时是否立即训练；普通刷新设 False，ML按钮再训练
+        enable_permutation: 是否启用排列测试（仅在 enable_backtest=True 时生效）
+        compute_weights: 是否重新计算窗口权重（默认 False，用缓存或默认权重）
+        train_ml_if_stale: ML缓存失效时是否立即训练；普通刷新设 False
     """
-    global _prediction_cache, _cache_time
-    
-    # 检查缓存（按自然天判断）
-    if use_prediction_cache and not force_refresh and _prediction_cache is not None:
-        if _is_today_cache(_cache_time):
-            elapsed = time.time() - _cache_time
-            log.info(f"使用今日缓存数据（缓存时间：{elapsed:.1f}秒前）")
-            return _prediction_cache
-        else:
-            log.info("缓存已过期（非今日数据），重新抓取")
-    
     try:
         if data is None:
             data = fetch_data(force_refresh=force_refresh)
@@ -695,11 +614,6 @@ def run_prediction(data=None, force_refresh=False, enable_backtest=False,
         # 添加和值/跨度区间回测
         result["backtest"]["sum_span_interval"] = backtest_sum_span_interval(numbers, trials=min(100, len(numbers) - 50))
         result["backtest"]["slope_patterns"] = backtest_slope_patterns(numbers, trials=min(200, len(numbers) - 50))
-    
-    # 保存到缓存
-    _prediction_cache = result
-    _cache_time = time.time()
-    log.info("预测结果已缓存")
     
     return result
 
