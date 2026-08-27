@@ -270,6 +270,23 @@ class TotalsTests(unittest.TestCase):
                                      total_high=3.6)
         self.assertLessEqual(capped, 3.6)
 
+    def test_soft_bounds_clamp_the_factors_themselves(self):
+        """**因子本身要先被夹住**，不能只靠最后那道硬约束兜底。
+
+        上一条用的是硬约束（3.6 封顶），所以软约束就算没了也看不出来。
+        这里把硬上界放到够不着的地方，让软约束成为唯一的拦截者：
+        因子上界 1.15，基数 2.0 → 最多 2.0 × 1.15 × 1.15 = 2.645。
+        """
+        wild = totals.target_total(2.0, asian_factor=99.0, goals_factor=99.0,
+                                   total_high=99.0)
+        self.assertAlmostEqual(wild, 2.0 * 1.15 * 1.15, places=6)
+
+    def test_soft_bounds_clamp_from_below_too(self):
+        """下界那一侧同样要夹——只测上界的话把 `factor_low` 删掉也全绿。"""
+        floored = totals.target_total(2.0, asian_factor=0.01, goals_factor=0.01,
+                                      total_low=0.0)
+        self.assertAlmostEqual(floored, 2.0 * 0.85 * 0.85, places=6)
+
     def test_unparsable_factors_fall_back_to_neutral(self):
         self.assertAlmostEqual(totals.target_total(2.8, asian_factor='x',
                                                   goals_factor=None), 2.8)
@@ -316,6 +333,27 @@ class AnchorTests(unittest.TestCase):
         half = scoring_model.anchor_outcomes(self.MATRIX, target, 0.5)[1]['after']
         self.assertGreater(half['胜'], before['胜'])
         self.assertLess(half['胜'], 0.60)
+
+    def test_strength_is_clamped_outside_zero_to_one(self):
+        """界外的强度要夹回去。**语料只喂 0/0.5/1 是不够的**——
+        不夹的话负强度会把概率朝反方向推、大于 1 会推过头，
+        而两者都不会报错，只会让推荐悄悄变形。"""
+        target = {'胜': 0.60, '平': 0.20, '负': 0.20}
+        none_at_all = scoring_model.anchor_outcomes(self.MATRIX, target, 0.0)[0]
+        negative = scoring_model.anchor_outcomes(self.MATRIX, target, -0.5)[0]
+        self.assertEqual(negative, none_at_all, '负强度等同于不对齐')
+
+        full = scoring_model.anchor_outcomes(self.MATRIX, target, 1.0)[0]
+        beyond = scoring_model.anchor_outcomes(self.MATRIX, target, 1.5)[0]
+        self.assertEqual(beyond, full, '超过 1 等同于完全对齐')
+
+    def test_reported_strength_is_the_clamped_value(self):
+        """报出来的也得是夹过的值，否则调用方以为用了 1.5。"""
+        target = {'胜': 0.60, '平': 0.20, '负': 0.20}
+        self.assertEqual(
+            scoring_model.anchor_outcomes(self.MATRIX, target, 1.5)[1]['strength'], 1.0)
+        self.assertEqual(
+            scoring_model.anchor_outcomes(self.MATRIX, target, -0.5)[1]['strength'], 0.0)
 
     def test_missing_target_is_reported_not_raised(self):
         """走不通就返回原分布加一个理由，**不抛也不悄悄返回半成品**。"""
