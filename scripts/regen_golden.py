@@ -172,3 +172,9 @@ from tests.domain.numeric.lottery3d.test_features import golden_entries as l3d_e
 from tests.domain.golden import as_comparable
 
 dump('lottery3d_features', {k: as_comparable(v) for k, v in l3d_entries()})
+
+
+# ---- lottery3d 评分与排名 ----
+from tests.domain.numeric.lottery3d.test_scoring import golden_entries as l3d_scoring_entries
+
+dump('lottery3d_scoring', {k: as_comparable(v) for k, v in l3d_scoring_entries()})
