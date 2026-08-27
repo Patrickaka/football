@@ -382,6 +382,161 @@ class SumSpanTests(unittest.TestCase):
         self.assertGreater(with_shift['sum_center'], without['sum_center'])
 
 
+class DisabledFeatureTests(unittest.TestCase):
+    """线上把 `miss` 开关关了，遗漏那一整段在黄金语料里走不到。
+
+    开关随时会打开，代码是活的——所以补用例，而不是删代码。参数全部显式给，
+    正好是领域层「不读全局配置」换来的好处。
+    """
+
+    WEIGHTS = W.DigitWeights(
+        hot_global=0.0, hot_position=0.0, markov=0.0, markov2=0.0,
+        markov_max=99.0, markov_alpha=1.0, miss_high=1.0, miss_mid=0.5,
+        last_appear=0.0, neighbor=0.0, road_match=0.0, decay=1.0)
+    FLAGS = {'hot': False, 'markov': False, 'miss': True,
+             'neighbor': False, 'road': False}
+
+    def _series(self, miss_for_seven):
+        """造一段：数字 7 恰好遗漏 miss_for_seven 期。"""
+        return [(7, 7, 7)] + [(1, 2, 3)] * miss_for_seven
+
+    def _score(self, miss):
+        scores, _ = digit_scoring.digit_scores(
+            self._series(miss), 500, self.WEIGHTS, self.FLAGS)
+        return scores[7]
+
+    def test_below_the_mid_threshold_earns_nothing(self):
+        """门槛写成字面量，不引用被测常量（判据 12）。"""
+        self.assertEqual(self._score(11), 0.0)
+
+    def test_at_the_mid_threshold_earns_the_mid_score(self):
+        self.assertEqual(self._score(12), 0.5)
+
+    def test_below_the_high_threshold_still_earns_only_the_mid_score(self):
+        self.assertEqual(self._score(19), 0.5)
+
+    def test_at_the_high_threshold_switches_to_the_scaled_score(self):
+        # 20 期：1.0 * (1 + 20/20) = 2.0
+        self.assertEqual(self._score(20), 2.0)
+
+    def test_the_scaled_score_grows_with_the_miss_length(self):
+        # 40 期：1.0 * (1 + 40/20) = 3.0
+        self.assertEqual(self._score(40), 3.0)
+
+    def test_markov_contribution_is_capped(self):
+        """封顶：样本极少的转移经平滑后仍可能给出极高的分，那是分母太小。"""
+        capped = W.DigitWeights(**{**self.WEIGHTS.__dict__,
+                                   'markov': 100.0, 'markov_max': 2.4})
+        uncapped = W.DigitWeights(**{**self.WEIGHTS.__dict__,
+                                     'markov': 100.0, 'markov_max': 1e9})
+        flags = {**self.FLAGS, 'miss': False, 'markov': True}
+        series = [(3, 0, 0)] * 30 + [(3, 0, 0)]
+        with_cap, _ = digit_scoring.digit_scores(series, 500, capped, flags)
+        without, _ = digit_scoring.digit_scores(series, 500, uncapped, flags)
+        self.assertLess(max(with_cap), max(without))
+        # 三个位各贡献一阶+二阶，每份都被 2.4 顶住
+        self.assertLessEqual(max(with_cap), 2.4 * POSITIONS * 2 + 1e-9)
+
+
+class NoiseAndCandidateTests(unittest.TestCase):
+    """线上 `RANDOM_NOISE` 是 0、`top_n` 不超过 30，几个常数在语料里走不到。"""
+
+    def setUp(self):
+        self.meta = build_meta(SERIES['recent200'], WINDOW_WEIGHTS['flat'])
+        self.score, _ = adapter.ensemble_digit_scores(
+            SERIES['recent200'], WINDOW_WEIGHTS['flat'], dynamic=self.meta['dynamic'])
+
+    def test_noise_only_touches_the_head_of_the_pool(self):
+        """只给前 50 注加扰动：后面的注本来就进不了推荐，加了纯属浪费。"""
+        pool = [(100.0 - i, f'{i:03d}') for i in range(200)]
+        noisy = ranking._add_noise(pool, 0.4, random.Random(3))
+        changed = [i for i, (w, num) in enumerate(sorted(noisy, key=lambda x: x[1]))
+                   if abs(w - (100.0 - int(num))) > 1e-12]
+        self.assertTrue(changed)
+        self.assertLessEqual(max(changed), 49)
+
+    def test_candidate_set_widens_past_the_flat_minimum(self):
+        """候选集是 max(注数*5, 150)：要到 top_n>30 才由倍数说了算。"""
+        seen = {}
+        original = ranking.select_diverse_pool
+
+        def spy(pool, top_n, candidate_size, *a, **k):
+            seen['size'] = candidate_size
+            return original(pool, top_n, candidate_size, *a, **k)
+
+        try:
+            ranking.select_diverse_pool = spy
+            context = _context(self.meta)
+            ranking.rank_triplets(self.score, self.meta, context, 40,
+                                  enable_diversity=True,
+                                  diversity={'candidate_size': 150},
+                                  position_top_k=5)
+        finally:
+            ranking.select_diverse_pool = original
+        self.assertEqual(seen['size'], 200)
+
+
+class HotColdBalanceTests(unittest.TestCase):
+    """冷热平衡：黄金语料只比对最终 top20，档位构成的常数在那之下看不见。"""
+
+    def _pool(self):
+        # 号码全用三位互不相同的，方便按数字归档
+        return [(100.0 - i, f'{(i // 100) % 10}{(i // 10) % 10}{i % 10}')
+                for i in range(1000)]
+
+    def _hot_cold(self, **over):
+        base = {'hot': [1, 2, 3], 'warm': [4, 5, 6], 'cold': [7, 8, 9],
+                'hot_share': 0.4, 'warm_share': 0.4, 'cold_share': 0.2}
+        base.update(over)
+        return base
+
+    def test_each_bucket_keeps_its_share(self):
+        """比例写成字面量：保留 100 注时是 40/40/20。"""
+        balanced = ranking._balance_hot_cold(self._pool(), 20, self._hot_cold())
+        self.assertEqual(len(balanced), 100)
+
+    def test_keep_size_follows_the_larger_of_the_two_rules(self):
+        """保留数是 max(注数*4, 100)：注数 30 以下由下限说了算。"""
+        self.assertEqual(len(ranking._balance_hot_cold(self._pool(), 5, self._hot_cold())), 100)
+        self.assertEqual(len(ranking._balance_hot_cold(self._pool(), 50, self._hot_cold())), 200)
+
+    def test_a_cold_pick_needs_both_a_cold_and_a_warm_digit(self):
+        """只要求冷号的话，这一档会被大量「冷+热」的注挤满。"""
+        context = self._hot_cold()
+        pool = [(9.0, '789'), (8.0, '147'), (7.0, '123')]
+        balanced = ranking._balance_hot_cold(pool, 1, context)
+        # 789 全冷、没有温号 → 不算冷注；147 冷+温 → 冷注
+        self.assertEqual(sorted(n for _, n in balanced), ['123', '147', '789'])
+        buckets = {'hot': [], 'warm': [], 'cold': []}
+        for _, number in pool:
+            digits = {int(c) for c in number}
+            if len(digits & {1, 2, 3}) >= 2:
+                buckets['hot'].append(number)
+            elif digits & {7, 8, 9} and digits & {4, 5, 6}:
+                buckets['cold'].append(number)
+            else:
+                buckets['warm'].append(number)
+        self.assertEqual(buckets['cold'], ['147'])
+        self.assertEqual(buckets['warm'], ['789'])
+
+
+class RecentShiftTests(unittest.TestCase):
+    """近期偏移的窗口大小，只有开着偏移时才看得见。线上是关的。"""
+
+    def test_shift_uses_exactly_the_last_five_periods(self):
+        # 前 20 期和值 0，最后 5 期和值 27；只取末 5 期时偏移目标是 27
+        sums = [0] * 20 + [27] * 5
+        spans = [0] * 25
+        found = windows.analyze_sum_span(sums, spans, 25, 1.0, 1.0)
+        self.assertAlmostEqual(found['sum_center'], 27.0, places=9)
+
+    def test_a_wider_shift_window_would_pull_the_centre_lower(self):
+        """窗口若取 10 期，末 10 期里有 5 期是 0，中心会被拉到 13.5。"""
+        sums = [0] * 20 + [27] * 5
+        self.assertEqual(sum(sums[-5:]) / 5, 27.0)
+        self.assertEqual(sum(sums[-10:]) / 10, 13.5)
+
+
 class DiversePoolTests(unittest.TestCase):
 
     def _pool(self):
