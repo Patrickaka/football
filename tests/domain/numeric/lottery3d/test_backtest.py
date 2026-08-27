@@ -389,13 +389,29 @@ class WeightSamplingTests(unittest.TestCase):
         self.assertGreaterEqual(got['SIG'], 2.0)
         self.assertLessEqual(got['SIG'], 5.0)
 
-    def test_mutate_floors_multiplier_key(self):
-        """倍率类只有下限，**没有上限**——这是迁移前的行为，refine 能把权重
-        推到采样阶段根本到不了的地方。改掉会动线上搜索结果，所以留着，
-        但用例把它钉住，免得下次有人以为它是被钳住的。"""
-        got = ws.mutate_weights({'W_A': 0.01}, ('W_A',), self.RANGES,
-                                random.Random(0), scale=10.0)
-        self.assertGreaterEqual(got['W_A'], 0.1)
+    def test_mutate_floors_multiplier_key_at_exactly_the_floor(self):
+        """滑到下限时**恰好**落在 0.1，不是「不低于 0.1」。
+
+        断言下界会漏掉把下限抬高的改动——0.5 也满足「不低于 0.1」。
+        起始值取得足够小，无论扰动往哪个方向都必然触底，与随机源无关。"""
+        got = ws.mutate_weights({'W_A': 1e-9}, ('W_A',), self.RANGES,
+                                random.Random(0), scale=0.5)
+        self.assertEqual(got['W_A'], 0.1)
+
+    def test_mutate_does_not_lift_a_value_above_the_floor(self):
+        """反方向：本来就在下限之上的值不该被抬起来。scale=0 时扰动为零，
+        出来的必须还是 0.2。"""
+        got = ws.mutate_weights({'W_A': 0.2}, ('W_A',), self.RANGES,
+                                random.Random(0), scale=0.0)
+        self.assertEqual(got['W_A'], 0.2)
+
+    def test_mutate_has_no_upper_bound_on_multiplier_keys(self):
+        """倍率类**没有上限**——这是迁移前的行为，refine 能把权重推到采样
+        阶段根本到不了的地方。改掉会动线上搜索结果，所以留着，但用例把它
+        钉住，免得下次有人以为它是被钳住的。"""
+        got = ws.mutate_weights({'W_A': 100.0}, ('W_A',), self.RANGES,
+                                random.Random(0), scale=0.0)
+        self.assertEqual(got['W_A'], 100.0)
 
     def test_adapter_signature_dropped_the_unused_base(self):
         """迁移前的签名是 `_mutate_weights(weights, base, rng, scale)`，而
