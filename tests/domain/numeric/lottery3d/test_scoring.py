@@ -446,14 +446,17 @@ class NoiseAndCandidateTests(unittest.TestCase):
         self.score, _ = adapter.ensemble_digit_scores(
             SERIES['recent200'], WINDOW_WEIGHTS['flat'], dynamic=self.meta['dynamic'])
 
-    def test_noise_only_touches_the_head_of_the_pool(self):
-        """只给前 50 注加扰动：后面的注本来就进不了推荐，加了纯属浪费。"""
+    def test_noise_touches_exactly_the_head_of_the_pool(self):
+        """只给前 50 注加扰动：后面的注本来就进不了推荐。
+
+        **两边都要断言**：只断言「50 之后没动」的话，把范围改小到 10
+        照样通过——那正是变异逃出去的地方。
+        """
         pool = [(100.0 - i, f'{i:03d}') for i in range(200)]
         noisy = ranking._add_noise(pool, 0.4, random.Random(3))
-        changed = [i for i, (w, num) in enumerate(sorted(noisy, key=lambda x: x[1]))
-                   if abs(w - (100.0 - int(num))) > 1e-12]
-        self.assertTrue(changed)
-        self.assertLessEqual(max(changed), 49)
+        moved = {int(num) for weight, num in noisy
+                 if abs(weight - (100.0 - int(num))) > 1e-12}
+        self.assertEqual(moved, set(range(50)))
 
     def test_candidate_set_widens_past_the_flat_minimum(self):
         """候选集是 max(注数*5, 150)：要到 top_n>30 才由倍数说了算。"""
@@ -501,23 +504,16 @@ class HotColdBalanceTests(unittest.TestCase):
         self.assertEqual(len(ranking._balance_hot_cold(self._pool(), 50, self._hot_cold())), 200)
 
     def test_a_cold_pick_needs_both_a_cold_and_a_warm_digit(self):
-        """只要求冷号的话，这一档会被大量「冷+热」的注挤满。"""
-        context = self._hot_cold()
-        pool = [(9.0, '789'), (8.0, '147'), (7.0, '123')]
-        balanced = ranking._balance_hot_cold(pool, 1, context)
-        # 789 全冷、没有温号 → 不算冷注；147 冷+温 → 冷注
-        self.assertEqual(sorted(n for _, n in balanced), ['123', '147', '789'])
-        buckets = {'hot': [], 'warm': [], 'cold': []}
-        for _, number in pool:
-            digits = {int(c) for c in number}
-            if len(digits & {1, 2, 3}) >= 2:
-                buckets['hot'].append(number)
-            elif digits & {7, 8, 9} and digits & {4, 5, 6}:
-                buckets['cold'].append(number)
-            else:
-                buckets['warm'].append(number)
-        self.assertEqual(buckets['cold'], ['147'])
-        self.assertEqual(buckets['warm'], ['789'])
+        """`789` 全是冷号但没有温号，算温注不算冷注。
+
+        断言落在**返回顺序**上：结果是「热档 + 温档 + 冷档」依次拼起来的，
+        所以顺序直接暴露了每注进了哪一档。分数刻意让 147 高于 789——
+        分档判据改成「只要有冷号」的话，两注都会落进冷档，顺序随之变。
+        在测试里把分档逻辑重抄一遍不算检查，那只是把同一个错写了两遍。
+        """
+        pool = [(9.0, '147'), (8.0, '789'), (7.0, '123')]
+        balanced = ranking._balance_hot_cold(pool, 1, self._hot_cold())
+        self.assertEqual([number for _, number in balanced], ['123', '789', '147'])
 
 
 class RecentShiftTests(unittest.TestCase):
