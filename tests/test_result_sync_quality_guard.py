@@ -24,6 +24,13 @@ from src.football.result_sync import (
 from src.football.sample_quality import assess_record_quality
 
 
+# 语料里的比赛都排在 06-27，这两个锚点把「赛前」「赛后」固定下来。
+# **不能靠真实时钟**：那样用例的成败取决于今天是几号，跑得越晚越容易红，
+# 而这种红和真回归在 CI 输出里长得一模一样。
+BEFORE_MATCH = datetime(2026, 6, 25, 10, 0)
+AFTER_MATCH = datetime(2026, 6, 30, 10, 0)
+
+
 class ResultSyncQualityGuardTests(unittest.TestCase):
     def test_mmdd_future_date_stays_current_year(self):
         parsed = _parse_match_datetime('06-27 11:00')
@@ -50,10 +57,52 @@ class ResultSyncQualityGuardTests(unittest.TestCase):
             'sync_status': 'pending',
         }]
 
-        self.assertFalse(history.update_result('future-1', '1-1', 'D', source='live_fid'))
+        # **时间必须注入**。原先这里不传 `now`，靠 06-27 当时还没到来——
+        # 于是这条用例在 6 月 27 日之后自己变红了，而红的原因与代码无关。
+        self.assertFalse(history.update_result(
+            'future-1', '1-1', 'D', source='live_fid', now=BEFORE_MATCH))
         self.assertFalse(history.records[0]['settled'])
         self.assertEqual(history.records[0]['sync_status'], 'pending')
         self.assertIsNone(history.records[0].get('actual_score'))
+
+    def test_update_result_accepts_match_past_settle_window(self):
+        """赛后就该放行。**必须和「赛前拒绝」成对存在**：只测拒绝那一侧的话，
+        把守卫写成恒真也照样全绿；两条一起还顺带证明注入的 `now` 真的生效了
+        （若被忽略，两条不可能同时通过）。"""
+        history = PredictionHistory()
+        history._save = lambda: None
+        history.records = [{
+            'match_id': 'past-1',
+            'home': '埃及',
+            'away': '伊朗',
+            'match_time': '06-27 11:00',
+            'settled': False,
+            'sync_status': 'pending',
+        }]
+
+        self.assertTrue(history.update_result(
+            'past-1', '1-1', 'D', source='live_fid', now=AFTER_MATCH))
+        self.assertTrue(history.records[0]['settled'])
+        self.assertEqual(history.records[0]['actual_score'], '1-1')
+
+    def test_repair_leaves_settled_match_alone(self):
+        """赛后回填的记录不该被「修复」掉——修错方向会把正常赛果清空。"""
+        history = PredictionHistory()
+        history._save = lambda: None
+        history.records = [{
+            'match_id': 'past-2',
+            'match_time': '06-27 08:00',
+            'actual_score': '0-0',
+            'actual_result': 'D',
+            'settled': True,
+            'sync_status': 'synced',
+        }]
+
+        result = history.repair_future_settlements(now=AFTER_MATCH)
+
+        self.assertEqual(result['repaired'], 0)
+        self.assertTrue(history.records[0]['settled'])
+        self.assertEqual(history.records[0]['actual_score'], '0-0')
 
     def test_repair_future_settlements_resets_bad_record(self):
         history = PredictionHistory()
@@ -69,7 +118,7 @@ class ResultSyncQualityGuardTests(unittest.TestCase):
             'sync_status': 'synced',
         }]
 
-        result = history.repair_future_settlements()
+        result = history.repair_future_settlements(now=BEFORE_MATCH)
 
         self.assertEqual(result['repaired'], 1)
         self.assertFalse(history.records[0]['settled'])
@@ -93,7 +142,8 @@ class ResultSyncQualityGuardTests(unittest.TestCase):
         }]
         try:
             result_sync._global_history = history
-            rows = result_sync.get_prediction_records(include_hidden=True)
+            rows = result_sync.get_prediction_records(include_hidden=True,
+                                                     now=BEFORE_MATCH)
         finally:
             result_sync._global_history = original_history
 
@@ -148,7 +198,7 @@ class ResultSyncQualityGuardTests(unittest.TestCase):
             'predicted_1x2': {'D': 0.5},
         }]
 
-        result = history.audit_prediction_history(repair=False)
+        result = history.audit_prediction_history(repair=False, now=BEFORE_MATCH)
 
         self.assertEqual(result['issue_counts']['future_settlement'], 1)
         self.assertTrue(history.records[0]['settled'])
@@ -191,7 +241,7 @@ class ResultSyncQualityGuardTests(unittest.TestCase):
             },
         ]
 
-        result = history.audit_prediction_history(repair=True)
+        result = history.audit_prediction_history(repair=True, now=BEFORE_MATCH)
 
         self.assertTrue(saved['called'])
         self.assertEqual(result['repaired_count'], 3)
@@ -310,7 +360,49 @@ class ResultSyncQualityGuardTests(unittest.TestCase):
 
         self.assertEqual(bucket['sample_count'], 10)
         self.assertAlmostEqual(bucket['weighted_sample_count'], 9.2)
-        self.assertEqual(bucket['calibration_factors'], {})
+
+        # 9.2 个加权样本足以启用校准（门槛是 4）。**迁移前这里断言的是 `{}`**，
+        # 那是旧的硬阈值行为：要求单桶加权样本 >=10 才算因子。而分桶是
+        # 联赛×大小球线×让球×预测总进球 四维，真实数据里绝大多数桶长期只有
+        # 1~3 场，永远够不到 10——校准因子因此始终为空，整个校准器退化成
+        # 恒等变换。断言 `{}` 等于把那个「看起来在工作、实际什么也没做」
+        # 钉成了规范。
+        factors = bucket['calibration_factors']
+        self.assertEqual(set(factors), {2, 3})
+        # 实际十场里九场开 2（预测 0.7）→ 因子朝上；开 3 只有一场（预测 0.3）→ 朝下
+        self.assertGreater(factors[2], 1.0)
+        self.assertLess(factors[3], 1.0)
+        # 部分池化：因子向 1.0 收缩，**不会满额跟随观测频率**。
+        # 观测比值约 1.40，夹到上界前的原始值；收缩后必须明显更靠近 1.0
+        self.assertLess(factors[2], 1.4)
+        self.assertGreater(factors[3], 0.5)
+
+    def test_goal_count_calibrator_stays_silent_below_activation(self):
+        """样本太少就不出因子——噪声比信号大。这是门槛的另一侧。"""
+        calibrator = GoalCountCalibrator()
+        calibrator.db = {}
+
+        dist = {2: 0.7, 3: 0.3}
+        for _ in range(3):
+            calibrator.record_result('Test', 2.5, dist, 2, 2.3, 0.0, sample_weight=1.0)
+
+        key = calibrator._get_bucket_key('Test', 2.5, 0.0, 2.3)
+        self.assertEqual(calibrator.db[key]['calibration_factors'], {})
+
+    def test_goal_count_calibrator_shrinks_harder_with_fewer_samples(self):
+        """**样本越少，因子越贴近 1.0。** 这是部分池化的核心性质，
+        比任何一个具体数值都值得守——收缩公式写反了，单点断言未必看得出来。"""
+        def factor_with(sample_count):
+            calibrator = GoalCountCalibrator()
+            calibrator.db = {}
+            dist = {2: 0.7, 3: 0.3}
+            for _ in range(sample_count):
+                calibrator.record_result('Test', 2.5, dist, 2, 2.3, 0.0, sample_weight=1.0)
+            key = calibrator._get_bucket_key('Test', 2.5, 0.0, 2.3)
+            return calibrator.db[key]['calibration_factors'][2]
+
+        few, many = factor_with(5), factor_with(40)
+        self.assertLess(abs(few - 1.0), abs(many - 1.0))
 
     def test_half_time_stats_uses_weighted_distribution(self):
         db = HalfTimeStatsDB()

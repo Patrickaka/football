@@ -1090,7 +1090,7 @@ class PredictionHistory:
     
     def update_result(self, match_id: str, actual_score: str, actual_result: str,
                       actual_half_score: str = None, error: str = None,
-                      source: str = None):
+                      source: str = None, now: datetime = None):
         """
         更新比赛结果
         
@@ -1100,11 +1100,14 @@ class PredictionHistory:
             actual_result: 实际结果 "H"/"D"/"A"
             actual_half_score: 实际半场比分 "1-0"（可选）
             error: 同步错误信息（可选）
+            now: 当前时间，**只为可测**。读时钟是副作用，藏在函数里就没法测
+                「拒绝提前回填」这条守卫——测试只能写死一个当时属于未来的日期，
+                而那种测试会在那天到来之后自己变红（这里踩过一次）。
         """
         for record in self.records:
             if record.get('match_id') == match_id:
                 if actual_score and actual_result:
-                    if not _is_match_settle_due(record.get('match_time'), minutes=180):
+                    if not _is_match_settle_due(record.get('match_time'), minutes=180, now=now):
                         record['sync_status'] = 'pending'
                         record['last_sync_error'] = '比赛尚未到结算时间，拒绝提前回填'
                         record['last_sync_at'] = datetime.now().isoformat()
@@ -1318,10 +1321,15 @@ class PredictionHistory:
             'last_settled_at': last_settled.isoformat() if last_settled else None,
         }
 
-    def repair_future_settlements(self, minutes: int = 180) -> Dict:
-        """Reset records that were settled before kickoff plus wait window."""
+    def repair_future_settlements(self, minutes: int = 180,
+                                  now: datetime = None) -> Dict:
+        """Reset records that were settled before kickoff plus wait window.
+
+        `now` 只为可测：读时钟是副作用，藏在里面就只能靠「写一个当时还没到的
+        日期」来测，而那种用例到了那天会自己变红。
+        """
         repaired = []
-        now = datetime.now()
+        now = now or datetime.now()
         fields_to_clear = [
             'actual_score', 'actual_result', 'actual_half_score', 'actual_half_result',
             'actual_half_full', 'settled_at', 'evaluation', 'hit_top1', 'hit_top3',
@@ -1356,11 +1364,15 @@ class PredictionHistory:
             self._save()
         return {'repaired': len(repaired), 'records': repaired}
 
-    def audit_prediction_history(self, repair: bool = False, minutes: int = 180) -> Dict:
-        """Audit historical records for unsafe calibration/backtest samples."""
+    def audit_prediction_history(self, repair: bool = False, minutes: int = 180,
+                                 now: datetime = None) -> Dict:
+        """Audit historical records for unsafe calibration/backtest samples.
+
+        `now` 只为可测，理由同 `repair_future_settlements`。
+        """
         issues = []
         repaired = []
-        now = datetime.now()
+        now = now or datetime.now()
 
         def add_issue(record, code, severity='warning', detail=None):
             item = {
@@ -2664,21 +2676,24 @@ def get_sync_status_summary() -> Dict:
     return _global_history.get_sync_status_summary()
 
 
-def repair_future_settlements(minutes: int = 180) -> Dict:
+def repair_future_settlements(minutes: int = 180, now: datetime = None) -> Dict:
     """撤销尚未到结算时间却已经回填的记录。"""
-    return _global_history.repair_future_settlements(minutes=minutes)
+    return _global_history.repair_future_settlements(minutes=minutes, now=now)
 
 
-def audit_prediction_history(repair: bool = False, minutes: int = 180) -> Dict:
-    return _global_history.audit_prediction_history(repair=repair, minutes=minutes)
+def audit_prediction_history(repair: bool = False, minutes: int = 180,
+                             now: datetime = None) -> Dict:
+    return _global_history.audit_prediction_history(repair=repair, minutes=minutes, now=now)
 
 
-def get_prediction_records(include_hidden: bool = False) -> List[Dict]:
+def get_prediction_records(include_hidden: bool = False,
+                           now: datetime = None) -> List[Dict]:
     """
     获取预测记录列表
-    
+
     参数：
         include_hidden: 是否包含已失败的记录
+        now: 当前时间，**只为可测**（理由同 `repair_future_settlements`）
     """
     records = []
     for record in _global_history.records:
@@ -2689,7 +2704,7 @@ def get_prediction_records(include_hidden: bool = False) -> List[Dict]:
         is_future_settled = (
             (record.get('settled') or record.get('sync_status') == 'synced')
             and record.get('match_time')
-            and not _is_match_settle_due(record.get('match_time'), minutes=180)
+            and not _is_match_settle_due(record.get('match_time'), minutes=180, now=now)
         )
         lottery_snapshot = (record.get('odds_snapshot') or {}).get('lottery') or {}
         spf_was_offered = not lottery_snapshot.get('offer_matched') or bool(

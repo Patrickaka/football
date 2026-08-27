@@ -37,6 +37,10 @@ def _mini_total():
         'close_line': 2.5,
         'open_line': 2.5,
         'close_prob': {'over': 0.56, 'under': 0.44},
+        # 残差特征里有一项「大球概率变化」，要拿开赛前后两个概率做差。
+        # 这个 mock 写在那项特征加进来之前，缺了它 → KeyError。
+        # 真实数据不会缺：`analyze_total()` 只有一个 return，必带这个键
+        'open_prob': {'over': 0.54, 'under': 0.46},
         'implied_total': 2.55,
         'expected_goals': [2, 4],
         'lean': 'over',

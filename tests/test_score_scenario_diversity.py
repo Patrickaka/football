@@ -2,6 +2,7 @@ import unittest
 from unittest.mock import patch
 
 import src.football as football
+from src.football import pipeline
 from src.football import assess_football_upset
 from src.football.prediction_policy import blend_score_matrices, select_diverse_score_scenarios
 from src.football.result_sync import PredictionHistory
@@ -56,8 +57,33 @@ class ScoreScenarioDiversityTests(unittest.TestCase):
         self.assertIn('欧赔与亚盘明显背离', result['signals'])
         self.assertIn('热门方向升水+0.15', result['signals'])
 
-    def test_prediction_logic_version_invalidates_old_diversified_ranking_cache(self):
-        self.assertIn('fair-price-joint-matrix', football.FOOTBALL_PREDICTION_LOGIC_VERSION)
+    def test_prediction_logic_version_invalidates_old_cache(self):
+        """版本对不上的缓存必须判为过期。
+
+        **原先这里断言的是版本字符串里含 `fair-price-joint-matrix`**，那测的
+        不是它想保护的行为：缓存失效靠的是相等性比较，版本改成任何别的值都
+        照样失效；而版本一演进（现在是 `2026-08-21-...-v34`）这条就红了——
+        保护没落到实处，噪声倒是留下了。改成直接测那个判断本身。
+        """
+        current = football.FOOTBALL_PREDICTION_LOGIC_VERSION
+        self.assertTrue(pipeline._is_prediction_cache_current(
+            {'model': {'prediction_logic_version': current}}))
+        self.assertFalse(pipeline._is_prediction_cache_current(
+            {'model': {'prediction_logic_version': 'some-older-version'}}))
+
+    def test_prediction_cache_without_version_is_stale(self):
+        """连版本都没有的旧缓存同样算过期——**默认必须是「不新鲜」**：
+        认下一份来路不明的缓存，比重算一次贵得多。"""
+        self.assertFalse(pipeline._is_prediction_cache_current({}))
+        self.assertFalse(pipeline._is_prediction_cache_current(
+            {'model': {}, 'model_status': {}}))
+        self.assertFalse(pipeline._is_prediction_cache_current('not-a-dict'))
+
+    def test_prediction_version_falls_back_to_model_status(self):
+        """版本写在 `model` 或 `model_status` 里都认——历史记录两种都有。"""
+        current = football.FOOTBALL_PREDICTION_LOGIC_VERSION
+        self.assertTrue(pipeline._is_prediction_cache_current(
+            {'model_status': {'prediction_logic_version': current}}))
 
     def test_score_matrix_ensemble_is_normalized(self):
         blended = blend_score_matrices(
