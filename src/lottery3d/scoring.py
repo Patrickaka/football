@@ -164,20 +164,6 @@ def backtest_sum_span_interval(numbers, trials=100):
     }
 
 
-_window_weights_cache = None
-
-
-_window_weights_cache_time = 0
-
-
-_window_weights_cache_numbers_hash = None
-
-
-def default_window_weights():
-    n = len(RECENT_WINDOWS)
-    return {w: 1.0 / n for w in RECENT_WINDOWS}
-
-
 def load_persisted_window_weights():
     """读取持久化的动态窗口权重"""
     try:
@@ -231,77 +217,6 @@ def resolve_window_weights(numbers, compute_weights=False, period=None):
         return weights, scores
 
     return default_window_weights(), {}
-
-
-def compute_window_weights(numbers, trials=WINDOW_BACKTEST_TRIALS, enable_cache=True):
-    """回测各窗口 Top3 命中表现，拉普拉斯先验后归一化为集成权重
-    
-    参数：
-        numbers: 历史号码数据
-        trials: 回测次数
-        enable_cache: 是否启用缓存（默认 True）
-    
-    返回：
-        (weights, scores): 窗口权重字典和原始分数字典
-    """
-    global _window_weights_cache, _window_weights_cache_time, _window_weights_cache_numbers_hash
-    
-    max_w = max(RECENT_WINDOWS)
-    if len(numbers) < max_w + 10:
-        return default_window_weights(), {}
-    
-    # 检查缓存
-    numbers_hash = hash(tuple(tuple(n) for n in numbers[-max_w-10:]))
-    if enable_cache and _window_weights_cache is not None:
-        elapsed = time.time() - _window_weights_cache_time
-        if elapsed < 3600 and _window_weights_cache_numbers_hash == numbers_hash:
-            log.debug("使用缓存的窗口权重")
-            return _window_weights_cache
-    
-    trials = min(trials, len(numbers) - max_w - 5)
-    trials = max(10, trials)
-    raw = {w: 0.0 for w in RECENT_WINDOWS}
-    start = len(numbers) - trials
-
-    for i in range(start, len(numbers)):
-        train = numbers[:i]
-        actual = numbers[i]
-        act_s = f"{actual[0]}{actual[1]}{actual[2]}"
-        for w in RECENT_WINDOWS:
-            if len(train) < w:
-                continue
-            sums = [sum(x) for x in train]
-            spans = [calc_span(x) for x in train]
-            meta = build_ranking_meta(train, {w: 1.0}, sums, spans, tail_top=4)
-            sc, _ = digit_scores(train, window=w, dynamic=meta.get("dynamic"))
-            dan, _, kill, _ = pick_dan_tuo_kill(sc, enable_danma_random=False)
-            top = rank_triplets(
-                sc, dan, kill, meta,
-                top_n=ZHIXUAN_TOP3,
-                enable_exploration=False,
-                apply_noise=False,
-                enable_cold_hot_balance=False,
-                enable_diversity=False,
-                enable_correlation=False,
-                recent_recommendations=None,
-            )
-            top_nums = [t[1] for t in top]
-            if act_s in top_nums:
-                raw[w] += 1.0
-            elif max_digit_overlap(act_s, top_nums) >= 2:
-                raw[w] += 0.25
-
-    prior = WINDOW_WEIGHT_PRIOR
-    total = sum(raw[w] + prior for w in RECENT_WINDOWS)
-    weights = {w: (raw[w] + prior) / total for w in RECENT_WINDOWS}
-    
-    # 更新缓存
-    if enable_cache:
-        _window_weights_cache = (weights, {w: round(raw[w], 1) for w in RECENT_WINDOWS})
-        _window_weights_cache_time = time.time()
-        _window_weights_cache_numbers_hash = numbers_hash
-    
-    return weights, {w: round(raw[w], 1) for w in RECENT_WINDOWS}
 
 
 TICKET_PRICE = 2
@@ -727,3 +642,96 @@ def evaluate_strategy_admission(served_last100_rate, raw_last100_rate,
                                 significance=None):
     return _admission.evaluate(served_last100_rate, raw_last100_rate,
                                actual_rank_avg, random_baseline, significance)
+
+
+# ─── 窗口权重适配 ───
+#
+# 权重怎么算在 `domain/numeric/lottery3d/window_weights.py`。**副作用全留在
+# 这里**：缓存、kv 读写、时间戳。领域层要能在测试里稳定复现，一旦它自己去
+# 读时钟或读 kv，就再也做不到了。
+
+from src.domain.numeric.lottery3d import window_weights as _ww
+
+
+class _WeightsCache:
+    """算一次权重要跑几十期回测，所以缓存它。
+
+    迁移前这是三个模块级全局量（值、时间、数据指纹），而
+    `src/lottery3d/__init__.py` 还把它们 `from ... import` 了出去——那是
+    **导入时的值快照**，永远是 `None`，改了也传不出去。收成一个对象，
+    生命周期就只有一处。
+    """
+
+    TTL_SECONDS = 3600
+
+    def __init__(self):
+        self._value = None
+        self._stamped_at = 0
+        self._fingerprint = None
+
+    def get(self, fingerprint):
+        if self._value is None or self._fingerprint != fingerprint:
+            return None
+        if time.time() - self._stamped_at >= self.TTL_SECONDS:
+            return None
+        return self._value
+
+    def put(self, fingerprint, value):
+        self._value = value
+        self._stamped_at = time.time()
+        self._fingerprint = fingerprint
+
+    def clear(self):
+        self.__init__()
+
+
+_WEIGHTS_CACHE = _WeightsCache()
+
+
+def default_window_weights():
+    return _ww.default_weights(RECENT_WINDOWS)
+
+
+def _window_fingerprint(numbers):
+    """只按最长窗口那一段取指纹：更早的数据不参与回测，变了也不该让缓存失效。"""
+    span = max(RECENT_WINDOWS) + 10
+    return hash(tuple(tuple(n) for n in numbers[-span:]))
+
+
+def _predict_for_window(train, window):
+    """某个窗口单独给出的 Top3。回测里逐期调用，**只看 train**。"""
+    sums = [sum(x) for x in train]
+    spans = [calc_span(x) for x in train]
+    meta = build_ranking_meta(train, {window: 1.0}, sums, spans, tail_top=4)
+    score, _ = digit_scores(train, window=window, dynamic=meta.get('dynamic'))
+    danma, _, kill, _ = pick_dan_tuo_kill(score, enable_danma_random=False)
+    top = rank_triplets(
+        score, danma, kill, meta, top_n=ZHIXUAN_TOP3,
+        enable_exploration=False, apply_noise=False,
+        enable_cold_hot_balance=False, enable_diversity=False,
+        enable_correlation=False, recent_recommendations=None)
+    return [item[1] for item in top]
+
+
+def compute_window_weights(numbers, trials=WINDOW_BACKTEST_TRIALS, enable_cache=True):
+    """回测各窗口的 Top3 表现，加先验后归一化成权重。"""
+    if not _ww.has_enough_history(numbers, RECENT_WINDOWS):
+        return default_window_weights(), {}
+
+    fingerprint = _window_fingerprint(numbers)
+    if enable_cache:
+        cached = _WEIGHTS_CACHE.get(fingerprint)
+        if cached is not None:
+            log.debug('使用缓存的窗口权重')
+            return cached
+
+    raw = _ww.score_windows(
+        numbers, RECENT_WINDOWS,
+        _ww.trial_count(numbers, RECENT_WINDOWS, trials),
+        _predict_for_window,
+        lambda draw: f'{draw[0]}{draw[1]}{draw[2]}')
+    result = (_ww.normalise(raw, RECENT_WINDOWS, WINDOW_WEIGHT_PRIOR),
+              {window: round(raw[window], 1) for window in RECENT_WINDOWS})
+    if enable_cache:
+        _WEIGHTS_CACHE.put(fingerprint, result)
+    return result
