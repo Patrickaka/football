@@ -20,6 +20,7 @@ from ..common import kv_store
 log = setup_logger('lottery3d')
 
 from .config import (
+    MARKOV_LAPLACE_ALPHA, PAIR_BONUS, W_SLOPE_MATCH,
     COLD_RATIO, CORRELATION_PENALTY, CORRELATION_THRESHOLD, DANMA_RANDOM_RATE, DANMA_TOP_POOL, DIVERSITY_WEIGHT, EXPLORATION_RATE, EXP_DECAY, FEATURE_FLAGS, HOT_RATIO, HOT_WINDOW, MARKOV_MAX_SCORE, RANDOM_DIGIT_REUSE, RANDOM_NOISE, RANDOM_POS_REPEAT, RECENT_SUM_SPAN_SHIFT, RECENT_WINDOW, RECENT_WINDOWS, SERVED_POOL_CANDIDATE_SIZE, SPAN_SOFT_SIGMA, SUM_INTERVAL_WINDOW, SUM_SOFT_SIGMA, SUM_TREND_ADJUST, SUM_TREND_WINDOW, WARM_RATIO, WINDOW_BACKTEST_TRIALS, WINDOW_WEIGHTS_KV_KEY, WINDOW_WEIGHT_PRIOR, W_CONSECUTIVE, W_DANMA_HIT, W_FORM_PRIOR, W_HOT_GLOBAL, W_HOT_POS, W_KILL_PENALTY, W_LAST_APPEAR, W_MARKOV, W_MARKOV2, W_MISS_HIGH, W_MISS_MID, W_NEIGHBOR, W_POS_REPEAT, W_RATIO_MATCH, W_ROAD_MATCH, W_TRIPLET_GLOBAL, W_TRIPLET_POS, W_ZU6_PAIR, ZHIXUAN_TOP3, ZHXUAN_POS_TOPK, ZU3_MIN_SAMPLES, ZU3_PAIRS_COUNT, ZU3_PRESENCE_WINDOWS, ZU3_TIER_SIZES, ZU6_FOUR_SIZE, ZU6_POOL_SIZE, ZU6_PRESENCE_WINDOWS, ZU6_USE_KILL,
 )
 from .features import (
@@ -1790,3 +1791,212 @@ def evaluate_strategy_admission(
     return {"eligible": eligible, "checks": checks}
 
 
+
+
+# ─── 领域层适配 ───
+#
+# 窗口集成、数字评分、直选排名三段已迁入 `src/domain/numeric/lottery3d/`。
+# 下面这一层只做两件事：把配置常量装进 `DigitWeights` / `TripletWeights`，
+# 以及保住旧的函数名与签名（`prediction.py` / `backtest.py` / `__init__.py`
+# 都按旧名字导入）。
+
+from src.domain.numeric.lottery3d import digit_scoring as _digits
+from src.domain.numeric.lottery3d import ranking as _ranking
+from src.domain.numeric.lottery3d import weights as _weights
+from src.domain.numeric.lottery3d import windows as _windows
+
+_DIGIT_WEIGHTS = _weights.DigitWeights(
+    hot_global=W_HOT_GLOBAL, hot_position=W_HOT_POS,
+    markov=W_MARKOV, markov2=W_MARKOV2, markov_max=MARKOV_MAX_SCORE,
+    markov_alpha=MARKOV_LAPLACE_ALPHA,
+    miss_high=W_MISS_HIGH, miss_mid=W_MISS_MID,
+    last_appear=W_LAST_APPEAR, neighbor=W_NEIGHBOR, road_match=W_ROAD_MATCH,
+    decay=EXP_DECAY,
+)
+
+_TRIPLET_WEIGHTS = _weights.TripletWeights(
+    danma_hit=W_DANMA_HIT, kill_penalty=W_KILL_PENALTY,
+    sum_sigma=SUM_SOFT_SIGMA, span_sigma=SPAN_SOFT_SIGMA,
+    consecutive=W_CONSECUTIVE, position_repeat=W_POS_REPEAT,
+    ratio_match=W_RATIO_MATCH, slope_match=W_SLOPE_MATCH, pair_bonus=PAIR_BONUS,
+    form_prior=W_FORM_PRIOR,
+    triplet_position=W_TRIPLET_POS, triplet_global=W_TRIPLET_GLOBAL,
+    diversity=DIVERSITY_WEIGHT,
+    correlation_penalty=CORRELATION_PENALTY,
+    correlation_threshold=CORRELATION_THRESHOLD,
+    noise=RANDOM_NOISE, exploration_rate=EXPLORATION_RATE,
+    danma_top_pool=DANMA_TOP_POOL, danma_random_rate=DANMA_RANDOM_RATE,
+)
+
+_BASELINES = _weights.Baselines(
+    position_repeat=RANDOM_POS_REPEAT, digit_reuse=RANDOM_DIGIT_REUSE,
+)
+
+# 动态权重缩放的基准。领域层不读全局配置，所以这几个静态值由这里给。
+_DYNAMIC_BASE = {
+    'position_repeat': W_POS_REPEAT,
+    'last_appear': W_LAST_APPEAR,
+    'consecutive': W_CONSECUTIVE,
+}
+
+_clamp = _windows.clamp
+def _empty_lag1():
+    return _windows.empty_lag1(_BASELINES)
+position_repeat_count = _windows.position_repeat_count
+
+
+def analyze_lag1_dynamics(numbers, window=RECENT_WINDOW):
+    return _windows.analyze_lag1(numbers, window, EXP_DECAY, _BASELINES)
+
+
+def ensemble_lag1_dynamics(numbers, window_weights):
+    return _windows.ensemble_lag1(numbers, window_weights, EXP_DECAY, _BASELINES)
+
+
+def derive_dynamic_weights(lag1, consec_rate):
+    return _windows.derive_dynamic_weights(lag1, consec_rate, _DYNAMIC_BASE, _BASELINES)
+
+
+def analyze_patterns(numbers, window=RECENT_WINDOW):
+    return _windows.analyze_patterns(numbers, window, EXP_DECAY)
+
+
+def ensemble_patterns(numbers, window_weights):
+    return _windows.ensemble_patterns(numbers, window_weights, EXP_DECAY)
+
+
+def analyze_sum_span(sums, spans, window=RECENT_WINDOW):
+    return _windows.analyze_sum_span(sums, spans, window, EXP_DECAY,
+                                     RECENT_SUM_SPAN_SHIFT)
+
+
+def ensemble_sum_span(sums, spans, window_weights):
+    return _windows.ensemble_sum_span(sums, spans, window_weights, EXP_DECAY,
+                                      RECENT_SUM_SPAN_SHIFT)
+
+
+def _meta_from_raw(meta_raw, tail_top=5):
+    return _windows.with_hot_sets(meta_raw, tail_top)
+
+
+def digit_scores(numbers, window=RECENT_WINDOW, dynamic=None):
+    """三份弱先验（遗漏周期、回补、熵值）在这里算好再喂进去：
+    它们各自有窗口与阈值，那是配置问题。"""
+    return _digits.digit_scores(
+        numbers, window, _DIGIT_WEIGHTS, FEATURE_FLAGS, dynamic,
+        miss_cycle=miss_cycle_bonus(numbers) if FEATURE_FLAGS.get('miss', True) else None,
+        rebound=rebound_model(numbers) if FEATURE_FLAGS.get('miss', True) else None,
+        entropy=entropy_model(numbers) if FEATURE_FLAGS.get('miss', True) else None,
+    )
+
+
+def ensemble_digit_scores(numbers, window_weights, dynamic=None):
+    return _digits.ensemble_digit_scores(
+        numbers, window_weights, _DIGIT_WEIGHTS, FEATURE_FLAGS, dynamic,
+        miss_cycle=miss_cycle_bonus(numbers) if FEATURE_FLAGS.get('miss', True) else None,
+        rebound=rebound_model(numbers) if FEATURE_FLAGS.get('miss', True) else None,
+        entropy=entropy_model(numbers) if FEATURE_FLAGS.get('miss', True) else None,
+    )
+
+
+def position_digit_scores(numbers, position, window=RECENT_WINDOW, dynamic=None):
+    return _digits.position_digit_scores(numbers, position, window,
+                                         _DIGIT_WEIGHTS, FEATURE_FLAGS, dynamic)
+
+
+def ensemble_position_digit_scores(numbers, position, window_weights, dynamic=None):
+    return _digits.ensemble_position_digit_scores(
+        numbers, position, window_weights, _DIGIT_WEIGHTS, FEATURE_FLAGS, dynamic)
+
+
+def zu6_digit_scores(numbers, window_weights=None, dynamic=None):
+    """`window_weights` 与 `dynamic` 留在签名里只为兼容旧调用方：
+    组六选池模型刻意不复用分位直选模型。"""
+    return _digits.zu6_digit_scores(numbers, ZU6_PRESENCE_WINDOWS)
+
+
+def _triplet_context(danma, kill, meta):
+    """建一次上下文。`form_switch` 与 `sum_interval` 只依赖历史——迁移前它们
+    是在一千注的循环里各算一遍的。"""
+    numbers = meta.get('numbers', [])
+    return _ranking.build_context(
+        meta, _TRIPLET_WEIGHTS, FEATURE_FLAGS, danma, kill,
+        form_switch=(form_switch_bonus(numbers)
+                     if len(numbers) >= 5 else None),
+        sum_interval=(sum_interval_bonus(numbers)
+                      if len(numbers) >= SUM_INTERVAL_WINDOW else None),
+    )
+
+
+def _blend_dan_score(score, meta):
+    return _ranking.blend_dan_score(score, meta)
+
+
+def _triplet_digit_base(a, b, c, score, meta):
+    return _ranking._term_base((a, b, c), score, meta,
+                               _triplet_context([], [], meta))
+
+
+def triplet_weight(a, b, c, score, danma, kill, meta, features=None):
+    context = _ranking.build_context(
+        meta, _TRIPLET_WEIGHTS, features if features is not None else FEATURE_FLAGS,
+        danma, kill,
+        form_switch=(form_switch_bonus(meta.get('numbers', []))
+                     if len(meta.get('numbers', [])) >= 5 else None),
+        sum_interval=(sum_interval_bonus(meta.get('numbers', []))
+                      if len(meta.get('numbers', [])) >= SUM_INTERVAL_WINDOW else None),
+    )
+    return _ranking.weight((a, b, c), score, meta, context)
+
+
+def triplet_weight_detail(a, b, c, score, danma, kill, meta):
+    return _ranking.detail((a, b, c), score, meta, _triplet_context(danma, kill, meta))
+
+
+def build_detail_list(items, score, danma, kill, meta):
+    return _ranking.build_detail_list(items, score, meta,
+                                      _triplet_context(danma, kill, meta))
+
+
+def select_danma(score_rank, enable_random=True):
+    return _ranking.select_danma(score_rank, DANMA_TOP_POOL, DANMA_RANDOM_RATE,
+                                 enable_random)
+
+
+def select_diverse_pool(pool, top_n=30, candidate_size=SERVED_POOL_CANDIDATE_SIZE,
+                        use_diversity=True, use_correlation=True):
+    return _ranking.select_diverse_pool(
+        pool, top_n, candidate_size, DIVERSITY_WEIGHT,
+        CORRELATION_PENALTY, CORRELATION_THRESHOLD, use_diversity, use_correlation)
+
+
+def _position_constrained_pool(score, danma, kill, meta, per_pos=ZHXUAN_POS_TOPK):
+    return _ranking.position_constrained_pool(
+        score, meta, _triplet_context(danma, kill, meta), per_pos)
+
+
+def _merge_rank_pools(*pools, top_n):
+    return _ranking.merge_pools(*pools, top_n=top_n)
+
+
+def rank_triplets(score, danma, kill, meta, top_n=20, enable_exploration=True,
+                  apply_noise=True, enable_cold_hot_balance=True,
+                  recent_recommendations=None, enable_diversity=True,
+                  enable_correlation=False):
+    numbers = meta.get('numbers', [])
+    hot_cold = None
+    if enable_cold_hot_balance and len(numbers) >= HOT_WINDOW:
+        hot, warm, cold = classify_digits_by_hot(numbers, HOT_WINDOW)
+        hot_cold = {'hot': hot, 'warm': warm, 'cold': cold,
+                    'hot_share': HOT_RATIO, 'warm_share': WARM_RATIO,
+                    'cold_share': COLD_RATIO}
+    return _ranking.rank_triplets(
+        score, meta, _triplet_context(danma, kill, meta), top_n,
+        hot_cold=hot_cold,
+        recent_recommendations=recent_recommendations,
+        penalise_recent=recent_recommend_penalty,
+        diversity={'candidate_size': SERVED_POOL_CANDIDATE_SIZE},
+        enable_exploration=enable_exploration, apply_noise=apply_noise,
+        enable_diversity=enable_diversity, enable_correlation=enable_correlation,
+        position_top_k=ZHXUAN_POS_TOPK,
+    )

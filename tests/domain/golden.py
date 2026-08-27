@@ -48,6 +48,9 @@ def as_comparable(value, ndigits=10):
 
     - **元组键**：二阶马尔可夫的键是 `(前两期, 前一期)`。JSON 不允许非字符串
       的键，`json.dumps` 会直接抛错，所以统一转成字符串。
+    - **集合**：热区、热门奇偶比这些量天然是集合，而 JSON 没有集合。转成
+      **排序后的列表**——转成 `str(...)` 也能比，但那样比的是 Python 的
+      repr，元素顺序一变就红，而集合本来就没有顺序。
     - **浮点取整**：指数加权、频率这类量在不同求和顺序下末位可能差一个 ulp。
       不取整的话，一次纯粹的结构调整也会让黄金比对整片变红，那就分不清
       「结果变了」和「加法顺序变了」。取到第 10 位远严于任何有意义的变化。
@@ -58,6 +61,8 @@ def as_comparable(value, ndigits=10):
     if isinstance(value, dict):
         return {str(k): as_comparable(v, ndigits)
                 for k, v in sorted(value.items(), key=lambda item: str(item[0]))}
+    if isinstance(value, (set, frozenset)):
+        return sorted((as_comparable(v, ndigits) for v in value), key=repr)
     if isinstance(value, (list, tuple)):
         return [as_comparable(v, ndigits) for v in value]
     if isinstance(value, float):
