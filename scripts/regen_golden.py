@@ -220,3 +220,9 @@ dump('lottery3d_ml', {k: as_comparable(v) for k, v in l3d_ml_entries()})
 from scripts.gen_beidan_modeling_golden import entries as beidan_modeling_entries
 
 dump('beidan_modeling', {k: as_comparable(v) for k, v in beidan_modeling_entries()})
+
+
+# ---- beidan 推荐质量与爆冷判定 ----
+from scripts.gen_beidan_quality_golden import entries as beidan_quality_entries
+
+dump('beidan_quality', {k: as_comparable(v) for k, v in beidan_quality_entries()})
