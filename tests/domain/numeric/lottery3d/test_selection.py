@@ -383,6 +383,17 @@ class FormProbabilityTests(unittest.TestCase):
         self.assertEqual(selection.FORM_BLEND['recent'], 0.40)
         self.assertEqual(selection.FORM_BLEND['markov'], 0.35)
 
+    def test_unnormalised_input_is_still_normalised_out(self):
+        """窗口权重不归一时 `recent_p` 也不归一——融合末尾那次归一化就是
+        为它准备的。四个输入都规范时它是空转，所以只能这样喂才测得到。
+        """
+        forms = ['zu6'] * 70 + ['zu3'] * 27 + ['baozi'] * 3
+        doubled = {'zu6': 1.44, 'zu3': 0.54, 'baozi': 0.02}   # 和 = 2.0
+        theory = {'zu6': 0.72, 'zu3': 0.27, 'baozi': 0.01}
+        _, blended = selection.form_probability(forms, doubled, theory)
+        self.assertAlmostEqual(sum(doubled.values()), 2.0, places=9)
+        self.assertAlmostEqual(sum(blended.values()), 1.0, places=9)
+
     def test_recent_evidence_moves_the_blend(self):
         forms = ['zu6'] * 100
         neutral = {'zu6': 1 / 3, 'zu3': 1 / 3, 'baozi': 1 / 3}
