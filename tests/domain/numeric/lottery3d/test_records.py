@@ -464,9 +464,20 @@ class WeightsCacheTests(unittest.TestCase):
         self.cache.put('fp', 'value')
         self.assertIsNone(self.cache.get('other'))
 
-    def test_an_expired_entry_misses(self):
+    def test_the_ttl_is_one_hour(self):
+        """写字面量：拿 `TTL_SECONDS` 当偏移量的话，把它改坏偏移会跟着挪，
+        断言照样通过（判据 12）。"""
+        self.assertEqual(adapter._WeightsCache.TTL_SECONDS, 3600)
+
+    def test_an_entry_just_inside_the_ttl_still_hits(self):
         self.cache.put('fp', 'value')
-        self.cache._stamped_at -= self.cache.TTL_SECONDS
+        self.cache._stamped_at -= 3599
+        self.assertEqual(self.cache.get('fp'), 'value')
+
+    def test_an_expired_entry_misses(self):
+        """两侧都要断言：只测「过期后失效」的话，把 TTL 改成 1 秒也发现不了。"""
+        self.cache.put('fp', 'value')
+        self.cache._stamped_at -= 3601
         self.assertIsNone(self.cache.get('fp'))
 
     def test_clear_drops_everything(self):
