@@ -60,7 +60,7 @@ from .scoring import (
     zu3_digit_presence, zu3_pair_scores, zu3_combos_from_pair, zu3_zu_notes_from_pair, pick_zu3_pairs,
     zu3_coverage_tiers, pick_dan_tuo_kill, pick_zu6_four, zu6_notes_from_digits, TICKET_PRICE,
     build_zu6_coverage_tiers, build_zu6_primary, evaluate_zu6_pool_recent, _zu6_four_payload, _zu6_four_balance_score,
-    build_zu6_four_variants, _effective_digit_score, _zu6_combo_score, pick_zu6_pool, _blend_dan_score,
+    build_zu6_four_variants, _effective_digit_score, pick_zu6_pool, _blend_dan_score,
     _triplet_digit_base, triplet_weight, triplet_weight_detail, build_detail_list, select_danma,
     _position_constrained_pool, _merge_rank_pools, rank_triplets, _meta_from_raw, build_ranking_meta,
     evaluate_strategy_admission,
