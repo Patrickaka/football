@@ -345,6 +345,20 @@ class SumTests(unittest.TestCase):
         self.assertEqual(result['bonus'][0], -0.5)
         self.assertEqual(result['bonus'][SUM_MAX], -0.5)
 
+    def test_extreme_band_boundaries_are_where_they_are(self):
+        """两端各多少算「极端」要有紧贴边界的样本。
+
+        线上 `SUM_EXTREME_PENALTY` 现在是 0，这一项等于关着，黄金语料测不到
+        边界——所以这里显式给一个非零罚分。区间取 1~7，让 8 与 24 落在
+        「既不在区间内也不算极端」的那一档，边界挪一格就会露出来。
+        """
+        result = history.sum_interval([(0, 0, 4)] * 10, 5, 3, 0.8, 0.5)
+        self.assertEqual((result['low'], result['high']), (1, 7))
+        self.assertEqual(result['bonus'][history.EXTREME_LOW], 0.8)      # 5 仍在区间内
+        self.assertEqual(result['bonus'][8], 0.0)                        # 出区间但不极端
+        self.assertEqual(result['bonus'][history.EXTREME_HIGH - 1], 0.0)  # 24 不极端
+        self.assertEqual(result['bonus'][history.EXTREME_HIGH], -0.5)     # 25 起算极端
+
     def test_interval_covers_every_possible_sum(self):
         result = history.sum_interval([(4, 5, 5)] * 10, 5, 4, 0.8, 0.5)
         self.assertEqual(sorted(result['bonus']), list(range(SUM_MIN, SUM_MAX + 1)))
@@ -402,10 +416,16 @@ class FormSwitchTests(unittest.TestCase):
                          {draw.ZU3: 0.0, draw.ZU6: 0.0})
 
     def test_too_little_history_gives_nothing(self):
+        """样本必须是「若不设下限就会给出奖励」的那种，否则下限改小也看不出来。
+
+        四期全组三、连续段已达 ZU3_MIN，只差期数下限这一道。
+        """
+        series = [(1, 1, 3)] * 4
+        self.assertGreaterEqual(len(series), self.ZU3_MIN)
         self.assertEqual(
-            history.form_switch_bonus([(1, 2, 3)] * 4, self.WEIGHT,
-                                      self.ZU6_MIN, self.ZU3_MIN),
+            history.form_switch_bonus(series, self.WEIGHT, self.ZU6_MIN, self.ZU3_MIN),
             {draw.ZU3: 0.0, draw.ZU6: 0.0})
+        self.assertEqual(history.MIN_PERIODS_FOR_FORM_SWITCH, 5)
 
     def test_streak_only_reads_the_tail(self):
         """迁移前这里把全部历史都归一遍类，而答案只取决于末尾那一段。"""
@@ -441,6 +461,23 @@ class SlopeTests(unittest.TestCase):
         """键写成「百位」会让加分恒为 0，而且不报错。"""
         analysis = slope.analyze(NUMBERS, SLOPE_MIN_CHAIN, SLOPE_MAX_CHAIN)
         self.assertEqual(sorted(analysis['position_hints']), sorted(POSITION_NAMES))
+
+    def test_longer_chain_gives_a_higher_strength(self):
+        """线上 1999 期的尾部没有同位斜连，黄金语料测不到强度，只能构造。"""
+        long_chain = [(1, 0, 0), (2, 0, 0), (3, 0, 0), (4, 0, 0), (5, 0, 0)]
+        short_chain = [(9, 0, 0), (1, 0, 0), (2, 0, 0), (3, 0, 0)]
+        longer = slope.position_signals(long_chain, SLOPE_MIN_CHAIN, SLOPE_MAX_CHAIN)[0]
+        shorter = slope.position_signals(short_chain, SLOPE_MIN_CHAIN, SLOPE_MAX_CHAIN)[0]
+        self.assertEqual((shorter['length'], shorter['strength']), (3, 1.0))
+        self.assertEqual((longer['length'], longer['strength']), (5, 1.5))
+
+    def test_in_draw_slope_is_weaker_than_a_position_chain(self):
+        """位内斜连只用了一期数据，强度必须低于同位斜连的起步值 1.0。"""
+        analysis = slope.analyze([(1, 2, 3)], SLOPE_MIN_CHAIN, SLOPE_MAX_CHAIN)
+        hints = analysis['position_hints'][POSITION_NAMES[0]]
+        self.assertEqual([h['digit'] for h in hints], [2])
+        self.assertEqual(hints[0]['strength'], 0.6)
+        self.assertLess(hints[0]['strength'], 1.0)
 
     def test_triplet_bonus_weights_by_hint_strength(self):
         analysis = {'position_hints': {POSITION_NAMES[0]: [{'digit': 7, 'strength': 2.0}]}}
