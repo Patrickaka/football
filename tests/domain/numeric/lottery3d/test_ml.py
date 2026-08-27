@@ -153,7 +153,15 @@ def _model_entries():
     names = features.FeatureEngineer([], SETTINGS).get_feature_names()
     for ratio in (0.5, 0.85):
         indices, selected = adapter.select_features(rows, labels, names, keep_ratio=ratio)
-        yield f'select:{ratio}', {'indices': indices, 'names': selected}
+        # **不固定选中了哪几维**——那是 sklearn 的互信息给的顺序，换个版本就变。
+        # 这里固定的是我们自己那部分：保留几维、索引是否映射回了原始维度、
+        # 名字与下标是否对得上
+        yield f'select:{ratio}', {
+            'count': len(indices),
+            'unique': len(set(indices)) == len(indices),
+            'within_range': all(0 <= index < FEATURE_COUNT for index in indices),
+            'names_match_indices': selected == [names[index] for index in indices],
+        }
     for probabilities, truth in (([0.9, 0.1], [1, 0]), ([0.5, 0.5], [1, 0]),
                                  ([0.0, 1.0], [1, 0]), ([], [])):
         yield (f'valscore:{probabilities}',
@@ -169,15 +177,51 @@ def _end_to_end_entries():
     saved = []
     with mock.patch.object(adapter, 'save_ml_backtest_history', saved.append):
         for name in ('s300', 's150'):
-            yield (f'predict:{name}',
-                   adapter.predict_current(SERIES[name], top_k=5, neg_samples=10))
+            # **模型算出来的数不进黄金**（分数、特征重要性、融合权重）——
+            # 它们随 catboost/xgboost/lightgbm 的版本变化，而 CI 装的是
+            # `requirements.txt` 里 `>=` 允许的更新版本。把它们钉进黄金，
+            # 库一升级 CI 就红，而那不是回归——「失败集合不超出基线」
+            # 这条判据会因此失效。模型无关的那条链路由打桩用例覆盖。
+            yield f'predict:{name}', _model_free(
+                adapter.predict_current(SERIES[name], top_k=5, neg_samples=10))
         yield 'predict:short', adapter.predict_current(NUMBERS[-50:], top_k=5)
-        yield 'backtest_ml', adapter.backtest_ml(
+        # 同上：命中数与平均排名直接来自模型预测，只固定结构性字段
+        yield 'backtest_ml', _model_free(adapter.backtest_ml(
             SERIES['s300'], trials=2, train_window=120,
-            base_period='2026228', neg_samples=10)
-        yield 'backtest_ml:saved', saved
+            base_period='2026228', neg_samples=10))
+        yield 'backtest_ml:saved', [_model_free(record) for record in saved]
         yield 'backtest_ml:short', adapter.backtest_ml(NUMBERS[-50:], trials=2,
                                                        train_window=120)
+
+
+# 这些字段的值由三个梯度提升库算出，随库版本变化
+MODEL_DEPENDENT = frozenset({
+    'recommendations', 'top3', 'feature_importance', 'model_weights',
+    'top3_hit', 'top3_rate', 'top15_hit', 'top15_rate',
+    'top30_hit', 'top30_rate', 'top100_hit', 'top100_rate',
+    'actual_rank_avg', 'actual_rank_median',
+})
+
+
+def _model_free(result):
+    """剥掉随库版本变化的字段，并把推荐替换成「几注 + 格式合法吗」。
+
+    留下的是我们自己那部分：采样出了多少样本、集成了几个模型、
+    结构性的基准率、错误分支的措辞。
+    """
+    stripped = {key: value for key, value in result.items()
+                if key not in MODEL_DEPENDENT}
+    if 'recommendations' in result:
+        picks = result['recommendations']
+        stripped['recommendation_count'] = len(picks)
+        stripped['nums_well_formed'] = all(
+            len(row['num']) == 3 and row['num'].isdigit() for row in picks)
+        stripped['scores_descend'] = all(
+            picks[i]['model_score'] >= picks[i + 1]['model_score']
+            for i in range(len(picks) - 1))
+        stripped['shares_sum_to_one'] = round(
+            sum(row['topk_score_share'] for row in picks), 2) == 1.0
+    return stripped
 
 
 class _Stub:
@@ -681,6 +725,78 @@ class FallbackPathTests(unittest.TestCase):
             adapter._fallback_model(rows, labels)
             adapter._fallback_model(rows, labels)
         self.assertEqual(warned.call_count, 1)
+
+
+class StubbedPipelineTests(unittest.TestCase):
+    """整条预测链路——建特征、给一千注打分、排序、取 TopK、算占比——
+    用打桩模型跑通。
+
+    **这是黄金剥掉模型输出之后的补偿。** 黄金不再固定分数与特征重要性
+    （它们随库版本变化），那部分逻辑改由这里覆盖：打桩模型与三个库无关，
+    库升级动不了它。
+    """
+
+    class _Descending:
+        """按候选的枚举顺序给递减分数，于是排名完全可预测：
+        `_rank_all` 枚举的第一注得分最高。"""
+
+        def predict(self, X):
+            return [1.0 - index / len(X) for index in range(len(X))]
+
+    def _stubbed(self, top_k=5):
+        stub = [(self._Descending(), 'stub', 1.0)]
+        with mock.patch.object(adapter, 'train_ensemble',
+                               return_value=(stub, list(range(FEATURE_COUNT)))):
+            return adapter.predict_current(NUMBERS[-150:], top_k=top_k, neg_samples=5)
+
+    def test_ranking_follows_model_score(self):
+        """候选按 (百, 十, 个) 字典序枚举，打桩模型让第一注分最高——
+        推荐必须正好是前五注。排序方向反了这里当场红。"""
+        result = self._stubbed()
+        self.assertEqual([row['num'] for row in result['recommendations']],
+                         ['000', '001', '002', '003', '004'])
+
+    def test_top3_is_the_head_of_recommendations(self):
+        result = self._stubbed()
+        self.assertEqual(result['top3'], result['recommendations'][:3])
+
+    def test_shares_sum_to_one_within_topk(self):
+        """占比的分母是 **TopK 内部**的分数和，不是全部一千注——
+        用全部当分母的话每个占比都会小两个数量级。"""
+        result = self._stubbed()
+        shares = [row['topk_score_share'] for row in result['recommendations']]
+        self.assertAlmostEqual(sum(shares), 1.0, places=3)
+
+    def test_shares_are_proportional_to_scores(self):
+        result = self._stubbed()
+        picks = result['recommendations']
+        total = sum(row['model_score'] for row in picks)
+        for row in picks:
+            self.assertAlmostEqual(row['topk_score_share'],
+                                   round(row['model_score'] / total, 4), places=3)
+
+    def test_top_k_controls_how_many_come_back(self):
+        self.assertEqual(len(self._stubbed(top_k=12)['recommendations']), 12)
+
+    def test_single_model_reports_its_own_name(self):
+        result = self._stubbed()
+        self.assertEqual(result['model_type'], 'stub')
+        self.assertEqual(result['num_models'], 1)
+        self.assertEqual(result['model_weights'], [1.0])
+
+    def test_backtest_counts_hits_against_the_stubbed_ranking(self):
+        """回测的命中统计同样与库无关：打桩模型把 '000' 排第一，
+        所以只有开出 '000' 的那期才算 Top3 命中。"""
+        stub = [(self._Descending(), 'stub', 1.0)]
+        series = list(NUMBERS[-190:-2]) + [(0, 0, 0), (9, 9, 9)]
+        with mock.patch.object(adapter, 'train_ensemble',
+                               return_value=(stub, list(range(FEATURE_COUNT)))), \
+             mock.patch.object(adapter, 'save_ml_backtest_history'):
+            result = adapter.backtest_ml(series, trials=2, train_window=120,
+                                         neg_samples=5)
+        self.assertEqual(result['trials'], 2)
+        self.assertEqual(result['top3_hit'], 1, "只有 '000' 那期中")
+        self.assertEqual(result['top3_rate'], 0.5)
 
 
 class AdapterGuardTests(unittest.TestCase):
