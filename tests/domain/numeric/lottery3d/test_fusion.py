@@ -265,6 +265,12 @@ class ModeTests(unittest.TestCase):
     def test_too_stable_and_missing_explores(self):
         self.assertEqual(fusion.select_mode(0.81, 0.02, 0.029, 300)[0], 'explore')
 
+    def test_moderate_stability_is_not_yet_too_stable(self):
+        """0.8 这道界要有紧贴两侧的样本：0.6 也判成过稳的话，正常波动会被
+        当成「推荐不动了」而强行打散。门槛写字面量。"""
+        self.assertNotEqual(fusion.select_mode(0.6, 0.02, 0.02, 300)[0], 'explore')
+        self.assertEqual(fusion.select_mode(0.81, 0.02, 0.02, 300)[0], 'explore')
+
     def test_stable_but_hitting_does_not_explore(self):
         """两个条件是「与」：只满足一个就转探索的话，命中良好时也会被打散。"""
         self.assertNotEqual(fusion.select_mode(0.81, 0.02, 0.031, 300)[0], 'explore')
@@ -321,6 +327,12 @@ class CountTests(unittest.TestCase):
     def test_good_coverage_without_hits_gives_less(self):
         self.assertEqual(fusion.recommend_count(0.01, 0.18, 0.029)[0], 20)
 
+    def test_coverage_between_the_two_thresholds_is_only_decent(self):
+        """0.18 与 0.12 两道界要分得开：覆盖率 0.15 且线上命中达标时，
+        仍然只是「尚可」而不是「良好」。"""
+        self.assertEqual(fusion.recommend_count(0.01, 0.15, 0.03)[0], 20)
+        self.assertEqual(fusion.recommend_count(0.01, 0.18, 0.03)[0], 30)
+
     def test_decent_coverage_gives_the_middle(self):
         self.assertEqual(fusion.recommend_count(0.01, 0.12, 0.0)[0], 20)
 
@@ -346,6 +358,13 @@ class SettleTests(unittest.TestCase):
         self.assertTrue(row['rule_only_hit_top3'])
         self.assertFalse(row['ml_only_hit_top3'])
         self.assertTrue(row['fused_hit_top3'])
+
+    def test_top3_and_top30_are_not_interchangeable(self):
+        """命中号排在第 6 位：只中 top30、不中 top3。两个切片写反了就会颠倒。"""
+        nums = [f'{i:03d}' for i in range(30)]
+        row = self._settle(nums, [], [], actual=nums[5])
+        self.assertFalse(row['rule_only_hit_top3'])
+        self.assertTrue(row['rule_only_hit_top30'])
 
     def test_tiers_are_nested(self):
         nums = [f'{i:03d}' for i in range(100)]
@@ -387,6 +406,79 @@ class SettleHistoryTests(unittest.TestCase):
     def test_an_unknown_period_is_skipped(self):
         rows = [_row('9999999', ['123'], [], [])]
         self.assertFalse(fusion.settle_history(rows, PERIODS, NUMBERS))
+
+
+class SaveStrategyRecordsTests(unittest.TestCase):
+    """`save_strategy_records` 此前一条用例都没有——变异验证撞出来的。"""
+
+    def setUp(self):
+        self.saved = {}
+        self.history = []
+        self._load, self._save = adapter.kv_store.load, adapter.kv_store.save
+        adapter.kv_store.load = (
+            lambda key, default=None: self.history
+            if key == adapter.STRATEGY_RECORDS_KEY
+            else (default if default is not None else []))
+        adapter.kv_store.save = lambda key, value: self.saved.update({key: value})
+
+    def tearDown(self):
+        adapter.kv_store.load, adapter.kv_store.save = self._load, self._save
+
+    def _save_record(self, period):
+        adapter.save_strategy_records(period, ['r'], ['m'], ['f'])
+        return self.saved.get(adapter.STRATEGY_RECORDS_KEY)
+
+    def test_a_new_period_is_written(self):
+        written = self._save_record('p1')
+        self.assertEqual([row['period'] for row in written], ['p1'])
+
+    def test_an_existing_unsettled_record_is_not_overwritten(self):
+        """首次发布的推荐就是当时真的发出去的那份，改了它等于篡改对比数据。"""
+        self.history = [_row('p1', ['old'], [], [])]
+        self.assertIsNone(self._save_record('p1'))
+        self.assertEqual(self.history[0]['rule_only'], ['old'])
+
+    def test_an_existing_settled_record_is_not_overwritten(self):
+        self.history = [_row('p1', ['old'], [], [], settled=True)]
+        self.assertIsNone(self._save_record('p1'))
+
+    def test_history_is_trimmed_to_the_limit(self):
+        """只留最近若干期：三路对比要的是趋势，不是全量档案。写字面量。"""
+        self.history = [_row(f'p{i}', [], [], []) for i in range(200)]
+        written = self._save_record('new')
+        self.assertEqual(len(written), 200)
+        self.assertEqual(written[-1]['period'], 'new')
+        self.assertEqual(written[0]['period'], 'p1')
+
+
+class DetailBuilderTests(unittest.TestCase):
+    """补拆解要四个参数**都**给齐。缺一个就留 None，不编。
+
+    打桩打在 `triplet_weight_detail` 上：这里要测的是「够不够条件去建」，
+    不是「建出来的拆解对不对」——后者是 3-12 的黄金文件在管。
+    """
+
+    def setUp(self):
+        self._original = adapter.triplet_weight_detail
+        adapter.triplet_weight_detail = lambda *a, **k: {'built': True}
+
+    def tearDown(self):
+        adapter.triplet_weight_detail = self._original
+
+    def _fuse(self, **over):
+        args = {'score': [1.0] * 10, 'danma': [1], 'kill': [2], 'meta': {}}
+        args.update(over)
+        return adapter.fuse_rule_ml([], _ml(['111']), 30, 0.55, 0.45, **args)
+
+    def test_all_four_present_builds_a_detail(self):
+        self.assertEqual(self._fuse()[0]['detail'], {'built': True})
+
+    def test_a_single_missing_argument_leaves_it_none(self):
+        """四个里缺一个就不建。改成「任一存在即建」的话，剩下三个是 None，
+        建的时候会直接炸在里面。"""
+        for missing in ('score', 'danma', 'kill', 'meta'):
+            with self.subTest(missing=missing):
+                self.assertIsNone(self._fuse(**{missing: None})[0]['detail'])
 
 
 class FirstPublishWinsTests(unittest.TestCase):
