@@ -165,3 +165,10 @@ for name, matches, history in toh.TrackerGoldenTests.CASES:
 dump('odds_history', golden)
 
 print('全部生成完成')
+
+
+# ---- lottery3d 特征层 ----
+from tests.domain.numeric.lottery3d.test_features import golden_entries as l3d_entries
+from tests.domain.golden import as_comparable
+
+dump('lottery3d_features', {k: as_comparable(v) for k, v in l3d_entries()})
