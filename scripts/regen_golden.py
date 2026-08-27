@@ -196,3 +196,9 @@ dump('lottery3d_records', {k: as_comparable(v) for k, v in l3d_rec_entries()})
 from tests.domain.numeric.lottery3d.test_fusion import golden_entries as l3d_fus_entries
 
 dump('lottery3d_fusion', {k: as_comparable(v) for k, v in l3d_fus_entries()})
+
+
+# ---- lottery3d 展示层与可用性判断 ----
+from tests.domain.numeric.lottery3d.test_presentation import golden_entries as l3d_pred_entries
+
+dump('lottery3d_prediction', {k: as_comparable(v) for k, v in l3d_pred_entries()})
