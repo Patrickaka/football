@@ -20,8 +20,10 @@ from src.foundation.tasks import TaskScheduler
 log = logging.getLogger('webapp.background')
 
 # 每个周期任务会长期占住一个 worker，所以这个数必须大于周期任务总数，
-# 否则一次性任务永远排不上队。当前四个周期任务（kl8 三个 + 篮球采样一个）。
-MAX_WORKERS = 6
+# 否则一次性任务永远排不上队。当前六个：kl8 三个 + 篮球采样一个
+# + 足球的赛后回填与时间分层扫描。加足球那两个之前这里是 6，正好等于任务数
+# ——`TaskScheduler.start()` 只会告警、不会拒绝，一次性任务从此排不上队。
+MAX_WORKERS = 8
 
 _lock = threading.Lock()
 _scheduler = None

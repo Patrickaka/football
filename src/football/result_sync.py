@@ -2879,67 +2879,39 @@ def get_history() -> PredictionHistory:
     return _global_history
 
 
-def start_background_sync(interval_seconds: int = 7200):
+# 两个周期任务的间隔（秒）
+SYNC_INTERVAL_SECONDS = 7200        # 赛后回填，两小时一轮
+TIME_LAYER_INTERVAL_SECONDS = 600   # 时间分层扫描，十分钟一轮
+
+
+def register_football_tasks(submit, interval_seconds=SYNC_INTERVAL_SECONDS):
+    """把足球的两个周期任务登记到进程级调度器。
+
+    **迁移前这里用 APScheduler，而 `apscheduler` 不在 `requirements.txt` 里。**
+    线上碰巧装着（3.11.3），所以走的是 APScheduler 那条路；环境一旦重建、
+    它不在了，代码会静默走进 `except ImportError` 的降级分支——那条分支把
+    两个任务塞进同一个 `while` 循环、共用一个 `sleep(7200)`，于是时间分层
+    扫描从十分钟一轮变成两小时一轮。而 T-15min 层的窗口只有 45 分钟
+    （`infer_time_layer` 分的是区间不是时刻），两小时一轮必然整层漏掉。
+    **不报错、不告警，只是那一层的预测再也不会产生。**
+
+    `foundation/tasks` 是纯线程实现，没有可选依赖，两个任务各自独立间隔——
+    这个隐患随之消失。
+
+    与 kl8 那批同样的语义差别：APScheduler 的 interval 是「从启动时刻起每 N
+    秒」，这里是「上一轮结束后再等 N 秒」，任务耗时会累积成漂移。这两个都是
+    「看当前状态、需要才做」的任务（分层扫描还带幂等：同一层预测过就跳过），
+    最窄的 T-15min 也有 45 分钟窗口容得下漂移，所以无害。
     """
-    启动后台定时同步线程（使用 APScheduler）
-    
-    参数：
-        interval_seconds: 同步间隔（秒），默认2小时
-    """
-    try:
-        from apscheduler.schedulers.background import BackgroundScheduler
-        from apscheduler.schedulers.blocking import BlockingScheduler
-        
-        scheduler = BlockingScheduler(timezone="Asia/Shanghai")
-        
-        # 每2小时同步一次（赛后回填）
-        scheduler.add_job(
-            auto_sync_results,
-            'interval',
-            seconds=interval_seconds,
-            id='football_result_sync',
-            replace_existing=True
-        )
-        
-        # 每10分钟扫描时间分层预测
-        scheduler.add_job(
-            scan_and_predict_time_layers,
-            'interval',
-            seconds=600,  # 10分钟
-            id='football_time_layer_scan',
-            replace_existing=True
-        )
-        
-        scheduler.start()
-        log.info(f"已启动后台同步调度器，同步间隔 {interval_seconds} 秒，时间分层扫描间隔 600 秒")
-        return scheduler
-        
-    except ImportError:
-        # 如果没有 APScheduler，使用简单线程
-        log.warning("APScheduler 未安装，使用简单线程调度")
-        
-        def sync_loop():
-            while True:
-                try:
-                    # 赛后回填
-                    result = auto_sync_results()
-                    if result['synced'] > 0 or result['failed'] > 0:
-                        log.info(f"后台同步: {result['message']}")
-                    
-                    # 时间分层扫描（每10分钟）
-                    layer_result = scan_and_predict_time_layers()
-                    if sum(layer_result.values()) > 0:
-                        log.info(f"时间分层预测: {layer_result}")
-                        
-                except Exception as e:
-                    log.error(f"后台同步异常: {e}")
-                
-                time.sleep(interval_seconds)
-        
-        thread = Thread(target=sync_loop, daemon=True)
-        thread.start()
-        log.info(f"已启动后台同步线程，间隔 {interval_seconds} 秒")
-        return thread
+    tasks = (
+        ('football_result_sync', auto_sync_results, interval_seconds),
+        ('football_time_layer_scan', scan_and_predict_time_layers,
+         TIME_LAYER_INTERVAL_SECONDS),
+    )
+    registered = [name for name, fn, interval in tasks
+                  if submit(name, fn, interval)]
+    log.info('足球后台任务已登记: %s', ', '.join(registered) or '（无）')
+    return registered
 
 
 # ==================== 测试 ====================
