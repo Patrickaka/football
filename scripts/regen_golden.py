@@ -190,3 +190,9 @@ dump('lottery3d_selection', {k: as_comparable(v) for k, v in l3d_sel_entries()})
 from tests.domain.numeric.lottery3d.test_records import golden_entries as l3d_rec_entries
 
 dump('lottery3d_records', {k: as_comparable(v) for k, v in l3d_rec_entries()})
+
+
+# ---- lottery3d 融合与策略 ----
+from tests.domain.numeric.lottery3d.test_fusion import golden_entries as l3d_fus_entries
+
+dump('lottery3d_fusion', {k: as_comparable(v) for k, v in l3d_fus_entries()})
