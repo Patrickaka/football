@@ -80,6 +80,27 @@ class QualityLevelTests(unittest.TestCase):
         self.assertEqual(merely_strong['level'], 'strong')
         self.assertFalse(merely_strong['high_precision'])
 
+    def test_medium_needs_both_probability_and_lead(self):
+        """medium 档同样是两个条件的与。**上一版整套用例里没有一条测 medium**
+        ——strong/split/low/unknown 都有，唯独漏了它。"""
+        result = quality.assess({'胜': 0.62, '平': 0.28, '负': 0.10})
+        self.assertEqual(result['level'], 'medium')
+        self.assertFalse(result['single_allowed'])
+
+    def test_medium_lead_boundary(self):
+        """领先够了算 medium，差一点就不是——门槛的两侧各一条。
+
+        **两侧都避开恰好等于 0.10 的输入**：`0.60 - 0.50` 在浮点里是
+        `0.09999999999999998`，比 0.10 小，于是「恰好达标」实际会落选。
+        用它当边界样本，测的是浮点表示而不是这条业务规则。
+        """
+        over = quality.assess({'胜': 0.60, '平': 0.49, '负': -0.09})
+        self.assertGreater(over['lead'], MEDIUM_LEAD)
+        self.assertEqual(over['level'], 'medium')
+        under = quality.assess({'胜': 0.60, '平': 0.55, '负': -0.15})
+        self.assertLess(under['lead'], MEDIUM_LEAD)
+        self.assertNotEqual(under['level'], 'medium')
+
     def test_hairline_lead_reports_split_not_low(self):
         """领先不到 3.5 个百分点报「分歧较大」而不是「低置信」。
 
@@ -153,11 +174,51 @@ class UpsetLevelTests(unittest.TestCase):
         risk = upset.assess_risk({'胜': 0.46, '平': 0.30, '负': 0.24})
         self.assertNotEqual(risk['level'], 'high')
 
+    def test_favourite_threshold_is_redundant_at_the_shipped_values(self):
+        """**三个条件里热门那道永远自动满足**，因为它与非热门质量是同一个量。
+
+        `upset_mass = 1 - favorite_prob`，所以 `mass >= 0.58` 等价于
+        `fav <= 0.42`，比 `fav < 0.45` 更严。想让热门那道单独决定结果，
+        在出厂门槛下是**不可能**的——这条用例把这个耦合钉住，
+        免得下次有人以为调 `high_fav_max` 能改变什么。
+        """
+        borderline = upset.assess_risk({'胜': 0.42, '平': 0.33, '负': 0.25})
+        self.assertEqual(borderline['level'], 'high')
+        # 把热门门槛放宽一倍，结果不变——它根本没参与判定
+        relaxed = upset.assess_risk({'胜': 0.42, '平': 0.33, '负': 0.25},
+                                    high_fav_max=0.90)
+        self.assertEqual(relaxed['level'], 'high')
+
+    def test_favourite_threshold_bites_once_mass_is_relaxed(self):
+        """调低非热门门槛之后，热门那道才重新起作用——**所以它不是死代码**。"""
+        loose_mass = upset.assess_risk({'胜': 0.50, '平': 0.42, '负': 0.08},
+                                       high_mass_min=0.30)
+        self.assertNotEqual(loose_mass['level'], 'high', '热门 0.50 超过 0.45')
+        both_loose = upset.assess_risk({'胜': 0.50, '平': 0.42, '负': 0.08},
+                                       high_mass_min=0.30, high_fav_max=0.60)
+        self.assertEqual(both_loose['level'], 'high')
+
     def test_gap_too_wide_drops_out_of_high(self):
         """三个条件是与不是或——差距一拉开就不算胶着。"""
         risk = upset.assess_risk({'胜': 0.44, '平': 0.28, '负': 0.28})
         self.assertEqual(risk['gap'], 0.16)
         self.assertNotEqual(risk['level'], 'high')
+
+    def test_gap_alone_can_disqualify_high(self):
+        """热门与非热门质量都满足、**只有差距超标**时落选。
+
+        上一条 `test_gap_too_wide_drops_out_of_high` 的输入 mass 只有 0.56，
+        够不到 0.58——它其实是被非热门质量那道拦下的，差距门槛怎么改都不影响
+        结果。这条把 mass 顶到 0.58 让 gap 成为唯一的变量。
+        """
+        probabilities = {'胜': 0.42, '平': 0.30, '负': 0.28}
+        strict = upset.assess_risk(probabilities)
+        self.assertGreaterEqual(strict['upset_prob'], HIGH_MASS)
+        self.assertGreater(strict['gap'], HIGH_GAP)
+        self.assertNotEqual(strict['level'], 'high')
+
+        relaxed = upset.assess_risk(probabilities, high_gap_max=0.30)
+        self.assertEqual(relaxed['level'], 'high', '放宽差距门槛后就该命中')
 
     def test_medium_is_the_looser_tier(self):
         """三个条件里 `mass >= 0.52` 最容易被忽略——**热门 0.50 时非热门
@@ -184,6 +245,23 @@ class UpsetLevelTests(unittest.TestCase):
     def test_confident_needs_both_a_strong_favourite_and_a_wide_gap(self):
         weak_favourite = upset.assess_risk({'胜': 0.57, '平': 0.25, '负': 0.18})
         self.assertFalse(weak_favourite['confident'])
+
+    def test_confident_is_suppressed_while_alerted(self):
+        """**已预警时不得给「稳胆」标签**，哪怕热门与差距都够。
+
+        真实阈值下这两组条件互斥（预警要 fav < 0.52，稳胆要 fav >= 0.58），
+        所以那个 `not alert` 前提平时够不到——它是防御性的，一旦有人调门槛
+        就会生效。这里用自定义阈值把两者叠在一起，验证前提确实起作用：
+        没有它，同一场比赛会同时挂着「爆冷预警」和「热门稳胆」两个标签。
+        """
+        probabilities = {'胜': 0.60, '平': 0.25, '负': 0.15}
+        alerted = upset.assess_risk(
+            probabilities,
+            medium_fav_max=0.70, medium_gap_max=0.40, medium_mass_min=0.30,
+            confident_fav_min=0.58, confident_gap_min=0.20)
+        self.assertTrue(alerted['alert'], '前置条件：这组阈值下应当预警')
+        self.assertFalse(alerted['confident'], '预警时不得同时判为稳胆')
+        self.assertEqual(alerted['label'], '爆冷预警')
 
     def test_low_without_confident_keeps_the_plain_label(self):
         risk = upset.assess_risk({'胜': 0.55, '平': 0.30, '负': 0.15})

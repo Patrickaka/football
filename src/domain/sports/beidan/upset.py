@@ -73,6 +73,10 @@ def assess_risk(probabilities,
     gap = favorite_prob - second_prob
     upset_mass = 1.0 - favorite_prob
 
+    # **三个条件里热门那道是冗余的**：`upset_mass = 1 - favorite_prob`，
+    # 所以 `mass >= 0.58` 等价于 `fav <= 0.42`，比 `fav < 0.45` 更严——
+    # 后者永远自动满足。medium 档同理（mass >= 0.52 ⟺ fav <= 0.48 < 0.52）。
+    # 保留它是因为门槛可调：一旦调低 mass 那道，热门条件就会重新起作用。
     if (favorite_prob < high_fav_max and gap <= high_gap_max
             and upset_mass >= high_mass_min):
         level, label, alert = HIGH, '爆冷高风险', True
