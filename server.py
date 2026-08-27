@@ -78,22 +78,6 @@ def _candidate_ips():
 
 def _start_background_sync():
     """启动后台自动同步线程（football + KL8 + basketball）"""
-    try:
-        from src.football.result_sync import start_background_sync
-        import threading
-
-        # 使用后台线程启动同步（非阻塞）
-        sync_thread = threading.Thread(
-            target=start_background_sync,
-            args=(7200,),  # 2小时间隔
-            daemon=True,
-            name='ResultSyncThread'
-        )
-        sync_thread.start()
-        log.info('后台自动同步线程已启动')
-    except Exception as e:
-        log.warning(f"启动后台同步失败: {e}")
-
     # 后台周期任务统一登记到一个调度器，登记完再一次性启动。
     # 迁移前它们分散在三处（kl8 用 APScheduler、篮球采样自建调度器、
     # 另有裸线程），没有任何一个地方能回答「现在后台在跑什么」。
@@ -120,6 +104,15 @@ def _start_background_sync():
             log.warning('篮球赔率采样未登记（数据库不可用）')
     except Exception as e:
         log.warning(f"登记篮球赔率采样失败: {e}")
+
+    # 足球赛后回填与时间分层扫描。迁移前这两个不在这里——它们由本函数开头
+    # 另起的一个 daemon 线程跑 APScheduler，游离在进程级调度器之外，
+    # `background.task_count()` 数不到，健康检查也看不见。
+    try:
+        from src.football.result_sync import register_football_tasks
+        register_football_tasks(background.submit_periodic)
+    except Exception as e:
+        log.warning(f"登记足球后台任务失败: {e}")
 
     # 全部登记完毕，启动唯一的后台调度器
     try:
