@@ -133,6 +133,31 @@ class DeadCacheTests(unittest.TestCase):
                 self.assertFalse(hasattr(adapter, name))
 
 
+class AdapterConstantTests(unittest.TestCase):
+    """适配层的几个展示常量。接进 `run_prediction` 之后由输出形状钉住——
+    它们此前只是定义在那里、没人用，改了没有任何反应。"""
+
+    def test_long_miss_threshold_is_eight(self):
+        """门槛写字面量。遗漏三五期是常态，八期起才值得单独列。"""
+        self.assertEqual(adapter.LONG_MISS_THRESHOLD, 8)
+        misses = {0: 7, 1: 8}
+        listed = presentation.long_miss_digits(misses, adapter.LONG_MISS_THRESHOLD)
+        self.assertEqual([item['digit'] for item in listed], [1])
+
+    def test_each_position_shows_five_digits(self):
+        self.assertEqual(adapter.TOP_DIGITS_PER_POSITION, 5)
+        scores = [[float(9 - d) for d in range(10)] for _ in range(3)]
+        result = presentation.position_top(scores, POSITION_NAMES,
+                                           adapter.TOP_DIGITS_PER_POSITION)
+        self.assertTrue(all(len(item['digits']) == 5 for item in result))
+
+    def test_position_miss_shows_three(self):
+        self.assertEqual(adapter.TOP_MISS_PER_POSITION, 3)
+
+    def test_hot_digits_and_sum_tails_show_five(self):
+        self.assertEqual((adapter.TOP_HOT_DIGITS, adapter.TOP_SUM_TAILS), (5, 5))
+
+
 class TransitionViewTests(unittest.TestCase):
 
     def _lag1(self, **over):
@@ -230,6 +255,16 @@ class HistoryQualityTests(unittest.TestCase):
         self.assertEqual(result['duplicate_periods'], 1)
         self.assertFalse(result['ml_fusion_allowed'])
 
+    def test_duplicates_alone_block_ml_fusion(self):
+        """把重复期号和断期分开验：一个重复的**可解析**期号必然也造成断期，
+        所以要用解析不了的期号来隔离——否则去掉重复这条判定也看不出来。
+        """
+        periods = ['abc', 'abc'] + [f'2026{i:03d}' for i in range(1, 301)]
+        result = self._assess(periods)
+        self.assertEqual(result['duplicate_periods'], 1)
+        self.assertEqual(result['period_gaps'], 0)
+        self.assertFalse(result['ml_fusion_allowed'])
+
     def test_gaps_block_ml_fusion(self):
         """ML 把序列当连续的来学，断期对它特别敏感。"""
         periods = [f'2026{i:03d}' for i in range(1, 301) if i != 100]
@@ -303,6 +338,10 @@ class MlCacheValidityTests(unittest.TestCase):
     def test_a_cache_just_inside_the_age_limit_is_valid(self):
         """两侧都要断言：只测过期的话，把上限改小也发现不了。"""
         self.assertTrue(self._valid(self._cache(created_at=str(self.NOW - 3599))))
+
+    def test_a_cache_exactly_at_the_age_limit_is_still_valid(self):
+        """恰好等于上限算有效（`<=`）。不测这一点的话 `<=` 改成 `<` 看不出来。"""
+        self.assertTrue(self._valid(self._cache(created_at=str(self.NOW - 3600))))
 
     def test_a_missing_timestamp_keeps_the_cache(self):
         """期号与版本都对上了，缺个时间戳不足以推翻它——迁移前的行为。"""

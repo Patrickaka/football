@@ -58,6 +58,7 @@ TOP_DIGITS_PER_POSITION = 5
 TOP_MISS_PER_POSITION = 3
 TOP_HOT_DIGITS = 5
 TOP_SUM_TAILS = 5
+TOP_RANK_DIGITS = 10
 
 
 def _transition_for_api(lag1, dynamic, pos_names=POS_NAMES):
@@ -396,31 +397,21 @@ def run_prediction(data=None, force_refresh=False, enable_backtest=False,
     # 计算线上实盘统计
     online_stats = calculate_online_stats()
     
-    pos_names = ("百", "十", "个")
-    position_top = []
-    for pos, name in enumerate(pos_names):
-        pr = sorted(enumerate(ensemble_position_digit_scores(numbers, pos, window_weights, dynamic=meta.get("dynamic"))), key=lambda x: -x[1])[:5]
-        position_top.append({
-            "name": name,
-            "digits": [{"digit": d, "score": round(s, 1)} for d, s in pr],
-        })
-
-    miss_global = []
-    for d in range(10):
-        mv = miss_value(numbers, d)
-        if mv >= 8:
-            miss_global.append({"digit": d, "miss": mv})
-    miss_global.sort(key=lambda x: -x["miss"])
-
-    miss_position = []
-    for pos, name in enumerate(pos_names):
-        top = sorted(range(10), key=lambda x: -miss_value(numbers, x, position=pos))[:3]
-        miss_position.append({
-            "name": name,
-            "digits": [{"digit": d, "miss": miss_value(numbers, d, position=pos)} for d in top],
-        })
-
-    sum_tails = [{"tail": t, "count": round(c, 2)} for t, c in meta_raw["sum_tail_freq"].most_common(5)]
+    pos_names = POS_NAMES
+    position_scores = [
+        ensemble_position_digit_scores(numbers, pos, window_weights,
+                                       dynamic=meta.get("dynamic"))
+        for pos in range(len(pos_names))
+    ]
+    position_top = _view.position_top(position_scores, pos_names,
+                                      TOP_DIGITS_PER_POSITION)
+    miss_global = _view.long_miss_digits(
+        {d: miss_value(numbers, d) for d in range(10)}, LONG_MISS_THRESHOLD)
+    miss_position = _view.position_miss_top(
+        [{d: miss_value(numbers, d, position=pos) for d in range(10)}
+         for pos in range(len(pos_names))],
+        pos_names, TOP_MISS_PER_POSITION)
+    sum_tails = _view.sum_tails(meta_raw["sum_tail_freq"], TOP_SUM_TAILS)
     zu6_recent_validation = evaluate_zu6_pool_recent(
         numbers, sizes=(5, ZU6_POOL_SIZE), trials=100
     )
@@ -435,11 +426,11 @@ def run_prediction(data=None, force_refresh=False, enable_backtest=False,
         "avg_sum": round(sum(sums) / len(sums), 2),
         "last_draw": "".join(map(str, last_num)),
         "neighbors": sorted(set().union(*[neighbor(d) for d in last_num])),
-        "hot_digits": [{"digit": d, "weight": round(c, 1)} for d, c in freq_all.most_common(5)],
+        "hot_digits": _view.weighted_digits(freq_all, TOP_HOT_DIGITS),
         "danma": danma,
         "tuoma": tuoma,
         "kill": kill,
-        "rank_top10": [{"digit": d, "score": round(s, 1)} for d, s in rank[:10]],
+        "rank_top10": _view.scored_digits(rank[:TOP_RANK_DIGITS]),
         "position_top": position_top,
         "miss_global": miss_global,
         "miss_position": miss_position,
@@ -448,12 +439,7 @@ def run_prediction(data=None, force_refresh=False, enable_backtest=False,
         "recent_windows": list(RECENT_WINDOWS),
         "window_weights": {str(k): round(v, 4) for k, v in window_weights.items()},
         "window_scores": window_scores,
-        "sum_span": {
-            "sum_center": round(meta["sum_center"], 1),
-            "hot_sums": meta["hot_sums"],
-            "span_center": round(meta["span_center"], 1),
-            "hot_spans": meta["hot_spans"],
-        },
+        "sum_span": _view.sum_span_view(meta),
         "patterns": {
             "consecutive_rate": round(pat["consec_rate"], 4),
             "odd_even_top": [
@@ -538,11 +524,8 @@ def run_prediction(data=None, force_refresh=False, enable_backtest=False,
         "zu6_coverage": build_zu6_coverage_tiers(zu6_score, kill=None, numbers=numbers),
         "zhixuan_top3": zhixuan_top3_detail,
         "zhixuan": zhixuan_with_detail,
-        "stability": {
-            "score": round(stability, 2),
-            "level": stability_level,
-            "adjusted_exploration_rate": round(adjusted_exploration_rate, 2),
-        },
+        "stability": _view.stability_view(stability, stability_level,
+                                          adjusted_exploration_rate),
         "version": PREDICTOR_VERSION,
         "online_stats": online_stats,
         "ml_status": ml_status_info,
