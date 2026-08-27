@@ -99,7 +99,28 @@ def _init_okooo_session():
     except Exception as e:
         log.warning(f"初始化okooo session失败: {e}")
 
-_init_okooo_session()
+
+# 预热做没做过。**只记「试过」，不记「成功」**——失败时也置位，
+# 否则每次取数都会重来一遍，而 okooo 不可达时那是两个 10 秒超时。
+_okooo_session_warmed = False
+
+
+def ensure_okooo_session():
+    """首次真正要用 okooo 时才预热 session。
+
+    **迁移前这是模块级调用**（`_init_okooo_session()` 直接写在文件末尾），
+    于是 `import src.beidan` 就发两次 HTTP 请求加一次 `sleep(0.5)`：
+    任何 import 了 beidan 的测试都在联网，CI 随第三方站点波动，
+    okooo 不可达时导入还要等两个 10 秒超时。
+
+    初始化本身没问题，问题是它发生在 import 期——**那时候还不知道这次运行
+    要不要用 okooo**。跑一个纯计算的单元测试也得先跟人家握两次手。
+    """
+    global _okooo_session_warmed
+    if _okooo_session_warmed:
+        return
+    _okooo_session_warmed = True
+    _init_okooo_session()
 
 BET_TYPES = {
     'spf': {'name': '胜平负', 'description': '预测比赛胜负平结果'},

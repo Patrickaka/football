@@ -28,7 +28,7 @@ from ..common import kv_store
 log = setup_logger('beidan')
 
 from .config import (
-    DC_SCHEDULE_URL, HEADERS, OKOOO_DANCHANG_URL, OKOOO_HEADERS, OKOOO_MATCH_URL, SCHEDULE_URL, _is_okooo_waf_blocked, _mark_okooo_waf_blocked, _okooo_session,
+    DC_SCHEDULE_URL, HEADERS, OKOOO_DANCHANG_URL, OKOOO_HEADERS, OKOOO_MATCH_URL, SCHEDULE_URL, _is_okooo_waf_blocked, _mark_okooo_waf_blocked, _okooo_session, ensure_okooo_session,
 )
 
 # 北单与足球打的是同一个 odds.500.com。两边各跑一条预热线程，若各自独立发请求，
@@ -87,6 +87,11 @@ def fetch_okooo(url, encoding='utf-8', referer=None, max_retries=2):
     if _is_okooo_waf_blocked():
         log.debug(f"okooo WAF已拦截，跳过请求: {url}")
         return None
+
+    # 预热 session（拿 cookie）。**迁移前这发生在 import 期**，于是任何
+    # import beidan 的测试都在联网；现在推迟到真正要发请求的这一刻。
+    # 幂等，只有第一次会真的握手。
+    ensure_okooo_session()
     
     for attempt in range(max_retries):
         try:

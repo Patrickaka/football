@@ -214,3 +214,9 @@ dump('lottery3d_backtest', {k: as_comparable(v) for k, v in l3d_bt_entries()})
 from tests.domain.numeric.lottery3d.test_ml import golden_entries as l3d_ml_entries
 
 dump('lottery3d_ml', {k: as_comparable(v) for k, v in l3d_ml_entries()})
+
+
+# ---- beidan 概率建模 ----
+from scripts.gen_beidan_modeling_golden import entries as beidan_modeling_entries
+
+dump('beidan_modeling', {k: as_comparable(v) for k, v in beidan_modeling_entries()})
