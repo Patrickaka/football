@@ -41,6 +41,58 @@ MIN_ACTIVATION_SAMPLES = 4     # 低于此加权样本量不计算因子（过�
 POOLING_K = 12.0               # 收缩强度：n=K 时因子只生效一半，n>>K 时接近满额
 
 
+# ─── 存储边界的防腐 ───
+#
+# **进球数是 int，而 kv_store 底层走 JSON，JSON 的对象键只能是字符串。**
+# 存进去的 `{2: 1.17}` 读回来是 `{"2": 1.17}`，而查询端拿 int 去查——
+# 于是 `factors.get(2)` 找不到 `"2"`，每个因子都回落成 1.0（校准等于没做），
+# 更糟的是 `set(goal_dist) | set(factors)` 混进两种类型的键，
+# 下一步 `sorted()` 直接抛 `'<' not supported between 'str' and 'int'`，
+# 被上层 except 吞成「进球数校准失败，使用原始分布」。
+#
+# 线上三天 2294 条该告警，434 个分桶里 74 个有因子，**一次都没生效过**——
+# 两种失效都不报错，只是这条反馈链一直空转。
+#
+# 修在**进门这一处**：外部表示（字符串键）在加载时还原成领域表示（int 键），
+# 存储格式的约束不再渗进算法。写出去仍是 JSON 的形状，不需要改存储。
+
+
+def _restore_goal_keys(db):
+    """把整个 db 里所有「进球数 → 概率」映射的键还原成 int。
+
+    只动 `calibration_factors` 与 `predicted_distributions`——分桶键
+    （`'瑞典超_2.75_+0.50_2.50'`）本来就是字符串，不能碰。
+    """
+    if not isinstance(db, dict):
+        return {}
+    for bucket in db.values():
+        if not isinstance(bucket, dict):
+            continue
+        factors = bucket.get('calibration_factors')
+        if isinstance(factors, dict):
+            bucket['calibration_factors'] = _int_keyed(factors)
+        dists = bucket.get('predicted_distributions')
+        if isinstance(dists, list):
+            bucket['predicted_distributions'] = [
+                _int_keyed(dist) if isinstance(dist, dict) else dist
+                for dist in dists
+            ]
+    return db
+
+
+def _int_keyed(mapping):
+    """键转 int。**转不动的原样留下**——宁可留一个查不到的键，
+    也不能把它悄悄丢掉：丢掉之后概率就不再归一，而那不会报错。
+    """
+    restored = {}
+    for key, value in mapping.items():
+        try:
+            restored[int(key)] = value
+        except (TypeError, ValueError):
+            restored[key] = value
+    return restored
+
+
 class GoalCountCalibrator:
     """
     总球数校准器
@@ -53,9 +105,9 @@ class GoalCountCalibrator:
         self._load()
     
     def _load(self):
-        """从 MySQL 加载校准数据库"""
+        """从 MySQL 加载校准数据库，并把进球数键还原成 int。"""
         try:
-            self.db = kv_store.load('goal_count_calibration') or {}
+            self.db = _restore_goal_keys(kv_store.load('goal_count_calibration') or {})
         except Exception as e:
             print(f"加载总球数校准数据库失败: {e}")
             self.db = {}
