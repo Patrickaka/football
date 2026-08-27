@@ -112,6 +112,10 @@ def build_training_samples(numbers, make_engineer, settings, rng):
     `make_engineer(history)` 由调用方给——造特征器要读一堆配置，那是配置层
     的事。这里只负责「哪些号码进训练集、各自多重」。
     """
+    # 这道守卫与下面 `range` 的边界重合——历史恰好等于下限时，
+    # `range(min_history, min_history)` 本来就是空的。留着是为了让「数据不足」
+    # 在代码里有个明确的位置，而不是靠 range 的边界行为隐含。
+    # **变异验证挡不住它**（把 `<=` 改成 `<` 行为完全相同），这是已知的等价变异
     if len(numbers) <= settings.min_history:
         return EMPTY
 

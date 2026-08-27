@@ -292,6 +292,24 @@ class TierTests(unittest.TestCase):
         self.assertEqual(tiers[7], features.HOT)
         self.assertEqual(tiers[9], features.COLD, '从没出现过的必然是冷号')
 
+    def test_exactly_at_the_threshold_counts_as_hot(self):
+        """**恰好达到阈值算热号**（`>=` 而不是 `>`）。
+
+        构造成不衰减 + 阈值 1.0，十个数字各出现三次、均值也是三次——
+        每个数字都恰好压在线上。真实语料里浮点值不会正好落在阈值上，
+        所以这条边界只能这样专门造出来。"""
+        settings = SETTINGS._replace(decay=1.0, hot_ratio=1.0)
+        series = [(digit, digit, digit) for digit in range(10)]
+        tiers = features.FeatureEngineer(series, settings).digit_tier
+        self.assertEqual(set(tiers.values()), {features.HOT})
+
+    def test_just_below_the_threshold_is_not_hot(self):
+        """反方向：差一点点就不算热号。"""
+        settings = SETTINGS._replace(decay=1.0, hot_ratio=1.0001)
+        series = [(digit, digit, digit) for digit in range(10)]
+        tiers = features.FeatureEngineer(series, settings).digit_tier
+        self.assertNotIn(features.HOT, tiers.values())
+
     def test_thresholds_are_ratios_not_counts(self):
         """把窗口整体拉长十倍，分档结果不变——阈值若写成绝对次数就会变。"""
         short = [(7, 7, 7), (1, 2, 3)] * 5
@@ -369,6 +387,12 @@ class TrainingSetTests(unittest.TestCase):
         self.assertFalse(samples)
         self.assertEqual(samples.rows, [])
         self.assertEqual(len(samples), 4, '仍是四元组，所以旧守卫确实拦不住')
+
+    def test_exactly_min_history_yields_nothing(self):
+        """**恰好** min_history 期时产出空——多一期才开始有样本。
+        两侧都断言，只测一侧的话把 `<=` 写成 `<` 也发现不了。"""
+        self.assertFalse(self._build(NUMBERS[-3:]))
+        self.assertTrue(self._build(NUMBERS[-4:]))
 
     def test_one_positive_per_period(self):
         samples = self._build(NUMBERS[-8:])
@@ -456,8 +480,18 @@ class SplitTests(unittest.TestCase):
         self.assertLess(max(groups[i] for i in train), min(groups[i] for i in valid))
 
     def test_too_few_periods_declines_to_split(self):
-        groups = [period for period in range(5) for _ in range(6)]
+        """期数不够就不切。
+
+        **六期而不是五期**：五期时 `int(5 * 0.8)` 正好落在最后一期，
+        验证段为空，于是真正拦下它的是「验证集最少样本数」那道判断——
+        用五期的话，这条用例测的根本不是它自己声称要测的那个常量。"""
+        groups = [period for period in range(6) for _ in range(10)]
         self.assertIsNone(training.split_by_period(groups, len(groups)))
+
+    def test_enough_periods_does_split(self):
+        """边界另一侧：十期就切得动。两侧都断言，才挡得住把门槛调松。"""
+        groups = [period for period in range(10) for _ in range(10)]
+        self.assertIsNotNone(training.split_by_period(groups, len(groups)))
 
     def test_mismatched_lengths_decline_to_split(self):
         self.assertIsNone(training.split_by_period([1, 2, 3], 99))
@@ -535,11 +569,63 @@ class ForestTests(unittest.TestCase):
         self.assertEqual(tree.tree['value'], 1)
 
     def test_depth_limit_is_respected(self):
-        rows, labels = self._separable()
+        """**语料必须是分不干净的**。完美可分的数据第一层就分纯了，
+        深度限制根本走不到——那样这条用例看起来在测限深，实际什么也没测。"""
+        rows = [[float(index)] for index in range(20)]
+        labels = [0, 0, 1, 0, 1, 1, 0, 1, 1, 1, 0, 0, 1, 0, 1, 1, 0, 1, 1, 1]
         tree = forest.DecisionTree(max_depth=1, min_samples_split=2,
                                    rng=random.Random(0)).fit(rows, labels)
-        self.assertTrue(tree.tree['leaf'] or
-                        (tree.tree['left']['leaf'] and tree.tree['right']['leaf']))
+        self.assertFalse(tree.tree['leaf'], '这份数据第一层分得动')
+        self.assertTrue(tree.tree['left']['leaf'] and tree.tree['right']['leaf'],
+                        '深度到顶，两个子节点都必须是叶')
+
+    def test_zero_gain_split_stops(self):
+        """增益为 0 就不分——再分下去只是把噪声刻进树里。
+
+        这份数据唯一的候选分裂点两边的正例比例都等于总体，增益精确为 0；
+        分裂点靠 `max_splits_per_feature=1` 卡到那一个位置上。"""
+        rows = [[float(index)] for index in range(6)]
+        labels = [0, 0, 1, 1, 0, 1]
+        tree = forest.DecisionTree(max_depth=5, min_samples_split=2,
+                                   rng=random.Random(0),
+                                   max_splits_per_feature=1).fit(rows, labels)
+        self.assertTrue(tree.tree['leaf'])
+
+    def test_single_tree_looks_at_every_feature_by_default(self):
+        """单棵树默认看**全部**特征。
+
+        十个特征里只有最后一个能分开，其余是常数。默认比例下每个种子都必然
+        抽中它；比例减半的话总有种子抽不到，那棵树会退化成一片叶子。"""
+        # 标签**交替**排列，不是前十后十：分段排列时常数特征按原始顺序切
+        # 也能切出满增益（见下一条用例），那样这份数据分辨不出抽没抽中
+        labels = [index % 2 for index in range(20)]
+        rows = [[0.0] * 9 + [float(label)] for label in labels]
+        for seed in range(8):
+            tree = forest.DecisionTree(max_depth=2, min_samples_split=2,
+                                       rng=random.Random(seed)).fit(rows, labels)
+            predictions = tree.predict(rows)
+            zeros = [p for p, label in zip(predictions, labels) if label == 0]
+            ones = [p for p, label in zip(predictions, labels) if label == 1]
+            with self.subTest(seed=seed):
+                # 断言树**真的区分了两类**，而不是「根不是叶」——常数特征也
+                # 会产出一个分裂节点（见下一条用例），根不是叶说明不了什么
+                self.assertLess(sum(zeros) / len(zeros), sum(ones) / len(ones))
+
+    def test_constant_feature_still_produces_a_split_node(self):
+        """**增益是按排序位置切出来评估的，实际分裂却按阈值切。**
+
+        对取值全同的特征，排序退化成原始顺序，于是「按位置切」能切出一个
+        增益很高的假分裂；而真正分裂时所有样本都满足 `<= threshold`，
+        全落到左边，右子是个空叶。树因此多一层却什么也没分开。
+
+        这是迁移前就有的行为，原样保留——降级路径线上走不到，改掉会动它的
+        输出。这条用例把现状钉住，免得下次有人以为「根不是叶」等于分开了。"""
+        rows = [[0.0] for _ in range(20)]
+        labels = [0] * 10 + [1] * 10
+        tree = forest.DecisionTree(max_depth=2, min_samples_split=2,
+                                   rng=random.Random(0)).fit(rows, labels)
+        self.assertFalse(tree.tree['leaf'], '产出了一个分裂节点')
+        self.assertEqual(len(set(tree.predict(rows))), 1, '但一个样本也没分开')
 
     def test_same_seed_reproduces_the_forest(self):
         rows, labels = self._separable()
@@ -609,6 +695,15 @@ class AdapterGuardTests(unittest.TestCase):
 
     def test_prediction_declines_on_short_history(self):
         self.assertEqual(adapter.predict_current(NUMBERS[-50:])['error'], '历史数据不足')
+
+    def test_prediction_declines_when_rows_are_too_few(self):
+        """历史够长、但采样出来的样本太少也要拒绝。
+
+        一百期够过第一道守卫，每期只抽一条负例 → 八十行，卡在
+        「历史数据不足」与「够训练」之间——这一档此前没有任何用例。"""
+        self.assertEqual(
+            adapter.predict_current(NUMBERS[-100:], neg_samples=1)['error'],
+            '训练数据不足')
 
     def test_backtest_declines_when_data_cannot_cover_the_window(self):
         result = adapter.backtest_ml(NUMBERS[-50:], trials=2, train_window=120)
