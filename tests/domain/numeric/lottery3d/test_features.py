@@ -346,18 +346,21 @@ class SumTests(unittest.TestCase):
         self.assertEqual(result['bonus'][SUM_MAX], -0.5)
 
     def test_extreme_band_boundaries_are_where_they_are(self):
-        """两端各多少算「极端」要有紧贴边界的样本。
+        """两端各多少算「极端」，要有紧贴边界的样本。
 
-        线上 `SUM_EXTREME_PENALTY` 现在是 0，这一项等于关着，黄金语料测不到
-        边界——所以这里显式给一个非零罚分。区间取 1~7，让 8 与 24 落在
-        「既不在区间内也不算极端」的那一档，边界挪一格就会露出来。
+        线上 `SUM_EXTREME_PENALTY` 是 0，这一项等于关着，黄金语料测不到边界，
+        所以这里显式给非零罚分。和值中心取 12，区间落在 9~15——这样 5 与 6、
+        24 与 25 都落在区间之外，两条边界才真的暴露出来。
+
+        边界值写成**字面量**：写成 `history.EXTREME_LOW` 的话，把常量改坏，
+        下标会跟着一起挪，断言照样通过（判据 12）。
         """
-        result = history.sum_interval([(0, 0, 4)] * 10, 5, 3, 0.8, 0.5)
-        self.assertEqual((result['low'], result['high']), (1, 7))
-        self.assertEqual(result['bonus'][history.EXTREME_LOW], 0.8)      # 5 仍在区间内
-        self.assertEqual(result['bonus'][8], 0.0)                        # 出区间但不极端
-        self.assertEqual(result['bonus'][history.EXTREME_HIGH - 1], 0.0)  # 24 不极端
-        self.assertEqual(result['bonus'][history.EXTREME_HIGH], -0.5)     # 25 起算极端
+        result = history.sum_interval([(4, 4, 4)] * 10, 5, 3, 0.8, 0.5)
+        self.assertEqual((result['low'], result['high']), (9, 15))
+        self.assertEqual(result['bonus'][5], -0.5)   # 下界之内：算极端
+        self.assertEqual(result['bonus'][6], 0.0)    # 差一格：出区间但不极端
+        self.assertEqual(result['bonus'][24], 0.0)   # 差一格：出区间但不极端
+        self.assertEqual(result['bonus'][25], -0.5)  # 上界之内：算极端
 
     def test_interval_covers_every_possible_sum(self):
         result = history.sum_interval([(4, 5, 5)] * 10, 5, 4, 0.8, 0.5)
