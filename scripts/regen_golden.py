@@ -168,13 +168,7 @@ print('全部生成完成')
 
 
 # ---- lottery3d 特征层 ----
-import gzip as _gzip
-from tests.domain.numeric.lottery3d import test_features as tl3
-from src.domain.numeric.lottery3d import draw as l3draw
-from src.domain.numeric.lottery3d import history as l3hist
-from src.domain.numeric.lottery3d import recommendations as l3rec
-from src.domain.numeric.lottery3d import slope as l3slope
+from tests.domain.numeric.lottery3d.test_features import golden_entries as l3d_entries
 from tests.domain.golden import as_comparable
 
-print('lottery3d 特征层的黄金值由 tests/domain/numeric/lottery3d/test_features.py')
-print('里的语料定义；重生成时把该文件的 GoldenTests 断言换成写入即可。')
+dump('lottery3d_features', {k: as_comparable(v) for k, v in l3d_entries()})

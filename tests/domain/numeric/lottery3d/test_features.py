@@ -58,119 +58,167 @@ def _key(triple):
     return ''.join(map(str, triple))
 
 
+def golden_entries():
+    """按 (键, 值) 逐条产出全部语料。
+
+    **测试与重生成脚本共用这一个生成器。** 两边各写一套语料，比对的就不是
+    生成时的那批输入了——而那种不一致只会表现为「黄金文件里有些键从来没被
+    验过」，不会报错。
+    """
+    yield from _draw_entries()
+    yield from _miss_entries()
+    yield from _series_entries()
+    yield from _slope_entries()
+    yield from _gaussian_entries()
+    yield from _recommendation_entries()
+
+
+def _draw_entries():
+    for triple in TRIPLES:
+        key = _key(triple)
+        yield f'calc_span:{key}', draw.span(triple)
+        yield f'odd_even_key:{key}', draw.odd_even_key(triple)
+        yield f'big_small_key:{key}', draw.big_small_key(triple)
+        yield f'has_consecutive:{key}', draw.has_consecutive_digits(*triple)
+        yield f'classify_form:{key}', draw.classify_form(triple)
+    for digit in DIGITS:
+        yield f'neighbor:{digit}', sorted(draw.neighbor(digit))
+        yield f'road:{digit}', draw.road(digit)
+    for ratio in ((0, 3), (3, 0), (1, 2), (2, 1)):
+        for kind in ('oe', 'bs', 'other'):
+            yield f'ratio_label:{ratio[0]}{ratio[1]}:{kind}', draw.ratio_label(ratio, kind)
+    yield 'form_labels', draw.FORM_LABELS
+    yield 'theory_form_p', draw.THEORY_FORM_P
+
+
+def _miss_entries():
+    for name, series in SERIES.items():
+        for position in (None, 0, 1, 2):
+            for digit in DIGITS:
+                yield (f'miss_value:{name}:{position}:{digit}',
+                       history.miss_value(series, digit, position))
+        for digit in DIGITS:
+            for window in (30, 100):
+                yield (f'avg_miss_cycle:{name}:{digit}:{window}',
+                       history.average_miss_cycle(series, digit, window))
+        forms = [draw.classify_form(t) for t in series]
+        for target in ('zu6', 'zu3', 'baozi'):
+            yield f'form_miss:{name}:{target}', history.form_miss(forms, target)
+        for window in (5, 30, 100):
+            yield (f'form_recent_p:{name}:{window}',
+                   history.form_recent_p(forms, window, EXP_DECAY))
+
+
+def _series_entries():
+    for name, series in SERIES.items():
+        for position in range(POSITIONS):
+            yield f'markov:{name}:{position}', history.build_markov(series, position)
+            yield f'markov2:{name}:{position}', history.build_markov2(series, position)
+        yield (f'rebound:{name}',
+               history.rebound_bonus(series, REBOUND_WINDOW, REBOUND_THRESHOLD,
+                                     REBOUND_BONUS))
+        yield f'hot_classify:{name}', history.classify_by_hot(series, HOT_WINDOW)
+        yield (f'sum_trend:{name}',
+               history.sum_trend(series, SUM_TREND_WINDOW, SUM_TREND_ADJUST))
+        yield (f'miss_cycle_bonus:{name}',
+               history.miss_cycle_bonus(series, MISS_CYCLE_WINDOW, MISS_OVER_RATIO,
+                                        MISS_OVER_BONUS))
+        yield (f'high_freq_pairs:{name}',
+               sorted(map(list, history.high_freq_pairs(series, PAIR_WINDOWS,
+                                                        PAIR_THRESHOLD))))
+        yield (f'form_switch:{name}',
+               history.form_switch_bonus(series, FORM_SWITCH_WEIGHT, ZU6_STREAK,
+                                         ZU3_STREAK))
+        yield (f'sum_interval:{name}',
+               history.sum_interval(series, SUM_INTERVAL_WINDOW, SUM_INTERVAL_WIDTH,
+                                    SUM_INTERVAL_BONUS, SUM_EXTREME_PENALTY))
+        for window in (10, 50):
+            yield f'pair_freq:{name}:{window}', history.pair_frequency(series, window)
+        flat = [d for t in series for d in t]
+        for decay in (0.9, 1.0, 0.5):
+            yield (f'exp_weighted:{name}:{decay}',
+                   history.exp_weighted_counts(flat, decay))
+        for window in (0, 1, 5, 30, 100, 10000):
+            yield (f'recent_slice:{name}:{window}',
+                   [list(x) for x in history._recent(series, window)])
+
+
+def _slope_entries():
+    for name, series in SERIES.items():
+        yield f'slope_patterns:{name}', slope.analyze(series, SLOPE_MIN_CHAIN,
+                                                      SLOPE_MAX_CHAIN)
+        yield f'cross_slope:{name}', slope.cross_period_signals(series)
+    for left in (0, 3, 9):
+        for right in (0, 4, 9):
+            yield f'slope_step:{left}:{right}', slope.step_between(left, right)
+    for name in ('full', 'recent200', 'recent30', 'recent5'):
+        for position in range(POSITIONS):
+            column = [t[position] for t in SERIES[name]]
+            yield (f'slope_chain:{name}:{position}',
+                   slope.detect_chain(column, SLOPE_MIN_CHAIN, SLOPE_MAX_CHAIN))
+    for name in ('full', 'recent200', 'recent30'):
+        analysis = slope.analyze(SERIES[name], SLOPE_MIN_CHAIN, SLOPE_MAX_CHAIN)
+        pairs = history.high_freq_pairs(SERIES[name], PAIR_WINDOWS, PAIR_THRESHOLD)
+        for triple in TRIPLES:
+            yield (f'slope_bonus:{name}:{_key(triple)}',
+                   round(slope.triplet_bonus(triple, analysis, W_SLOPE_MATCH), 10))
+            yield (f'pair_bonus:{name}:{_key(triple)}',
+                   round(history.pair_bonus(triple, pairs, PAIR_BONUS), 10))
+
+
+def _gaussian_entries():
+    for value in (0, 5, 13.5, 27, -3, 100):
+        for center in (13.5, 0, 27):
+            for sigma in (1, 5, 0.1):
+                yield (f'gaussian:{value}:{center}:{sigma}',
+                       history.gaussian_score(value, center, sigma))
+
+
+def _recommendation_entries():
+    pools = [[(1.0, '123'), (0.9, '456'), (0.8, '789')],
+             [(2.0, '000'), (1.5, '111')], []]
+    recents = [[], [{'numbers': ['123']}],
+               [{'numbers': ['123', '456']}, {'numbers': ['789']}]]
+    for i, pool in enumerate(pools):
+        for j, recent in enumerate(recents):
+            yield (f'recent_penalty:{i}:{j}',
+                   recommendations.penalise_repeats(pool, recent, RECENT_WINDOW,
+                                                    RECENT_PENALTY,
+                                                    RECENT_CONSECUTIVE_PENALTY))
+    for actual in ('123', '000', '987'):
+        for candidates in (['123', '456'], ['321'], [], ['111', '122']):
+            yield (f'max_overlap:{actual}:{"-".join(candidates) or "none"}',
+                   recommendations.max_digit_overlap(actual, candidates))
+
+
 class GoldenTests(unittest.TestCase):
     """迁移前后逐条比对。任何一条对不上，都意味着推荐的号变了。"""
 
-    def _check(self, key, value):
-        with self.subTest(case=key):
-            self.assertEqual(as_comparable(value), GOLDEN[key])
+    def test_matches_golden(self):
+        seen = set()
+        for key, value in golden_entries():
+            seen.add(key)
+            with self.subTest(case=key):
+                self.assertEqual(as_comparable(value), GOLDEN[key])
+        # 黄金文件里有语料不再覆盖的键，说明语料被删过而文件没跟着重生成——
+        # 那些键从此再也不会被验证，而少了断言不会有任何提示。
+        self.assertEqual(sorted(set(GOLDEN) - seen), [])
 
-    def test_draw_properties_match_golden(self):
-        for triple in TRIPLES:
-            key = _key(triple)
-            self._check(f'calc_span:{key}', draw.span(triple))
-            self._check(f'odd_even_key:{key}', draw.odd_even_key(triple))
-            self._check(f'big_small_key:{key}', draw.big_small_key(triple))
-            self._check(f'has_consecutive:{key}', draw.has_consecutive_digits(*triple))
-            self._check(f'classify_form:{key}', draw.classify_form(triple))
-        for digit in DIGITS:
-            self._check(f'neighbor:{digit}', sorted(draw.neighbor(digit)))
-            self._check(f'road:{digit}', draw.road(digit))
-        for key in ((0, 3), (3, 0), (1, 2), (2, 1)):
-            for kind in ('oe', 'bs', 'other'):
-                self._check(f'ratio_label:{key[0]}{key[1]}:{kind}',
-                            draw.ratio_label(key, kind))
-        self._check('form_labels', draw.FORM_LABELS)
-        self._check('theory_form_p', draw.THEORY_FORM_P)
 
-    def test_miss_and_cycles_match_golden(self):
-        for name, series in SERIES.items():
-            for position in (None, 0, 1, 2):
-                for digit in DIGITS:
-                    self._check(f'miss_value:{name}:{position}:{digit}',
-                                history.miss_value(series, digit, position))
-            for digit in DIGITS:
-                for window in (30, 100):
-                    self._check(f'avg_miss_cycle:{name}:{digit}:{window}',
-                                history.average_miss_cycle(series, digit, window))
-            forms = [draw.classify_form(t) for t in series]
-            for target in ('zu6', 'zu3', 'baozi'):
-                self._check(f'form_miss:{name}:{target}', history.form_miss(forms, target))
-            for window in (5, 30, 100):
-                self._check(f'form_recent_p:{name}:{window}',
-                            history.form_recent_p(forms, window, EXP_DECAY))
+class DisabledEntropyTests(unittest.TestCase):
+    """`entropy_model` 恒为 0，且**刻意**留在 `src/lottery3d/features.py`。
 
-    def test_series_statistics_match_golden(self):
-        for name, series in SERIES.items():
-            for position in range(POSITIONS):
-                self._check(f'markov:{name}:{position}',
-                            history.build_markov(series, position))
-                self._check(f'markov2:{name}:{position}',
-                            history.build_markov2(series, position))
-            self._check(f'rebound:{name}', history.rebound_bonus(series, REBOUND_WINDOW, REBOUND_THRESHOLD, REBOUND_BONUS))
-            self._check(f'hot_classify:{name}', history.classify_by_hot(series, HOT_WINDOW))
-            self._check(f'sum_trend:{name}', history.sum_trend(series, SUM_TREND_WINDOW, SUM_TREND_ADJUST))
-            self._check(f'miss_cycle_bonus:{name}',
-                        history.miss_cycle_bonus(series, MISS_CYCLE_WINDOW, MISS_OVER_RATIO, MISS_OVER_BONUS))
-            self._check(f'high_freq_pairs:{name}',
-                        sorted(map(list, history.high_freq_pairs(series, PAIR_WINDOWS, PAIR_THRESHOLD))))
-            self._check(f'form_switch:{name}', history.form_switch_bonus(series, FORM_SWITCH_WEIGHT, ZU6_STREAK, ZU3_STREAK))
-            self._check(f'sum_interval:{name}', history.sum_interval(series, SUM_INTERVAL_WINDOW, SUM_INTERVAL_WIDTH,
-                                          SUM_INTERVAL_BONUS, SUM_EXTREME_PENALTY))
-            for window in (10, 50):
-                self._check(f'pair_freq:{name}:{window}',
-                            history.pair_frequency(series, window))
-            flat = [d for t in series for d in t]
-            for decay in (0.9, 1.0, 0.5):
-                self._check(f'exp_weighted:{name}:{decay}',
-                            history.exp_weighted_counts(flat, decay))
-            for window in (0, 1, 5, 30, 100, 10000):
-                self._check(f'recent_slice:{name}:{window}',
-                            [list(x) for x in history._recent(series, window)])
+    它不是领域逻辑，是一条结论：「长期未出现」不会提高下一期出现的概率，
+    所以熵值奖励被关掉了。`digit_scores` 仍在把它加进去——删掉函数等于把
+    这条结论也删掉，下次有人想「加个冷号奖励」时就读不到了。
+    """
 
-    def test_slope_matches_golden(self):
-        for name, series in SERIES.items():
-            self._check(f'slope_patterns:{name}', slope.analyze(series, SLOPE_MIN_CHAIN, SLOPE_MAX_CHAIN))
-            self._check(f'cross_slope:{name}', slope.cross_period_signals(series))
-        for left in (0, 3, 9):
-            for right in (0, 4, 9):
-                self._check(f'slope_step:{left}:{right}', slope.step_between(left, right))
-        for name in ('full', 'recent200', 'recent30', 'recent5'):
-            for position in range(POSITIONS):
-                series = [t[position] for t in SERIES[name]]
-                self._check(f'slope_chain:{name}:{position}',
-                            slope.detect_chain(series, SLOPE_MIN_CHAIN, SLOPE_MAX_CHAIN))
-        for name in ('full', 'recent200', 'recent30'):
-            analysis = slope.analyze(SERIES[name], SLOPE_MIN_CHAIN, SLOPE_MAX_CHAIN)
-            pairs = history.high_freq_pairs(SERIES[name], PAIR_WINDOWS, PAIR_THRESHOLD)
-            for triple in TRIPLES:
-                self._check(f'slope_bonus:{name}:{_key(triple)}',
-                            round(slope.triplet_bonus(triple, analysis, W_SLOPE_MATCH), 10))
-                self._check(f'pair_bonus:{name}:{_key(triple)}',
-                            round(history.pair_bonus(triple, pairs, PAIR_BONUS), 10))
-
-    def test_gaussian_matches_golden(self):
-        for value in (0, 5, 13.5, 27, -3, 100):
-            for center in (13.5, 0, 27):
-                for sigma in (1, 5, 0.1):
-                    self._check(f'gaussian:{value}:{center}:{sigma}',
-                                history.gaussian_score(value, center, sigma))
-
-    def test_recommendation_helpers_match_golden(self):
-        pools = [[(1.0, '123'), (0.9, '456'), (0.8, '789')],
-                 [(2.0, '000'), (1.5, '111')], []]
-        recents = [[], [{'numbers': ['123']}],
-                   [{'numbers': ['123', '456']}, {'numbers': ['789']}]]
-        for i, pool in enumerate(pools):
-            for j, recent in enumerate(recents):
-                self._check(f'recent_penalty:{i}:{j}',
-                            recommendations.penalise_repeats(pool, recent, RECENT_WINDOW,
-                                                             RECENT_PENALTY,
-                                                             RECENT_CONSECUTIVE_PENALTY))
-        for actual in ('123', '000', '987'):
-            for candidates in (['123', '456'], ['321'], [], ['111', '122']):
-                self._check(f'max_overlap:{actual}:{"-".join(candidates) or "none"}',
-                            recommendations.max_digit_overlap(actual, candidates))
+    def test_entropy_bonus_is_zero_for_every_digit(self):
+        from src.lottery3d.features import entropy_model
+        for series in (NUMBERS, NUMBERS[-5:], []):
+            with self.subTest(length=len(series)):
+                self.assertEqual(entropy_model(series),
+                                 {d: 0.0 for d in range(10)})
 
 
 class TimeDirectionTests(unittest.TestCase):
