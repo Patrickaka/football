@@ -13,6 +13,8 @@
 import math
 from collections import Counter, defaultdict
 
+from src.domain.numeric.lottery3d import backtest as _bt
+from src.domain.numeric.lottery3d import component_backtest as _component
 from src.domain.numeric.lottery3d import draw as _draw
 from src.domain.numeric.lottery3d import history as _history
 from src.domain.numeric.lottery3d import recommendations as _recommend
@@ -146,33 +148,12 @@ def recent_recommend_penalty(pool, recent_recommendations):
 def backtest_slope_patterns(numbers, trials=100):
     """斜连信号独立回测（分位预测是否命中）。
 
-    同位与跨期分开统计：两者强度不同，混在一起算命中率会把强的那类摊薄。
-    基线 0.10 是单个分位随机命中的概率（十个数字里猜中一个）。
+    起点不只受 `trials` 约束：链还没形成的那几期算不出任何信号，
+    `SLOPE_MIN_CHAIN + 1` 是能出第一条信号的最早位置。
     """
-    pos_hit = pos_total = 0
-    cross_hit = cross_total = 0
-    start = max(SLOPE_MIN_CHAIN + 1, len(numbers) - trials)
-
-    for index in range(start, len(numbers)):
-        actual = numbers[index]
-        analysis = analyze_slope_patterns(numbers[:index])
-        for signal in analysis.get('signals', []):
-            hit = int(actual[signal['position']] == signal['predict_digit']) \
-                if 'position' in signal else 0
-            if signal['type'] == 'position_slope':
-                pos_total += 1
-                pos_hit += hit
-            elif signal['type'] == 'cross_period_slope':
-                cross_total += 1
-                cross_hit += hit
-
-    return {
-        'trials': trials,
-        'position_slope_hit': pos_hit,
-        'position_slope_total': pos_total,
-        'position_slope_rate': round(pos_hit / pos_total, 4) if pos_total else 0.0,
-        'cross_slope_hit': cross_hit,
-        'cross_slope_total': cross_total,
-        'cross_slope_rate': round(cross_hit / cross_total, 4) if cross_total else 0.0,
-        'baseline_single_pos': 0.10,
-    }
+    reachable = max(0, len(numbers) - SLOPE_MIN_CHAIN - 1)
+    accumulator = _component.SlopeBacktest()
+    for train, actual in _bt.rolling_slices(numbers, min(trials, reachable)):
+        analysis = analyze_slope_patterns(train)
+        accumulator.observe(actual, analysis.get('signals', []))
+    return accumulator.summarise()

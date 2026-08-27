@@ -9,6 +9,10 @@ from itertools import combinations
 from ..common.logger import setup_logger
 from ..common import kv_store
 
+from src.domain.numeric.lottery3d import backtest as _bt
+from src.domain.numeric.lottery3d import component_backtest as _component
+from src.domain.numeric.lottery3d import draw as _draw
+
 log = setup_logger('lottery3d')
 
 from .config import (
@@ -20,148 +24,38 @@ from .features import (
 )
 
 def backtest_dan_kill(numbers, trials=100):
-    """胆码/杀码独立回测
-    
-    参数：
-        numbers: 历史号码数据
-        trials: 回测期数
-    
-    返回：
-        result: 胆码和杀码的回测统计
-    """
-    dan_hit1 = 0
-    dan_hit2 = 0
-    kill_fail = 0
-
-    start = len(numbers) - trials
-
-    for i in range(start, len(numbers)):
-        train = numbers[:i]
-        actual = numbers[i]
-        actual_set = set(actual)
-
-        ww = default_window_weights()
-        meta = build_ranking_meta(train, ww)
-        sc, _ = ensemble_digit_scores(train, ww, dynamic=meta.get("dynamic"))
-        dan, _, kill, _ = pick_dan_tuo_kill(sc, enable_danma_random=False)
-
-        hit_count = len(set(dan) & actual_set)
-
-        if hit_count >= 1:
-            dan_hit1 += 1
-        if hit_count >= 2:
-            dan_hit2 += 1
-
-        if set(kill) & actual_set:
-            kill_fail += 1
-
-    return {
-        "trials": trials,
-        "dan_hit1_rate": dan_hit1 / trials,
-        "dan_hit2_rate": dan_hit2 / trials,
-        "kill_fail_rate": kill_fail / trials,
-    }
+    """胆码/杀码独立回测"""
+    accumulator = _component.DanKillBacktest()
+    for train, actual in _bt.rolling_slices(numbers, trials):
+        weights = default_window_weights()
+        meta = build_ranking_meta(train, weights)
+        score, _ = ensemble_digit_scores(train, weights, dynamic=meta.get("dynamic"))
+        danma, _, kill, _ = pick_dan_tuo_kill(score, enable_danma_random=False)
+        accumulator.observe(actual, danma, kill)
+    return accumulator.summarise()
 
 
 def backtest_form_prediction(numbers, trials=100):
-    """形态预测命中率回测
-    
-    参数：
-        numbers: 历史号码数据
-        trials: 回测期数
-    
-    返回：
-        result: 形态预测回测统计
-    """
-    hit = 0
-    zu6_hit = 0
-    zu6_total = 0
-    zu3_hit = 0
-    zu3_total = 0
-
-    start = len(numbers) - trials
-
-    for i in range(start, len(numbers)):
-        train = numbers[:i]
-        actual_form = classify_form(numbers[i])
-
-        ww = default_window_weights()
-        pred = analyze_form_probability(train, window_weights=ww)
-        pred_form = max(pred["blend_p"].items(), key=lambda x: x[1])[0]
-
-        if pred_form == actual_form:
-            hit += 1
-
-        if pred_form == "zu6":
-            zu6_total += 1
-            if actual_form == "zu6":
-                zu6_hit += 1
-
-        if pred_form == "zu3":
-            zu3_total += 1
-            if actual_form == "zu3":
-                zu3_hit += 1
-
-    return {
-        "trials": trials,
-        "form_top1_rate": hit / trials,
-        "zu6_precision": zu6_hit / zu6_total if zu6_total else 0,
-        "zu3_precision": zu3_hit / zu3_total if zu3_total else 0,
-    }
+    """形态预测命中率回测"""
+    accumulator = _component.FormBacktest(tracked_forms=(_draw.ZU6, _draw.ZU3))
+    for train, actual in _bt.rolling_slices(numbers, trials):
+        weights = default_window_weights()
+        predicted = analyze_form_probability(train, window_weights=weights)
+        top_form = max(predicted["blend_p"].items(), key=lambda item: item[1])[0]
+        accumulator.observe(classify_form(actual), top_form)
+    return accumulator.summarise()
 
 
 def backtest_sum_span_interval(numbers, trials=100):
-    """和值/跨度区间独立回测
-    
-    参数：
-        numbers: 历史号码数据
-        trials: 回测期数
-    
-    返回：
-        result: 和值/跨度区间回测统计
-    """
-    sum_hit_2 = 0
-    sum_hit_3 = 0
-    sum_hit_4 = 0
-    span_hit_1 = 0
-    span_hit_2 = 0
-
-    start = len(numbers) - trials
-
-    for i in range(start, len(numbers)):
-        train = numbers[:i]
-        actual = numbers[i]
-        actual_sum = sum(actual)
-        actual_span = max(actual) - min(actual)
-
-        ww = default_window_weights()
+    """和值/跨度区间独立回测"""
+    accumulator = _component.SumSpanBacktest()
+    for train, actual in _bt.rolling_slices(numbers, trials):
+        weights = default_window_weights()
         sums = [sum(x) for x in train]
         spans = [calc_span(x) for x in train]
-        meta = build_ranking_meta(train, ww, sums, spans)
-
-        sum_center = meta["sum_center"]
-        span_center = meta["span_center"]
-
-        if abs(actual_sum - sum_center) <= 2:
-            sum_hit_2 += 1
-        if abs(actual_sum - sum_center) <= 3:
-            sum_hit_3 += 1
-        if abs(actual_sum - sum_center) <= 4:
-            sum_hit_4 += 1
-
-        if abs(actual_span - span_center) <= 1:
-            span_hit_1 += 1
-        if abs(actual_span - span_center) <= 2:
-            span_hit_2 += 1
-
-    return {
-        "trials": trials,
-        "sum_hit_2_rate": sum_hit_2 / trials,
-        "sum_hit_3_rate": sum_hit_3 / trials,
-        "sum_hit_4_rate": sum_hit_4 / trials,
-        "span_hit_1_rate": span_hit_1 / trials,
-        "span_hit_2_rate": span_hit_2 / trials,
-    }
+        meta = build_ranking_meta(train, weights, sums, spans)
+        accumulator.observe(actual, meta["sum_center"], meta["span_center"])
+    return accumulator.summarise()
 
 
 def load_persisted_window_weights():
