@@ -18,7 +18,7 @@ from .config import (
     BEIDAN_VERSION, BEIDAN_HISTORY_KEY, BEIDAN_HISTORY_LIMIT, BASE_URL, SCHEDULE_URL,
     DC_SCHEDULE_URL, MATCH_DETAIL_URL, OKOOO_BASE, OKOOO_DANCHANG_URL, OKOOO_MATCH_URL,
     HEADERS, OKOOO_HEADERS, _okooo_session, _okooo_waf_blocked, _okooo_waf_blocked_time,
-    _mark_okooo_waf_blocked, _is_okooo_waf_blocked, _init_okooo_session, BET_TYPES, MAX_GOALS,
+    _mark_okooo_waf_blocked, _is_okooo_waf_blocked, _init_okooo_session, ensure_okooo_session, BET_TYPES, MAX_GOALS,
     SCORE_SPLIT, LEAGUE_PROFILES,
 )
 from .modeling import (
