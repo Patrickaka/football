@@ -420,6 +420,29 @@ class LeagueProfiles(unittest.TestCase):
         self.assertAlmostEqual(blended['low_score'], 0.88)
         self.assertEqual(blended['live_sample'], 200)
 
+    def test_the_fallback_goal_average_only_fires_on_an_incomplete_profile(self):
+        """`DEFAULT_AVG_GOAL` 是 `.get(..., default)` 的兜底。
+
+        两个产出画像的函数都必然带 `avg_goal`，所以生产路径走不到它——
+        但 `LEAGUE_PROFILES` 是手写配置，`default` 少一个键就会落到这里，
+        属判据 9 第二行「配置让它不可达」→ **补用例，不要删**。
+        """
+        static = {'home_boost': 1.08, 'low_score': 0.88, 'draw_mult': 0.95}
+        live = {'avg_goal': 2.0, 'draw_rate': 0.25, 'sample_size': 200}
+        blended = parsing.blend_league_profiles(static, live, '英超')
+        self.assertAlmostEqual(blended['avg_goal'], 0.7 * 1.42 + 0.3 * 2.0)
+
+        # 反过来：实时画像缺 avg_goal 时同样落到兜底
+        no_live_goal = parsing.blend_league_profiles(
+            {'avg_goal': 1.52}, {'draw_rate': 0.25, 'sample_size': 200}, '英超')
+        self.assertAlmostEqual(no_live_goal['avg_goal'], 0.7 * 1.52 + 0.3 * 1.42)
+
+    def test_both_profile_producers_always_include_the_goal_average(self):
+        """把「生产路径走不到兜底」这件事也钉住——否则上一条读起来像在测主路径。"""
+        self.assertIn('avg_goal', parsing.league_profile_from_matches([{'score': '1-1'}]))
+        self.assertIn('avg_goal', parsing.resolve_static_league_profile(
+            '任意联赛', self.PROFILES))
+
     def test_league_profile_from_matches_skips_unparsable_scores(self):
         profile = parsing.league_profile_from_matches(
             [{'score': '2-1'}, {'score': 'bad'}, {'score': None},
