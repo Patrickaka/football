@@ -24,30 +24,67 @@ except Exception:
     np = None
     NUMPY_AVAILABLE = False
 
-# 尝试导入机器学习库
+# 机器学习库：只有 MetaWeightModel 用得到，而它是惰性构造的，所以这里只声明
+# 名字，真正的 import 推到 _load_ml_libs()。三个库合计约 0.76 秒，而整个
+# import src.football 原本才 0.85 秒——九成的导入代价花在这上面。
 XGBOOST_AVAILABLE = False
 LIGHTGBM_AVAILABLE = False
 SKLEARN_AVAILABLE = False
 
-try:
-    from xgboost import XGBRegressor
-    XGBOOST_AVAILABLE = NUMPY_AVAILABLE
-except Exception:
-    pass
+XGBRegressor = None
+LGBMRegressor = None
+StandardScaler = None
+LabelEncoder = None
+train_test_split = None
+mean_squared_error = None
 
-try:
-    from lightgbm import LGBMRegressor
-    LIGHTGBM_AVAILABLE = NUMPY_AVAILABLE
-except Exception:
-    pass
+_ML_LIBS_LOADED = False
 
-try:
-    from sklearn.preprocessing import StandardScaler, LabelEncoder
-    from sklearn.model_selection import train_test_split
-    from sklearn.metrics import mean_squared_error
-    SKLEARN_AVAILABLE = NUMPY_AVAILABLE
-except Exception:
-    pass
+
+def _load_ml_libs():
+    """真正要用 ML 库时才导入。
+
+    语义与原来的模块级 try-import 完全一致：真的去 import，失败就把对应的
+    *_AVAILABLE 留在 False。**只有时机变了**——从「import src.football」
+    推迟到「第一次构造 MetaWeightModel」。
+
+    幂等：失败过一次就不再重试，与模块级 import 只执行一次的行为对齐。
+    """
+    global _ML_LIBS_LOADED
+    global XGBOOST_AVAILABLE, LIGHTGBM_AVAILABLE, SKLEARN_AVAILABLE
+    global XGBRegressor, LGBMRegressor
+    global StandardScaler, LabelEncoder, train_test_split, mean_squared_error
+
+    if _ML_LIBS_LOADED:
+        return
+    _ML_LIBS_LOADED = True
+
+    try:
+        from xgboost import XGBRegressor as _XGBRegressor
+        XGBRegressor = _XGBRegressor
+        XGBOOST_AVAILABLE = NUMPY_AVAILABLE
+    except Exception:
+        pass
+
+    try:
+        from lightgbm import LGBMRegressor as _LGBMRegressor
+        LGBMRegressor = _LGBMRegressor
+        LIGHTGBM_AVAILABLE = NUMPY_AVAILABLE
+    except Exception:
+        pass
+
+    try:
+        from sklearn.preprocessing import StandardScaler as _StandardScaler
+        from sklearn.preprocessing import LabelEncoder as _LabelEncoder
+        from sklearn.model_selection import train_test_split as _train_test_split
+        from sklearn.metrics import mean_squared_error as _mean_squared_error
+        StandardScaler = _StandardScaler
+        LabelEncoder = _LabelEncoder
+        train_test_split = _train_test_split
+        mean_squared_error = _mean_squared_error
+        SKLEARN_AVAILABLE = NUMPY_AVAILABLE
+    except Exception:
+        pass
 
 
 # 支持的联赛列表（用于编码）
@@ -100,6 +137,7 @@ class MetaWeightModel:
     """
     
     def __init__(self, model_type: str = 'auto'):
+        _load_ml_libs()
         self.model_type = model_type.lower()
         self.models = {}  # 四个输出的模型
         self.league_encoder = LabelEncoder() if SKLEARN_AVAILABLE else None
@@ -677,8 +715,26 @@ def fuse_predictions(market_pred: Dict[str, float],
     return fused
 
 
-# 全局Meta模型实例
-_global_meta_model = MetaWeightModel()
+# 全局Meta模型实例（惰性）：构造它会拉起三个 ML 库，而线上从来走不到这里
+# ——init_meta_model 在全仓没有任何调用者，所以 get_dynamic_weights._meta_model
+# 永远不存在，Meta 模型那条分支恒为假。这一条留给 F-1 的活死清单定性，
+# 本批只把导入代价挪走，不删任何东西。
+_META_MODEL = None
+
+
+def _meta_model():
+    """首次访问时才构造全局 Meta 模型"""
+    global _META_MODEL
+    if _META_MODEL is None:
+        _META_MODEL = MetaWeightModel()
+    return _META_MODEL
+
+
+def __getattr__(name):
+    """保住 `dynamic_weights._global_meta_model` 这个既有写法（PEP 562）"""
+    if name == '_global_meta_model':
+        return _meta_model()
+    raise AttributeError(f'module {__name__!r} has no attribute {name!r}')
 
 
 def init_meta_model(model_path: Optional[str] = None):
@@ -688,12 +744,12 @@ def init_meta_model(model_path: Optional[str] = None):
     参数：
         model_path: 预训练模型路径
     """
-    global _global_meta_model
-    
+    model = _meta_model()
+
     if model_path:
-        _global_meta_model.load_model(model_path)
-    
+        model.load_model(model_path)
+
     # 将Meta模型绑定到get_dynamic_weights函数
-    get_dynamic_weights._meta_model = _global_meta_model
-    
-    return _global_meta_model
+    get_dynamic_weights._meta_model = model
+
+    return model

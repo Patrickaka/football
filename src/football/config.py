@@ -102,8 +102,6 @@ except Exception:
     MARKET_CLUSTERING_AVAILABLE = False
     log.warning("盘口聚类模块未导入")
 
-sys.stdout.reconfigure(encoding='utf-8')
-
 # ===================== 常量 =====================
 BASE = 'https://odds.500.com'
 INDEX_URL = f'{BASE}/index_jczq.shtml'
