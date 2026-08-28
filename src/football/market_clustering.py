@@ -21,6 +21,8 @@ from collections import defaultdict
 from ..common import kv_store
 from ..common.logger import setup_logger
 
+from ..domain.sports.football import market_matching as _mm
+
 log = setup_logger('football.market_clustering')
 
 # ==================== 常量配置 ====================
@@ -59,23 +61,8 @@ class MarketCluster:
         kv_store.save('market_cluster_db', self.clusters)
     
     def _round_to_standard(self, handicap: float, total: float) -> Tuple[float, float]:
-        """
-        将盘口四舍五入到标准盘口
-        
-        参数：
-            handicap: 亚盘让球
-            total: 大小球线
-        
-        返回：
-            (标准让球, 标准大小球)
-        """
-        # 找到最近的标准让球
-        std_hcap = min(STANDARD_HANDICAPS, key=lambda x: abs(x - handicap))
-        
-        # 找到最近的标准大小球
-        std_total = min(STANDARD_TOTALS, key=lambda x: abs(x - total))
-        
-        return std_hcap, std_total
+        """纯计算在领域层"""
+        return _mm.round_to_standard(handicap, total)
     
     def add_match(self, handicap: float, total: float, score: str):
         """
