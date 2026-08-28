@@ -16,6 +16,14 @@ class _Base(unittest.TestCase):
     def setUp(self):
         background.reset()
         self.addCleanup(background.reset)
+        # 这一组测的是登记与失败隔离，**与启动时序无关**。生产上周期任务
+        # 首轮要错开一分钟（见 `background.STARTUP_STAGGER_SECONDS`：
+        # 六个任务同时开跑把这台机器冻死过两次），但那会让「等第二个任务
+        # 跑起来」的断言一律超时。这里关掉它，另有专门的用例守着错开本身。
+        self._stagger = background.STARTUP_STAGGER_SECONDS
+        background.STARTUP_STAGGER_SECONDS = 0
+        self.addCleanup(setattr, background, 'STARTUP_STAGGER_SECONDS',
+                        self._stagger)
 
 
 class RegistrationTests(_Base):
@@ -206,3 +214,25 @@ class FootballTaskRegistrationTests(_Base):
         source = pathlib.Path(module.__file__).read_text()
         self.assertNotIn('apscheduler.schedulers', source)
         self.assertFalse(hasattr(module, 'start_background_sync'))
+
+
+class StaggerWiringTests(_Base):
+    """`background` 要把错开值真的传给调度器。
+
+    这条守的是**接线**，不是错开本身（那个在
+    `tests/foundation/test_tasks_scheduler.py` 里）。接线断了不会报错，
+    只会让六个周期任务又同时开跑——而那正是这台机器冻死过两次的原因。
+    """
+
+    def test_the_stagger_reaches_the_scheduler(self):
+        background.STARTUP_STAGGER_SECONDS = 17
+        self.assertEqual(background.scheduler().startup_stagger_seconds, 17)
+
+    def test_the_shipped_default_is_not_zero(self):
+        """出厂值要真的错开。判据 29：默认值本身是一条分支。"""
+        self.assertGreater(self._stagger, 0)
+
+    def test_the_worker_pool_still_outnumbers_the_periodic_tasks(self):
+        """每个周期任务长期占一个 worker，错开不改变这一点——
+        worker 数仍必须多于周期任务数，否则一次性任务永远排不上队。"""
+        self.assertGreater(background.MAX_WORKERS, 6)

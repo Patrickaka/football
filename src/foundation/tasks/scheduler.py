@@ -15,10 +15,24 @@ class TaskScheduler:
     注意每个周期任务会长期占用一个 worker，配置 max_workers 时要把它们算进去。
     """
 
-    def __init__(self, max_workers=2):
+    def __init__(self, max_workers=2, startup_stagger_seconds=0):
+        """`startup_stagger_seconds`：周期任务首轮之间的错开间隔。
+
+        第 i 个周期任务等 `i × 间隔` 之后才跑第一轮，此后各按各的周期。
+        **默认 0（不错开）**：错开多少是部署形态的事，取决于机器余量与
+        任务本身有多重，不该由调度器替调用方决定。
+
+        为什么需要它：进程刚起来时所有缓存都是空的，六个周期任务同时
+        开跑等于把一天里最重的一次计算全挤在同一分钟。这台机器上因此
+        整机冻死过两次——内存耗尽时连 sshd 都 fork 不出来。
+        """
         if max_workers <= 0:
             raise ValueError('max_workers must be > 0, got %r' % (max_workers,))
+        if startup_stagger_seconds < 0:
+            raise ValueError('startup_stagger_seconds must be >= 0, got %r'
+                             % (startup_stagger_seconds,))
         self.max_workers = max_workers
+        self.startup_stagger_seconds = startup_stagger_seconds
         self._pending = []
         self._pending_names = set()
         self._periodic = []
@@ -76,8 +90,11 @@ class TaskScheduler:
                 '周期任务数(%d) >= max_workers(%d)，一次性任务可能长时间得不到执行',
                 len(periodic), self.max_workers,
             )
-        for name, fn, interval, _ in periodic:
-            self._executor.submit(self._run_periodic, name, fn, interval)
+        for index, (name, fn, interval, _) in enumerate(periodic):
+            # 按登记顺序错开首轮。**顺序即优先级**：先登记的先跑，
+            # 所以要把最该早出结果的任务排在前面。
+            self._executor.submit(self._run_periodic, name, fn, interval,
+                                  index * self.startup_stagger_seconds)
         for _, _, name, fn in tasks:
             self._executor.submit(self._run, name, fn)
 
@@ -119,12 +136,17 @@ class TaskScheduler:
         with self._guard:
             self._results[name] = {'status': 'ok', 'value': value}
 
-    def _run_periodic(self, name, fn, interval):
+    def _run_periodic(self, name, fn, interval, start_delay=0):
         """周期执行直到 shutdown。
 
         单次失败只记录不终止循环——一次瞬时故障（源站抖动、网络超时）
         不该让这个任务永久停摆。results() 里记录最近一次的结果与累计执行次数。
+
+        `start_delay` 只推迟**第一轮**，之后的间隔不受影响。等待期间也响应
+        `shutdown()`——否则一个错开了五分钟的任务会把停机拖住五分钟。
         """
+        if start_delay and self._stop.wait(start_delay):
+            return
         runs = 0
         while not self._stop.is_set():
             runs += 1
