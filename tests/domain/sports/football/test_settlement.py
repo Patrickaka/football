@@ -24,7 +24,8 @@ import json
 import math
 import pathlib
 import unittest
-from datetime import datetime
+from datetime import datetime, timedelta
+from unittest import mock
 
 from src.domain.sports.football import settlement
 from tests.domain.golden import as_comparable
@@ -34,6 +35,14 @@ GOLDEN = json.load(gzip.open(FIXTURES / 'golden/football_settlement.json.gz',
                              'rt', encoding='utf-8'))
 NOW = datetime(2026, 8, 28, 12, 0, 0)
 PROBS = {'H': 0.5, 'D': 0.3, 'A': 0.2}
+
+
+class _FrozenDatetime(datetime):
+    """一个"现在"停在两年后的 datetime——用来证明没有漏网的时钟读取。"""
+
+    @classmethod
+    def now(cls, tz=None):
+        return datetime(2028, 3, 1, 4, 30, 0)
 
 
 def golden_entries():
@@ -48,6 +57,19 @@ class GoldenTests(unittest.TestCase):
             with self.subTest(key=key):
                 self.assertIn(key, GOLDEN)
                 self.assertEqual(GOLDEN[key], as_comparable(value))
+
+    def test_the_golden_does_not_move_when_the_wall_clock_does(self):
+        """**换一个"现在"重跑，黄金必须一字不差。**
+
+        漏注入一处时钟的症状是「本地绿、CI 红」：CI 跑在 UTC、本地在东八区，
+        `_assess_result_quality` 判「比赛到期没」两边就能得出不同答案。
+        黄金写死一个 `NOW` 挡不住这个——挡得住的是这条：
+        把模块看到的真实时钟换掉，结果不变才说明没有漏网的 `datetime.now()`。
+        """
+        with mock.patch.object(settlement, 'datetime', _FrozenDatetime):
+            for key, value in golden_entries():
+                with self.subTest(key=key):
+                    self.assertEqual(GOLDEN[key], as_comparable(value))
 
 
 class ScoringMetrics(unittest.TestCase):

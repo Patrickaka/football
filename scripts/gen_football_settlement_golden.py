@@ -3,6 +3,7 @@
 
 **时间解析的「当前年」注入固定时钟**——不注入的话黄金跨年就红。
 """
+import inspect
 import itertools
 import re as _re
 from datetime import datetime, timedelta
@@ -41,18 +42,36 @@ def _key(fn, label):
     return base if _SEEN[base] == 1 else f'{base}#{_SEEN[base]}'
 
 
-def _y(fn, label, *a, **kw):
+def _clock_kwargs(func, given):
+    """签名里带 `now` 就自动注入固定时钟。
+
+    漏一个就是「本地绿、CI 红」——CI 跑在 UTC，本地跑在东八区，
+    `_assess_result_quality` 判「比赛到期没」的结果两边不一样。
+    按名字维护一张清单迟早会漏，按签名判才不会。
+    """
+    if 'now' in given:
+        return {}
     try:
-        yield _key(fn, label), _nan_safe(getattr(new, fn)(*a, **kw))
+        return {'now': NOW} if 'now' in inspect.signature(func).parameters else {}
+    except (TypeError, ValueError):
+        return {}
+
+
+def _y(fn, label, *a, **kw):
+    func = getattr(new, fn)
+    kw = dict(kw, **_clock_kwargs(func, kw))
+    try:
+        yield _key(fn, label), _nan_safe(func(*a, **kw))
     except Exception as exc:
         yield _key(fn, label), f'{type(exc).__name__}: {exc}'
 
 
 def _yc(fn, label, args_old, args_new):
     """注入型函数：黄金只记新实现在**固定时钟**下的结果"""
+    func = getattr(new, fn)
     fixed = tuple(NOW if isinstance(x, datetime) else x for x in args_new)
     try:
-        yield _key(fn, label), _nan_safe(getattr(new, fn)(*fixed))
+        yield _key(fn, label), _nan_safe(func(*fixed, **_clock_kwargs(func, {})))
     except Exception as exc:
         yield _key(fn, label), f'{type(exc).__name__}: {exc}'
 
