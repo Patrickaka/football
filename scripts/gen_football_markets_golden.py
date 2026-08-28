@@ -37,11 +37,15 @@ def _kelly_prob_variants(euro):
     """每组欧赔配几套概率，覆盖 spread 的三档
 
     - `devig`：与线上一致，spread ≡ 0 → neutral
-    - `devig_nudge`：去水概率上做 ±0.004 的微扰 → spread 落在 1~4 的中间档
+    - `devig_tiny`：±0.0005 微扰 → spread 落在 (0, 1) 内，**仍是 neutral**。
+      这一档专为 `KELLY_NEUTRAL_SPREAD = 1.0` 而设：不喂它的话，把门槛从
+      1.0 改成 0.1 是零反应的（devig 那档 spread≈1e-14 在两个门槛下都算中性）。
+    - `devig_nudge`：±0.004 微扰 → spread 落在 1~4 的中间档
     - 五组手写三元组 → spread ≥ 4 的分化档
     """
     devig = _devig_probs(euro['close'])
     yield 'devig', devig
+    yield 'devig_tiny', (devig[0] + 0.0005, devig[1], devig[2] - 0.0005)
     nudged = (devig[0] + 0.004, devig[1], devig[2] - 0.004)
     yield 'devig_nudge', nudged
     for i, probs in enumerate(CORPUS['kelly_probs']):

@@ -114,6 +114,14 @@ class DefaultsArePartOfTheContract(unittest.TestCase):
         # 反过来：把噪声放进窗口内，斜率必须变——否则这条断言什么也没守住
         self.assertNotEqual(markets.analyze_kelly_trend(five)['slopes'],
                             markets.analyze_kelly_trend(five + [[99.0, 99.0, 99.0, 93.0]] * 3)['slopes'])
+        # **窗口必须恰好是 5，不是「至少 3」**（判据 5：单向断言挡不住反方向）。
+        # 后两条反向：窗口 5 的斜率与窗口 3 的必须不同。
+        reversing = [[2.0, 3.4, 3.8, 93.0], [2.1, 3.4, 3.8, 93.0], [2.2, 3.4, 3.8, 93.0],
+                     [1.5, 3.4, 3.8, 93.0], [1.4, 3.4, 3.8, 93.0]]
+        self.assertEqual(markets.analyze_kelly_trend(reversing)['slopes'],
+                         markets.analyze_kelly_trend(reversing, 5)['slopes'])
+        self.assertNotEqual(markets.analyze_kelly_trend(reversing)['slopes'],
+                            markets.analyze_kelly_trend(reversing, 3)['slopes'])
 
 
 class AsianBoundaries(unittest.TestCase):
@@ -219,9 +227,16 @@ class TotalBoundaries(unittest.TestCase):
         self.assertLess(mid, high)
 
     def test_implied_total_clamps_extreme_probabilities_into_the_search_bounds(self):
-        """0/1 概率不该让二分跑飞——夹到 [0.02, 0.98] 再搜 [0.3, 6.5]。"""
-        self.assertGreater(markets.implied_total_goals(2.5, 0.0), 0.3)
-        self.assertLess(markets.implied_total_goals(2.5, 1.0), 6.5)
+        """0/1 概率不该让二分跑飞——夹到 [0.02, 0.98] 再搜 [0.3, 6.5]。
+
+        **断言的是夹紧后的具体值，不是「大于下界」**：不夹的话 p=0 会一路
+        收敛到 0.3 附近，而 `> 0.3` 对 0.30000001 也成立——那条断言什么也
+        没守住（判据 5）。夹到 0.02 之后落在 0.567。
+        """
+        self.assertAlmostEqual(markets.implied_total_goals(2.5, 0.0), 0.5672, places=3)
+        # 上界那侧要挑一条低盘口才咬得到：λ=6.5 时 P(进球>0.5) 已达 0.9985 > 0.98
+        self.assertLess(markets.implied_total_goals(0.5, 1.0), 6.5)
+        self.assertGreater(markets.implied_total_goals(0.5, 1.0), 3.0)
 
 
 class KellyDegeneracy(unittest.TestCase):
@@ -260,6 +275,19 @@ class KellyDegeneracy(unittest.TestCase):
         middle = markets.analyze_kelly(self.ODDS, nudged, nudged)
         self.assertTrue(1.0 <= middle['spread'] < 4.0)
         self.assertIn('最难项倾向', middle['summary'])
+
+    def test_the_neutral_cutoff_is_one_not_merely_near_zero(self):
+        """spread 在 (0, 1) 之间仍算中性——**这一档必须专门喂**。
+
+        不喂的话把 `KELLY_NEUTRAL_SPREAD` 从 1.0 改成 0.1 是零反应的：
+        同源去水那档 spread≈1e-14，在两个门槛下都算中性（判据 5 的反方向）。
+        """
+        devig = markets.remove_vig(2.0, 3.4, 3.8)
+        tiny = (devig[0] + 0.0005, devig[1], devig[2] - 0.0005)
+        result = markets.analyze_kelly(self.ODDS, tiny, tiny)
+        self.assertTrue(0.1 < result['spread'] < 1.0)
+        self.assertEqual(result['hardest'], 'neutral')
+        self.assertIn('暂无明显最难项', result['summary'])
 
 
 class SeriesGuards(unittest.TestCase):
