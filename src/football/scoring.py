@@ -41,6 +41,43 @@ from .upset import (
     _evaluate_upset_risk,
 )
 
+from ..domain.sports.football import scoring as _sc
+
+# 34 个纯计算转发给领域层
+fit_lambdas_from_markets = _sc.fit_lambdas_from_markets
+_baseline_freq = _sc._baseline_freq
+score_implied_prob_from_euro = _sc.score_implied_prob_from_euro
+score_heat_label = _sc.score_heat_label
+_heat_filter_weight = _sc._heat_filter_weight
+_half_full_probs_to_dict = _sc._half_full_probs_to_dict
+_estimate_score_odds = _sc._estimate_score_odds
+_score_entry = _sc._score_entry
+_alignment_score = _sc._alignment_score
+_recommend_reasons = _sc._recommend_reasons
+_get_score_cluster = _sc._get_score_cluster
+_get_cluster_name = _sc._get_cluster_name
+score_pattern = _sc.score_pattern
+_score_total_line_factor = _sc._score_total_line_factor
+_common_score_overheat_factor = _sc._common_score_overheat_factor
+_total_market_tempo_signal = _sc._total_market_tempo_signal
+_joint_market_state = _sc._joint_market_state
+_apply_joint_market_state = _sc._apply_joint_market_state
+_score_total_movement_factor = _sc._score_total_movement_factor
+_adjust_score_probs_with_total_movement = _sc._adjust_score_probs_with_total_movement
+_anchor_score_candidates_to_1x2 = _sc._anchor_score_candidates_to_1x2
+_anchor_score_candidates_to_goal_mean = _sc._anchor_score_candidates_to_goal_mean
+_normalize_goal_dist = _sc._normalize_goal_dist
+_implied_total_mean = _sc._implied_total_mean
+_anchor_goal_dist_to_total_line = _sc._anchor_goal_dist_to_total_line
+_goal_over_under_from_line = _sc._goal_over_under_from_line
+_adjust_goal_dist_with_total_movement = _sc._adjust_goal_dist_with_total_movement
+_score_result_code = _sc._score_result_code
+_candidate_result_support = _sc._candidate_result_support
+_adjust_half_full_with_score_context = _sc._adjust_half_full_with_score_context
+_adjust_half_full_with_market_context = _sc._adjust_half_full_with_market_context
+_assess_market_data_quality = _sc._assess_market_data_quality
+_diversify_score_recommendations = _sc._diversify_score_recommendations
+
 def perturb_parameters(base_params):
     """
     对参数进行扰动，生成扰动后的参数组合。
@@ -185,206 +222,14 @@ def ensemble_predict_scores(asian, euro, total, team_strength=None, league_profi
     return candidates, avg_lam_home, avg_lam_away, meta
 
 
-def fit_lambdas_from_markets(
-    supremacy, total_line, p_over,
-    p_home, p_draw, p_away,
-    open_total_line=None, team_strength=None, euro_lambdas=None,
-    league_profile=None, handicap=None, open_handicap=None,
-    open_time=None, close_time=None,
-):
-    """
-    大小球反推总进球 + 反推净胜球 + 欧赔/球队先验，网格+坐标下降拟合 λ
-    
-    核心改进（按优先级）：
-    1. 盘口直接反推 λ（主让1.0 + 大小球3.0 → home=2.0, away=1.0）
-    2. 亚盘升降盘对 λ 的修正（包含时间因素）
-    3. 大小球升降对 λ 的修正（包含时间因素）
-    4. ELO xG 直接参与 λ 融合
-    """
-    # 1. 计算融合后的大小球线
-    line = _blend_close_open(total_line, open_total_line)
-    lp = league_profile or LEAGUE_PROFILES['default']
-    avg_goal = lp.get('avg_goal', AVG_LEAGUE_GOAL)
-    
-    # 2. 由大小球反推总进球期望
-    target_total = implied_total_goals(line, p_over)
-    target_total = max(avg_goal * 1.4, min(avg_goal * 3.2, target_total))
-    
-    # 3. 核心改进：由盘口直接反推 λ（作为主先验）
-    market_lams = None
-    if handicap is not None:
-        market_lams = market_implied_lambdas(handicap, target_total)
-    
-    # 4. 计算球队攻防 λ
-    team_lams = None
-    if team_strength:
-        team_lams = team_poisson_lambdas(team_strength, target_total, lp)
-    
-    # 5. 获取 ELO xG（如果可用）
-    elo_lams = None
-    if team_strength and 'elo_xg_home' in team_strength and 'elo_xg_away' in team_strength:
-        elo_lams = (team_strength['elo_xg_home'], team_strength['elo_xg_away'])
-    
-    # 6. 融合市场、球队和 ELO 的 λ 值
-    if market_lams:
-        lam_home, lam_away = blend_lambdas_with_market(market_lams, team_lams, elo_lams)
-    elif team_lams:
-        lam_home, lam_away = team_lams
-    else:
-        lam_home, lam_away = estimate_lambdas(supremacy, target_total)
-    
-    # 7. 应用盘口变化调整（亚盘升降盘，包含时间因素）
-    lam_home, lam_away = apply_handicap_change_adjustment(
-        lam_home, lam_away, open_handicap, handicap,
-        open_time, close_time
-    )
-    
-    # 8. 应用大小球变化调整（包含时间因素）
-    lam_home, lam_away = apply_total_line_change_adjustment(
-        lam_home, lam_away, open_total_line, total_line,
-        open_time, close_time
-    )
-    
-    # 9. 使用融合后的 λ 作为先验，进行网格拟合精调
-    ou_targets = _ou_total_distribution(target_total)
-    fused_lams = (lam_home, lam_away)
-    
-    lam_home, lam_away = _fit_lambda_grid(
-        supremacy, target_total, p_home, p_draw, p_away, rho=0.0,
-        ou_targets=ou_targets, team_lambdas=fused_lams, euro_lambdas=euro_lambdas,
-    )
-    
-    # 10. 估计 Dixon-Coles rho 并再次精调
-    rho = _estimate_dc_rho(lam_home, lam_away, p_draw)
-    lam_home, lam_away = _fit_lambda_grid(
-        supremacy, target_total, p_home, p_draw, p_away, rho=rho,
-        ou_targets=ou_targets, team_lambdas=fused_lams, euro_lambdas=euro_lambdas,
-    )
-    
-    return lam_home, lam_away, target_total, rho
 
 
-def _baseline_freq(h, a, league_profile=None):
-    """历史基准频率（用于兼容旧逻辑）"""
-    base = SCORE_BASELINE_FREQ.get((h, a), 0.018)
-    if not league_profile:
-        return base
-    low_mult = league_profile.get('low_score', 1.0)
-    draw_mult = league_profile.get('draw_mult', 1.0)
-    if h == a:
-        return base * draw_mult
-    if h + a <= 2:
-        return base * low_mult
-    if h + a >= 4:
-        return base / max(low_mult, 0.85)
-    return base
 
 
-def score_implied_prob_from_euro(h, a, euro_odds):
-    """
-    由欧赔计算比分的隐含概率（简化版）。
-    使用 Dixon-Coles 风格的近似：先计算 1X2 概率，再按比分分布特征调整。
-    """
-    home_odds, draw_odds, away_odds = euro_odds['home'], euro_odds['draw'], euro_odds['away']
-    
-    # 去水概率
-    p_home, p_draw, p_away = remove_vig(home_odds, draw_odds, away_odds)
-    
-    # 比分概率近似计算
-    diff = h - a
-    
-    if diff > 0:  # 主胜
-        base_prob = p_home
-        # 主胜比分按净胜球分布：净胜1球概率最高，净胜越多概率越低
-        if diff == 1:
-            base_prob *= 0.55  # 净胜1球占主胜的约55%
-        elif diff == 2:
-            base_prob *= 0.28  # 净胜2球占主胜的约28%
-        elif diff == 3:
-            base_prob *= 0.12  # 净胜3球占主胜的约12%
-        else:
-            base_prob *= 0.05  # 净胜3球以上占主胜的约5%
-    elif diff == 0:  # 平局
-        base_prob = p_draw
-        # 平局比分分布：1-1最高，0-0次之，2-2及以上较少
-        if h == 0:
-            base_prob *= 0.35  # 0-0 占平局的约35%
-        elif h == 1:
-            base_prob *= 0.45  # 1-1 占平局的约45%
-        elif h == 2:
-            base_prob *= 0.15  # 2-2 占平局的约15%
-        else:
-            base_prob *= 0.05  # 3-3及以上占平局的约5%
-    else:  # 客胜
-        base_prob = p_away
-        # 客胜比分按净胜球分布，对称于主胜
-        if diff == -1:
-            base_prob *= 0.55
-        elif diff == -2:
-            base_prob *= 0.28
-        elif diff == -3:
-            base_prob *= 0.12
-        else:
-            base_prob *= 0.05
-    
-    return max(0.001, min(0.5, base_prob))
 
 
-def score_heat_label(h, a, model_prob, league_profile=None, euro_odds=None, use_implied_prob=True):
-    """
-    比分冷热：模型概率 vs 赔率隐含概率（或历史基准频率）。
-    
-    参数：
-        h, a: 主客进球数
-        model_prob: 模型预测概率
-        league_profile: 联赛画像（用于历史基准）
-        euro_odds: 欧赔赔率 {'home': x, 'draw': y, 'away': z}
-        use_implied_prob: 是否使用赔率隐含概率（默认是）
-    
-    返回：
-        ('cold' | 'hot' | 'neutral', ratio)
-        
-    冷=模型概率 > 赔率隐含概率（模型更看好但市场忽视）
-    热=模型概率 < 赔率隐含概率（市场过热，难出）
-    """
-    if use_implied_prob and euro_odds:
-        # 基于赔率隐含概率计算冷热
-        implied_prob = score_implied_prob_from_euro(h, a, euro_odds)
-        if implied_prob <= 0:
-            return 'neutral', 1.0
-        
-        # 冷热阈值随概率大小动态调整（小概率事件更容易出现冷热偏差）
-        ratio = model_prob / implied_prob
-        
-        # 动态阈值：概率越小，阈值越宽
-        prob_scale = min(1.0, implied_prob * 20)  # 归一化到 0-1
-        cold_threshold = 1.25 + (1.45 - 1.25) * (1 - prob_scale)   # 1.25 ~ 1.45
-        hot_threshold = 0.75 - (0.75 - 0.65) * (1 - prob_scale)    # 0.65 ~ 0.75
-        
-        if ratio >= cold_threshold:
-            return 'cold', ratio
-        if ratio <= hot_threshold:
-            return 'hot', ratio
-        return 'neutral', ratio
-    else:
-        # 回退到历史基准频率（兼容旧逻辑）
-        base = _baseline_freq(h, a, league_profile)
-        if base <= 0:
-            return 'neutral', 1.0
-        ratio = model_prob / base
-        if ratio >= HEAT_RATIO_COLD:
-            return 'cold', ratio
-        if ratio <= HEAT_RATIO_HOT:
-            return 'hot', ratio
-        return 'neutral', ratio
 
 
-def _heat_filter_weight(heat):
-    if heat == 'hot':
-        return HEAT_FILTER_PENALTY
-    if heat == 'cold':
-        return COLD_FILTER_BONUS
-    return 1.0
 
 
 def calculate_half_full_time_probs(candidates, team_strength=None, asian=None, total=None, home_team='', away_team='', league=''):
@@ -813,31 +658,73 @@ def calculate_half_full_time_probs(candidates, team_strength=None, asian=None, t
     }
 
 
-def _half_full_probs_to_dict(half_full_time):
-    """Convert half/full-time display rows into raw probability dict for storage."""
-    if not half_full_time:
-        return None
 
-    if isinstance(half_full_time, dict):
-        if 'distribution' in half_full_time and isinstance(half_full_time['distribution'], dict):
-            return half_full_time['distribution']
 
-        probs = half_full_time.get('probs')
-        if isinstance(probs, dict):
-            return probs
-        if isinstance(probs, list):
-            result = {}
-            for item in probs:
-                code = item.get('code')
-                if not code:
-                    continue
-                if 'raw_prob' in item:
-                    result[code] = item.get('raw_prob', 0.0)
-                else:
-                    result[code] = item.get('probability', 0.0) / 100.0
-            return result or None
+def apply_market_change_prior(score_probs: Dict[str, float], asian: Dict, total: Dict,
+                              weight: float = 0.08) -> Tuple[Dict[str, float], Dict]:
+    """
+    用盘口变化历史先验修正比分概率
+    """
+    try:
+        from .market_db import MarketChangeDB, normalize_asian, normalize_ou
 
-    return None
+        asian_from = asian.get('open_handicap')
+        asian_to = asian.get('handicap')
+
+        ou_from = total.get('open_line')
+        ou_to = get_close_total_line(total)
+
+        asian_from = normalize_asian(asian_from)
+        asian_to = normalize_asian(asian_to)
+        ou_from = normalize_ou(ou_from)
+        ou_to = normalize_ou(ou_to)
+
+        if asian_from is None or asian_to is None or ou_from is None or ou_to is None:
+            return score_probs, {'available': False, 'reason': '缺少开终盘'}
+
+        db = MarketChangeDB()
+        stats = db.get_change_stats(asian_from, asian_to, ou_from, ou_to)
+
+        if not stats:
+            return score_probs, {'available': False, 'reason': '无历史样本'}
+
+        sample_count = stats.get('sample_count', 0)
+        prior = stats.get('probabilities', {})
+
+        # 样本不足只展示，不参与融合
+        if sample_count < 30:
+            return score_probs, {
+                'available': True,
+                'used': False,
+                'sample_count': sample_count,
+                'reason': '样本不足，仅展示',
+                'top_scores': list(prior.items())[:5],
+            }
+
+        fused = {}
+        all_scores = set(score_probs.keys()) | set(prior.keys())
+
+        for score in all_scores:
+            model_prob = score_probs.get(score, 0.0)
+            prior_prob = prior.get(score, 0.0)
+            fused[score] = (1 - weight) * model_prob + weight * prior_prob
+
+        total_prob = sum(fused.values())
+        if total_prob > 0:
+            fused = {k: v / total_prob for k, v in fused.items()}
+
+        return fused, {
+            'available': True,
+            'used': True,
+            'sample_count': sample_count,
+            'weight': weight,
+            'top_scores': list(prior.items())[:5],
+            'key': stats.get('key'),
+        }
+
+    except Exception as e:
+        log.debug(f"盘口变化先验融合失败: {e}")
+        return score_probs, {'available': False, 'reason': str(e)}
 
 
 def predict_scores(asian, euro, total, team_strength=None, league_profile=None, 
@@ -1229,208 +1116,14 @@ def predict_scores(asian, euro, total, team_strength=None, league_profile=None,
     return candidates, lam_home, lam_away, meta
 
 
-def _estimate_score_odds(h, a, euro_odds):
-    """
-    估算比分赔率（基于欧赔）
-    
-    参数：
-        h: 主队进球数
-        a: 客队进球数
-        euro_odds: 欧赔赔率 {'home': x, 'draw': y, 'away': z}
-    
-    返回：
-        估算的比分赔率
-    """
-    try:
-        home_odds = euro_odds.get('home', 2.0)
-        draw_odds = euro_odds.get('draw', 3.0)
-        away_odds = euro_odds.get('away', 4.0)
-        
-        # 基于结果类型估算比分赔率
-        if h > a:
-            base_odds = home_odds
-        elif h == a:
-            base_odds = draw_odds
-        else:
-            base_odds = away_odds
-        
-        # 根据进球数调整
-        total_goals = h + a
-        if total_goals <= 1:
-            return base_odds * 1.5
-        elif total_goals <= 3:
-            return base_odds * 1.2
-        else:
-            return base_odds * 1.8
-    except Exception:
-        return 1.0
 
 
-def _score_entry(h, a, prob, heat_info=None):
-    entry = {'home': h, 'away': a, 'prob': prob, 'result': _result_label(h, a)}
-    if heat_info:
-        entry['heat'] = heat_info[0]
-        entry['heat_ratio'] = round(heat_info[1], 2)
-    return entry
 
 
-def _alignment_score(h, a, asian, euro, total):
-    """赔率信号一致性得分（0~1），用于在概率接近时优选更贴合市场的比分"""
-    diff = h - a
-    favor, diff_range, hcap = asian['favor'], asian['diff_range'], asian['handicap']
-    p_home, p_draw, p_away = euro['close']['home'], euro['close']['draw'], euro['close']['away']
-    lo, hi = total['expected_goals']
-    score = 0.0
-
-    if favor == 'home' and diff > 0 and diff_range[0] <= diff <= diff_range[1]:
-        score += 0.35
-    elif favor == 'away' and diff < 0 and diff_range[0] <= -diff <= diff_range[1]:
-        score += 0.35
-    elif favor == 'even' and diff == 0:
-        score += 0.25
-
-    top = max(p_home, p_draw, p_away)
-    if diff > 0 and p_home >= top - 0.03:
-        score += 0.3
-    elif diff < 0 and p_away >= top - 0.03:
-        score += 0.3
-    elif diff == 0 and p_draw >= top - 0.03:
-        score += 0.3
-
-    goals = h + a
-    if lo <= goals <= hi:
-        score += 0.25
-    elif abs(goals - (lo + hi) / 2) <= 1.0:
-        score += 0.12
-
-    if total['lean'] == 'over' and goals >= total['close_line']:
-        score += 0.1
-    elif total['lean'] == 'under' and goals <= total['close_line']:
-        score += 0.1
-
-    return min(1.0, score)
 
 
-def _recommend_reasons(h, a, asian, euro, total, team=None, heat=None):
-    """为单个推荐比分生成理由列表"""
-    diff = h - a
-    favor, diff_range, hcap = asian['favor'], asian['diff_range'], asian['handicap']
-    p_home, p_draw, p_away = euro['close']['home'], euro['close']['draw'], euro['close']['away']
-    lo, hi = total['expected_goals']
-
-    reasons = []
-    if team:
-        reasons.append(f"攻防强度 λ≈{team['attack_home']:.2f}/{team['attack_away']:.2f}进")
-        if team.get('form_diff', 0) > 0.35 and diff > 0:
-            reasons.append('主队近期状态更好')
-        elif team.get('form_diff', 0) < -0.35 and diff < 0:
-            reasons.append('客队近期状态更好')
-    mom = euro.get('momentum') or {}
-    if mom.get('summary') and mom['summary'] != '欧赔走势平稳':
-        reasons.append(mom['summary'])
-    if favor == 'home' and diff > 0 and diff_range[0] <= diff <= diff_range[1]:
-        reasons.append(f"符合主让{hcap}球盘口预期")
-    elif favor == 'away' and diff < 0 and diff_range[0] <= -diff <= diff_range[1]:
-        reasons.append(f"符合客让{abs(hcap)}球盘口预期")
-    elif diff == 0:
-        reasons.append("欧赔平局概率支撑")
-    if diff > 0 and p_home > 0.4:
-        reasons.append(f"欧赔主胜概率{p_home*100:.0f}%")
-    elif diff < 0 and p_away > 0.4:
-        reasons.append(f"欧赔客胜概率{p_away*100:.0f}%")
-    elif diff == 0 and p_draw > 0.3:
-        reasons.append(f"欧赔平局概率{p_draw*100:.0f}%")
-    if lo <= h + a <= hi:
-        reasons.append(f"总进球{h+a}球在预期区间")
-    if heat == 'cold':
-        reasons.append("冷门口比分（模型概率高于历史基准）")
-    elif heat == 'hot':
-        reasons.append("热门比分（已降权）")
-    kelly = euro.get('kelly')
-    if kelly:
-        fav = kelly.get('favored')
-        hard = kelly.get('hardest')
-        # 只有当不是中性时才进行判断
-        if fav != 'neutral':
-            if fav == 'home' and diff > 0:
-                reasons.append("凯利指数相对看好主胜")
-            elif fav == 'away' and diff < 0:
-                reasons.append("凯利指数相对看好客胜")
-            elif fav == 'draw' and diff == 0:
-                reasons.append("凯利指数相对看好平局")
-        if hard != 'neutral':
-            if hard == 'home' and diff > 0:
-                reasons.append("凯利提示主胜打出难度偏大")
-            elif hard == 'away' and diff < 0:
-                reasons.append("凯利提示客胜打出难度偏大")
-    return reasons or ["综合赔率推断"]
 
 
-def apply_market_change_prior(score_probs: Dict[str, float], asian: Dict, total: Dict,
-                              weight: float = 0.08) -> Tuple[Dict[str, float], Dict]:
-    """
-    用盘口变化历史先验修正比分概率
-    """
-    try:
-        from .market_db import MarketChangeDB, normalize_asian, normalize_ou
-
-        asian_from = asian.get('open_handicap')
-        asian_to = asian.get('handicap')
-
-        ou_from = total.get('open_line')
-        ou_to = get_close_total_line(total)
-
-        asian_from = normalize_asian(asian_from)
-        asian_to = normalize_asian(asian_to)
-        ou_from = normalize_ou(ou_from)
-        ou_to = normalize_ou(ou_to)
-
-        if asian_from is None or asian_to is None or ou_from is None or ou_to is None:
-            return score_probs, {'available': False, 'reason': '缺少开终盘'}
-
-        db = MarketChangeDB()
-        stats = db.get_change_stats(asian_from, asian_to, ou_from, ou_to)
-
-        if not stats:
-            return score_probs, {'available': False, 'reason': '无历史样本'}
-
-        sample_count = stats.get('sample_count', 0)
-        prior = stats.get('probabilities', {})
-
-        # 样本不足只展示，不参与融合
-        if sample_count < 30:
-            return score_probs, {
-                'available': True,
-                'used': False,
-                'sample_count': sample_count,
-                'reason': '样本不足，仅展示',
-                'top_scores': list(prior.items())[:5],
-            }
-
-        fused = {}
-        all_scores = set(score_probs.keys()) | set(prior.keys())
-
-        for score in all_scores:
-            model_prob = score_probs.get(score, 0.0)
-            prior_prob = prior.get(score, 0.0)
-            fused[score] = (1 - weight) * model_prob + weight * prior_prob
-
-        total_prob = sum(fused.values())
-        if total_prob > 0:
-            fused = {k: v / total_prob for k, v in fused.items()}
-
-        return fused, {
-            'available': True,
-            'used': True,
-            'sample_count': sample_count,
-            'weight': weight,
-            'top_scores': list(prior.items())[:5],
-            'key': stats.get('key'),
-        }
-
-    except Exception as e:
-        log.debug(f"盘口变化先验融合失败: {e}")
-        return score_probs, {'available': False, 'reason': str(e)}
 
 
 SCORE_CLUSTERS = {
@@ -1447,1007 +1140,48 @@ SCORE_CLUSTERS = {
 }
 
 
-def _get_score_cluster(h, a):
-    """获取比分所属的簇"""
-    diff = h - a
-    if diff > 0:
-        if diff == 1:
-            return 'home_win_1'
-        elif diff == 2:
-            return 'home_win_2'
-        else:
-            return 'home_win_3'
-    elif diff < 0:
-        if diff == -1:
-            return 'away_win_1'
-        elif diff == -2:
-            return 'away_win_2'
-        else:
-            return 'away_win_3'
-    else:
-        return 'draw'
-
-
-def _get_cluster_name(cluster):
-    """获取簇的中文名称"""
-    cluster_names = {
-        'home_win_1': '主胜1球',
-        'home_win_2': '主胜2球',
-        'home_win_3': '主胜3球+',
-        'draw': '平局',
-        'away_win_1': '客胜1球',
-        'away_win_2': '客胜2球',
-        'away_win_3': '客胜3球+',
-    }
-    return cluster_names.get(cluster, cluster)
-
-
-def score_pattern(h: int, a: int) -> str:
-    """
-    判断比分属于哪种剧本模式
-    
-    参数：
-        h: 主队进球数
-        a: 客队进球数
-    
-    返回：
-        剧本模式标识
-    """
-    total = h + a
-    
-    if h > a and total <= 2:
-        return 'home_low'      # 主胜小比分
-    if h > a and total >= 3:
-        return 'home_high'     # 主胜大比分
-    if h == a:
-        return 'draw'          # 平局
-    if h < a and total <= 2:
-        return 'away_low'      # 客胜小比分
-    return 'away_high'         # 客胜大比分
-
-
-def _score_total_line_factor(h: int, a: int, total_line: float) -> float:
-    """Soft ranking factor for score totals against the closing O/U line."""
-    if total_line is None:
-        return 1.0
-    try:
-        line = float(total_line)
-    except (TypeError, ValueError):
-        return 1.0
-
-    goals = h + a
-    distance = abs(goals - line)
-    factor = 1.06 - min(distance, 2.5) * 0.08
-
-    if line <= 2.25 and goals >= 4:
-        factor *= 0.82
-    elif line <= 2.25 and goals <= 2:
-        factor *= 1.04
-    elif line >= 3.0 and goals <= 1:
-        factor *= 0.84
-    elif line >= 3.0 and goals >= 3:
-        factor *= 1.04
-
-    return max(0.72, min(1.10, factor))
-
-
-def _common_score_overheat_factor(h: int, a: int, prob: float, total_line: float) -> float:
-    """Dampen common scores when their raw probability is too dominant."""
-    baselines = {
-        (0, 0): 0.095,
-        (1, 0): 0.120,
-        (0, 1): 0.110,
-        (1, 1): 0.135,
-    }
-    baseline = baselines.get((h, a))
-    if baseline is None or prob <= baseline * 1.30:
-        return 1.0
-
-    factor = 0.94
-    try:
-        line = float(total_line) if total_line is not None else None
-    except (TypeError, ValueError):
-        line = None
-
-    if line is not None:
-        goals = h + a
-        if line >= 3.0 and goals <= 1:
-            factor *= 0.88
-        elif line <= 2.25 and goals >= 3:
-            factor *= 0.88
-    if prob >= baseline * 1.65:
-        factor *= 0.92
-    return max(0.78, factor)
-
-
-def _total_market_tempo_signal(total: Dict) -> Dict:
-    """Return a conservative tempo signal from O/U line and water movement."""
-    total = total or {}
-    try:
-        close_line = float(get_close_total_line(total))
-    except (TypeError, ValueError):
-        close_line = None
-
-    try:
-        open_line = float(total.get('open_line'))
-    except (TypeError, ValueError):
-        open_line = close_line
-
-    open_prob = total.get('open_prob') or {}
-    close_prob = total.get('close_prob') or {}
-    try:
-        over_delta = float(close_prob.get('over', 0.0)) - float(open_prob.get('over', 0.0))
-    except (TypeError, ValueError):
-        over_delta = 0.0
-
-    line_delta = 0.0
-    if open_line is not None and close_line is not None:
-        line_delta = close_line - open_line
-
-    line_signal = max(-1.0, min(1.0, line_delta / 0.5))
-    water_signal = max(-1.0, min(1.0, over_delta / 0.08))
-    base_signal = (0.62 * line_signal) + (0.38 * water_signal)
-
-    if close_line is not None:
-        if close_line >= 3.0:
-            base_signal += 0.22
-        elif close_line <= 2.25:
-            base_signal -= 0.22
-
-    conflict = line_signal * water_signal < -0.15
-    if conflict:
-        base_signal *= 0.35
-
-    return {
-        'signal': max(-1.0, min(1.0, base_signal)),
-        'line': close_line,
-        'line_delta': line_delta,
-        'over_delta': over_delta,
-        'conflict': conflict,
-    }
-
-
-def _joint_market_state(asian: Dict, euro: Dict, total: Dict) -> Dict:
-    """Combine handicap, water, 1X2 and O/U movement into one market state."""
-    asian = asian or {}
-    euro = euro or {}
-    tempo = _total_market_tempo_signal(total)
-
-    try:
-        handicap_signal = max(-1.0, min(1.0, float(asian.get('handicap_change', 0.0)) / 0.5))
-    except (TypeError, ValueError):
-        handicap_signal = 0.0
-    prob_change = asian.get('prob_change') or {}
-    try:
-        asian_water_signal = max(-1.0, min(1.0, float(prob_change.get('home', 0.0)) / 0.08))
-    except (TypeError, ValueError):
-        asian_water_signal = 0.0
-    try:
-        euro_signal = max(-1.0, min(1.0, float((euro.get('momentum') or {}).get('shift_supremacy', 0.0)) / 0.25))
-    except (TypeError, ValueError):
-        euro_signal = 0.0
-
-    directional_parts = [handicap_signal, asian_water_signal, euro_signal]
-    active = [value for value in directional_parts if abs(value) >= 0.10]
-    conflict = bool(active and min(active) < -0.10 and max(active) > 0.10)
-    direction_signal = (
-        0.45 * handicap_signal + 0.30 * asian_water_signal + 0.25 * euro_signal
-    )
-    agreement = 1.0
-    if conflict:
-        agreement = 0.40
-        direction_signal *= agreement
-
-    strength = min(1.0, (abs(direction_signal) + abs(tempo['signal'])) / 1.6)
-    return {
-        'direction_signal': max(-1.0, min(1.0, direction_signal)),
-        'tempo_signal': tempo['signal'],
-        'handicap_signal': handicap_signal,
-        'asian_water_signal': asian_water_signal,
-        'euro_signal': euro_signal,
-        'conflict': conflict or bool(tempo.get('conflict')),
-        'agreement_factor': agreement,
-        'strength': strength,
-        'tempo': tempo,
-    }
-
-
-def _apply_joint_market_state(candidates, asian: Dict, euro: Dict, total: Dict):
-    """Softly fit one score matrix to the closing Asian and O/U prices.
-
-    Closing prices already contain the information accumulated during the
-    open-to-close move.  The movement state is therefore used as a reliability
-    control (especially when markets conflict), not as another independent
-    vote.  A 0.35 constraint was selected on a 2024/25 -> 2025/26 walk-forward
-    because it improved exact-score, goal and 1X2 log loss without allowing a
-    single market to dominate the prior.
-    """
-    rows = list(candidates or [])
-    if not rows:
-        return rows, {'applied': False, 'reason': 'empty_distribution'}
-    state = _joint_market_state(asian, euro, total)
-
-    matrix = {}
-    for item in rows:
-        try:
-            if len(item) == 2 and isinstance(item[0], tuple):
-                score, probability = item
-            else:
-                score, probability = (item[0], item[1]), item[2]
-            score = int(score[0]), int(score[1])
-            matrix[score] = matrix.get(score, 0.0) + max(0.0, float(probability))
-        except (TypeError, ValueError, IndexError):
-            continue
-    raw_total = sum(matrix.values())
-    if raw_total <= 0:
-        return rows, {'applied': False, 'reason': 'zero_raw_mass', **state}
-    matrix = {score: probability / raw_total for score, probability in matrix.items()}
-    before_matrix = dict(matrix)
-
-    def line_parts(line):
-        line = round(float(line) * 4.0) / 4.0
-        lower = math.floor(line * 2.0) / 2.0
-        if abs(line - lower) < 1e-8:
-            return (lower,)
-        return (lower, lower + 0.5)
-
-    def settlement_profit(value, line, fair_decimal):
-        profits = []
-        for settlement_line in line_parts(line):
-            if value > settlement_line + 1e-8:
-                profits.append(fair_decimal - 1.0)
-            elif value < settlement_line - 1e-8:
-                profits.append(-1.0)
-            else:
-                profits.append(0.0)
-        return sum(profits) / len(profits)
-
-    def constrain(source, feature, strength):
-        values = {score: feature(score) for score in source}
-        buckets = {}
-        for score, probability in source.items():
-            value = round(values[score], 12)
-            buckets[value] = buckets.get(value, 0.0) + probability
-
-        def expectation(theta):
-            weighted = [
-                (value, probability * math.exp(max(-20.0, min(20.0, theta * value))))
-                for value, probability in buckets.items()
-            ]
-            denominator = sum(probability for _, probability in weighted)
-            return sum(value * probability for value, probability in weighted) / denominator
-
-        lo, hi = -12.0, 12.0
-        if expectation(lo) > 0 or expectation(hi) < 0:
-            return source, {'applied': False, 'reason': 'target_outside_support'}
-        expected_before = expectation(0.0)
-        for _ in range(40):
-            mid = (lo + hi) / 2.0
-            if expectation(mid) < 0:
-                lo = mid
-            else:
-                hi = mid
-        theta = strength * (lo + hi) / 2.0
-        adjusted = {
-            score: probability * math.exp(max(-20.0, min(20.0, theta * values[score])))
-            for score, probability in source.items()
-        }
-        denominator = sum(adjusted.values())
-        adjusted = {score: probability / denominator for score, probability in adjusted.items()}
-        expected_after = sum(adjusted[score] * values[score] for score in adjusted)
-        return adjusted, {
-            'applied': True,
-            'theta': round(theta, 5),
-            'fair_profit_before': round(expected_before, 5),
-            'fair_profit_after': round(expected_after, 5),
-        }
-
-    close_asian = asian.get('close_prob') or {}
-    home_probability = next((close_asian.get(key) for key in
-                             ('home_give', 'home_recv', 'home')
-                             if close_asian.get(key) is not None), None)
-    over_probability = (total.get('close_prob') or {}).get('over')
-    handicap = asian.get('handicap')
-    total_line = total.get('close_line')
-    reliability = 0.40 if state.get('conflict') else 1.0
-    pass_strength = 0.35 * reliability / 3.0
-    asian_meta = {'applied': False, 'reason': 'missing_price_or_line'}
-    total_meta = {'applied': False, 'reason': 'missing_price_or_line'}
-    for _ in range(3):
-        try:
-            if handicap is not None and home_probability and 0 < float(home_probability) < 1:
-                fair_decimal = 1.0 / float(home_probability)
-                matrix, asian_meta = constrain(
-                    matrix,
-                    lambda score, line=float(handicap), odds=fair_decimal: settlement_profit(
-                        score[0] - score[1], line, odds
-                    ),
-                    pass_strength,
-                )
-        except (TypeError, ValueError, ZeroDivisionError):
-            asian_meta = {'applied': False, 'reason': 'invalid_price_or_line'}
-        try:
-            if total_line is not None and over_probability and 0 < float(over_probability) < 1:
-                fair_decimal = 1.0 / float(over_probability)
-                matrix, total_meta = constrain(
-                    matrix,
-                    lambda score, line=float(total_line), odds=fair_decimal: settlement_profit(
-                        score[0] + score[1], line, odds
-                    ),
-                    pass_strength,
-                )
-        except (TypeError, ValueError, ZeroDivisionError):
-            total_meta = {'applied': False, 'reason': 'invalid_price_or_line'}
-
-    if not asian_meta.get('applied') and not total_meta.get('applied'):
-        state.update({'applied': False, 'reason': 'missing_closing_market_prices'})
-        return rows, state
-
-    adjusted = sorted(matrix.items(), key=lambda item: -item[1])
-    expected_before = sum(sum(score) * probability for score, probability in before_matrix.items())
-    home_mass_before = sum(
-        probability for (home, away), probability in before_matrix.items() if home > away
-    )
-    expected_after = sum(sum(score) * probability for score, probability in adjusted)
-    home_mass_after = sum(probability for (home, away), probability in adjusted if home > away)
-    state.update({
-        'applied': True,
-        'method': 'maximum_entropy_fair_price_constraint',
-        'constraint_strength': round(0.35 * reliability, 3),
-        'asian_constraint': asian_meta,
-        'total_constraint': total_meta,
-        'expected_goals_before': expected_before,
-        'expected_goals_after': expected_after,
-        'home_win_before': home_mass_before,
-        'home_win_after': home_mass_after,
-    })
-    return adjusted, state
-
-
-def _score_total_movement_factor(h: int, a: int, total: Dict) -> float:
-    """Soft score-ranking factor from O/U movement so score picks follow goal picks."""
-    signal_info = _total_market_tempo_signal(total)
-    signal = signal_info.get('signal', 0.0)
-    if abs(signal) < 0.12:
-        return 1.0
-
-    goals = h + a
-    line = signal_info.get('line')
-    if line is None:
-        line = 2.5
-
-    distance = goals - line
-    factor = 1.0 + max(-0.18, min(0.18, signal * distance * 0.10))
-
-    if signal > 0 and goals >= math.ceil(line + 0.5):
-        factor *= 1.0 + min(0.08, signal * 0.05)
-    elif signal < 0 and goals <= math.floor(line):
-        factor *= 1.0 + min(0.08, abs(signal) * 0.05)
-
-    if signal > 0 and goals <= 1:
-        factor *= 0.93
-    elif signal < 0 and goals >= 4:
-        factor *= 0.93
-
-    return max(0.82, min(1.12, factor))
-
-
-def _adjust_score_probs_with_total_movement(score_probs: Dict[str, float], total: Dict) -> Tuple[Dict[str, float], Dict]:
-    """Tilt the score probability distribution with the O/U tempo signal."""
-    if not isinstance(score_probs, dict) or not score_probs:
-        return score_probs, {'applied': False, 'reason': 'empty_distribution'}
-
-    signal_info = _total_market_tempo_signal(total)
-    if abs(signal_info.get('signal', 0.0)) < 0.12:
-        return score_probs, {
-            'applied': False,
-            'reason': 'weak_tempo_signal',
-            'tempo': signal_info,
-        }
-
-    parsed = {}
-    raw_total = 0.0
-    for score, prob in score_probs.items():
-        try:
-            h, a = map(int, str(score).split('-'))
-            value = max(0.0, float(prob or 0.0))
-        except (TypeError, ValueError):
-            continue
-        parsed[score] = (h, a, value)
-        raw_total += value
-
-    if raw_total <= 0:
-        return score_probs, {'applied': False, 'reason': 'zero_raw_total'}
-
-    expected_before = sum((h + a) * value for h, a, value in parsed.values()) / raw_total
-    adjusted = {
-        score: value * _score_total_movement_factor(h, a, total)
-        for score, (h, a, value) in parsed.items()
-    }
-
-    total_prob = sum(adjusted.values())
-    if total_prob <= 0:
-        return score_probs, {'applied': False, 'reason': 'zero_adjusted_total'}
-
-    adjusted = {score: prob / total_prob for score, prob in adjusted.items()}
-    expected_after = 0.0
-    for score, prob in adjusted.items():
-        h, a = map(int, score.split('-'))
-        expected_after += (h + a) * prob
-
-    return adjusted, {
-        'applied': True,
-        'tempo': signal_info,
-        'expected_before': expected_before,
-        'expected_after': expected_after,
-        'direction': 'over' if signal_info.get('signal', 0.0) > 0 else 'under',
-    }
-
-
-def _anchor_score_candidates_to_1x2(candidates, euro,
-                                    strength=SCORE_1X2_MARKET_ANCHOR_STRENGTH):
-    """Partially anchor final score marginals to de-vigged closing 1X2 odds.
-
-    Every upstream score transform is free to improve the within-outcome score
-    shape.  This guard only limits aggregate H/D/A drift; a 0.75 geometric
-    anchor leaves 25% of the team, Asian-market and context signal intact.
-    """
-    rows = []
-    current = {'home': 0.0, 'draw': 0.0, 'away': 0.0}
-    for score, probability in candidates or []:
-        try:
-            home_goals, away_goals = int(score[0]), int(score[1])
-            probability = max(0.0, float(probability))
-        except (TypeError, ValueError, IndexError):
-            continue
-        outcome = 'home' if home_goals > away_goals else ('away' if home_goals < away_goals else 'draw')
-        rows.append(((home_goals, away_goals), probability, outcome))
-        current[outcome] += probability
-    total = sum(current.values())
-    if total <= 0 or any(value <= 0 for value in current.values()):
-        return candidates, {'applied': False, 'reason': 'incomplete_score_distribution'}
-    current = {key: value / total for key, value in current.items()}
-
-    close = (euro or {}).get('close') or {}
-    try:
-        target = {
-            key: max(0.0, float(close.get(key, 0.0)))
-            for key in ('home', 'draw', 'away')
-        }
-    except (TypeError, ValueError):
-        return candidates, {'applied': False, 'reason': 'invalid_market_probabilities'}
-    target_total = sum(target.values())
-    if target_total <= 0 or any(value <= 0 for value in target.values()):
-        return candidates, {'applied': False, 'reason': 'missing_market_probabilities'}
-    target = {key: value / target_total for key, value in target.items()}
-
-    weight = max(0.0, min(1.0, float(strength)))
-    adjusted = [
-        (score, probability * (target[outcome] / current[outcome]) ** weight, outcome)
-        for score, probability, outcome in rows
-    ]
-    adjusted_total = sum(probability for _, probability, _ in adjusted)
-    if adjusted_total <= 0:
-        return candidates, {'applied': False, 'reason': 'zero_adjusted_total'}
-    result = sorted(
-        ((score, probability / adjusted_total) for score, probability, _ in adjusted),
-        key=lambda item: -item[1],
-    )
-    after = {
-        key: sum(probability for (home_goals, away_goals), probability in result
-                 if ('home' if home_goals > away_goals else
-                     ('away' if home_goals < away_goals else 'draw')) == key)
-        for key in ('home', 'draw', 'away')
-    }
-    return result, {
-        'applied': True,
-        'strength': weight,
-        'before': {key: round(value, 6) for key, value in current.items()},
-        'target': {key: round(value, 6) for key, value in target.items()},
-        'after': {key: round(value, 6) for key, value in after.items()},
-        'source': 'closing_euro_market',
-    }
-
-
-def _anchor_score_candidates_to_goal_mean(candidates, total, max_shift=0.60):
-    """Anchor score expected goals to the O/U target while preserving 1X2 mass."""
-    rows = []
-    for score, prob in candidates or []:
-        try:
-            h, a = int(score[0]), int(score[1])
-            p = max(0.0, float(prob))
-        except (TypeError, ValueError, IndexError):
-            continue
-        outcome = 'H' if h > a else ('D' if h == a else 'A')
-        rows.append(((h, a), p, h + a, outcome))
-    total_prob = sum(row[1] for row in rows)
-    if total_prob <= 0:
-        return candidates, {'applied': False, 'reason': 'empty_distribution'}
-    rows = [(score, p / total_prob, goals, outcome) for score, p, goals, outcome in rows]
-    expected_before = sum(p * goals for _, p, goals, _ in rows)
-
-    try:
-        target = float((total or {}).get('implied_total'))
-    except (TypeError, ValueError):
-        target = None
-    if target is None:
-        try:
-            target = float(get_close_total_line(total or {}))
-        except (TypeError, ValueError):
-            target = expected_before
-    requested_target = target
-    # A fixed 0.60-goal cap was too restrictive when exact-score/history
-    # calibration collapsed a genuinely high O/U market back near two goals.
-    # Permit a larger upward repair only for a clear 3.0+ market; ordinary and
-    # low-total matches retain the conservative cap.
-    effective_max_shift = max_shift
-    if requested_target >= 3.0 and requested_target > expected_before:
-        effective_max_shift = max(max_shift, min(1.25, requested_target - expected_before))
-    target = max(
-        expected_before - max_shift,
-        min(expected_before + effective_max_shift, requested_target),
-    )
-    if abs(target - expected_before) < 0.08:
-        return candidates, {
-            'applied': False, 'reason': 'already_aligned',
-            'target': target, 'expected_before': expected_before,
-            'expected_after': expected_before,
-        }
-
-    outcome_mass = {}
-    for _, p, _, outcome in rows:
-        outcome_mass[outcome] = outcome_mass.get(outcome, 0.0) + p
-
-    def tilt(theta):
-        raw = [(score, p * math.exp(theta * goals), goals, outcome)
-               for score, p, goals, outcome in rows]
-        raw_mass = {}
-        for _, p, _, outcome in raw:
-            raw_mass[outcome] = raw_mass.get(outcome, 0.0) + p
-        adjusted = []
-        for score, p, goals, outcome in raw:
-            scale = outcome_mass[outcome] / max(raw_mass[outcome], 1e-15)
-            adjusted.append((score, p * scale, goals))
-        mean = sum(p * goals for _, p, goals in adjusted)
-        return adjusted, mean
-
-    low, high = -1.5, 1.5
-    for _ in range(50):
-        mid = (low + high) / 2.0
-        _, mean = tilt(mid)
-        if mean < target:
-            low = mid
-        else:
-            high = mid
-    theta = (low + high) / 2.0
-    adjusted, expected_after = tilt(theta)
-    result = sorted(((score, p) for score, p, _ in adjusted), key=lambda item: -item[1])
-    return result, {
-        'applied': True, 'target': target, 'requested_target': requested_target,
-        'max_shift': effective_max_shift, 'theta': theta,
-        'expected_before': expected_before, 'expected_after': expected_after,
-        'preserved_1x2': True,
-    }
-
-
-def _normalize_goal_dist(goal_dist: Dict) -> Dict[int, float]:
-    normalized = {}
-    if not isinstance(goal_dist, dict):
-        return normalized
-    for goals, prob in goal_dist.items():
-        try:
-            key = int(goals)
-            value = max(0.0, float(prob or 0.0))
-        except (TypeError, ValueError):
-            continue
-        normalized[key] = normalized.get(key, 0.0) + value
-    total_prob = sum(normalized.values())
-    if total_prob > 0:
-        normalized = {key: value / total_prob for key, value in normalized.items()}
-    return normalized
-
-
-def _implied_total_mean(line: float, p_over: float) -> float:
-    """由大小球盘口(line)与 over 概率反解泊松总进球「期望值」。
-
-    关键：盘口线是 over/under 的平衡点（≈中位数），而总进球分布右偏，均值 > 中位数。
-    过去把分布均值直接锚到盘口线，系统性压低了期望总进球（405 场实测：模型对 75%
-    的比赛预测「小球」，真实 over 率却约 48%）。这里解 P(Poisson(m) > line) = p_over
-    得到 skew-aware 的期望 m，作为进球分布的正确锚点。
-    """
-    try:
-        line = float(line)
-        p_over = float(p_over)
-    except (TypeError, ValueError):
-        return None
-    if not (0.0 < p_over < 1.0):
-        return None
-    k = int(math.floor(line))  # over 表示 total >= k+1
-    lo, hi = 0.3, 7.0
-    for _ in range(50):
-        mid = (lo + hi) / 2.0
-        p_le = sum(math.exp(-mid) * mid ** i / math.factorial(i) for i in range(k + 1))
-        if (1.0 - p_le) < p_over:
-            lo = mid
-        else:
-            hi = mid
-    return (lo + hi) / 2.0
-
-
-def _anchor_goal_dist_to_total_line(goal_dist: Dict, total: Dict, max_theta: float = 0.60) -> Tuple[Dict[int, float], Dict]:
-    """把总进球分布锚定到「市场隐含期望总进球」（而非盘口线本身）。
-
-    优先用 line + over 概率反解 skew-aware 期望（_implied_total_mean）；无 over 概率时
-    退回盘口线。用指数倾斜 exp(theta*goals) 并二分求解 theta 使分布期望「命中」目标
-    （旧实现 theta=delta/4 且 0.18 死区会严重欠调）。
-    """
-    normalized = _normalize_goal_dist(goal_dist)
-    if not normalized:
-        return normalized, {'applied': False, 'reason': 'empty_distribution'}
-
-    line = get_close_total_line(total)
-    if line is None:
-        return normalized, {'applied': False, 'reason': 'missing_total_line'}
-
-    p_over = (total or {}).get('close_prob', {}).get('over') if isinstance(total, dict) else None
-    target = _implied_total_mean(line, p_over)
-    if target is None:
-        target = float(line)
-
-    expected_before = sum(goals * prob for goals, prob in normalized.items())
-    delta = target - expected_before
-    if abs(delta) < 0.05:
-        return normalized, {
-            'applied': False, 'reason': 'already_aligned',
-            'line': float(line), 'target': target,
-            'expected_before': expected_before, 'expected_after': expected_before,
-        }
-
-    # 二分求解 theta 使倾斜后分布期望命中 target（限幅 max_theta 防极端盘口异常）
-    lo, hi = -max_theta, max_theta
-    for _ in range(40):
-        theta = (lo + hi) / 2.0
-        tilted = {g: p * math.exp(theta * g) for g, p in normalized.items()}
-        s = sum(tilted.values())
-        exp_t = sum(g * p / s for g, p in tilted.items()) if s > 0 else expected_before
-        if exp_t < target:
-            lo = theta
-        else:
-            hi = theta
-    theta = (lo + hi) / 2.0
-    tilted = {g: p * math.exp(theta * g) for g, p in normalized.items()}
-    total_prob = sum(tilted.values())
-    if total_prob <= 0:
-        return normalized, {'applied': False, 'reason': 'zero_tilted_total'}
-
-    adjusted = {goals: prob / total_prob for goals, prob in tilted.items()}
-    expected_after = sum(goals * prob for goals, prob in adjusted.items())
-    return adjusted, {
-        'applied': True,
-        'line': float(line),
-        'target': target,
-        'theta': theta,
-        'expected_before': expected_before,
-        'expected_after': expected_after,
-    }
-
-
-def _goal_over_under_from_line(goal_dist: Dict[int, float], total: Dict) -> Dict[str, float]:
-    line = get_close_total_line(total)
-    if line is None:
-        line = 2.5
-    over = sum(prob for goals, prob in goal_dist.items() if goals > line)
-    under = sum(prob for goals, prob in goal_dist.items() if goals < line)
-    push = max(0.0, 1.0 - over - under)
-    return {'over': over, 'under': under, 'push': push, 'line': line}
-
-
-def _adjust_goal_dist_with_total_movement(goal_dist: Dict[int, float], total: Dict) -> Tuple[Dict[int, float], Dict]:
-    """Softly tilt goal-count distribution with O/U line and water movement."""
-    normalized = _normalize_goal_dist(goal_dist)
-    if not normalized:
-        return goal_dist, {'applied': False, 'reason': 'empty_distribution'}
-
-    total = total or {}
-    try:
-        open_line = float(total.get('open_line'))
-        close_line = float(get_close_total_line(total))
-    except (TypeError, ValueError):
-        open_line = None
-        close_line = None
-
-    open_prob = total.get('open_prob') or {}
-    close_prob = total.get('close_prob') or {}
-    try:
-        over_delta = float(close_prob.get('over', 0.0)) - float(open_prob.get('over', 0.0))
-    except (TypeError, ValueError):
-        over_delta = 0.0
-
-    line_delta = 0.0
-    if open_line is not None and close_line is not None:
-        line_delta = close_line - open_line
-
-    if abs(line_delta) < 0.01 and abs(over_delta) < 0.015:
-        return normalized, {
-            'applied': False,
-            'reason': 'stable_total_market',
-            'line_delta': round(line_delta, 3),
-            'over_delta': round(over_delta, 3),
-        }
-
-    line_signal = max(-1.0, min(1.0, line_delta / 0.5))
-    water_signal = max(-1.0, min(1.0, over_delta / 0.08))
-    conflict = line_signal * water_signal < -0.15
-
-    signal = (0.60 * line_signal) + (0.40 * water_signal)
-    if conflict:
-        signal *= 0.35
-
-    theta = max(-0.10, min(0.10, signal * 0.08))
-    if abs(theta) < 0.003:
-        return normalized, {
-            'applied': False,
-            'reason': 'weak_or_conflicted_signal',
-            'line_delta': round(line_delta, 3),
-            'over_delta': round(over_delta, 3),
-            'conflict': conflict,
-        }
-
-    expected_before = sum(goals * prob for goals, prob in normalized.items())
-    tilted = {goals: prob * math.exp(theta * (goals - expected_before)) for goals, prob in normalized.items()}
-    total_prob = sum(tilted.values())
-    if total_prob <= 0:
-        return normalized, {'applied': False, 'reason': 'zero_tilted_total'}
-
-    adjusted = {goals: prob / total_prob for goals, prob in tilted.items()}
-    expected_after = sum(goals * prob for goals, prob in adjusted.items())
-    return adjusted, {
-        'applied': True,
-        'theta': round(theta, 4),
-        'line_delta': round(line_delta, 3),
-        'over_delta': round(over_delta, 3),
-        'direction': 'over' if theta > 0 else 'under',
-        'conflict': conflict,
-        'expected_before': expected_before,
-        'expected_after': expected_after,
-    }
-
-
-def _score_result_code(h: int, a: int) -> str:
-    if h > a:
-        return 'H'
-    if h < a:
-        return 'A'
-    return 'D'
-
-
-def _candidate_result_support(candidates, limit: int = 8) -> Dict[str, float]:
-    support = {'H': 0.0, 'D': 0.0, 'A': 0.0}
-    for item in candidates[:limit]:
-        if len(item) == 2 and isinstance(item[0], tuple):
-            (h, a), prob = item
-        elif len(item) == 3:
-            h, a, prob = item
-        else:
-            continue
-        support[_score_result_code(h, a)] += max(0.0, float(prob or 0.0))
-    total_prob = sum(support.values())
-    if total_prob > 0:
-        support = {key: value / total_prob for key, value in support.items()}
-    return support
-
-
-def _adjust_half_full_with_score_context(half_full_time: Dict, candidates, strength: float = 0.35) -> Dict:
-    """Softly align half/full-time final direction with the score candidate distribution."""
-    if not half_full_time or not isinstance(half_full_time, dict):
-        return half_full_time
-
-    support = _candidate_result_support(candidates)
-    if not support or max(support.values()) <= 0:
-        return half_full_time
-
-    rows = half_full_time.get('probs')
-    if not isinstance(rows, list):
-        return half_full_time
-
-    adjusted_rows = []
-    adjusted_dist = {}
-    for row in rows:
-        code = row.get('code')
-        if not code or len(code) != 2:
-            adjusted_rows.append(row)
-            continue
-        final_result = code[1]
-        factor = 1.0 - strength + strength * (support.get(final_result, 0.0) * 3.0)
-        factor = max(0.65, min(1.25, factor))
-        raw_prob = max(0.0, float(row.get('raw_prob', 0.0))) * factor
-        new_row = row.copy()
-        new_row['raw_prob'] = raw_prob
-        adjusted_rows.append(new_row)
-        adjusted_dist[code] = raw_prob
-
-    total_prob = sum(row.get('raw_prob', 0.0) for row in adjusted_rows)
-    if total_prob <= 0:
-        return half_full_time
-
-    for row in adjusted_rows:
-        raw_prob = row.get('raw_prob', 0.0) / total_prob
-        row['raw_prob'] = raw_prob
-        row['probability'] = round(raw_prob * 100, 1)
-
-    adjusted_rows.sort(key=lambda item: -item.get('raw_prob', 0.0))
-    adjusted = half_full_time.copy()
-    adjusted['probs'] = adjusted_rows
-    adjusted['distribution'] = {
-        row['code']: row['raw_prob']
-        for row in adjusted_rows
-        if row.get('code')
-    }
-    adjusted['score_context'] = {
-        'applied': True,
-        'support': support,
-        'strength': strength,
-    }
-    return adjusted
-
-
-def _adjust_half_full_with_market_context(half_full_time: Dict,
-                                          asian: Dict = None,
-                                          total: Dict = None,
-                                          strength: float = 0.18) -> Dict:
-    """Softly align half/full-time paths with handicap depth and total-goal tempo."""
-    if not half_full_time or not isinstance(half_full_time, dict):
-        return half_full_time
-
-    rows = half_full_time.get('probs')
-    if not isinstance(rows, list):
-        return half_full_time
-
-    asian = asian or {}
-    total = total or {}
-    try:
-        handicap = float(asian.get('handicap') or 0.0)
-    except (TypeError, ValueError):
-        handicap = 0.0
-    favor = asian.get('favor') or ('home' if handicap > 0 else 'away' if handicap < 0 else 'even')
-    tempo_info = _total_market_tempo_signal(total)
-    try:
-        total_line = float(tempo_info.get('line') if tempo_info.get('line') is not None else get_close_total_line(total))
-    except (TypeError, ValueError):
-        total_line = 2.5
-
-    tempo = tempo_info.get('signal', 0.0)
-
-    depth = abs(handicap)
-    adjusted_rows = []
-    for row in rows:
-        code = row.get('code')
-        if not code or len(code) != 2:
-            adjusted_rows.append(row)
-            continue
-
-        half_res, full_res = code[0], code[1]
-        factor = 1.0
-
-        if tempo > 0:
-            if half_res != 'D':
-                factor *= 1.0 + strength * 0.55 * tempo
-            if code in {'HH', 'AA'}:
-                factor *= 1.0 + strength * 0.35 * tempo
-            if code == 'DD':
-                factor *= 1.0 - strength * 0.45 * tempo
-        elif tempo < 0:
-            slow = abs(tempo)
-            if half_res == 'D':
-                factor *= 1.0 + strength * 0.55 * slow
-            if code in {'DD', 'HD', 'AD'}:
-                factor *= 1.0 + strength * 0.35 * slow
-            if code in {'HA', 'AH'}:
-                factor *= 1.0 - strength * 0.35 * slow
-            if total_line <= 2.25 and half_res == 'D':
-                factor *= 1.0 + strength * 0.30 * slow
-            if total_line <= 2.0 and half_res != 'D':
-                factor *= 1.0 - strength * 0.18 * slow
-
-        if depth >= 1.0 and favor in {'home', 'away'}:
-            fav_res = 'H' if favor == 'home' else 'A'
-            if code == f'{fav_res}{fav_res}':
-                factor *= 1.0 + strength * min(1.0, depth / 1.5)
-            elif full_res != fav_res and half_res != 'D':
-                factor *= 1.0 - strength * 0.45
-        elif depth <= 0.25:
-            if half_res == 'D':
-                factor *= 1.0 + strength * 0.35
-            if full_res == 'D':
-                factor *= 1.0 + strength * 0.25
-
-        new_row = row.copy()
-        new_row['raw_prob'] = max(0.0, float(row.get('raw_prob', 0.0))) * max(0.65, min(1.35, factor))
-        adjusted_rows.append(new_row)
-
-    total_prob = sum(row.get('raw_prob', 0.0) for row in adjusted_rows)
-    if total_prob <= 0:
-        return half_full_time
-
-    for row in adjusted_rows:
-        raw_prob = row.get('raw_prob', 0.0) / total_prob
-        row['raw_prob'] = raw_prob
-        row['probability'] = round(raw_prob * 100, 1)
-    adjusted_rows.sort(key=lambda item: -item.get('raw_prob', 0.0))
-
-    adjusted = half_full_time.copy()
-    adjusted['probs'] = adjusted_rows
-    adjusted['distribution'] = {
-        row['code']: row['raw_prob']
-        for row in adjusted_rows
-        if row.get('code')
-    }
-    adjusted['market_context'] = {
-        'applied': True,
-        'tempo': round(tempo, 3),
-        'tempo_source': tempo_info,
-        'handicap': handicap,
-        'favor': favor,
-        'strength': strength,
-    }
-    return adjusted
-
-
-def _assess_market_data_quality(asian: Dict, euro: Dict, total: Dict) -> Dict:
-    score = 1.0
-    reasons = []
-
-    if asian.get('handicap') is None:
-        score -= 0.25
-        reasons.append('missing_asian_handicap')
-    if total.get('close_line') is None:
-        score -= 0.25
-        reasons.append('missing_total_line')
-    if not euro.get('close') or not all(k in euro.get('close', {}) for k in ('home', 'draw', 'away')):
-        score -= 0.25
-        reasons.append('missing_euro_close')
-
-    for market_name, market, keys in (
-        ('asian', asian, ('open_prob', 'close_prob')),
-        ('total', total, ('open_prob', 'close_prob')),
-    ):
-        for key in keys:
-            if not market.get(key):
-                score -= 0.08
-                reasons.append(f'missing_{market_name}_{key}')
-
-    try:
-        sup_a = float(asian.get('implied_supremacy', 0.0))
-        sup_e = float(euro.get('implied_supremacy', 0.0))
-        if sup_a * sup_e < 0:
-            score -= 0.18
-            reasons.append('asian_euro_direction_conflict')
-        elif abs(sup_a - sup_e) >= SUPREMACY_CONFLICT_GAP:
-            score -= 0.10
-            reasons.append('asian_euro_supremacy_gap')
-    except Exception:
-        pass
-
-    score = max(0.0, min(1.0, score))
-    if score >= 0.85:
-        grade = 'high'
-        weight_factor = 1.0
-    elif score >= 0.62:
-        grade = 'medium'
-        weight_factor = 0.75
-    elif score >= 0.40:
-        grade = 'low'
-        weight_factor = 0.45
-    else:
-        grade = 'reject'
-        weight_factor = 0.0
-
-    return {
-        'score': round(score, 3),
-        'grade': grade,
-        'weight_factor': weight_factor,
-        'reasons': reasons,
-    }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 def _pick_recommendations(candidates, asian, euro, total, n=2, pool=12, confidence=None, league_profile=None, team=None, similar_market=None):
@@ -2690,81 +1424,5 @@ def _pick_recommendations(candidates, asian, euro, total, n=2, pool=12, confiden
     value_bets.sort(key=lambda x: -x.get('ev', 0))
     
     return recommendations, value_bets
-
-
-def _diversify_score_recommendations(picked, scored, n: int, favor: str, upset_count: int, max_upsets: int):
-    """Avoid returning recommendations that all tell the same score story."""
-    if len(picked) < 3:
-        return picked
-
-    def result_code(h, a):
-        return 'H' if h > a else 'A' if h < a else 'D'
-
-    def goal_band(h, a):
-        goals = h + a
-        if goals <= 1:
-            return 'low'
-        if goals <= 3:
-            return 'mid'
-        return 'high'
-
-    def replace_last_matching(items, predicate, replacement):
-        diversified = items[:]
-        for idx in range(len(diversified) - 1, 0, -1):
-            if predicate(diversified[idx]):
-                diversified[idx] = replacement
-                return diversified[:n]
-        return items
-
-    pattern_counts = {}
-    for _, _, _, _, pattern, _ in picked:
-        pattern_counts[pattern] = pattern_counts.get(pattern, 0) + 1
-
-    seen = {(h, a) for h, a, *_ in picked}
-    min_prob = min(prob for _, _, prob, *_ in picked)
-
-    overloaded_pattern = next((pattern for pattern, count in pattern_counts.items() if count >= 3), None)
-    picked_results = {result_code(h, a) for h, a, *_ in picked}
-    picked_bands = {goal_band(h, a) for h, a, *_ in picked}
-
-    target = None
-    if overloaded_pattern:
-        target = ('pattern', overloaded_pattern)
-    elif len(picked_results) == 1:
-        target = ('result', next(iter(picked_results)))
-    elif len(picked_bands) == 1:
-        target = ('goal_band', next(iter(picked_bands)))
-
-    if not target:
-        return picked
-
-    for (h, a), prob, _, _, cluster, _ in scored:
-        if (h, a) in seen:
-            continue
-        if prob < min_prob * 0.65:
-            continue
-        pattern = score_pattern(h, a)
-        candidate_result = result_code(h, a)
-        candidate_band = goal_band(h, a)
-        if target[0] == 'pattern' and pattern == target[1]:
-            continue
-        if target[0] == 'result' and candidate_result == target[1]:
-            continue
-        if target[0] == 'goal_band' and candidate_band == target[1]:
-            continue
-
-        is_upset = (favor == 'home' and h < a) or (favor == 'away' and h > a)
-        if is_upset and upset_count >= max_upsets:
-            continue
-        replacement = (h, a, prob, cluster, pattern, 'diversity')
-        if target[0] == 'pattern':
-            return replace_last_matching(picked, lambda item: item[4] == target[1], replacement)
-        if target[0] == 'result':
-            return replace_last_matching(picked, lambda item: result_code(item[0], item[1]) == target[1], replacement)
-        if target[0] == 'goal_band':
-            return replace_last_matching(picked, lambda item: goal_band(item[0], item[1]) == target[1], replacement)
-        break
-
-    return picked
 
 
