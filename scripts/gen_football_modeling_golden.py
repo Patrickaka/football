@@ -45,27 +45,45 @@ class SeededRandom:
         return self._r.random()
 
 
-def real_market_triples():
-    """用 F-2 的领域层从真实赔率语料构造 asian / euro / total 三件套"""
-    out = []
-    for i in range(min(len(MK['asian']), len(MK['euro']), len(MK['total']))):
-        try:
-            out.append((markets.analyze_asian(MK['asian'][i]),
-                        markets.analyze_euro(MK['euro'][i]),
-                        markets.analyze_total(MK['total'][i])))
-        except Exception:
-            continue
-    return out
-
-
-REAL = real_market_triples()
-
-
 def _cover_probs(prob_dict, side):
     """亚盘概率的键名随让球方向变，取值要兼容三种形态"""
     if side == 'home':
         return prob_dict.get('home_give') or prob_dict.get('home_recv') or prob_dict.get('home')
     return prob_dict.get('away_recv') or prob_dict.get('away_give') or prob_dict.get('away')
+
+
+def real_market_triples():
+    """用 F-2 的领域层从真实赔率语料构造 asian / euro / total 三件套
+
+    **必须补上 `implied_supremacy` / `implied_lambdas`**：`analyze_asian` /
+    `analyze_euro` 不产出这两个键，是 `pipeline` 事后塞进去的（线上缓存里
+    确实有）。第一版语料漏了这步，于是 `compute_prediction_confidence` 的
+    三条扣分分支一条都走不到——122 条样本的 score **恒等于 0.880**，
+    把 `CONFIDENCE_HIGH_THRESHOLD` 从 0.72 改成 0.4 都测不出来（判据 23）。
+    """
+    out = []
+    for i in range(min(len(MK['asian']), len(MK['euro']), len(MK['total']))):
+        try:
+            a = markets.analyze_asian(MK['asian'][i])
+            e = markets.analyze_euro(MK['euro'][i])
+            t = markets.analyze_total(MK['total'][i])
+        except Exception:
+            continue
+        ph = _cover_probs(a['close_prob'], 'home')
+        pa = _cover_probs(a['close_prob'], 'away')
+        a['implied_supremacy'] = lambdas.asian_implied_supremacy(
+            a['handicap'], ph, pa, t['implied_total'])
+        ec = e['close']
+        e['implied_supremacy'] = lambdas.euro_implied_supremacy(
+            ec['home'], ec['draw'], ec['away'], t['implied_total'])
+        eh, ea = lambdas.euro_implied_lambdas(ec['home'], ec['draw'], ec['away'],
+                                              t['implied_total'])
+        e['implied_lambdas'] = {'home': eh, 'away': ea}
+        out.append((a, e, t))
+    return out
+
+
+REAL = real_market_triples()
 
 
 def entries():

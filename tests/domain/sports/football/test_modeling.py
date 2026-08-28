@@ -245,6 +245,91 @@ class RiskLevelThresholds(unittest.TestCase):
         self.assertEqual(narrow['risk_factors'], [])
 
 
+class ProfileFallbacksOnlyFireOnIncompleteProfiles(unittest.TestCase):
+    """`lp.get('avg_goal', AVG_LEAGUE_GOAL)` 这类兜底在完整画像下走不到。
+
+    判据 9 第二行「配置让它不可达」——`LEAGUE_PROFILES` 是手写配置，
+    少一个键就落到这里，所以**补用例不要删**。
+    """
+
+    STRENGTH = {
+        'attack_home': 1.6, 'defense_home': 1.0, 'attack_away': 1.1, 'defense_away': 1.3,
+        'form_diff': 0.4, 'momentum_supremacy': 0.05,
+        'home_recent': {'games': 10, 'gf': 18, 'ga': 9, 'form_pts': 2.0, 'attack': 1.8, 'defense': 0.9},
+        'away_recent': {'games': 10, 'gf': 11, 'ga': 13, 'form_pts': 1.2, 'attack': 1.1, 'defense': 1.3},
+        'home_venue': {'games': 5, 'gf': 12, 'ga': 3, 'form_pts': 2.6, 'attack': 2.4, 'defense': 0.6},
+        'away_venue': {'games': 5, 'gf': 4, 'ga': 7, 'form_pts': 1.0, 'attack': 0.8, 'defense': 1.4},
+    }
+
+    def test_a_profile_missing_avg_goal_falls_back_to_the_league_average(self):
+        complete = {'avg_goal': 1.42, 'home_boost': 1.06, 'low_score': 0.92, 'draw_mult': 1.0}
+        without = {k: v for k, v in complete.items() if k != 'avg_goal'}
+        same = dict(without, avg_goal=AVG_LEAGUE_GOAL)
+        self.assertEqual(lambdas.team_poisson_lambdas(self.STRENGTH, 2.6, without),
+                         lambdas.team_poisson_lambdas(self.STRENGTH, 2.6, same))
+        self.assertNotEqual(lambdas.team_poisson_lambdas(self.STRENGTH, 2.6, without),
+                            lambdas.team_poisson_lambdas(self.STRENGTH, 2.6, complete))
+
+    def test_a_profile_missing_home_boost_falls_back_to_the_venue_boost(self):
+        complete = {'avg_goal': 1.42, 'home_boost': 1.30, 'low_score': 0.92, 'draw_mult': 1.0}
+        without = {k: v for k, v in complete.items() if k != 'home_boost'}
+        same = dict(without, home_boost=1.06)
+        self.assertEqual(lambdas.team_poisson_lambdas(self.STRENGTH, 2.6, without),
+                         lambdas.team_poisson_lambdas(self.STRENGTH, 2.6, same))
+        self.assertNotEqual(lambdas.team_poisson_lambdas(self.STRENGTH, 2.6, without),
+                            lambdas.team_poisson_lambdas(self.STRENGTH, 2.6, complete))
+
+
+class ConfidenceLevelThresholds(unittest.TestCase):
+    """三档置信度的门槛各测两侧。
+
+    **第一版语料在这里退化过**：`analyze_asian`/`analyze_euro` 不产出
+    `implied_supremacy`（那是 pipeline 事后塞的），漏了这一步的话三条扣分
+    分支一条都不走，122 条样本的 score 恒等于 0.880，把门槛从 0.72 改成
+    0.4 都测不出来（判据 23）。
+    """
+
+    @staticmethod
+    def _confidence(sup_asian, sup_euro, kelly_spread=99.0):
+        asian = {'implied_supremacy': sup_asian}
+        euro = {'implied_supremacy': sup_euro, 'kelly': {'spread': kelly_spread}}
+        return risk.compute_prediction_confidence(asian, euro, {})
+
+    def test_no_penalty_at_all_is_high(self):
+        result = self._confidence(0.5, 0.5)
+        self.assertEqual(result['score'], 1.0)
+        self.assertEqual(result['level'], 'high')
+        self.assertEqual(result['notes'], [])
+
+    def test_the_kelly_penalty_alone_still_leaves_it_high(self):
+        result = self._confidence(0.5, 0.5, kelly_spread=1.0)
+        self.assertAlmostEqual(result['score'], 0.88)
+        self.assertEqual(result['level'], 'high')
+
+    def test_a_supremacy_gap_drops_it_to_medium(self):
+        """1.0 - 0.22 - 0.12 = 0.66，落在 [0.52, 0.72) → medium。"""
+        result = self._confidence(1.5, 0.5, kelly_spread=1.0)
+        self.assertAlmostEqual(result['score'], 0.66)
+        self.assertEqual(result['level'], 'medium')
+
+    def test_opposite_directions_drop_it_to_low(self):
+        """1.0 - 0.32 - 0.12 = 0.56 仍是 medium；再叠一项才到 low。"""
+        opposite = self._confidence(0.5, -0.5, kelly_spread=1.0)
+        self.assertAlmostEqual(opposite['score'], 0.56)
+        self.assertEqual(opposite['level'], 'medium')
+
+    def test_the_two_supremacy_branches_are_mutually_exclusive(self):
+        """方向相反扣 0.32，方向相同但分歧大扣 0.22——**是 if/elif 不是两条**。"""
+        opposite = self._confidence(1.5, -1.5, kelly_spread=99.0)
+        self.assertAlmostEqual(opposite['score'], 0.68)
+        self.assertEqual(len(opposite['notes']), 1)
+
+    def test_the_supremacy_gap_threshold_is_exactly_zero_point_seven_five(self):
+        """门槛是 `>=`：gap 恰好 0.75 就要扣分（判据 28：先验算再写断言）。"""
+        self.assertEqual(self._confidence(1.24, 0.5)['notes'], [])      # gap 0.74
+        self.assertEqual(len(self._confidence(1.25, 0.5)['notes']), 1)  # gap 0.75
+
+
 class McmcNeedsAnInjectedRandomSource(unittest.TestCase):
     """判据 16：随机源是副作用，不注入的话黄金文件不可复现。"""
 
@@ -278,6 +363,55 @@ class McmcNeedsAnInjectedRandomSource(unittest.TestCase):
                                              n_samples=n_samples, burn_in=burn_in,
                                              rng=self.Seeded(7))
         self.assertEqual(len(samples), n_samples - burn_in)
+
+    def test_the_rho_clamp_never_binds_at_realistic_sample_counts(self):
+        """rho 是步长 ±0.01 的随机游走，从 0 出发——实测 3000 步后仍只到
+        -0.4544，够不到 ±0.5 的夹紧。所以把夹紧从 0.5 改到 5.0 是
+        **等价变异**（判据 30），不是漏测。
+
+        下一条用极端随机源证明夹紧本身没坏。
+        """
+        samples = bayes._mcmc_sample_lambdas(self.TARGETS, 2.6, 0.4, None, None,
+                                             n_samples=3000, burn_in=0, rng=self.Seeded(7))
+        rhos = [s[2] for s in samples]
+        self.assertLess(max(abs(min(rhos)), abs(max(rhos))), 0.5)
+
+    class DriftingUp:
+        """三次提议取 1.0（rho 每步 +0.01），第四次取 0.0 让接受判据必然通过。
+
+        恒返回 1.0 的源是不行的——接受判据也读随机数，`1.0 < exp(负数)`
+        永远为假，所有提议都被拒，rho 停在 0（判据 28：先验算）。
+        """
+
+        def __init__(self):
+            self._i = 0
+
+        def random(self):
+            value = 0.0 if self._i % 4 == 3 else 1.0
+            self._i += 1
+            return value
+
+    def test_the_rho_clamp_binds_when_the_walk_is_pushed(self):
+        samples = bayes._mcmc_sample_lambdas(self.TARGETS, 2.6, 0.4, None, None,
+                                             n_samples=40, burn_in=0, rng=self.DriftingUp())
+        self.assertAlmostEqual(max(s[2] for s in samples), 0.40)
+
+    def test_reaching_the_clamp_exactly_crashes_the_posterior(self):
+        """**隐患，行为原样保留**：`rho_transformed = rho + 0.5` 把
+        [-0.5, 0.5] 映到 [0, 1]，而 `log(1 - rho_transformed)` 在 rho 恰好
+        等于 +0.5 时取 `log(0)` → `ValueError: math domain error`。
+
+        夹紧允许取到端点，而对数的定义域是开区间——差的正是这一个端点。
+        真实随机源下走 3000 步只到 -0.4544，所以线上没炸过；但
+        `bayesian_predict_scores` 默认跑 2000 步，换个种子就可能撞上。
+        修不修是单独决策（见交接文档 §四）。
+        """
+        with self.assertRaises(ValueError):
+            bayes._mcmc_sample_lambdas(self.TARGETS, 2.6, 0.4, None, None,
+                                       n_samples=60, burn_in=0, rng=self.DriftingUp())
+        # 反过来：没走到端点就不该炸
+        bayes._mcmc_sample_lambdas(self.TARGETS, 2.6, 0.4, None, None,
+                                   n_samples=40, burn_in=0, rng=self.DriftingUp())
 
     def test_without_an_injected_source_it_still_runs(self):
         """默认走 `random` 模块本身——与迁移前一致，只是不可复现。"""
