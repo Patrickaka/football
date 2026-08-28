@@ -110,6 +110,145 @@ class GoalDistributionAnchoring(unittest.TestCase):
         self.assertGreater(half['push'], 0.0)
 
 
+class OneXTwoAnchorStrength(unittest.TestCase):
+    """`_anchor_score_candidates_to_1x2` 的锚定强度是**默认参数**（判据 29）。
+
+    适配层不传它，所以默认值 0.75 没有任何生产路径覆盖——不专门测一遍，
+    把它改成 0.0（完全不锚定）是零反应的。
+
+    **它收的是 `(score, prob)` 序列，不是字典**：喂字典的话迭代出的是键，
+    `score[1]` 取到的是客队进球数而不是概率，于是整张分布"不完整"，
+    函数直接早退返回 `{'applied': False}`——看着"通过"其实什么也没测
+    （判据 23）。
+    """
+
+    MATRIX = sm.build_score_matrix(1.5, 1.1, 7, -0.11)
+    CANDIDATES = list(MATRIX.items())
+    # **`euro` 要的是带 `close` 的完整赔率字典**，不是裸概率
+    EURO = {'close': {'home': 0.60, 'draw': 0.22, 'away': 0.18}}
+
+    @staticmethod
+    def _margins(candidates):
+        out = {'H': 0.0, 'D': 0.0, 'A': 0.0}
+        for (h, a), p in candidates:
+            out[scoring._score_result_code(h, a)] += p
+        total = sum(out.values())
+        return {k: v / total for k, v in out.items()} if total else out
+
+    def test_it_actually_applies_on_a_complete_distribution(self):
+        """先把前提钉住——否则下面三条可能都在测早退路径。"""
+        _, meta = scoring._anchor_score_candidates_to_1x2(self.CANDIDATES, self.EURO)
+        self.assertTrue(meta.get('applied'), meta)
+
+    def test_anchoring_pulls_the_margins_towards_the_market(self):
+        before = self._margins(self.CANDIDATES)
+        anchored, _ = scoring._anchor_score_candidates_to_1x2(self.CANDIDATES, self.EURO)
+        self.assertLess(abs(self._margins(anchored)['H'] - self.EURO['close']['home']),
+                        abs(before['H'] - self.EURO['close']['home']))
+
+    def test_zero_strength_leaves_the_margins_alone(self):
+        """**反方向**：强度为 0 时不该动。"""
+        before = self._margins(self.CANDIDATES)
+        untouched, _ = scoring._anchor_score_candidates_to_1x2(
+            self.CANDIDATES, self.EURO, strength=0.0)
+        after = self._margins(untouched)
+        for key in ('H', 'D', 'A'):
+            with self.subTest(key=key):
+                self.assertAlmostEqual(after[key], before[key], places=9)
+
+    def test_the_default_strength_is_three_quarters(self):
+        default = scoring._anchor_score_candidates_to_1x2(self.CANDIDATES, self.EURO)[0]
+        self.assertEqual(default, scoring._anchor_score_candidates_to_1x2(
+            self.CANDIDATES, self.EURO, strength=0.75)[0])
+        self.assertNotEqual(default, scoring._anchor_score_candidates_to_1x2(
+            self.CANDIDATES, self.EURO, strength=0.3)[0])
+
+
+class HeatFilterWeights(unittest.TestCase):
+    """冷热过滤：热门扣分、冷门加分，两侧都测（判据 5）。"""
+
+    def test_it_takes_a_label_not_a_probability(self):
+        """**收的是 `'hot'`/`'cold'` 标签**，不是概率（第一版用例喂了浮点，
+        三档全落到 `return 1.0` 的兜底，看着"通过"其实什么也没测——判据 23）。
+        """
+        hot = scoring._heat_filter_weight('hot')
+        cold = scoring._heat_filter_weight('cold')
+        neutral = scoring._heat_filter_weight('warm')
+        self.assertLess(hot, neutral)
+        self.assertGreater(cold, neutral)
+        self.assertEqual(neutral, 1.0)
+
+    def test_an_unknown_label_falls_back_to_no_adjustment(self):
+        for label in ('warm', '', None, 0.5):
+            with self.subTest(label=label):
+                self.assertEqual(scoring._heat_filter_weight(label), 1.0)
+
+
+class LeagueGoalFallback(unittest.TestCase):
+    """`AVG_LEAGUE_GOAL` 用在 `fit_lambdas_from_markets` 里，
+    不是 `score_heat_label`（第一版用例找错了函数）。
+    """
+
+    def _fit(self, league_profile):
+        return scoring.fit_lambdas_from_markets(
+            0.3, 2.5, 0.52, 0.45, 0.28, 0.27, 2.5, None, None, league_profile)
+
+    def test_a_profile_without_avg_goal_falls_back_to_the_league_constant(self):
+        """`lp.get('avg_goal', AVG_LEAGUE_GOAL)`——配置少一个键就落到这里
+        （判据 9 第二行：配置让它不可达 → 补用例）。
+        """
+        with_constant = self._fit(dict(LEAGUE, avg_goal=1.35))
+        without = self._fit({k: v for k, v in LEAGUE.items() if k != 'avg_goal'})
+        self.assertEqual(with_constant, without)
+
+    def test_a_different_average_changes_the_result(self):
+        """**反方向**：否则上一条对任何常量都成立。"""
+        self.assertNotEqual(self._fit(dict(LEAGUE, avg_goal=1.35)),
+                            self._fit(dict(LEAGUE, avg_goal=3.0)))
+
+
+class SupremacyConflictGate(unittest.TestCase):
+    """`abs(sup_a - sup_e) >= SUPREMACY_CONFLICT_GAP` 那道门的两侧。"""
+
+    ASIAN = {'handicap': 0.5, 'open_handicap': 0.5,
+             'close_prob': {'home_give': 0.55, 'away_recv': 0.45},
+             'open_prob': {'home_give': 0.55, 'away_recv': 0.45},
+             'close_water': {'home': 0.9, 'away': 0.9},
+             'open_water': {'home': 0.9, 'away': 0.9},
+             'trend_direction': 'stable', 'trend_strength': 0.0, 'favor': 'home'}
+    TOTAL = {'close_line': 2.5, 'open_line': 2.5, 'implied_total': 2.6,
+             'open_implied_total': 2.6, 'close_prob': {'over': 0.52, 'under': 0.48},
+             'open_prob': {'over': 0.52, 'under': 0.48},
+             'trend_direction': 'stable', 'trend_strength': 0.0}
+
+    def _state(self, sup_asian, sup_euro):
+        asian = dict(self.ASIAN, implied_supremacy=sup_asian)
+        euro = {'close': {'home': 0.45, 'draw': 0.28, 'away': 0.27},
+                'open': {'home': 0.45, 'draw': 0.28, 'away': 0.27},
+                'implied_supremacy': sup_euro,
+                'kelly': {'spread': 0.0, 'hardest': 'neutral', 'favored': 'neutral'}}
+        # **这道门在 `_assess_market_data_quality` 里，不是 `_joint_market_state`**
+        return scoring._assess_market_data_quality(asian, euro, self.TOTAL)
+
+    def test_a_wide_supremacy_gap_is_flagged_and_a_narrow_one_is_not(self):
+        """门槛 0.75：差 0.1 与差 1.1 必须给出不同状态。"""
+        agree = self._state(0.5, 0.6)
+        conflict = self._state(0.5, 1.6)
+        self.assertNotEqual(agree, conflict)
+
+    def test_the_gate_sits_exactly_at_three_quarters(self):
+        just_under = self._state(0.5, 0.5 + 0.74)
+        just_over = self._state(0.5, 0.5 + 0.76)
+        self.assertNotIn('asian_euro_supremacy_gap', just_under.get('reasons', []))
+        self.assertIn('asian_euro_supremacy_gap', just_over.get('reasons', []))
+
+    def test_opposite_directions_take_the_earlier_branch(self):
+        """`sup_a * sup_e < 0` 是 if、差距大是 elif——**方向冲突优先**。"""
+        opposite = self._state(0.5, -1.5)
+        self.assertIn('asian_euro_direction_conflict', opposite.get('reasons', []))
+        self.assertNotIn('asian_euro_supremacy_gap', opposite.get('reasons', []))
+
+
 class MarketStateAgreement(unittest.TestCase):
     """联合市场状态：让球与大小球一致时该给强信号，冲突时该给弱信号。"""
 
