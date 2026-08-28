@@ -475,13 +475,145 @@ class TeamStrength(unittest.TestCase):
         self.assertIsNone(parsing.parse_team_strength(self.HTML, '皇马', '巴萨'))
 
     def test_the_context_window_is_what_separates_the_teams(self):
-        """队名只在战绩前 140 字符内找——窗口开太大会串台。
-
-        断言的是**原因**：把窗口调到很小，谁也匹配不上。
-        """
+        """队名只在战绩前 140 字符内找。断言的是**原因**：窗口太小谁也匹配不上。"""
         self.assertIsNotNone(parsing.parse_team_strength(self.HTML, '阿森纳', '切尔西'))
         self.assertIsNone(parsing.parse_team_strength(self.HTML, '阿森纳', '切尔西',
                                                       context_chars=1))
+
+    def test_too_wide_a_window_makes_the_teams_bleed_into_each_other(self):
+        """窗口的**上界**才是它存在的理由：开太大，客队块的上下文里会先撞上
+        主队名（`team_in_context(ctx, home)` 排在前面），四块全归主队，
+        `away_all` 落空 → 返回 None。这正是代码注释说的「避免多场数据串台」。
+        """
+        self.assertIsNotNone(parsing.parse_team_strength(self.HTML, '阿森纳', '切尔西',
+                                                         context_chars=140))
+        self.assertIsNone(parsing.parse_team_strength(self.HTML, '阿森纳', '切尔西',
+                                                      context_chars=400))
+
+    def test_the_exact_window_size_is_not_load_bearing_on_real_pages(self):
+        """**140 这个数本身没有守住任何东西**——实测真实页面上 15 到 1180
+        之间任何窗口都得到同一结果。所以把 `TEAM_CONTEXT_CHARS` 改成 20
+        是**等价变异**，不是漏测（判据 30）。
+
+        写下来免得下一个人去补一个补不出来的用例。真正承重的是两端：
+        太窄谁也匹配不上，太宽会串台——上面两条各守一端。
+        """
+        real = PAGES['shuju:1430017']
+        baseline = parsing.parse_team_strength(real, '波鸿', '奥斯纳布吕克')
+        self.assertIsNotNone(baseline)
+        for chars in (20, 60, 140, 400, 1000):
+            with self.subTest(chars=chars):
+                self.assertEqual(
+                    parsing.parse_team_strength(real, '波鸿', '奥斯纳布吕克',
+                                                context_chars=chars),
+                    baseline)
+
+    def test_a_venue_weight_change_actually_moves_the_numbers(self):
+        """**迁移时在这里踩过一次**：适配层原本传了 `CLOSE_BLEND_WEIGHT`(0.72)，
+        而迁移前这里硬编码的是 0.68——两个数长得像但不是一回事。
+
+        新旧双跑差分没抓住，因为当时用的队名在真实页面里不存在、每条都返回
+        None（判据 8）。变异验证抓住了。这条断言保证权重真的在起作用。
+        """
+        low = parsing.parse_team_strength(self.HTML, '阿森纳', '切尔西', venue_weight=0.68)
+        high = parsing.parse_team_strength(self.HTML, '阿森纳', '切尔西', venue_weight=0.72)
+        self.assertNotEqual(low['attack_home'], high['attack_home'])
+        self.assertAlmostEqual(low['attack_home'], 0.68 * (12 / 5) + 0.32 * (18 / 10))
+        self.assertAlmostEqual(high['attack_home'], 0.72 * (12 / 5) + 0.28 * (18 / 10))
+        # 不传参数时用的是 0.68
+        default = parsing.parse_team_strength(self.HTML, '阿森纳', '切尔西')
+        self.assertEqual(default['attack_home'], low['attack_home'])
+
+    def test_a_three_character_suffix_is_what_matches_a_misspelled_name(self):
+        """真实语料里赛程写「不伦瑞克」而页面写「布伦瑞克」——**首字都不同**。
+
+        救回来的是 3 字尾串 `伦瑞克`。把 `TEAM_SUFFIX_LENGTHS` 砍成 `(4,)`
+        这一场就匹配不上了，而只测 4 字尾串是发现不了的（判据 5）。
+        """
+        ctx = '大 布伦瑞克'
+        self.assertTrue(parsing.team_in_context(ctx, '不伦瑞克'))
+        self.assertFalse(parsing.team_in_context(ctx, '曼彻斯特联'))
+        html = self.HTML.replace('阿森纳', '布伦瑞克')
+        self.assertIsNotNone(parsing.parse_team_strength(html, '不伦瑞克', '切尔西'))
+
+
+class TeamNameSuffixMatching(unittest.TestCase):
+    """`TEAM_SUFFIX_LENGTHS = (4, 3, 2)` 每一档都要有样本。"""
+
+    def test_each_suffix_length_is_load_bearing(self):
+        # 4 字尾串：曼彻斯特联 → 彻斯特联
+        self.assertTrue(parsing.team_in_context('主队 彻斯特联 近', '曼彻斯特联'))
+        # 3 字尾串：不伦瑞克 → 伦瑞克（首字都不同，真实语料里的情况）
+        self.assertTrue(parsing.team_in_context('大 布伦瑞克', '不伦瑞克'))
+        # 2 字尾串：北京国安 → 国安
+        self.assertTrue(parsing.team_in_context('主队 国安 近', '北京国安'))
+
+    def test_shortening_the_suffix_list_breaks_the_three_character_case(self):
+        """**断言的是原因**：只留 4 字尾串，`不伦瑞克` 就匹配不上 `布伦瑞克`。"""
+        import src.domain.sports.football.parsing as module
+        original = module.TEAM_SUFFIX_LENGTHS
+        try:
+            module.TEAM_SUFFIX_LENGTHS = (4,)
+            self.assertFalse(parsing.team_in_context('大 布伦瑞克', '不伦瑞克'))
+            module.TEAM_SUFFIX_LENGTHS = (4, 3)
+            self.assertTrue(parsing.team_in_context('大 布伦瑞克', '不伦瑞克'))
+            module.TEAM_SUFFIX_LENGTHS = (4, 3)
+            self.assertFalse(parsing.team_in_context('主队 国安 近', '北京国安'))
+        finally:
+            module.TEAM_SUFFIX_LENGTHS = original
+
+    def test_an_empty_name_never_matches(self):
+        for name in ('', None):
+            with self.subTest(name=name):
+                self.assertFalse(parsing.team_in_context('任何上下文', name))
+
+
+class DrawCoverThresholdsAreCoupled(unittest.TestCase):
+    """`DRAW_COVER_MIN_PROBABILITY = 0.24` 在归一化输入下永远不单独决定结果。
+
+    判据 28「条件之间是耦合的」——与北单 `upset` 那三个门槛同一形状。
+    证明：`平 < 0.24` 且 `首选 - 平 <= 0.12` ⇒ `首选 <= 0.36`，
+    于是第三项 `= 1 - 首选 - 平 >= 0.40 > 首选`，与「首选是最大值」矛盾。
+
+    所以把这个常量从 0.24 改到 0.10，**任何归一化输入的输出都不变**——
+    变异不红不是漏测。这里把它证下来，免得下一个人去补一个补不出来的用例。
+    """
+
+    def test_no_normalised_input_can_isolate_the_draw_probability_gate(self):
+        step = 0.005
+        counterexamples = []
+        for i in range(int(1 / step) + 1):
+            win = round(i * step, 3)
+            for j in range(int((1 - win) / step) + 1):
+                draw = round(j * step, 3)
+                lose = round(1 - win - draw, 3)
+                if lose < 0:
+                    continue
+                probs = {'胜': win, '平': draw, '负': lose}
+                primary = max(probs, key=probs.get)
+                if primary == '平':
+                    continue
+                if probs[primary] - draw <= 0.12 and draw < 0.24:
+                    counterexamples.append(probs)
+        self.assertEqual(counterexamples, [],
+                         '若出现反例，说明这条耦合结论不再成立，注释要跟着改')
+
+    def test_lowering_the_gate_changes_nothing_for_normalised_inputs(self):
+        """直接验一遍：把门槛降到 0.10，一组归一化样本的输出逐条不变。"""
+        samples = [{'胜': w / 100, '平': d / 100, '负': (100 - w - d) / 100}
+                   for w in range(0, 101, 5) for d in range(0, 101 - w, 5)]
+        for probs in samples:
+            with self.subTest(probs=probs):
+                self.assertEqual(
+                    lottery.spf_selection_profile(probs),
+                    lottery.spf_selection_profile(probs, draw_cover_min=0.10))
+
+    def test_the_gate_does_bite_on_unnormalised_input(self):
+        """它不是死代码——调用方传未归一化的概率时就有作用。"""
+        loose = {'胜': 0.30, '平': 0.20, '负': 0.10}
+        self.assertEqual(lottery.spf_selection_profile(loose)['mode'], 'single')
+        self.assertEqual(
+            lottery.spf_selection_profile(loose, draw_cover_min=0.10)['mode'], 'draw_cover')
 
 
 class OuzhiSeriesContract(unittest.TestCase):

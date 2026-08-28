@@ -118,9 +118,20 @@ def entries():
             else:
                 yield f'daxiao_nums:{key}', p.daxiao_from_avg_numbers(nums)
         else:
-            for home, away in (('阿森纳', '切尔西'), ('曼联', '利物浦'), ('', '')):
+            # **用页面里真实存在的队名**——第一版用了阿森纳/切尔西，
+            # 而这两页是德乙，于是每一条都返回 None，黄金看起来有 6 条
+            # 实际一条也没走到成功路径（判据 8）。
+            for home, away in (('布伦瑞克', '柏林赫塔'), ('不伦瑞克', '柏林赫塔'),
+                               ('波鸿', '奥斯纳布吕克'), ('柏林赫塔', '布伦瑞克'),
+                               ('阿森纳', '切尔西'), ('', '')):
                 yield (f'team_strength:{key}:{home}/{away}',
                        p.parse_team_strength(html, home, away))
+                for weight in (0.5, 0.68, 0.9):
+                    yield (f'team_strength_w:{key}:{home}/{away}:{weight}',
+                           p.parse_team_strength(html, home, away, venue_weight=weight))
+                for chars in (10, 20, 140, 400):
+                    yield (f'team_strength_ctx:{key}:{home}/{away}:{chars}',
+                           p.parse_team_strength(html, home, away, context_chars=chars))
             yield f'form_matches:{key}', len(p.RECENT_FORM_PAT.findall(html))
 
     # --- 队名匹配 ---

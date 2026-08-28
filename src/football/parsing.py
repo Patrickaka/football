@@ -161,7 +161,10 @@ def fetch_team_strength(match_id, home, away, league_profile=None):
     except (urllib.error.URLError, ValueError, OSError):
         return None
 
-    result = _p.parse_team_strength(html, home, away, venue_weight=CLOSE_BLEND_WEIGHT)
+    # **不传 venue_weight**：迁移前这里硬编码的是 0.68，不是 config 的
+    # CLOSE_BLEND_WEIGHT（0.72）——两个数长得像但不是一回事（判据 10）。
+    # 领域层的默认值就是 0.68。
+    result = _p.parse_team_strength(html, home, away)
     if result is None:
         return None
 
