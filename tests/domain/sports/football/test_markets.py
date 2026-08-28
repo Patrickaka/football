@@ -290,6 +290,26 @@ class KellyDegeneracy(unittest.TestCase):
         self.assertIn('暂无明显最难项', result['summary'])
 
 
+class ReturnRateFallback(unittest.TestCase):
+    """返还率兜底：**契约内走不到**，只有负赔率才触发。
+
+    变异 `DEFAULT_RETURN_RATE` 不红就是因为这个。这里把它钉住并说明原因，
+    免得下一个人把它当成漏测去补一个正赔率的用例——那是补不出来的。
+    """
+
+    def test_positive_odds_can_never_reach_the_fallback(self):
+        """三个正数的倒数之和恒大于 0，所以返还率永远是算出来的。"""
+        for odds in ((2.0, 3.4, 3.8), (1.01, 50.0, 60.0), (1000.0, 1000.0, 1000.0)):
+            with self.subTest(odds=odds):
+                self.assertNotEqual(markets.return_rate_from_odds(*odds), 92.0)
+                self.assertAlmostEqual(markets.return_rate_from_odds(*odds),
+                                       100.0 / sum(1.0 / o for o in odds))
+
+    def test_the_fallback_value_is_ninety_two(self):
+        """只有让倒数之和恰好为 0 的负赔率才走得到——不是合法输入，只为钉值。"""
+        self.assertEqual(markets.return_rate_from_odds(-1.0, 2.0, 2.0), 92.0)
+
+
 class SeriesGuards(unittest.TestCase):
     """时序类函数的守卫：样本不足要走同一条兜底路（判据 7）。"""
 
