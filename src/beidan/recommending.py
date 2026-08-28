@@ -31,7 +31,10 @@ from .config import (
 # 赛果解读、分组、筛选的算法在 `src/domain/sports/beidan/analysis.py`。
 # 留在这里的是抓取、缓存、时钟与快照写入。
 from src.domain.sports.beidan import analysis as _analysis
+
+
 from .modeling import (
+    _profile as _league_profile,
     BEIDAN_STRONG_MIN_LEAD, BEIDAN_STRONG_MIN_PROBABILITY, aggregate_goals_from_scores, anchor_score_outcomes, build_dixon_coles_matrix, calibrate_draw_probability, match_lambdas, match_target_total, parse_beidan_handicap, predict_scores_by_poisson, rqspf_probs_from_score_probs,
 )
 from .fetching import (
@@ -52,6 +55,53 @@ from .quality import (
 from .upset import (
     _result_from_score, assess_score_consistency, assess_upset_risk, pick_upset_scores,
 )
+
+# ─── 领域层适配（推荐组装）───
+#
+# 四种玩法的组装顺序在 `src/domain/sports/beidan/recommendation.py`。
+# 那一层不认识配置，所以把**已经配好配置的操作**打成两组注入进去：
+# `_MODEL` 是比分模型（联赛档案、DC 的 rho、最大进球数、锚定强度都在里面），
+# `_MARKET` 是盘口层（十几个阈值都在里面）。
+#
+# 属性名与领域层用到的名字必须一一对上，拼错要到运行时才炸——
+# `test_recommendation.py` 里有一道按 AST 比对的守卫盯着这件事。
+import types
+
+from src.domain.sports.beidan import recommendation as _recommendation
+
+_MODEL = types.SimpleNamespace(
+    predict_scores=predict_scores_by_poisson,
+    calibrate_draw=calibrate_draw_probability,
+    league_profile=_league_profile,
+    target_total=match_target_total,
+    lambdas=match_lambdas,
+    score_matrix=build_dixon_coles_matrix,
+    anchor_outcomes=anchor_score_outcomes,
+    aggregate_goals=aggregate_goals_from_scores,
+    rqspf_from_scores=rqspf_probs_from_score_probs,
+)
+
+_MARKET = types.SimpleNamespace(
+    latest_total=_latest_ou_market,
+    apply_joint=apply_beidan_joint_market_state,
+    analyze_asian=analyze_asian_trend,
+    analyze_goals=analyze_goals_trend,
+    analyze_correct_score=analyze_cs_trend,
+    blend_scores_with_market=enhance_scores_with_cs,
+    asian_goal_factor=calculate_asian_goal_factor,
+    goals_factor=calculate_goals_factor,
+    adjust_goal_buckets=adjust_zjq_by_goals,
+)
+
+
+def _history_calibration(probabilities, bet_type, league=None):
+    """把历史校准包成领域层要的形状。
+
+    **仍然走模块全局**：黄金生成脚本与测试都靠打桩 `apply_beidan_history_calibration`
+    来隔开存储，改成直接引用函数对象会让那些桩失效。
+    """
+    return apply_beidan_history_calibration(probabilities, bet_type, league=league)
+
 
 def build_zjq_group_recommendation(zjq_probs):
     """总进球的三个可投注分组。分组定义在领域层，这里只透传。"""
@@ -289,275 +339,25 @@ def build_beidan_match_analysis(spf_result):
 
 
 def analyze_spf(match, asian_data=None, cs_data=None, goals_data=None):
-    result = {
-        'match_id': match['id'],
-        'num': match['num'],
-        'home': match['home'],
-        'away': match['away'],
-        'league': match['league'],
-        'time': match['time'],
-        'type': 'spf',
-    }
-    
-    odds_data = fetch_ouzhi_odds(match['id'])
-    
-    if not odds_data:
-        if match.get('spf_sp') and match.get('spf_s') and match.get('spf_f'):
-            odds_data = {
-                'home': match['spf_sp'],
-                'draw': match['spf_s'],
-                'away': match['spf_f'],
-            }
-            result['odds_source'] = 'okooo_main'
-        else:
-            result['error'] = '欧赔数据不可用'
-            return result
-    
-    if odds_data:
-        odds = {
-            '胜': odds_data['home'],
-            '平': odds_data['draw'],
-            '负': odds_data['away'],
-        }
-        
-        probs = calculate_implied_probability(odds)
-        
-        if probs:
-            result['odds'] = odds
-            result['margin'] = sum(1.0 / value for value in odds.values()) - 1.0
-            
-            home_win_prob = probs.get('胜', 0.33)
-            draw_prob = probs.get('平', 0.33)
-            away_win_prob = probs.get('负', 0.34)
-            
-            model_probs = {
-                '胜': home_win_prob,
-                '平': draw_prob,
-                '负': away_win_prob,
-            }
-            prob_total = sum(model_probs.values())
-            if prob_total > 0:
-                model_probs = {k: v / prob_total for k, v in model_probs.items()}
-
-            model_probs, calibration_meta = apply_beidan_history_calibration(
-                model_probs,
-                'spf',
-                league=match.get('league')
-            )
-            result['history_calibration'] = calibration_meta
-
-            result['probabilities'] = model_probs
-            result['raw_probabilities'] = probs
-            result['prediction'] = max(model_probs, key=model_probs.get)
-            result['confidence'] = model_probs[result['prediction']]
-            
-            total_line, total_over, total_under = _latest_ou_market(goals_data)
-            score_prediction = predict_scores_by_poisson(
-                model_probs.get('胜', home_win_prob),
-                model_probs.get('平', draw_prob),
-                model_probs.get('负', away_win_prob),
-                league=match['league'],
-                handicap=match.get('handicap', 0),
-                total_over_odds=total_over,
-                total_under_odds=total_under,
-                total_line=total_line,
-            )
-            joint_scores, joint_meta = apply_beidan_joint_market_state(
-                score_prediction.get('score_probs'), asian_data, goals_data
-            )
-            score_prediction['score_probs'] = joint_scores
-            score_prediction['top3'] = [
-                {'score': f'{h}-{a}', 'probability': p, 'home_goals': h, 'away_goals': a}
-                for (h, a), p in sorted(joint_scores.items(), key=lambda item: -item[1])[:3]
-            ]
-            result['joint_market_state'] = joint_meta
-            result['asian_adjusted'] = bool(joint_meta.get('applied'))
-
-            # SPF, score and total-goal outputs must be marginals of one matrix.
-            model_probs = {
-                '胜': sum(p for (h, a), p in joint_scores.items() if h > a),
-                '平': sum(p for (h, a), p in joint_scores.items() if h == a),
-                '负': sum(p for (h, a), p in joint_scores.items() if h < a),
-            }
-            result['probabilities'] = model_probs
-            result['prediction'] = max(model_probs, key=model_probs.get)
-            result['confidence'] = model_probs[result['prediction']]
-            
-            if cs_data and cs_data.get('history'):
-                score_prediction = enhance_scores_with_cs(score_prediction, cs_data['history'])
-                result['cs_adjusted'] = True
-            
-            result['scores'] = score_prediction['top3']
-            result['score_probs'] = [
-                [h, a, round(prob, 6)]
-                for (h, a), prob in (score_prediction.get('score_probs') or {}).items()
-            ]
-            result['lambda_home'] = score_prediction['lambda_home']
-            result['lambda_away'] = score_prediction['lambda_away']
-            result['target_total'] = score_prediction.get('target_total')
-            result['total_line'] = total_line
-            result['outcome_anchor'] = score_prediction.get('outcome_anchor')
-
-            # 爆冷识别：基于校准后 1X2 概率判定风险，并从比分分布挑反向爆冷比分
-            upset = assess_upset_risk(model_probs)
-            upset['candidates'] = pick_upset_scores(
-                score_prediction.get('score_probs'),
-                upset.get('favorite'),
-                top_n=2
-            )
-            upset['chalk_result'] = result['prediction']
-            result['upset'] = upset
-
-            if asian_data and asian_data.get('history'):
-                result['asian_trend'] = analyze_asian_trend(asian_data['history'])
-            
-            quality_context = {}
-            if result.get('asian_trend'):
-                quality_context['asian_direction'] = result['asian_trend'].get('direction')
-            result['score_consistency'] = assess_score_consistency(
-                result['scores'],
-                result['prediction']
-            )
-            quality_context['score_consistency'] = result['score_consistency']
-            result['quality'] = assess_recommendation_quality(
-                model_probs,
-                result['prediction'],
-                quality_context
-            )
-            
-            if cs_data and cs_data.get('history'):
-                result['cs_trend'] = analyze_cs_trend(cs_data['history'])
-    else:
-        result['error'] = '欧赔数据不可用'
-    
-    return result
+    """胜平负推荐。抓欧赔在这里，组装在领域层。"""
+    return _recommendation.spf(
+        match, fetch_ouzhi_odds(match['id']), _MODEL, _MARKET,
+        asian_data=asian_data, cs_data=cs_data, goals_data=goals_data,
+        calibrate=_history_calibration)
 
 
 def analyze_rqspf(match, asian_data=None, goals_data=None):
-    result = {
-        'match_id': match['id'],
-        'num': match['num'],
-        'home': match['home'],
-        'away': match['away'],
-        'league': match['league'],
-        'time': match['time'],
-        'handicap': match['handicap'],
-        'type': 'rqspf',
-    }
-    
+    """让球胜平负推荐。
+
+    **让球值先解析、解析不出来就不抓欧赔**——迁移前那道守卫排在抓取之前，
+    顺序保住：没有盘口的场次不该白白打一次网络。
+    """
     handicap_value = parse_beidan_handicap(match.get('handicap'))
-    if handicap_value is None:
-        result['error'] = '让球值不可用，无法计算让球胜平负'
-        return result
-
-    odds_data = fetch_ouzhi_odds(match['id'])
-
-    if not odds_data:
-        if match.get('spf_sp') and match.get('spf_s') and match.get('spf_f'):
-            odds_data = {
-                'home': match['spf_sp'],
-                'draw': match['spf_s'],
-                'away': match['spf_f'],
-            }
-            result['odds_source'] = 'okooo_main'
-        else:
-            result['error'] = '欧赔数据不可用，无法计算让球胜平负'
-            return result
-
-    odds = {
-        '胜': odds_data['home'],
-        '平': odds_data['draw'],
-        '负': odds_data['away'],
-    }
-    probs = calculate_implied_probability(odds)
-    if not probs:
-        result['error'] = '欧赔概率不可用，无法计算让球胜平负'
-        return result
-
-    home_win_prob = probs.get('胜', 0.33)
-    draw_prob = probs.get('平', 0.33)
-    away_win_prob = probs.get('负', 0.34)
-
-    total_line, total_over, total_under = _latest_ou_market(goals_data)
-    score_prediction = predict_scores_by_poisson(
-        home_win_prob,
-        draw_prob,
-        away_win_prob,
-        league=match.get('league', ''),
-        handicap=handicap_value,
-        total_over_odds=total_over,
-        total_under_odds=total_under,
-        total_line=total_line,
-    )
-    score_prediction['score_probs'], result['joint_market_state'] = apply_beidan_joint_market_state(
-        score_prediction['score_probs'], asian_data, goals_data
-    )
-    result['asian_adjusted'] = bool(result['joint_market_state'].get('applied'))
-    rq_probs, rq_meta = rqspf_probs_from_score_probs(
-        score_prediction['score_probs'],
-        handicap_value
-    )
-    if not rq_probs:
-        result['error'] = '让球胜平负概率计算失败'
-        result['rqspf_meta'] = rq_meta
-        return result
-
-    # 历史校准（与 SPF 同机制）：用已结算快照对让球胜平负做可靠性修正
-    rq_probs, calibration_meta = apply_beidan_history_calibration(
-        rq_probs,
-        'rqspf',
-        league=match.get('league')
-    )
-    result['history_calibration'] = calibration_meta
-
-    result['spf_odds'] = odds
-    official_rqspf_odds = match.get('rqspf_odds') or match.get('lottery_rqspf_odds')
-    if not official_rqspf_odds:
-        try:
-            prices = [float(match.get(key) or 0.0) for key in ('rqspf_sp', 'rqspf_s', 'rqspf_f')]
-            if all(price > 1.0 for price in prices):
-                official_rqspf_odds = dict(zip(('让胜', '让平', '让负'), prices))
-        except (TypeError, ValueError):
-            official_rqspf_odds = None
-    result['odds'] = official_rqspf_odds or {}
-    result['official_odds_available'] = bool(official_rqspf_odds)
-    result['raw_spf_probabilities'] = probs
-    result['probabilities'] = rq_probs
-    result['prediction'] = max(rq_probs, key=rq_probs.get)
-    result['confidence'] = rq_probs[result['prediction']]
-    result['lambda_home'] = score_prediction['lambda_home']
-    result['lambda_away'] = score_prediction['lambda_away']
-    result['target_total'] = score_prediction.get('target_total')
-    result['total_line'] = total_line
-    result['outcome_anchor'] = score_prediction.get('outcome_anchor')
-    result['rqspf_meta'] = rq_meta
-    if asian_data and asian_data.get('history'):
-        result['asian_trend'] = analyze_asian_trend(asian_data['history'])
-        quality_context = {}
-        if result.get('asian_trend'):
-            quality_context['asian_direction'] = result['asian_trend'].get('direction')
-        result['quality'] = assess_recommendation_quality(
-            rq_probs,
-            result['prediction'],
-            quality_context
-        )
-    else:
-        result['quality'] = assess_recommendation_quality(
-            rq_probs,
-            result['prediction'],
-            {}
-        )
-    result['scores'] = [
-        {
-            'score': item['score'],
-            'handicap_score': item['handicap_score'],
-            'result': item['result'],
-            'probability': item['probability'],
-        }
-        for item in rq_meta.get('top_scores', [])
-    ]
-    
-    return result
+    ouzhi = fetch_ouzhi_odds(match['id']) if handicap_value is not None else None
+    return _recommendation.rqspf(
+        match, ouzhi, handicap_value, _MODEL, _MARKET,
+        asian_data=asian_data, goals_data=goals_data,
+        calibrate=_history_calibration)
 
 
 def build_beidan_total_goals_accuracy_gate(section, goals_data, league):
@@ -575,216 +375,23 @@ def build_beidan_total_goals_accuracy_gate(section, goals_data, league):
 
 
 def analyze_bifen(match, bifen_odds=None, asian_data=None, goals_data=None):
-    result = {
-        'match_id': match['id'],
-        'num': match['num'],
-        'home': match['home'],
-        'away': match['away'],
-        'league': match['league'],
-        'time': match['time'],
-        'type': 'bifen',
-    }
-
-    # 1. 1X2 隐含概率（驱动比分模型，okooo 源也可获取）
-    odds_data = fetch_ouzhi_odds(match['id'])
-    if not odds_data:
-        if match.get('spf_sp') and match.get('spf_s') and match.get('spf_f'):
-            odds_data = {'home': match['spf_sp'], 'draw': match['spf_s'], 'away': match['spf_f']}
-            result['odds_source'] = 'okooo_main'
-        else:
-            result['error'] = '欧赔数据不可用，无法计算比分'
-            return result
-
-    home_odds, draw_odds, away_odds = odds_data['home'], odds_data['draw'], odds_data['away']
-    home_prob = 1 / home_odds
-    draw_prob = 1 / draw_odds
-    away_prob = 1 / away_odds
-    total_prob = home_prob + draw_prob + away_prob
-
-    league_profile = LEAGUE_PROFILES.get(match.get('league'), {'avg_goals': 2.6, 'draw_rate': 0.27})
-    p_home, p_draw, p_away = calibrate_draw_probability(
-        home_prob / total_prob, draw_prob / total_prob, away_prob / total_prob,
-        match.get('handicap', 0), league_draw_rate=league_profile['draw_rate']
-    )
-
-    # 2. 大小球隐含总进球 + 盘口趋势因子
-    total_line, total_over, total_under = _latest_ou_market(goals_data)
-    asian_factor = calculate_asian_goal_factor(asian_data['history']) if asian_data and asian_data.get('history') else 1.0
-    goals_factor = calculate_goals_factor(goals_data['history']) if goals_data and goals_data.get('history') else 1.0
-    target_total = match_target_total(
-        match['league'], total_over, total_under, asian_factor, goals_factor,
-        total_line=total_line,
-    )
-    lam_home, lam_away = match_lambdas(p_home, p_draw, p_away, target_total)
-    model_matrix = build_dixon_coles_matrix(lam_home, lam_away)
-    model_matrix, result['outcome_anchor'] = anchor_score_outcomes(
-        model_matrix, {'胜': p_home, '平': p_draw, '负': p_away}
-    )
-
-    # 3. 市场比分赔率融合（若有）
-    market_probs = None
-    market_odds = (bifen_odds or {}).get(match['id']) if isinstance(bifen_odds, dict) else None
-    if market_odds:
-        market_probs = calculate_implied_probability(market_odds)
-
-    if market_probs:
-        blended = {}
-        for key in set(model_matrix) | set(market_probs):
-            blended[key] = model_matrix.get(key, 0.0) * 0.6 + market_probs.get(key, 0.0) * 0.4
-        result['market_adjusted'] = True
-        result['odds'] = market_odds
-    else:
-        blended = dict(model_matrix)
-        result['market_adjusted'] = False
-    result['model_based'] = True
-
-    # 4. 历史校准（bifen 支持）
-    blended, calibration_meta = apply_beidan_history_calibration(
-        blended, 'bifen', league=match.get('league')
-    )
-    result['history_calibration'] = calibration_meta
-    blended, result['joint_market_state'] = apply_beidan_joint_market_state(
-        blended, asian_data, goals_data
-    )
-
-    # 5. 归一化并生成 "h-a" 字符串键
-    total_b = sum(blended.values())
-    if total_b > 0:
-        blended = {k: v / total_b for k, v in blended.items()}
-
-    result['probabilities'] = blended
-    result['lambda_home'] = lam_home
-    result['lambda_away'] = lam_away
-    result['target_total'] = target_total
-
-    sorted_scores = sorted(blended.items(), key=lambda x: -x[1])
-    result['top3'] = sorted_scores[:3]
-    result['prediction'] = sorted_scores[0][0] if sorted_scores else None
-    result['confidence'] = sorted_scores[0][1] if sorted_scores else 0.0
-    result['quality'] = assess_recommendation_quality(
-        blended, result['prediction'], {}
-    )
-
-    # 爆冷识别：用 1X2 概率评风险 + 从比分分布挑相反方向的爆冷比分候选
-    probs_1x2 = {'胜': p_home, '平': p_draw, '负': p_away}
-    upset = assess_upset_risk(probs_1x2)
-    upset['candidates'] = pick_upset_scores(blended, upset.get('favorite'), top_n=2)
-    top_result = _result_from_score(result['prediction']) if result['prediction'] else None
-    # 若最可能比分恰好是热门方向，给出"如爆冷则看这些比分"的提示
-    upset['chalk_result'] = top_result
-    result['upset'] = upset
-    return result
+    """比分推荐。市场报价按场次取出后传进去。"""
+    market_odds = ((bifen_odds or {}).get(match['id'])
+                   if isinstance(bifen_odds, dict) else None)
+    return _recommendation.bifen(
+        match, fetch_ouzhi_odds(match['id']), _MODEL, _MARKET,
+        market_odds=market_odds, asian_data=asian_data, goals_data=goals_data,
+        calibrate=_history_calibration)
 
 
 def analyze_zjq(match, zjq_odds=None, asian_data=None, goals_data=None):
-    result = {
-        'match_id': match['id'],
-        'num': match['num'],
-        'home': match['home'],
-        'away': match['away'],
-        'league': match['league'],
-        'time': match['time'],
-        'type': 'zjq',
-    }
-    
-    odds_data = fetch_ouzhi_odds(match['id'])
-    
-    if not odds_data:
-        if match.get('spf_sp') and match.get('spf_s') and match.get('spf_f'):
-            odds_data = {
-                'home': match['spf_sp'],
-                'draw': match['spf_s'],
-                'away': match['spf_f'],
-            }
-            result['odds_source'] = 'okooo_main'
-        else:
-            result['error'] = '欧赔数据不可用，无法计算总进球'
-            return result
-    
-    home_odds, draw_odds, away_odds = odds_data['home'], odds_data['draw'], odds_data['away']
-    
-    home_prob = 1 / home_odds
-    draw_prob = 1 / draw_odds
-    away_prob = 1 / away_odds
-    total_prob = home_prob + draw_prob + away_prob
-    
-    home_prob_norm = home_prob / total_prob
-    draw_prob_norm = draw_prob / total_prob
-    away_prob_norm = away_prob / total_prob
-    
-    # 统一管线：大小球隐含总进球 + 强度感知 λ + Dixon-Coles 低比分修正
-    # 与比分预测共用同一组 λ，保证 总进球分布 == 比分分布之和（一致性）
-    total_line, total_over, total_under = _latest_ou_market(goals_data)
-    asian_factor = calculate_asian_goal_factor(asian_data['history']) if asian_data and asian_data.get('history') else 1.0
-    goals_factor = calculate_goals_factor(goals_data['history']) if goals_data and goals_data.get('history') else 1.0
-    target_total = match_target_total(
-        match.get('league'), total_over, total_under, asian_factor, goals_factor,
-        total_line=total_line,
-    )
-    lam_home, lam_away = match_lambdas(home_prob_norm, draw_prob_norm, away_prob_norm, target_total)
-    dc_matrix = build_dixon_coles_matrix(lam_home, lam_away)
-    dc_matrix, result['outcome_anchor'] = anchor_score_outcomes(
-        dc_matrix,
-        {'胜': home_prob_norm, '平': draw_prob_norm, '负': away_prob_norm},
-    )
-    dc_matrix, result['joint_market_state'] = apply_beidan_joint_market_state(
-        dc_matrix, asian_data, goals_data
-    )
-    zjq_probs = aggregate_goals_from_scores(dc_matrix)
-    mu1, mu2 = lam_home, lam_away
-
-    if goals_data and goals_data.get('history'):
-        zjq_probs = adjust_zjq_by_goals(zjq_probs, goals_data['history'])
-        result['goals_adjusted'] = True
-
-    market_zjq_odds = (zjq_odds or {}).get(match['id']) if isinstance(zjq_odds, dict) else None
-    if market_zjq_odds:
-        market_probs = calculate_implied_probability(market_zjq_odds)
-        if market_probs:
-            blended = {}
-            for key in set(zjq_probs) | set(market_probs):
-                model_prob = zjq_probs.get(key, 0)
-                market_prob = market_probs.get(key, 0)
-                blended[key] = model_prob * 0.55 + market_prob * 0.45
-            zjq_probs = blended
-            result['odds'] = market_zjq_odds
-            result['market_probabilities'] = market_probs
-            result['market_adjusted'] = True
-    
-    total_zjq = sum(zjq_probs.values())
-    if total_zjq > 0:
-        zjq_probs = {k: v / total_zjq for k, v in zjq_probs.items()}
-
-    zjq_probs, calibration_meta = apply_beidan_history_calibration(
-        zjq_probs,
-        'zjq',
-        league=match.get('league')
-    )
-    result['history_calibration'] = calibration_meta
-    
-    result['probabilities'] = zjq_probs
-    result['mu_home'] = mu1
-    result['mu_away'] = mu2
-    
-    sorted_counts = sorted(zjq_probs.items(), key=lambda x: -x[1])
-    result['top3'] = sorted_counts[:3]
-    result['prediction'] = sorted_counts[0][0]
-    result['confidence'] = sorted_counts[0][1]
-    result['quality'] = assess_recommendation_quality(
-        zjq_probs,
-        result['prediction'],
-        {}
-    )
-    result['goal_groups'] = build_zjq_group_recommendation(zjq_probs)
-    
-    over25_prob = sum(zjq_probs.get(str(i), 0) for i in [3, 4, 5, 6]) + zjq_probs.get('7+', 0)
-    result['over25_prob'] = over25_prob
-    result['under25_prob'] = 1 - over25_prob
-    
-    if goals_data and goals_data.get('history'):
-        result['goals_trend'] = analyze_goals_trend(goals_data['history'])
-    
-    return result
+    """总进球推荐。市场报价按场次取出后传进去。"""
+    market_odds = ((zjq_odds or {}).get(match['id'])
+                   if isinstance(zjq_odds, dict) else None)
+    return _recommendation.zjq(
+        match, fetch_ouzhi_odds(match['id']), _MODEL, _MARKET,
+        market_odds=market_odds, asian_data=asian_data, goals_data=goals_data,
+        calibrate=_history_calibration)
 
 
 def analyze_bqc(match, bqc_odds):
