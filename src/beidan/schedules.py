@@ -46,6 +46,7 @@ def _fetch_table(date, game_type, label, parse):
 
     try:
         content = fetch(url, referer=SCHEDULE_URL)
+        # 同上：改成 `is None` 输出等价，短路只是省一次空转。
         if not content:
             return {}
         result, failures = parse(content)

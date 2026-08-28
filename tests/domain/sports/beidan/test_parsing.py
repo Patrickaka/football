@@ -93,10 +93,17 @@ class PairTableTests(unittest.TestCase):
                          {'1320957': {'1-0': 8.0}})
 
     def test_surrounding_whitespace_is_trimmed_off_each_line(self):
-        """不逐行 strip 的话，比赛号会带着缩进进结果——**下游按号取数就全落空**。"""
+        """不逐行 strip 的话，比赛号会带着缩进进结果——**下游按号取数就全落空**。
+
+        **要用多行语料**：单行的首尾空白靠「先对整段 strip 一次」也能去掉，
+        两处清理互相盖住，谁失效都测不出来（迁移前正是两处都有，
+        整段那次因此一个字符也改变不了结果，已删）。
+        缩进只出现在**中间那一行**时，才只有逐行 strip 能救。
+        """
+        content = '1320957|1-0|8.00\n   1320958|0-0|9.50   \n1320959|2-2|15.00'
+        self.assertEqual(sorted(parsing.parse_pair_table(content)),
+                         ['1320957', '1320958', '1320959'])
         self.assertEqual(parsing.parse_pair_table('  1320957|1-0|8.00  '),
-                         {'1320957': {'1-0': 8.0}})
-        self.assertEqual(parsing.parse_pair_table('\n\t1320957|1-0|8.00\n'),
                          {'1320957': {'1-0': 8.0}})
 
     def test_a_bad_price_drops_only_that_pair(self):

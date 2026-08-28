@@ -59,6 +59,8 @@ def _fetch_history(match_id, spec, what, unit, path_suffixes):
     for url in urls:
         try:
             html = fetch_okooo(url, referer=OKOOO_DANCHANG_URL)
+            # 空页面直接换下一个。改成 `is None` 在输出上等价（空串解析出来
+            # 也是空记录），留短路是为了不在空串上白跑一遍正则。
             if not html:
                 continue
             records, source = _parsing.parse_history(html, spec)

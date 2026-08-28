@@ -69,8 +69,13 @@ BQC_MINIMUM = 10
 
 
 def _data_lines(content):
-    """去掉空行与注释行。`content` 为空时不产出任何一行。"""
-    for line in (content or '').strip().split('\n'):
+    """去掉空行与注释行。`content` 为空时不产出任何一行。
+
+    **迁移前先对整段做了一次 `strip()`，删掉了**：逐行的 `strip()` 已经把
+    首尾两行也处理了，整段那次一个字符也改变不了结果——与比分表那道
+    `len(parts) < 2` 一样，是看起来像防线的空操作（判据 9 第一类）。
+    """
+    for line in (content or '').split('\n'):
         line = line.strip()
         if line and not line.startswith(COMMENT_PREFIX):
             yield line
