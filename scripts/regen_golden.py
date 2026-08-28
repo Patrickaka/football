@@ -250,3 +250,9 @@ dump('beidan_settlement', {k: as_comparable(v) for k, v in beidan_settlement_ent
 from scripts.gen_beidan_analysis_golden import entries as beidan_analysis_entries
 
 dump('beidan_analysis', {k: as_comparable(v) for k, v in beidan_analysis_entries()})
+
+
+# ---- beidan 四种玩法的推荐组装 ----
+from scripts.gen_beidan_recommendation_golden import entries as beidan_rec_entries
+
+dump('beidan_recommendation', {k: as_comparable(v) for k, v in beidan_rec_entries()})
