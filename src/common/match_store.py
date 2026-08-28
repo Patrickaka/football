@@ -2,7 +2,7 @@
 """matches 表读写适配器：CSV 行 ↔ matches 行 ↔ 还原 CSV row dict。
 
 读路径将 matches 记录还原成「原始 CSV 列名为键、值为字符串」的 row dict，
-供 market_db / similar_market / ml_dataset_builder 的现有解析器复用。
+供 market_db / similar_market 的现有解析器复用。
 """
 import csv
 import json

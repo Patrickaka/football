@@ -23,7 +23,7 @@ log = setup_logger('football')
 from . import modeling as _modeling_mod
 
 from .config import (
-    AVG_LEAGUE_GOAL, BAYESIAN_CALIBRATION_AVAILABLE, COLD_FILTER_BONUS, DYNAMIC_ELO_AVAILABLE, HEAT_FILTER_PENALTY, HEAT_RATIO_COLD, HEAT_RATIO_HOT, LEAGUE_PROFILES, MARKET_CLUSTERING_AVAILABLE, MAX_GOALS, MOMENTUM_SUPREMACY_WEIGHT, SCORE_1X2_MARKET_ANCHOR_STRENGTH, SCORE_BASELINE_FREQ, SUPREMACY_CONFLICT_GAP, VALUE_BETTING_AVAILABLE, calculate_ev, calculate_value, calibrate_predictions, get_elo_difference, get_market_prior,
+    AVG_LEAGUE_GOAL, COLD_FILTER_BONUS, DYNAMIC_ELO_AVAILABLE, HEAT_FILTER_PENALTY, HEAT_RATIO_COLD, HEAT_RATIO_HOT, LEAGUE_PROFILES, MARKET_CLUSTERING_AVAILABLE, MAX_GOALS, MOMENTUM_SUPREMACY_WEIGHT, SCORE_1X2_MARKET_ANCHOR_STRENGTH, SCORE_BASELINE_FREQ, SUPREMACY_CONFLICT_GAP, VALUE_BETTING_AVAILABLE, calculate_ev, calculate_value, calibrate_predictions, get_elo_difference, get_market_prior,
 )
 from .parsing import (
     _blend_close_open, get_close_total_line,
@@ -1174,32 +1174,25 @@ def predict_scores(asian, euro, total, team_strength=None, league_profile=None,
 
     # 应用概率输出校准
     if enable_calibration:
-        # 优先使用贝叶斯校准（基于真实历史预测记录）
-        if BAYESIAN_CALIBRATION_AVAILABLE:
-            try:
-                # 获取联赛和盘口信息用于市场环境校准
-                league_info = team_strength.get('league', '') if team_strength else ''
-                # 转换为字典格式 {"1-1": 0.108, ...}
-                score_probs = {f"{h}-{a}": p for (h, a), p in matrix.items()}
-                # 使用贝叶斯校准（带市场环境信息）
-                score_probs = calibrate_predictions(score_probs, league_info, line, sup_asian or 0)
-                # 转换回原始格式
-                matrix = {
-                    tuple(map(int, score.split("-"))): prob
-                    for score, prob in score_probs.items()
-                }
-                log.debug("已应用贝叶斯概率校准")
-            except Exception as e:
-                log.warning(f"贝叶斯校准失败，降级使用Platt校准: {e}")
-                # 降级到 Platt 校准
-                league_name = league_profile.get('name', 'default') if league_profile else 'default'
-                calibration_data = get_league_calibration_data(league_name)
-                matrix = calibrate_probabilities(matrix, method=calibration_method, calibration_data=calibration_data)
-        else:
-            # 使用传统 Platt 校准
+        # 优先使用贝叶斯校准（基于真实历史预测记录），失败退回 Platt
+        try:
+            # 获取联赛和盘口信息用于市场环境校准
+            league_info = team_strength.get('league', '') if team_strength else ''
+            # 转换为字典格式 {"1-1": 0.108, ...}
+            score_probs = {f"{h}-{a}": p for (h, a), p in matrix.items()}
+            # 使用贝叶斯校准（带市场环境信息）
+            score_probs = calibrate_predictions(score_probs, league_info, line, sup_asian or 0)
+            # 转换回原始格式
+            matrix = {
+                tuple(map(int, score.split("-"))): prob
+                for score, prob in score_probs.items()
+            }
+            log.debug("已应用贝叶斯概率校准")
+        except Exception as e:
+            log.warning(f"贝叶斯校准失败，降级使用Platt校准: {e}")
+            # 降级到 Platt 校准
             league_name = league_profile.get('name', 'default') if league_profile else 'default'
             calibration_data = get_league_calibration_data(league_name)
-            log.debug(f"使用联赛 {league_name} 的校准参数: Platt(A={calibration_data['platt_params'][0]:.4f}, B={calibration_data['platt_params'][1]:.4f})")
             matrix = calibrate_probabilities(matrix, method=calibration_method, calibration_data=calibration_data)
 
     policy_adjustment = {'applied': False}
