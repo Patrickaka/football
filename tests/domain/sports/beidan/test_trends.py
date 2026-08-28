@@ -134,6 +134,26 @@ class AsianProbabilityAdjustmentTests(unittest.TestCase):
         # 归一化前平局是原值，所以调整后它相对于总量只随分母变化
         self.assertAlmostEqual(draw / (home + draw + away), draw, places=9)
 
+    def test_default_counter_ratio_is_half(self):
+        """**不传参数时反方向就该只有一半力度。**
+
+        下一条用例显式传了 `counter_ratio`，所以改默认值影响不到它；
+        适配层也是显式传的——于是领域层这个默认值没有任何路径覆盖。
+        这条走默认值，用「两侧的相对变化之比」来断言，
+        归一化会同比缩放两边，比值不受影响。
+        """
+        home_only = _asian(1.05, -0.05, 0.95, 0.0)   # 只有主队在降赔
+        home, _, away = trends.adjust_probs_by_asian(*self.PROBS, home_only)
+
+        # **用主客比值而不是各自的涨幅**：函数末尾会归一化，
+        # 那会把两边同时缩放，「相对原值涨了多少」因此不再反映调整力度。
+        # 比值不受归一化影响——它正好等于 (1 + factor) / (1 - factor * ratio)。
+        before = self.PROBS[0] / self.PROBS[2]
+        after = home / away
+        self.assertAlmostEqual(after / before,
+                               (1 + ASIAN_FACTOR) / (1 - ASIAN_FACTOR * 0.5),
+                               places=6)
+
     def test_counter_side_gets_only_half_the_force(self):
         """反方向只给一半力度——**对称调整会把一条信息用成两条**。"""
         strong = trends.adjust_probs_by_asian(
