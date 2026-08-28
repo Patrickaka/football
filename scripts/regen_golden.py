@@ -312,3 +312,9 @@ from scripts.gen_football_value_golden import entries as football_value_entries
 
 dump('football_value',
      {k: _as_comparable(v) for k, v in football_value_entries()})
+
+# ---- football ML 契约层 ----
+from scripts.gen_football_ml_golden import entries as football_ml_entries
+
+dump('football_ml',
+     {k: _as_comparable(v) for k, v in football_ml_entries()})
