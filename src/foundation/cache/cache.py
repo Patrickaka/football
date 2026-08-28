@@ -37,15 +37,29 @@ class Cache:
         self._refresh_guard = threading.Lock()
         self._epoch = 0
 
-    def get(self, key, compute_fn, ttl=None):
-        ttl = self.default_ttl if ttl is None else ttl
-        now = time.time()
+    def peek(self, key):
+        """读一份**可能已过期**的条目，不计算、不刷新。命不中返回 `None`。
 
+        给「自己决定新鲜度」的调用方用。北单是这样的：一份结果覆盖三百多场，
+        过期与否由「最早未开赛场次还有多久」推导，而不是一个固定 TTL——
+        那条规则没法塞进 `get` 的 `ttl` 参数里（它要看算完之后的内容才知道）。
+
+        **返回 `Entry` 而不是值**：`None` 既可能是「没缓存」也可能是「缓存了
+        一个 None」，用条目本身把这两件事分开。命中 L2 时顺带回填 L1，
+        与 `get` 的行为一致——否则同一个进程里每次读都要过一趟 Redis。
+        """
         entry = self.l1.get(key)
         if entry is None:
             entry = self.l2.get(key)
             if entry is not None:
                 self.l1.set(key, entry.value, entry.ttl, now=entry.stored_at)
+        return entry
+
+    def get(self, key, compute_fn, ttl=None):
+        ttl = self.default_ttl if ttl is None else ttl
+        now = time.time()
+
+        entry = self.peek(key)
 
         if entry is not None:
             if entry.is_fresh(now):

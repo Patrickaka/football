@@ -245,3 +245,56 @@ class CacheTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class PeekTests(unittest.TestCase):
+    """`peek`：读一份可能已过期的条目，不计算、不刷新。
+
+    给「自己决定新鲜度」的调用方用——北单的过期规则由「最早未开赛场次还有
+    多久」推导，看的是算完之后的内容，塞不进 `get` 的 `ttl` 参数。
+    """
+
+    def setUp(self):
+        self.l1, self.l2 = MemoryBackend(), MemoryBackend()
+        self.cache = Cache(l1=self.l1, l2=self.l2, default_ttl=60)
+
+    def test_a_miss_returns_none(self):
+        self.assertIsNone(self.cache.peek('没写过'))
+
+    def test_it_never_computes(self):
+        """**这是它与 `get` 的全部差别。** `get` 命不中会算一次并写回。"""
+        self.cache.peek('没写过')
+        self.assertIsNone(self.l1.get('没写过'))
+        self.assertIsNone(self.l2.get('没写过'))
+
+    def test_it_returns_stale_entries(self):
+        """过期也要读得到——SWR 的调用方靠旧数据顶住请求。"""
+        self.cache.set('k', 'v', ttl=1)
+        self.l1.set('k', 'v', ttl=1, now=time.time() - 3600)
+        entry = self.cache.peek('k')
+        self.assertEqual(entry.value, 'v')
+        self.assertFalse(entry.is_fresh())
+
+    def test_it_promotes_l2_into_l1(self):
+        """命中 L2 时回填 L1，否则同一进程里每次读都要过一趟 Redis。"""
+        self.cache.set('k', 'v')
+        self.cache.l1 = MemoryBackend()
+        self.assertIsNone(self.cache.l1.get('k'))
+        self.assertEqual(self.cache.peek('k').value, 'v')
+        self.assertEqual(self.cache.l1.get('k').value, 'v')
+
+    def test_the_promotion_keeps_the_original_timestamp(self):
+        """回填要带上原来的存入时刻，**不能当成刚写的**——
+        那样一条过期数据会在回填后凭空变新鲜。"""
+        stored_at = time.time() - 3600
+        self.l2.set('k', 'v', ttl=60, now=stored_at)
+        entry = self.cache.peek('k')
+        self.assertFalse(entry.is_fresh())
+        self.assertAlmostEqual(self.cache.l1.get('k').stored_at, stored_at, places=3)
+
+    def test_a_cached_none_is_distinguishable_from_a_miss(self):
+        """返回 `Entry` 而不是值，就是为了分开这两件事。"""
+        self.cache.set('k', None)
+        self.assertIsNotNone(self.cache.peek('k'))
+        self.assertIsNone(self.cache.peek('k').value)
+        self.assertIsNone(self.cache.peek('别的键'))
