@@ -23,6 +23,8 @@ log = setup_logger('football')
 from . import parsing as _parsing_mod
 from . import fetching as _fetching_mod
 
+from ..domain.sports.football.analysis_result import build_analysis_result
+from ..domain.sports.football.market_anchoring import anchor_candidates_to_market
 from .config import (
     ACTIONABLE_1X2_MIN_MARGIN, ACTIONABLE_1X2_MIN_PROBABILITY, AVG_LEAGUE_GOAL, BAYESIAN_CALIBRATION_AVAILABLE, CACHE_AVAILABLE, DYNAMIC_ELO_AVAILABLE, DYNAMIC_WEIGHTS_AVAILABLE, FOOTBALL_PREDICTION_LOGIC_VERSION, MAX_GOALS, SIMILAR_MARKET_AVAILABLE, STEAM_MOVE_AVAILABLE, calibrate_predictions, get_cache, get_calibrator, get_dynamic_weights, set_cache, similar_market_match, steam_move_detector,
 )
@@ -876,88 +878,19 @@ def analyze_match(match, force_refresh=False):
 
     # Exact-score calibration can change the marginal goal mean. Re-anchor the
     # final score matrix to the market-implied total without changing 1X2 mass.
+    # 依次锚定到市场信号——顺序有讲究，见领域层的模块说明。
+    # 生产历史档案要读存储、带缓存，在这一层取好注入进去（判据 16）。
     try:
-        candidates, score_goal_anchor = _anchor_score_candidates_to_goal_mean(
-            candidates, total
-        )
-        meta['score_goal_anchor'] = score_goal_anchor
-        if score_goal_anchor.get('applied'):
-            log.debug(
-                "score goal mean anchored: %.3f -> %.3f (target %.3f)",
-                score_goal_anchor['expected_before'],
-                score_goal_anchor['expected_after'],
-                score_goal_anchor['target'],
-            )
-    except Exception as e:
-        meta['score_goal_anchor'] = {'applied': False, 'reason': str(e)}
-        log.warning(f"score goal mean anchor failed: {e}")
-
-    # Production-history correction runs after the market anchor.  It is
-    # deliberately shrunk by effective sample size and capped, so a short hot
-    # streak cannot overwhelm the current match's odds and total-goal line.
-    try:
-        from .history_calibration import apply_history_calibration, get_runtime_history_profile
-
+        from .history_calibration import get_runtime_history_profile
         history_profile = get_runtime_history_profile()
-        candidates, history_adjustment = apply_history_calibration(candidates, history_profile)
-        meta['production_history_calibration'] = history_adjustment
-        if history_adjustment.get('applied'):
-            log.debug(
-                "production history calibrated: n=%s beta=%.4f goals %.3f -> %.3f",
-                history_adjustment.get('sample_count'),
-                history_adjustment.get('goal_beta', 0.0),
-                history_adjustment.get('expected_goals_before', 0.0),
-                history_adjustment.get('expected_goals_after', 0.0),
-            )
     except Exception as e:
-        meta['production_history_calibration'] = {'applied': False, 'reason': str(e)}
-        log.warning(f"production history calibration failed: {e}")
+        history_profile = None
+        log.warning(f"production history profile unavailable: {e}")
 
-    # Multi-stage score corrections can unintentionally move aggregate H/D/A
-    # mass away from the efficient closing market.  Re-anchor those marginals
-    # before the final goal-mean repair; the latter preserves 1X2 by design.
-    try:
-        candidates, outcome_market_anchor = _anchor_score_candidates_to_1x2(
-            candidates, euro
-        )
-        meta['outcome_market_anchor'] = outcome_market_anchor
-    except Exception as e:
-        meta['outcome_market_anchor'] = {'applied': False, 'reason': str(e)}
-        log.warning(f"score 1X2 market anchor failed: {e}")
+    candidates, anchor_meta = anchor_candidates_to_market(
+        candidates, total, euro, asian, history_profile)
+    meta.update(anchor_meta)
 
-    # History calibration is useful for residual bias, but it must not undo the
-    # current O/U market's total-goal signal.  Make the market anchor the final
-    # score-distribution transform so high-total matches retain their 4+ tail.
-    try:
-        candidates, final_score_goal_anchor = _anchor_score_candidates_to_goal_mean(
-            candidates, total
-        )
-        meta['final_score_goal_anchor'] = final_score_goal_anchor
-        if final_score_goal_anchor.get('applied'):
-            log.debug(
-                "final score goal mean anchored after history: %.3f -> %.3f (target %.3f)",
-                final_score_goal_anchor['expected_before'],
-                final_score_goal_anchor['expected_after'],
-                final_score_goal_anchor['target'],
-            )
-    except Exception as e:
-        meta['final_score_goal_anchor'] = {'applied': False, 'reason': str(e)}
-        log.warning(f"final score goal mean anchor failed: {e}")
-
-    # The final distribution is a single market-consistent state: closing 1X2
-    # sets the outcome marginal above, the O/U line sets the goal mean, and the
-    # fair Asian/O-U prices now apply the validated soft settlement constraint.
-    # All downstream SPF/RQSPF/score/goal outputs are derived from this matrix.
-    try:
-        candidates, joint_market_adjustment = _apply_joint_market_state(
-            candidates, asian, euro, total
-        )
-        meta['joint_market_state'] = joint_market_adjustment
-    except Exception as e:
-        meta['joint_market_state'] = {'applied': False, 'reason': str(e)}
-        log.warning(f"joint market constraint failed: {e}")
-
-    dixon_coles_result = None
     try:
         from .ml import dixon_coles_score_matrix, dixon_coles_1x2_prob, get_dc_rho
         dc_rho = get_dc_rho(
@@ -1498,103 +1431,50 @@ def analyze_match(match, force_refresh=False):
             production_spf_policy = load_production_league_spf_policy(match.get('league'))
         except Exception as e:
             log.warning('生产联赛门禁读取失败，继续使用全局门禁规则: %s', e)
-    lottery['accuracy_gate'] = build_accuracy_gate(
-        lottery,
+    # 输出契约住在领域层——字段名与嵌套形状下游都按名字取（判据 12）。
+    result = build_analysis_result(
+        asian=asian,
+        calibration_effect=calibration_effect,
+        candidates=candidates,
         confidence=confidence,
-        anomaly={
-            'joint_water': joint_anomaly,
-            'euro_asian_deviation': euro_asian_dev,
-        },
-        upset=upset,
-        league=match.get('league'),
+        dixon_coles_result=dixon_coles_result,
+        euro=euro,
+        euro_asian_dev=euro_asian_dev,
+        goal_count_result=goal_count_result,
+        goal_dist_after_calibration=goal_dist_after_calibration,
+        goal_dist_before_calibration=goal_dist_before_calibration,
+        half_full_time=half_full_time,
+        joint_anomaly=joint_anomaly,
+        k=k,
+        lam_away=lam_away,
+        lam_home=lam_home,
+        league_profile=league_profile,
+        live_context=live_context,
+        live_context_quality=live_context_quality,
+        lottery=lottery,
+        market_change_result=market_change_result,
+        match=match,
+        meta=meta,
+        ml_result=ml_result,
+        model_status=model_status,
+        model_weights=model_weights,
+        probability_rank=probability_rank,
         production_spf_policy=production_spf_policy,
+        recommend=recommend,
+        recommend_rank=recommend_rank,
+        risk=risk,
+        settlement=settlement,
+        similar_market_detail=similar_market_detail,
+        similar_market_result=similar_market_result,
+        single_odds=single_odds,
+        steam_result=steam_result,
+        team=team,
+        top_scores=top_scores,
+        total=total,
+        upset=upset,
+        value_bets=value_bets,
     )
-    total_goals_gate = build_total_goals_gate(
-        total,
-        league=match.get('league'),
-        goal_count=goal_count_result,
-    )
-    lottery['accuracy_gate']['total_goals'] = total_goals_gate
-    if goal_count_result is not None:
-        goal_count_result['accuracy_gate'] = total_goals_gate
 
-    result = {
-        'match': {k: match.get(k) for k in (
-            'home', 'away', 'league', 'time', 'match_id', 'num',
-            'lottery_handicap', 'lottery_primary_market', 'lottery_source',
-            'lottery_offer_matched', 'lottery_available_markets',
-            'lottery_spf_available', 'lottery_rqspf_available',
-            'lottery_unavailable_reason', 'okooo_id'
-        )},
-        'lottery': lottery,
-        'league_profile': league_profile,
-        'asian': asian,
-        'euro': euro,
-        'total': total,
-        'team': team,
-        'single_odds': single_odds,
-        'bookmaker_consensus': asian.get('bookmaker_consensus'),
-        'confidence': confidence,
-        'anomaly': {
-            'joint_water': joint_anomaly,
-            'euro_asian_deviation': euro_asian_dev,
-        },
-        'similar_market': similar_market_result,
-        'steam_move': steam_result,
-        'market_change': market_change_result,
-        'live_context': live_context,
-        'live_context_quality': live_context_quality,
-        
-        # ========== 新增字段 ==========
-        'model_status': model_status,
-        'probability_rank': probability_rank,
-        'recommend_rank': recommend_rank,
-        'model_weights': model_weights,
-        'calibration_effect': calibration_effect,
-        'similar_market_detail': similar_market_detail,
-        'risk_level': {
-            'level': risk['level'],
-            'description': risk['description'],
-            'risk_score': risk['risk_score'],
-            'risk_factors': risk['risk_factors'],
-            'recommend_count': risk['recommend_count'],
-        },
-        'settlement': settlement,
-
-        # ========== 爆冷识别结果（对齐北单，前端「爆冷预警」展示）==========
-        'upset': upset,
-
-        'model': {
-            'lam_home': lam_home, 'lam_away': lam_away,
-            'top_scores': top_scores, 'recommend': recommend,
-            'value_bets': value_bets,
-            'half_full_time': half_full_time,
-            'goal_count': goal_count_result,
-            'goal_calibration': {
-                'before': goal_dist_before_calibration,
-                'after': goal_dist_after_calibration,
-                'calibrated': goal_dist_after_calibration is not None
-            },
-            'dixon_coles': dixon_coles_result,
-            'ml': ml_result,
-            'risk_level': {
-                'level': risk['level'],
-                'description': risk['description'],
-                'risk_score': risk['risk_score'],
-                'risk_factors': risk['risk_factors'],
-                'recommend_count': risk['recommend_count'],
-            },
-            'candidates': candidates,
-            **meta,
-        },
-    }
-
-    try:
-        from .professional_readiness import build_match_evidence_profile
-        result['professional_evidence'] = build_match_evidence_profile(result)
-    except Exception as e:
-        log.warning(f"专业证据覆盖评估失败: {e}")
-        result['professional_evidence'] = None
 
     try:
         from .bayes_report import load_professional_validation_summary

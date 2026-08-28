@@ -336,3 +336,9 @@ from scripts.gen_football_reports_golden import entries as football_reports_entr
 
 dump('football_reports',
      {k: _as_comparable(v) for k, v in football_reports_entries()})
+
+# ---- football 编排层抽出段 ----
+from scripts.gen_football_pipeline_golden import entries as football_pipeline_entries
+
+dump('football_pipeline',
+     {k: _as_comparable(v) for k, v in football_pipeline_entries()})
