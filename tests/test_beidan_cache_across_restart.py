@@ -179,6 +179,30 @@ class TtlTests(unittest.TestCase):
         self.assertEqual(physical, TTL_SECONDS * REDIS_STALE_GRACE_FACTOR)
         self.assertGreater(physical, 25 * 60)
 
+    def test_an_entry_older_than_the_ttl_is_still_served(self):
+        """**跨天的第一个请求靠的就是这条。**
+
+        `beidan_cache_key(None, ...)` 生成的是 `okooo_today_spf`——**这个键
+        不含日期，跨天会复用**。前一天写下的条目按一天的 TTL 已经过期，
+        而 Redis 按十倍存物理过期，所以它还在。这时必须照样把它返回出去
+        （随后后台刷新），否则跨零点后的第一个请求要同步等 25 分钟。
+
+        只用「TTL 之内但 `_cached_at` 很旧」的语料是测不出这条的——
+        那种条目按 `is_fresh()` 仍然是新鲜的（判据 23）。
+        """
+        cache, _ = _cache_with_redis()
+        payload = _payload()
+        payload['_cached_at'] = time.time() - 25 * 3600
+        stored_at = time.time() - 25 * 3600
+        cache.l2.set(beidan_cache._shared_key('okooo_today_spf'), payload,
+                     ttl=TTL_SECONDS, now=stored_at)
+        with patch.object(beidan_cache, 'get_shared_cache', return_value=cache):
+            entry = cache.peek(beidan_cache._shared_key('okooo_today_spf'))
+            self.assertFalse(entry.is_fresh(), '语料本身要真的越过 TTL')
+            stale, fresh = beidan_cache.read_beidan_cache('okooo_today_spf')
+        self.assertIsNotNone(stale, '按 TTL 过期就不返回的话，跨天必然 504')
+        self.assertFalse(fresh)
+
     def test_freshness_still_comes_from_cached_at_not_the_ttl(self):
         """存了一天不代表一天都算新鲜：过期与否仍由刷新档位判定。"""
         cache, _ = _cache_with_redis()
