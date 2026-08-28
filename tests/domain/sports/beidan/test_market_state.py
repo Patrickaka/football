@@ -91,6 +91,33 @@ class JointStateTests(unittest.TestCase):
         self.assertAlmostEqual(tiny['direction_signal'], floored['direction_signal'],
                                places=9)
 
+    def test_strength_normalisation_is_exact(self):
+        """强度按 `strength_divisor` 归一化，**满格恰好在除数那一点**。
+
+        只断言「强的比弱的大」是不够的——把除数改成 0.5 后大小关系依然成立，
+        变异照样逃掉。这里钉住具体的比例：0.06 是半格、0.12 及以上是满格。
+        """
+        half = self._state({'direction': 'home_backing',
+                            'strength': STRENGTH_DIVISOR / 2}, self.QUIET)
+        full = self._state({'direction': 'home_backing',
+                            'strength': STRENGTH_DIVISOR}, self.QUIET)
+        beyond = self._state({'direction': 'home_backing', 'strength': 9.9}, self.QUIET)
+        self.assertAlmostEqual(full['direction_signal'], DIRECTION_BLEND, places=9)
+        self.assertAlmostEqual(half['direction_signal'], DIRECTION_BLEND / 2, places=9)
+        self.assertAlmostEqual(beyond['direction_signal'], DIRECTION_BLEND, places=9)
+
+    def test_two_sources_carry_their_declared_weights(self):
+        """水位与线各占 0.65 / 0.35。**只断言「线也有影响」是不够的**——
+        把两个权重对调，方向依然会动，变异逃得掉。"""
+        water_only = self._state({'direction': 'home_backing',
+                                  'strength': STRENGTH_DIVISOR}, self.QUIET)
+        line_only = self._state(
+            self.QUIET, self.QUIET,
+            asian=_history(['0', '-0.5'], [0.95] * 2, [0.95] * 2))
+        self.assertAlmostEqual(water_only['direction_signal'], DIRECTION_BLEND, places=9)
+        self.assertAlmostEqual(line_only['direction_signal'],
+                               -(1 - DIRECTION_BLEND), places=9)
+
     def test_handicap_move_contributes_independently(self):
         """盘口线本身的移动是第二个来源，与水位方向分开加权。"""
         no_move = self._state(self.QUIET, self.QUIET,
@@ -215,6 +242,68 @@ class TiltTests(unittest.TestCase):
             wide, self._over_profit(2.5, 1.01), 1.0)
         self.assertTrue(all(math.isfinite(value) for value in adjusted.values()))
         self.assertAlmostEqual(sum(adjusted.values()), 1.0, places=9)
+
+
+class ExponentClampTests(unittest.TestCase):
+    """指数必须夹紧——**θ·特征值 在极端赔率下能到上万**，不夹会 OverflowError。"""
+
+    # **分布必须不对称**：两个 ±5000 各占一半时期望本来就是 0，
+    # θ 会停在 0，根本触发不了夹紧——那样这两条用例测的是「不用调整」。
+    SKEWED = {(0, 0): 0.7, (3, 3): 0.3}
+
+    @staticmethod
+    def _huge(key):
+        return 5000.0 if sum(key) > 3 else -5000.0
+
+    def test_huge_feature_values_do_not_overflow(self):
+        """公平赔率可以非常大（一侧报价极低时），此时单位收益也随之变大。
+        θ 上限 12，两者相乘轻易越过 `exp` 的定义域。
+        """
+        adjusted, meta = market_state.tilt_to_fair_price(
+            self.SKEWED, self._huge, 1.0)
+        self.assertTrue(meta['applied'])
+        self.assertNotAlmostEqual(meta['theta'], 0.0, places=6, msg='应当真的需要调整')
+        self.assertTrue(all(math.isfinite(value) for value in adjusted.values()))
+        self.assertAlmostEqual(sum(adjusted.values()), 1.0, places=9)
+
+    def test_clamped_exponent_still_shifts_the_mass(self):
+        """夹紧不能把调整抹平——**那样约束就等于没做**。
+
+        原分布七三开偏向 0-0，而 0-0 那侧是负收益，所以约束会把质量
+        推向 3-3。夹紧只该限制幅度，不该改变方向。
+        """
+        adjusted, _ = market_state.tilt_to_fair_price(
+            self.SKEWED, self._huge, 1.0)
+        self.assertGreater(adjusted[(3, 3)], self.SKEWED[(3, 3)])
+        self.assertLess(adjusted[(0, 0)], self.SKEWED[(0, 0)])
+
+
+class AdapterPathTests(unittest.TestCase):
+    """适配层里那条「有报价但没有盘口线」的分支。"""
+
+    def test_missing_handicap_is_treated_as_a_pk_market(self):
+        """少数备用源只给两侧报价而没有盘口线。**按平手盘处理而不是丢弃**——
+        那是这场唯一的方向性价格证据。兜底值必须是 0（平手），
+        用别的数会凭空造出一个让球盘。
+        """
+        import importlib
+        markets = importlib.import_module('src.beidan.markets')
+        matrix = scoring_model.dixon_coles_matrix(1.4, 1.1, 0.0, 7)
+        no_line = {'history': [{'home_odds': 0.95, 'away_odds': 0.95}] * 3}
+        with_pk = {'history': [{'handicap': '0',
+                                'home_odds': 0.95, 'away_odds': 0.95}] * 3}
+        goals = {'history': [{'line': 2.5, 'over_odds': 0.95, 'under_odds': 0.95}] * 3}
+
+        missing_result, missing_meta = markets.apply_beidan_joint_market_state(
+            matrix, no_line, goals)
+        pk_result, pk_meta = markets.apply_beidan_joint_market_state(
+            matrix, with_pk, goals)
+        self.assertTrue(missing_meta['asian_constraint']['applied'])
+        self.assertEqual(missing_meta['asian_constraint']['theta'],
+                         pk_meta['asian_constraint']['theta'],
+                         '缺盘口线应当与平手盘算出同一个 θ')
+        for key in pk_result:
+            self.assertAlmostEqual(missing_result[key], pk_result[key], places=9)
 
 
 class FairOddsTests(unittest.TestCase):
