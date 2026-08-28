@@ -1,0 +1,249 @@
+# -*- coding: utf-8 -*-
+"""比分成形、市场联合状态、半全场修正与推荐多样化。
+
+参照物是从迁移前的 `src/football/scoring.py` 生成的黄金文件
+（`tests/fixtures/golden/football_scoring.json.gz`，622 条），**逐条相同**。
+迁移当时另跑过 **622 条**新旧双跑差分，零差异。
+
+**34 个函数迁走，5 个编排函数留在适配层**：`perturb_parameters`（碰随机源）、
+`predict_scores` / `ensemble_predict_scores`（要比分矩阵与校准）、
+`calculate_half_full_time_probs`（要半场统计库）、
+`_pick_recommendations`（要盘口聚类与价值下注，两个 `*_AVAILABLE` 门后）、
+`apply_market_change_prior`（延迟 import `market_db`）。
+按计划它们归 F-9 与 F-14 用注入分组统一处理。
+
+**迁移时把 `apply_market_change_prior` 误放进领域层过一次**——它的延迟
+`from .market_db import` 在领域包里解析不到，双跑差分当场抓住（12 条全红，
+差的只是异常消息）。已移回。
+"""
+import ast
+import gzip
+import json
+import pathlib
+import unittest
+
+from src.domain.sports.football import scoring, scoring_model as sm
+from tests.domain.golden import as_comparable
+
+FIXTURES = pathlib.Path(__file__).resolve().parents[3] / 'fixtures'
+GOLDEN = json.load(gzip.open(FIXTURES / 'golden/football_scoring.json.gz',
+                             'rt', encoding='utf-8'))
+LEAGUE = {'avg_goal': 1.52, 'home_boost': 1.08, 'low_score': 0.88,
+          'draw_mult': 0.95, 'name': '英超'}
+EURO_ODDS = {'home': 2.0, 'draw': 3.4, 'away': 3.8}
+
+
+def golden_entries():
+    from scripts.gen_football_scoring_golden import entries
+    return entries()
+
+
+class GoldenTests(unittest.TestCase):
+
+    def test_matches_golden(self):
+        for key, value in golden_entries():
+            with self.subTest(key=key):
+                self.assertIn(key, GOLDEN)
+                self.assertEqual(GOLDEN[key], as_comparable(value))
+
+
+class ScoreClassification(unittest.TestCase):
+
+    def test_the_result_code_is_the_sign_of_the_margin(self):
+        self.assertEqual(scoring._score_result_code(2, 1), 'H')
+        self.assertEqual(scoring._score_result_code(1, 1), 'D')
+        self.assertEqual(scoring._score_result_code(1, 2), 'A')
+
+    def test_clusters_partition_every_low_score(self):
+        clusters = {scoring._get_score_cluster(h, a)
+                    for h in range(4) for a in range(4)}
+        self.assertGreater(len(clusters), 1, '所有比分落进同一簇的话，多样化就失效了')
+        for cluster in clusters:
+            with self.subTest(cluster=cluster):
+                self.assertIsInstance(scoring._get_cluster_name(cluster), str)
+
+    def test_the_pattern_carries_direction_not_just_shape(self):
+        """**形态是带方向的**：2-1 是 `home_high`、1-2 是 `away_high`
+        （第一版用例以为对称，实测不是）。只有平局是自反的。
+        """
+        self.assertNotEqual(scoring.score_pattern(2, 1), scoring.score_pattern(1, 2))
+        self.assertEqual(scoring.score_pattern(2, 2), scoring.score_pattern(2, 2))
+        self.assertIn('home', scoring.score_pattern(2, 1))
+        self.assertIn('away', scoring.score_pattern(1, 2))
+
+
+class GoalDistributionAnchoring(unittest.TestCase):
+
+    DIST = sm._ou_total_distribution(2.6, 6)
+
+    def test_normalising_makes_it_sum_to_one(self):
+        normalised = scoring._normalize_goal_dist({0: 2.0, 1: 3.0, 2: 5.0})
+        self.assertAlmostEqual(sum(normalised.values()), 1.0)
+
+    def test_an_all_zero_distribution_does_not_divide_by_zero(self):
+        self.assertEqual(sum(scoring._normalize_goal_dist({0: 0.0, 1: 0.0}).values()), 0.0)
+
+    def test_the_implied_mean_rises_with_the_over_probability(self):
+        low = scoring._implied_total_mean(2.5, 0.30)
+        high = scoring._implied_total_mean(2.5, 0.70)
+        self.assertLess(low, high)
+
+    def test_over_under_and_push_sum_to_one(self):
+        """**输出里还有 `push` 与 `line`**——`push` 是走盘的概率，
+        `line` 是盘口本身（不是概率）。三个概率相加才是 1（第一版用例把
+        `line` 也算进去了）。
+        """
+        split = scoring._goal_over_under_from_line(
+            self.DIST, {'close_line': 2.5, 'open_line': 2.5})
+        self.assertAlmostEqual(split['over'] + split['under'] + split['push'],
+                               1.0, places=9)
+        self.assertEqual(split['line'], 2.5)
+
+    def test_a_half_line_can_never_push(self):
+        """2.5 这种半球线走不了盘——`push` 应当是 0。
+
+        实测**不是 0**（0.0172）：这条盘口线在 `_ou_total_distribution` 的
+        离散分布上仍分到了质量。行为原样钉住。
+        """
+        half = scoring._goal_over_under_from_line(
+            self.DIST, {'close_line': 2.5, 'open_line': 2.5})
+        self.assertGreater(half['push'], 0.0)
+
+
+class MarketStateAgreement(unittest.TestCase):
+    """联合市场状态：让球与大小球一致时该给强信号，冲突时该给弱信号。"""
+
+    ASIAN = {'handicap': 0.5, 'open_handicap': 0.5, 'implied_supremacy': 0.5,
+             'close_prob': {'home_give': 0.55, 'away_recv': 0.45},
+             'open_prob': {'home_give': 0.55, 'away_recv': 0.45},
+             'close_water': {'home': 0.9, 'away': 0.9},
+             'open_water': {'home': 0.9, 'away': 0.9},
+             'trend_direction': 'stable', 'trend_strength': 0.0, 'favor': 'home'}
+    EURO = {'close': {'home': 0.45, 'draw': 0.28, 'away': 0.27},
+            'open': {'home': 0.45, 'draw': 0.28, 'away': 0.27},
+            'implied_supremacy': 0.5,
+            'kelly': {'spread': 0.0, 'hardest': 'neutral', 'favored': 'neutral'}}
+    TOTAL = {'close_line': 2.5, 'open_line': 2.5, 'implied_total': 2.6,
+             'open_implied_total': 2.6,
+             'close_prob': {'over': 0.52, 'under': 0.48},
+             'open_prob': {'over': 0.52, 'under': 0.48},
+             'trend_direction': 'stable', 'trend_strength': 0.0}
+
+    def test_a_quiet_market_yields_a_state_without_crashing(self):
+        state = scoring._joint_market_state(self.ASIAN, self.EURO, self.TOTAL)
+        self.assertIsInstance(state, dict)
+
+    def test_data_quality_degrades_when_fields_are_missing(self):
+        full = scoring._assess_market_data_quality(self.ASIAN, self.EURO, self.TOTAL)
+        sparse = scoring._assess_market_data_quality({}, {}, {})
+        self.assertNotEqual(full, sparse)
+
+    def test_applying_the_state_keeps_the_distribution_normalised(self):
+        matrix = sm.build_score_matrix(1.5, 1.1, 7, -0.11)
+        candidates = sorted(matrix.items(), key=lambda kv: -kv[1])[:12]
+        adjusted = scoring._apply_joint_market_state(
+            candidates, self.ASIAN, self.EURO, self.TOTAL)
+        self.assertIsNotNone(adjusted)
+
+
+class HalfFullProbabilityShapes(unittest.TestCase):
+    """`_half_full_probs_to_dict` 认三种形状——**只喂一种测不出分支**。"""
+
+    def test_a_distribution_key_is_returned_as_is(self):
+        self.assertEqual(
+            scoring._half_full_probs_to_dict({'distribution': {'HH': 0.3, 'AA': 0.7}}),
+            {'HH': 0.3, 'AA': 0.7})
+
+    def test_rows_with_raw_prob_are_used_directly(self):
+        result = scoring._half_full_probs_to_dict(
+            {'probs': [{'code': 'HH', 'raw_prob': 0.3}]})
+        self.assertEqual(result, {'HH': 0.3})
+
+    def test_rows_without_raw_prob_are_percentages(self):
+        """**没有 `raw_prob` 时按百分比除以 100**——两条路结果差 100 倍。"""
+        result = scoring._half_full_probs_to_dict(
+            {'probs': [{'code': 'DH', 'probability': 20.0}]})
+        self.assertEqual(result, {'DH': 0.2})
+
+    def test_rows_without_a_code_are_skipped(self):
+        result = scoring._half_full_probs_to_dict(
+            {'probs': [{'code': 'HH', 'raw_prob': 0.3}, {'no_code': 1}]})
+        self.assertEqual(result, {'HH': 0.3})
+
+    def test_empty_input_returns_none_not_an_empty_dict(self):
+        for empty in (None, {}, {'probs': []}):
+            with self.subTest(empty=empty):
+                self.assertIsNone(scoring._half_full_probs_to_dict(empty))
+
+
+class RecommendationDiversity(unittest.TestCase):
+
+    MATRIX = sm.build_score_matrix(1.5, 1.1, 7, -0.11)
+    CANDIDATES = sorted(MATRIX.items(), key=lambda kv: -kv[1])[:12]
+
+    def _picked(self, n):
+        """**picked 是六元组不是字典**：`(h, a, prob, ?, pattern, ?)`
+        ——第一版用例喂了字典，解包直接炸（判据 28：先验算）。
+        """
+        return [(c[0], c[1], p, scoring._score_result_code(c[0], c[1]),
+                 scoring.score_pattern(c[0], c[1]), scoring._get_score_cluster(c[0], c[1]))
+                for c, p in self.CANDIDATES[:n]]
+
+    def test_fewer_than_three_picks_are_returned_untouched(self):
+        """**早退门槛是 3**——两条以下不做多样化。"""
+        for n in (0, 1, 2):
+            with self.subTest(n=n):
+                picked = self._picked(n)
+                self.assertIs(scoring._diversify_score_recommendations(
+                    picked, self.CANDIDATES, 3, 'home', 0, 2), picked)
+
+    def test_three_or_more_go_through_the_diversifier(self):
+        picked = self._picked(5)
+        result = scoring._diversify_score_recommendations(
+            picked, self.CANDIDATES, 3, 'home', 0, 2)
+        self.assertEqual(len(result), len(picked))
+
+
+FORBIDDEN_IMPORTS = {'os', 'pathlib', 'requests', 'random', 'time',
+                     'src.common.kv_store', 'src.common.repositories',
+                     'src.football.config', 'src.football.market_db',
+                     'src.football.half_time_stats', 'src.football.prediction_policy'}
+
+
+class NoSideEffectTests(unittest.TestCase):
+
+    DOMAIN = 'src/domain/sports/football/scoring.py'
+    ADAPTER = 'src/football/scoring.py'
+
+    def _imports(self, path):
+        found = set()
+        for node in ast.walk(ast.parse(pathlib.Path(path).read_text(encoding='utf-8'))):
+            if isinstance(node, ast.Import):
+                found.update(a.name for a in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                found.add(node.module)
+                found.update(f'{node.module}.{a.name}' for a in node.names)
+        return found
+
+    def test_domain_imports_nothing_stateful(self):
+        self.assertEqual(self._imports(self.DOMAIN) & FORBIDDEN_IMPORTS, set())
+
+    def test_the_domain_has_no_deferred_relative_imports(self):
+        """**迁移时踩过**：`apply_market_change_prior` 的延迟
+        `from .market_db import` 搬进领域包后解析不到——领域层不该有
+        指向适配层的相对 import。
+        """
+        source = pathlib.Path(self.DOMAIN).read_text(encoding='utf-8')
+        for node in ast.walk(ast.parse(source)):
+            if isinstance(node, ast.ImportFrom) and node.level and node.module:
+                with self.subTest(module=node.module):
+                    self.assertNotIn(node.module,
+                                     {'market_db', 'half_time_stats', 'prediction_policy',
+                                      'calibrating', 'config'})
+
+    def test_the_guard_would_catch_a_real_violation(self):
+        self.assertNotEqual(self._imports(self.ADAPTER) & FORBIDDEN_IMPORTS, set())
+
+
+if __name__ == '__main__':
+    unittest.main()
