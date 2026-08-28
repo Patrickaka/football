@@ -181,141 +181,50 @@ def fetch_okooo(url, encoding='utf-8', referer=None, max_retries=2):
 
 
 def fetch_okooo_schedule(date=None):
+    """okooo 的赛程，取不到就回退到 500.com。
+
+    **三种回退的日志要分开**：页面为空（多半是 WAF）、页面结构不对
+    （表格数不够）、解析出来一场未完结的都没有。§十一·3 那类
+    「接口返回 200 加 0 场比赛」的故障里，最难查的正是分不清这三者。
+    """
     if date is None:
         date = time.strftime('%Y-%m-%d')
-    
+
     url = f'{OKOOO_DANCHANG_URL}?date={date}'
     log.info(f"抓取okooo北单赛程: {date}")
-    
+
     try:
         html = fetch_okooo(url, referer=OKOOO_DANCHANG_URL)
         if not html:
-            log.warning(f"okooo页面返回为空(WAF拦截或网络错误)，尝试500.com备用数据源")
-            fallback_matches = fetch_beidan_schedule(date, source='dc')
-            if not fallback_matches:
-                fallback_matches = fetch_beidan_schedule(date, source='jczq')
-            for m in fallback_matches:
-                m['source'] = '500.com'
-            return fallback_matches
-        
+            log.warning("okooo页面返回为空(WAF拦截或网络错误)，尝试500.com备用数据源")
+            return _fallback_schedule(date, try_dc_first=True)
+
         log.debug(f"okooo页面HTML长度: {len(html)}")
-        matches = []
-        
-        table_pattern = re.compile(r'<table[^>]*>(.*?)</table>', re.DOTALL)
-        tables = table_pattern.findall(html)
-        log.debug(f"okooo页面找到 {len(tables)} 个table标签")
-        
-        if len(tables) < 2:
-            log.warning(f"okooo页面未找到比赛表格，找到 {len(tables)} 个table标签，尝试500.com备用数据源")
+        matches, table_count = _parsing.parse_okooo_schedule(html, date)
+        log.debug(f"okooo页面找到 {table_count} 个table标签")
+        if matches is None:
+            log.warning(f"okooo页面未找到比赛表格，找到 {table_count} 个table标签，"
+                        "尝试500.com备用数据源")
             return fetch_beidan_schedule(date)
-        
-        main_table = tables[1]
-        tr_pattern = re.compile(r'<tr[^>]*>(.*?)</tr>', re.DOTALL)
-        tr_list = tr_pattern.findall(main_table)
-        
-        current_date = date
-        
-        for tr in tr_list:
-            td_pattern = re.compile(r'<td[^>]*>(.*?)</td>', re.DOTALL)
-            td_list = td_pattern.findall(tr)
-            
-            if len(td_list) < 6:
-                date_match = re.search(r'(\d{4}-\d{2}-\d{2})', tr)
-                if date_match:
-                    current_date = date_match.group(1)
-                continue
-            
-            num_match = re.search(r'<span class="xh"><i>(\d+)</i></span>', td_list[0])
-            league_match = re.search(r'href="//www\.okooo\.com/soccer/league/\d+/"[^>]*>([^<]+)</a>', td_list[0])
-            match_id_match = re.search(r'/soccer/match/(\d+)', tr)
-            
-            time_str = re.sub(r'<[^>]+>', '', td_list[1]).strip()
-            mtime_match = re.search(r'mTime="([^"]+)"', td_list[1])
-            
-            score = re.sub(r'<[^>]+>', '', td_list[5]).strip()
-            
-            home_match = re.search(r'<span class="homenameobj[^>]*title="([^"]+)"[^>]*>([^<]+)</span>', td_list[2])
-            away_match = re.search(r'<span class="awaynameobj[^>]*title="([^"]+)"[^>]*>([^<]+)</span>', td_list[2])
-            handicap_match = re.search(r'<span class="handicapobj[^>]*>([^<]+)</span>', td_list[2])
-            
-            odds_pattern = re.findall(r'<em[^>]*>([\d.]+)</em>', td_list[2])
-            
-            if not home_match or not away_match:
-                continue
-            
-            num = num_match.group(1) if num_match else ''
-            league = league_match.group(1) if league_match else ''
-            match_id = match_id_match.group(1) if match_id_match else f'{current_date.replace("-", "")}_{num}'
-            
-            home_name = home_match.group(2).strip()
-            away_name = away_match.group(2).strip()
-            handicap_info = handicap_match.group(1).strip() if handicap_match else None
-            
-            spf_sp = float(odds_pattern[0]) if len(odds_pattern) >= 1 else None
-            spf_s = float(odds_pattern[1]) if len(odds_pattern) >= 2 else None
-            spf_f = float(odds_pattern[2]) if len(odds_pattern) >= 3 else None
-            rqspf_sp = float(odds_pattern[3]) if len(odds_pattern) >= 6 else None
-            rqspf_s = float(odds_pattern[4]) if len(odds_pattern) >= 6 else None
-            rqspf_f = float(odds_pattern[5]) if len(odds_pattern) >= 6 else None
-            
-            if mtime_match:
-                match_time = mtime_match.group(1)
-                date_time_match = re.match(r'(\d{2}-\d{2})\s+(\d{2}:\d{2})', match_time)
-                if date_time_match:
-                    match_date = f"{current_date[:4]}-{date_time_match.group(1)}"
-                    match_time = date_time_match.group(2)
-                else:
-                    match_date = current_date
-            else:
-                date_time_match = re.match(r'(\d{2}-\d{2})\s+(\d{2}:\d{2})', time_str)
-                if date_time_match:
-                    match_date = f"{current_date[:4]}-{date_time_match.group(1)}"
-                    match_time = date_time_match.group(2)
-                else:
-                    match_date = current_date
-                    match_time = time_str
-            
-            status = 'finished' if score and score != '-' else 'not_started'
-            
-            matches.append({
-                'id': match_id,
-                'home': home_name,
-                'away': away_name,
-                'num': num,
-                'date': match_date,
-                'time': match_time,
-                'league': league,
-                'spf_sp': spf_sp,
-                'spf_s': spf_s,
-                'spf_f': spf_f,
-                'rqspf_sp': rqspf_sp,
-                'rqspf_s': rqspf_s,
-                'rqspf_f': rqspf_f,
-                'rqspf_odds': (
-                    {'让胜': rqspf_sp, '让平': rqspf_s, '让负': rqspf_f}
-                    if all(value and value > 1.0 for value in (rqspf_sp, rqspf_s, rqspf_f))
-                    else None
-                ),
-                'handicap': handicap_info,
-                'status': status,
-                'source': 'okooo',
-            })
-        
-        matches = [m for m in matches if m['status'] != 'finished']
-        
         if not matches:
-            log.warning(f"okooo未找到未完结比赛，尝试500.com备用数据源")
+            log.warning("okooo未找到未完结比赛，尝试500.com备用数据源")
             return fetch_beidan_schedule(date)
-        
+
         log.info(f"okooo获取到 {len(matches)} 场未完结北单比赛")
         return matches
-    
     except Exception as e:
         log.error(f"抓取okooo北单赛程失败: {e}，尝试500.com备用数据源")
-        fallback_matches = fetch_beidan_schedule(date)
-        for m in fallback_matches:
-            m['source'] = '500.com'
-        return fallback_matches
+        return _fallback_schedule(date)
+
+
+def _fallback_schedule(date, try_dc_first=False):
+    """回退到 500.com，并把来源标记改掉——下游靠它判断数据从哪来。"""
+    matches = fetch_beidan_schedule(date, source='dc') if try_dc_first else []
+    if not matches:
+        matches = fetch_beidan_schedule(date, source='jczq' if try_dc_first else 'jczq')
+    for match in matches:
+        match['source'] = '500.com'
+    return matches
 
 
 def fetch_okooo_asian_history(match_id):
@@ -338,139 +247,24 @@ def fetch_okooo_cs_history(match_id):
 
 
 def fetch_beidan_schedule(date=None, source='jczq'):
+    """500.com 的赛程。解析在领域层，**时钟由这一层注入**。"""
     if date is None:
         date = time.strftime('%Y-%m-%d')
-    
-    if source == 'dc':
-        url = DC_SCHEDULE_URL
-        referer = DC_SCHEDULE_URL
-    else:
-        url = SCHEDULE_URL
-        referer = SCHEDULE_URL
-    
+
+    url = referer = DC_SCHEDULE_URL if source == 'dc' else SCHEDULE_URL
     log.info(f"抓取北单赛程({source}): {date}")
-    
+
     try:
         html = fetch(url, referer=referer)
         if not html:
             return []
-        
-        matches = []
-        
-        title_pat = re.compile(
-            r'shuju-(\d+)\.shtml.*?title="([^"]+?)VS([^"]+?)'
-            r'(?:数据|盘口|百家|欧赔|亚赔|亚盘|指数|对比|分析)[^"]*"',
-            re.DOTALL
-        )
-        for m in title_pat.finditer(html):
-            match_id = m.group(1).strip()
-            home_name = m.group(2).strip()
-            away_name = m.group(3).strip()
-            for suffix in ['百家', '欧赔', '亚赔', '亚盘', '数据', '盘口', '指数', '对比', '分析', '百家欧赔', '百家亚盘']:
-                if home_name.endswith(suffix):
-                    home_name = home_name[:-len(suffix)].strip()
-                if away_name.endswith(suffix):
-                    away_name = away_name[:-len(suffix)].strip()
-            if home_name and away_name and match_id:
-                matches.append({
-                    'id': match_id,
-                    'home': home_name,
-                    'away': away_name,
-                    'num': '',
-                    'date': date,
-                    'time': '',
-                    'league': '',
-                    'spf_sp': None,
-                    'spf_s': None,
-                    'spf_f': None,
-                    'rqspf_sp': None,
-                    'rqspf_s': None,
-                    'rqspf_f': None,
-                    'handicap': None,
-                    'status': 'not_started',
-                })
-        
-        match_time_map = {}
-        time_patterns = [
-            r'<td[^>]*?rowspan="2"[^>]*?>(\d{2}-\d{2}\s+\d{2}:\d{2})</td>.*?'
-            r'shuju-(\d+)\.shtml',
-            r'shuju-(\d+)\.shtml.*?(\d{2}-\d{2}\s+\d{2}:\d{2})',
-        ]
-        for pat in time_patterns:
-            time_row_pat = re.compile(pat, re.DOTALL)
-            for m in time_row_pat.finditer(html):
-                if m.group(1).isdigit():
-                    match_id = m.group(1)
-                    time_val = m.group(2)
-                else:
-                    match_id = m.group(2)
-                    time_val = m.group(1)
-                if match_id not in match_time_map:
-                    match_time_map[match_id] = time_val
-        
-        match_num_map = dict(
-            re.findall(r'value="(\d+)"\s*/>\s*(周[一二三四五六日]\d{3})', html)
-        )
-        
-        match_league_map = {}
-        league_blocks = re.split(r'<a[^>]*href="//liansai\.500\.com/zuqiu-\d+/"[^>]*>([^<]+)</a>', html)
-        current_league = ''
-        for i, block in enumerate(league_blocks):
-            if i % 2 == 1:
-                current_league = block.strip()
-            else:
-                match_ids_in_block = re.findall(r'shuju-(\d+)\.shtml', block)
-                for match_id in match_ids_in_block:
-                    if match_id not in match_league_map:
-                        match_league_map[match_id] = current_league
-        
-        now = datetime.now()
-        
-        for match in matches:
-            match_id = match['id']
-            if match_id in match_time_map:
-                time_val = match_time_map[match_id]
-                date_match = re.match(r'(\d{2}-\d{2})\s+(\d{2}:\d{2})', time_val)
-                if date_match:
-                    match['time'] = date_match.group(2)
-                    time_date_str = date_match.group(1)
-                    if time_date_str != date[5:]:
-                        match['date'] = f"{date[:4]}-{time_date_str}"
-                else:
-                    match['time'] = time_val
-            if match_id in match_league_map:
-                match['league'] = match_league_map[match_id].strip()
-            if match_id in match_num_map:
-                match['num'] = match_num_map[match_id]
-            
-            match_datetime = None
-            try:
-                if match['date'] and match['time']:
-                    match_datetime = datetime.strptime(f"{match['date']} {match['time']}", '%Y-%m-%d %H:%M')
-            except ValueError:
-                pass
-            
-            if match_datetime:
-                if match_datetime < now - timedelta(hours=3):
-                    match['status'] = 'finished'
-                elif match_datetime < now + timedelta(hours=1):
-                    match['status'] = 'in_progress'
-                else:
-                    match['status'] = 'not_started'
-            else:
-                try:
-                    match_date = datetime.strptime(match['date'], '%Y-%m-%d')
-                    if match_date < now.date():
-                        match['status'] = 'finished'
-                except ValueError:
-                    pass
-        
-        matches = [m for m in matches if m['status'] != 'finished']
-        
+        matches = _parsing.parse_500_schedule(html, date, datetime.now())
         log.info(f"获取到 {len(matches)} 场未完结北单比赛")
         return matches
-    
     except Exception as e:
+        # **这里兜住的不只是网络错误**：解析层在拿不到开赛时刻时会抛
+        # TypeError（见 `_match_status` 的说明），于是整份赛程变成空列表。
+        # 迁移前就是这样，原样保留——修它会改变回退路径的返回值。
         log.error(f"抓取北单赛程失败: {e}")
         return []
 

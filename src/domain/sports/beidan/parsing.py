@@ -16,6 +16,7 @@
 一行坏数据很常见，为它放弃整场比赛的走势是不划算的。但「跳过什么」在
 迁移前的三个实现里并不一致，那些不一致原样保留了，各自在注释里写明。
 """
+from datetime import datetime as _datetime, timedelta as _timedelta
 import re
 
 # 表格与脚本的抽取。都用正则而不是 HTML 解析器：页面标签常年不闭合，
@@ -325,3 +326,257 @@ def parse_history(html, spec):
         return records, FROM_TABLE
     records = parse_history_scripts(cleaned, spec)
     return records, (FROM_SCRIPT if records else None)
+
+
+# ── 赛程页 ───────────────────────────────────────────────────────
+# 两个来源的页面结构完全不同：okooo 是一张规整的表格，500.com 是一堆
+# 带 `shuju-*.shtml` 链接的锚点加上散落各处的时间、场次号与联赛块。
+# 后者要把这些**分别抓出来再按比赛号拼回去**——页面上它们并不在一起。
+
+_SCHEDULE_LINK = re.compile(
+    r'shuju-(\d+)\.shtml.*?title="([^"]+?)VS([^"]+?)'
+    r'(?:数据|盘口|百家|欧赔|亚赔|亚盘|指数|对比|分析)[^"]*"', re.DOTALL)
+# 时间有两种排布：跨行的时间格在链接**之前**，或时间跟在链接**之后**。
+# 两条都试，先命中的那条算数。
+_SCHEDULE_TIME_PATTERNS = (
+    re.compile(r'<td[^>]*?rowspan="2"[^>]*?>(\d{2}-\d{2}\s+\d{2}:\d{2})</td>.*?'
+               r'shuju-(\d+)\.shtml', re.DOTALL),
+    re.compile(r'shuju-(\d+)\.shtml.*?(\d{2}-\d{2}\s+\d{2}:\d{2})', re.DOTALL),
+)
+_SCHEDULE_NUM = re.compile(r'value="(\d+)"\s*/>\s*(周[一二三四五六日]\d{3})')
+_SCHEDULE_LEAGUE_SPLIT = re.compile(
+    r'<a[^>]*href="//liansai\.500\.com/zuqiu-\d+/"[^>]*>([^<]+)</a>')
+_SCHEDULE_ID = re.compile(r'shuju-(\d+)\.shtml')
+_DAY_AND_TIME = re.compile(r'(\d{2}-\d{2})\s+(\d{2}:\d{2})')
+
+# 队名后面常跟着入口的名字（同一场比赛在页面上有九个入口）。要逐个剥掉。
+_NAME_SUFFIXES = ('百家', '欧赔', '亚赔', '亚盘', '数据', '盘口', '指数',
+                  '对比', '分析', '百家欧赔', '百家亚盘')
+
+# 开赛前一小时算「进行中」，赛后三小时算「已结束」。三小时是一场球加中场
+# 加伤停补时的上限——比这更短会把还在踢的比赛判成已结束。
+IN_PROGRESS_BEFORE_HOURS = 1
+FINISHED_AFTER_HOURS = 3
+NOT_STARTED, IN_PROGRESS, FINISHED = 'not_started', 'in_progress', 'finished'
+
+_EMPTY_MATCH = {
+    'num': '', 'time': '', 'league': '',
+    'spf_sp': None, 'spf_s': None, 'spf_f': None,
+    'rqspf_sp': None, 'rqspf_s': None, 'rqspf_f': None,
+    'handicap': None, 'status': NOT_STARTED,
+}
+
+
+def _strip_entry_suffixes(name):
+    for suffix in _NAME_SUFFIXES:
+        if name.endswith(suffix):
+            name = name[:-len(suffix)].strip()
+    return name
+
+
+def _schedule_times(html):
+    """比赛号 → 时间。两种排布都试，**先命中的先占位**。"""
+    times = {}
+    for pattern in _SCHEDULE_TIME_PATTERNS:
+        for match in pattern.finditer(html):
+            first, second = match.group(1), match.group(2)
+            match_id, value = ((first, second) if first.isdigit()
+                               else (second, first))
+            times.setdefault(match_id, value)
+    return times
+
+
+def _schedule_leagues(html):
+    """联赛名与它下面的比赛。页面用联赛链接分段，段内的比赛都归它。"""
+    blocks = _SCHEDULE_LEAGUE_SPLIT.split(html)
+    leagues = {}
+    current = ''
+    for index, block in enumerate(blocks):
+        if index % 2 == 1:
+            current = block.strip()
+            continue
+        for match_id in _SCHEDULE_ID.findall(block):
+            leagues.setdefault(match_id, current)
+    return leagues
+
+
+def _match_status(match, now):
+    """按开赛时刻判断状态。
+
+    **这里有一处迁移前就存在的缺陷，原样保留了**：拿不到开赛时刻时会走到
+    「只按日期判断」那条分支，而它比较的是 `datetime` 与 `date`，
+    Python 直接抛 `TypeError`。外层只 `catch ValueError`，于是异常一路冒到
+    最外面，**整份赛程变成空列表**——一场没解析到时间的比赛，
+    足以让当天所有比赛都消失。
+
+    这条路只在 okooo 挂掉、回退到 500.com 时才走（线上 7 天内一次都没走过），
+    所以迁移期没有动它。修它会改变回退路径的返回值，应单独决策。
+    """
+    try:
+        if match['date'] and match['time']:
+            kickoff = _datetime.strptime(f"{match['date']} {match['time']}",
+                                         '%Y-%m-%d %H:%M')
+        else:
+            kickoff = None
+    except ValueError:
+        kickoff = None
+
+    if kickoff:
+        if kickoff < now - _timedelta(hours=FINISHED_AFTER_HOURS):
+            return FINISHED
+        if kickoff < now + _timedelta(hours=IN_PROGRESS_BEFORE_HOURS):
+            return IN_PROGRESS
+        return NOT_STARTED
+
+    try:
+        day = _datetime.strptime(match['date'], '%Y-%m-%d')
+    except ValueError:
+        return match['status']
+    # ↓ `datetime < date`，必抛 TypeError。见上面的说明。
+    return FINISHED if day < now.date() else match['status']
+
+
+def parse_500_schedule(html, date, now):
+    """500.com 的即时赔率页 → 未完结的比赛列表。
+
+    时间、场次号、联赛名在页面上分散在三处，各自抓出来再按比赛号拼回去。
+    已结束的比赛在返回前滤掉——调用方要的是「今天还能买的」。
+    """
+    matches = []
+    for found in _SCHEDULE_LINK.finditer(html):
+        match_id = found.group(1).strip()
+        home = _strip_entry_suffixes(found.group(2).strip())
+        away = _strip_entry_suffixes(found.group(3).strip())
+        if home and away and match_id:
+            matches.append(dict(_EMPTY_MATCH, id=match_id, home=home,
+                                away=away, date=date))
+
+    times = _schedule_times(html)
+    leagues = _schedule_leagues(html)
+    numbers = dict(_SCHEDULE_NUM.findall(html))
+
+    for match in matches:
+        match_id = match['id']
+        if match_id in times:
+            when = times[match_id]
+            parsed = _DAY_AND_TIME.match(when)
+            if parsed:
+                match['time'] = parsed.group(2)
+                # 时间里的日期与请求的日期不同时，记录跟着挪过去
+                # ——跨零点的比赛属于第二天
+                if parsed.group(1) != date[5:]:
+                    match['date'] = f'{date[:4]}-{parsed.group(1)}'
+            else:
+                match['time'] = when
+        if match_id in leagues:
+            match['league'] = leagues[match_id].strip()
+        if match_id in numbers:
+            match['num'] = numbers[match_id]
+        match['status'] = _match_status(match, now)
+
+    return [match for match in matches if match['status'] != FINISHED]
+
+
+# ── okooo 的单场页 ───────────────────────────────────────────────
+_OKOOO_NUM = re.compile(r'<span class="xh"><i>(\d+)</i></span>')
+_OKOOO_LEAGUE = re.compile(
+    r'href="//www\.okooo\.com/soccer/league/\d+/"[^>]*>([^<]+)</a>')
+_OKOOO_MATCH_ID = re.compile(r'/soccer/match/(\d+)')
+_OKOOO_MTIME = re.compile(r'mTime="([^"]+)"')
+_OKOOO_HOME = re.compile(
+    r'<span class="homenameobj[^>]*title="([^"]+)"[^>]*>([^<]+)</span>')
+_OKOOO_AWAY = re.compile(
+    r'<span class="awaynameobj[^>]*title="([^"]+)"[^>]*>([^<]+)</span>')
+_OKOOO_HANDICAP = re.compile(r'<span class="handicapobj[^>]*>([^<]+)</span>')
+_OKOOO_ODDS = re.compile(r'<em[^>]*>([\d.]+)</em>')
+_OKOOO_DATE = re.compile(r'(\d{4}-\d{2}-\d{2})')
+
+# 比赛表是页面上的第二张表，前面还有目录之类。少于两张说明页面不对——
+# 多半是被 WAF 换成了别的东西，而不是「今天没有比赛」。
+OKOOO_MINIMUM_TABLES = 2
+OKOOO_SCHEDULE_CELLS = 6
+# 胜平负三个价在前，让球三个价在后。**让球那三个要六个都在才算数**：
+# 只报了前三个时后三个是别的东西，取来会得到一组假赔率。
+OKOOO_FULL_ODDS = 6
+
+
+def _okooo_price(odds, index, required):
+    return float(odds[index]) if len(odds) >= required else None
+
+
+def parse_okooo_schedule(html, date, minimum_tables=OKOOO_MINIMUM_TABLES):
+    """okooo 的单场页 → `(未完结比赛, 表格数)`。
+
+    **表格数不足时返回 `(None, 数量)`**：那是「页面不对」，与「今天没有
+    未完结比赛」不是一回事，而两者都会让调用方去找备用数据源——
+    分开返回是为了让日志能说清是哪一种（§十一·3 那类故障里，
+    「200 加 0 场比赛」最难查的地方正是分不清这两者）。
+    """
+    tables = _TABLE.findall(html)
+    if len(tables) < minimum_tables:
+        return None, len(tables)
+
+    matches = []
+    current_date = date
+    for row in _ROW.findall(tables[1]):
+        cells = _CELL.findall(row)
+        if len(cells) < OKOOO_SCHEDULE_CELLS:
+            found = _OKOOO_DATE.search(row)
+            if found:
+                current_date = found.group(1)
+            continue
+
+        home = _OKOOO_HOME.search(cells[2])
+        away = _OKOOO_AWAY.search(cells[2])
+        if not home or not away:
+            continue
+
+        num_found = _OKOOO_NUM.search(cells[0])
+        league_found = _OKOOO_LEAGUE.search(cells[0])
+        id_found = _OKOOO_MATCH_ID.search(row)
+        num = num_found.group(1) if num_found else ''
+        handicap_found = _OKOOO_HANDICAP.search(cells[2])
+        odds = _OKOOO_ODDS.findall(cells[2])
+
+        spf = [_okooo_price(odds, index, index + 1) for index in range(3)]
+        rqspf = [_okooo_price(odds, index, OKOOO_FULL_ODDS)
+                 for index in range(3, OKOOO_FULL_ODDS)]
+
+        match_date, match_time = _okooo_kickoff(cells[1], current_date)
+        score = _TAG.sub('', cells[5]).strip()
+        matches.append({
+            'id': (id_found.group(1) if id_found
+                   else f'{current_date.replace("-", "")}_{num}'),
+            'home': home.group(2).strip(), 'away': away.group(2).strip(),
+            'num': num,
+            'date': match_date, 'time': match_time,
+            'league': league_found.group(1) if league_found else '',
+            'spf_sp': spf[0], 'spf_s': spf[1], 'spf_f': spf[2],
+            'rqspf_sp': rqspf[0], 'rqspf_s': rqspf[1], 'rqspf_f': rqspf[2],
+            'rqspf_odds': (
+                {'让胜': rqspf[0], '让平': rqspf[1], '让负': rqspf[2]}
+                if all(value and value > 1.0 for value in rqspf) else None),
+            'handicap': (handicap_found.group(1).strip()
+                         if handicap_found else None),
+            # **状态不看时钟，看比分栏**：有比分就是踢完了。比 500 那边
+            # 按时间推算可靠——页面自己说的比我们算的准。
+            'status': FINISHED if score and score != '-' else NOT_STARTED,
+            'source': 'okooo',
+        })
+
+    return [m for m in matches if m['status'] != FINISHED], len(tables)
+
+
+def _okooo_kickoff(cell, current_date):
+    """开赛时刻优先取 `mTime` 属性，没有再从单元格文本里认。
+
+    认不出格式时**原样留着那段文本**（`'稍后'` 这种），日期退回当前段落的
+    日期。两个来源在这一点上处置相同——迁移时我以为它们不一样，
+    黄金比对当场把这个想当然抓了出来。
+    """
+    mtime = _OKOOO_MTIME.search(cell)
+    raw = mtime.group(1) if mtime else _TAG.sub('', cell).strip()
+    parsed = _DAY_AND_TIME.match(raw)
+    if parsed:
+        return f'{current_date[:4]}-{parsed.group(1)}', parsed.group(2)
+    return current_date, raw
