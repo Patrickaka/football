@@ -226,3 +226,9 @@ dump('beidan_modeling', {k: as_comparable(v) for k, v in beidan_modeling_entries
 from scripts.gen_beidan_quality_golden import entries as beidan_quality_entries
 
 dump('beidan_quality', {k: as_comparable(v) for k, v in beidan_quality_entries()})
+
+
+# ---- beidan 盘口走势与因子 ----
+from scripts.gen_beidan_trends_golden import entries as beidan_trends_entries
+
+dump('beidan_trends', {k: as_comparable(v) for k, v in beidan_trends_entries()})
