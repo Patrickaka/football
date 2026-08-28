@@ -93,6 +93,16 @@ class ImpliedProbabilityTests(unittest.TestCase):
         self.assertEqual(settlement.implied_probability({'胜': 0, '平': None}), {})
         self.assertEqual(settlement.implied_probability({}), {})
 
+    def test_none_is_not_a_dict(self):
+        """入口守卫挡的是 `None`——空 dict 靠后面那道零分母守卫也能兜住，
+        `None` 只能靠这一道。变异验证里去掉它，只有这条会红。"""
+        self.assertEqual(settlement.implied_probability(None), {})
+
+    def test_infinite_odds_do_not_divide_by_zero(self):
+        """`1/inf` 是 0.0，而 `inf > 0` 成立——分母归零但分子这一档还在，
+        没有零分母守卫就会 ZeroDivisionError。"""
+        self.assertEqual(settlement.implied_probability({'胜': float('inf')}), {})
+
 
 class ActualOutcomeTests(unittest.TestCase):
     """五个取值候选、两条不同的候选顺序。"""
@@ -169,6 +179,15 @@ class ActualZjqTests(unittest.TestCase):
     def test_direct_field_outside_range_falls_back_to_score(self):
         record = {'actual_zjq': '9', 'actual_score': '2-1'}
         self.assertEqual(settlement.actual_zjq(record), '3')
+
+    def test_max_goals_itself_is_not_a_bucket_name(self):
+        """档位是 `'0'`~`'6'` 加 `'7+'`——**没有 `'7'` 这一档**。
+
+        合法档位取 `range(max_goals)` 而不是 `range(max_goals + 1)`，
+        差一位就会让 `'7'` 被当成合法直取值，而它在下游一个也对不上。"""
+        record = {'actual_zjq': '7', 'actual_score': '2-1'}
+        self.assertEqual(settlement.actual_zjq(record), '3')
+        self.assertEqual(settlement.actual_zjq({'actual_zjq': '6'}), '6')
 
     def test_zero_goal_direct_field_is_skipped_as_if_missing(self):
         """**`0` 是假值，`or` 链把「零球」当成缺失**——钉住现状。
@@ -284,14 +303,22 @@ class CalibrationFactorTests(unittest.TestCase):
             factor_min=0.0, factor_max=99.0)
         self.assertGreater(eight['0'], two['a'])
 
-    def test_default_prior_matches_the_shipped_value(self):
-        """默认值是公开契约的一部分（判据 29）。"""
-        expected, actuals = {'胜': 0.0, '平': 0.0, '负': 3.0}, {'胜': 3.0, '平': 0.0, '负': 0.0}
-        self.assertEqual(
-            settlement.calibration_factors(expected, actuals),
-            settlement.calibration_factors(expected, actuals, prior=FACTOR_PRIOR,
-                                           factor_min=FACTOR_MIN,
-                                           factor_max=FACTOR_MAX))
+    def test_default_prior_shows_up_in_an_unclamped_factor(self):
+        """默认值是公开契约的一部分（判据 29），而**要看见它，语料必须
+        落在钳制区间之内**——第一版这条用例喂的是 0 对 3 的悬殊样本，
+        先验改成 3.0 之后两侧照样被夹到 0.86/1.16，一模一样（判据 23）。
+
+        三档平摊先验 2.0，`(3.5+2)/(3+2) = 1.1`；先验换成 3.0 就是 1.125。"""
+        factors = settlement.calibration_factors(
+            {'胜': 3.0, '平': 3.0, '负': 3.0}, {'胜': 3.5, '平': 3.0, '负': 2.5})
+        self.assertAlmostEqual(factors['胜'], 1.1)
+        self.assertAlmostEqual(factors['平'], 1.0)
+        self.assertAlmostEqual(factors['负'], 0.9)
+
+    def test_zero_prior_does_not_divide_by_zero(self):
+        """先验是可调参数，调成 0 时分母就真的能到 0——护栏为此存在。"""
+        self.assertEqual(settlement.calibration_factors(
+            {'a': 0.0}, {'a': 0.0}, prior=0.0), {'a': FACTOR_MIN})
 
 
 class ApplyHistoryCalibrationTests(unittest.TestCase):
@@ -343,6 +370,23 @@ class ApplyHistoryCalibrationTests(unittest.TestCase):
         self.assertEqual(plain, 10.0)
         self.assertEqual(weighted, 10.0 * SAME_LEAGUE_WEIGHT)
 
+    def test_meta_keeps_enough_precision_to_be_read(self):
+        """说明字段的取整位数也是契约：**样本数保到 3 位、因子保到 6 位**。
+
+        整齐的语料看不出来——`1.25 × 10 = 12.5` 与因子恰好撞在钳制界上的
+        `0.86`/`1.16`，取 1 位还是 3 位、2 位还是 6 位都一模一样。
+        取 9 条同联赛样本（`11.25`，取 1 位会塌成 `11.2`）、
+        概率给一组不整齐的值，因子才落到 `0.933063` 这种量级上。
+        """
+        probs = {'胜': 0.37, '平': 0.31, '负': 0.32}
+        history = [_settled(score, probs=probs) for score in
+                   ('2-1', '1-1', '0-2', '1-0', '1-1', '0-1', '3-1', '1-1', '0-2')]
+        _, meta = settlement.apply_history_calibration(
+            probs, history, settlement.actual_spf, 'spf', league='K2联赛')
+        self.assertEqual(meta['sample_count'], 11.25)
+        self.assertEqual(meta['factors']['胜'], 0.933063)
+        self.assertEqual(meta['expected']['平'], 3.488)
+
     def test_other_league_is_not_weighted(self):
         records = [_settled('2-1', league='K2联赛') for _ in range(10)]
         self.assertEqual(self._apply(records, league='英超')[1]['sample_count'], 10.0)
@@ -375,6 +419,37 @@ class ApplyHistoryCalibrationTests(unittest.TestCase):
         """分节名错了就一条也攒不上——`section_key` 不是装饰性参数。"""
         records = [_settled('2-1', section='zjq') for _ in range(10)]
         self.assertEqual(self._apply(records, min_samples=1)[1]['sample_count'], 0.0)
+
+    def test_int_keys_collect_samples_but_never_move_the_probabilities(self):
+        """**这一条把两处不对称同时钉住**，它们相差一个 `str()`：
+
+        统计侧的档位按 `str(选项)` 建，所以 int 键的概率**攒得到样本**
+        （`applied` 为真、因子也算出来了）；而回写侧用的是原始键，
+        `factors.get(0)` 一个也对不上，每个选项静默乘以 1.0。
+        于是 `applied=True`、因子非平凡、**输出与输入逐位相同**——
+        判据 27 说的「不抛异常」与「真的生效」是两回事，就是这个样子。
+        """
+        history = [{'settled': True, 'actual': {'score': '1-1'},
+                    'zjq': {'probabilities': {'0': 0.1, '1': 0.2, '2': 0.3, '3': 0.4}}}
+                   for _ in range(12)]
+        probs = {0: 0.1, 1: 0.2, 2: 0.3, 3: 0.4}
+        adjusted, meta = settlement.apply_history_calibration(
+            probs, history, settlement.actual_zjq, 'zjq')
+        self.assertTrue(meta['applied'])
+        self.assertEqual(meta['sample_count'], 12.0)
+        self.assertEqual(sorted(meta['factors']), ['0', '1', '2', '3'])
+        self.assertNotEqual(set(meta['factors'].values()), {1.0})
+        self.assertEqual(adjusted, probs)
+
+    def test_all_zero_probabilities_are_rejected_before_normalising(self):
+        """全零概率会让归一化的分母也归零——这道守卫是唯一拦它的东西。"""
+        records = [_settled('2-1') for _ in range(12)]
+        _, meta = self._apply(records)
+        self.assertTrue(meta['applied'])
+        adjusted, meta = settlement.apply_history_calibration(
+            {'胜': 0.0, '平': 0.0, '负': 0.0}, records, settlement.actual_spf, 'spf')
+        self.assertEqual(meta['reason'], 'zero_adjusted_total')
+        self.assertEqual(adjusted, {'胜': 0.0, '平': 0.0, '负': 0.0})
 
     def test_non_string_keys_silently_fall_back_to_no_correction(self):
         """**钉住现状**：因子按 `str(选项)` 建，回写时用原始键。
@@ -497,6 +572,16 @@ class StorageRoundTripTests(unittest.TestCase):
         self.assertEqual(meta['reason'], 'empty_probabilities')
         load.assert_not_called()
 
+    def test_adapter_limit_matches_the_shipped_value(self):
+        """适配层自己有一份默认 limit——领域层那份守不住它（变异验证里
+        只改适配层这一处，领域层的用例一条都不会红）。"""
+        history = [_settled('2-1') for _ in range(DEFAULT_LIMIT + 5)]
+        with mock.patch.object(kv_store, 'load',
+                               return_value=json.loads(json.dumps(history))):
+            _, meta = apply_beidan_history_calibration(
+                {'胜': 0.40, '平': 0.30, '负': 0.30}, 'spf')
+        self.assertEqual(meta['sample_count'], float(DEFAULT_LIMIT))
+
     def test_unknown_bet_type_collects_nothing(self):
         with mock.patch.object(kv_store, 'load',
                                return_value=json.loads(json.dumps(self.HISTORY))):
@@ -512,7 +597,9 @@ class StorageRoundTripTests(unittest.TestCase):
 
 class SaveHistoryTests(unittest.TestCase):
 
-    def test_newest_first_and_truncated(self):
+    HISTORY_LIMIT = 500
+
+    def test_newest_first(self):
         records = [{'created_at': f'2026-08-{day:02d}T00:00:00', 'n': day}
                    for day in range(1, 21)]
         with mock.patch.object(kv_store, 'save') as save:
@@ -520,6 +607,19 @@ class SaveHistoryTests(unittest.TestCase):
         stored = save.call_args[0][1]
         self.assertEqual(stored[0]['n'], 20)
         self.assertEqual(stored[-1]['n'], 1)
+
+    def test_truncated_to_the_limit(self):
+        """**上一版这条用例只喂了 20 条**，名字里带 truncated 却从没到过
+        500——把截断整句删掉照样全绿（判据 7）。要越过界才测得到界。"""
+        records = [{'created_at': f'2026-{1 + n // 300:02d}-01T00:00:{n % 60:02d}',
+                    'n': n} for n in range(self.HISTORY_LIMIT + 5)]
+        with mock.patch.object(kv_store, 'save') as save:
+            _save_beidan_history(records)
+        stored = save.call_args[0][1]
+        self.assertEqual(len(stored), self.HISTORY_LIMIT)
+        # 截掉的是最旧的那 5 条，不是最新的
+        self.assertNotIn(0, [r['n'] for r in stored])
+        self.assertIn(self.HISTORY_LIMIT + 4, [r['n'] for r in stored])
 
     def test_records_without_a_timestamp_sort_last(self):
         records = [{'n': 'no_ts'}, {'created_at': '2026-08-01T00:00:00', 'n': 'ts'}]
