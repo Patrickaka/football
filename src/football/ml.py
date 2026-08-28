@@ -76,76 +76,9 @@ except Exception:
 DEFAULT_RHO = 0.1
 
 
-def get_dc_rho(league: str = None, total_line: float = None, handicap: float = None) -> float:
-    """
-    根据比赛特征动态获取 Dixon-Coles 的 rho 参数
-    
-    参数：
-        league: 联赛名称
-        total_line: 大小球盘口
-        handicap: 亚盘让球
-    
-    返回：
-        动态 rho 值
-    """
-    # 默认值
-    rho = 0.1
-    
-    # 低进球联赛（如意甲防守强联赛）使用更高的 rho
-    low_goal_leagues = ['意甲', '意乙', '葡超', '希腊超', '阿甲']
-    if league and league in low_goal_leagues:
-        rho = 0.12
-    
-    # 亚冠/欧冠等大赛倾向于低 rho
-    big_leagues = ['欧冠', '欧联', '世界杯', '欧洲杯', '美洲杯']
-    if league and league in big_leagues:
-        rho = 0.08
-    
-    # 根据总进球盘口调整
-    if total_line is not None:
-        if total_line <= 2.25:
-            rho = max(rho, 0.12)  # 低进球盘口，提高 rho
-        elif total_line >= 3.0:
-            rho = min(rho, 0.04)  # 高进球盘口，降低 rho
-    
-    # 根据让球调整
-    if handicap is not None:
-        if abs(handicap) <= 0.25:
-            rho = max(rho, 0.10)  # 平手盘，提高 rho
-    
-    return rho
 
-def poisson_pmf(k: int, lam: float) -> float:
-    """泊松概率质量函数 P(X=k)"""
-    return math.exp(-lam) * lam ** k / math.factorial(k)
 
-def dixon_coles_adjustment(rho: float, lam_home: float, lam_away: float,
-                          h_goals: int, a_goals: int) -> float:
-    """Dixon-Coles 调整系数"""
-    if h_goals > 1 or a_goals > 1:
-        return 1.0
 
-    p_home_0 = poisson_pmf(0, lam_home)
-    p_home_1 = poisson_pmf(1, lam_home)
-    p_away_0 = poisson_pmf(0, lam_away)
-    p_away_1 = poisson_pmf(1, lam_away)
-
-    if h_goals == 0 and a_goals == 0:
-        return 1 - rho * p_home_1 * p_away_1 / (p_home_0 * p_away_0)
-    elif h_goals == 1 and a_goals == 0:
-        return 1 + rho * p_home_0 * p_away_1 / (p_home_1 * p_away_0)
-    elif h_goals == 0 and a_goals == 1:
-        return 1 + rho * p_home_1 * p_away_0 / (p_home_0 * p_away_1)
-    elif h_goals == 1 and a_goals == 1:
-        return 1 - rho * p_home_0 * p_away_0 / (p_home_1 * p_away_1)
-    return 1.0
-
-def dixon_coles_score_prob(h_goals: int, a_goals: int, lam_home: float, 
-                           lam_away: float, rho: float = DEFAULT_RHO) -> float:
-    """计算 Dixon-Coles 模型下的比分概率"""
-    poisson_prob = poisson_pmf(h_goals, lam_home) * poisson_pmf(a_goals, lam_away)
-    adjustment = dixon_coles_adjustment(rho, lam_home, lam_away, h_goals, a_goals)
-    return poisson_prob * adjustment
 
 def dixon_coles_score_matrix(lam_home: float, lam_away: float,
                              max_goals: int = 7, rho: float = DEFAULT_RHO) -> np.ndarray:
@@ -193,28 +126,6 @@ GOAL_COUNT_LABELS = {0: '0球', 1: '1球', 2: '2球', 3: '3球',
                      4: '4球', 5: '5球', 6: '6球', 7: '7球+'}
 
 
-def get_close_total_line(total: dict, default: float = 2.5) -> float:
-    """
-    统一获取大小球终盘线
-    
-    支持多种数据结构：
-    - total.get('close_line') - 直接存储的终盘线
-    - total.get('line') - 直接存储的线
-    - total.get('close', {}).get('line') - 通过 close 字典获取（如 fetch_daxiao 返回的结构）
-    
-    参数：
-        total: 大小球数据字典
-        default: 默认值（当所有来源都取不到时使用）
-    
-    返回：
-        大小球终盘线
-    """
-    return (
-        total.get('close_line')
-        or total.get('line')
-        or total.get('close', {}).get('line')
-        or default
-    )
 
 
 def calculate_goal_counts(prob_matrix: np.ndarray) -> Dict[int, float]:
@@ -242,98 +153,6 @@ def recommend_goal_counts(prob_matrix: np.ndarray, top_n: int = 2) -> List[Dict]
         })
     return recommendations
 
-def recommend_goal_counts_from_dist(goal_dist: Dict[int, float], top_n: int = 2, 
-                                      high_risk: bool = False, low_quality_sample: bool = False) -> List[Dict]:
-    """
-    从进球数分布字典推荐概率最大的进球数
-    
-    动态推荐策略：
-    - 第一名概率 ≥ 26%，且第二名差距 ≥ 5%，只推 1 个
-    - 前两名累计概率 ≥ 45%，推 2 个
-    - 高风险盘或盘口冲突，最多推 1 个
-    - 低质量历史样本时，只展示分布，推荐基于原始模型
-    
-    参数：
-        goal_dist: 进球数分布字典
-        top_n: 最大推荐数量（上限）
-        high_risk: 是否为高风险盘
-        low_quality_sample: 是否为低质量样本
-    
-    返回：
-        推荐列表
-    """
-    sorted_counts = sorted(goal_dist.items(), key=lambda x: -x[1])
-    
-    if not sorted_counts:
-        return []
-    
-    recommendations = []
-    
-    # 高风险盘或盘口冲突，最多推1个
-    if high_risk:
-        goals, prob = sorted_counts[0]
-        recommendations.append({
-            'goals': goals,
-            'label': GOAL_COUNT_LABELS.get(goals, f'{goals}球'),
-            'probability': prob,
-            'rank': 1
-        })
-        return recommendations
-    
-    # 第一名概率 ≥ 26%，且第二名差距 ≥ 5%，只推 1 个
-    if len(sorted_counts) >= 2:
-        first_prob = sorted_counts[0][1]
-        second_prob = sorted_counts[1][1]
-        
-        if first_prob >= 0.26 and (first_prob - second_prob) >= 0.05:
-            goals, prob = sorted_counts[0]
-            recommendations.append({
-                'goals': goals,
-                'label': GOAL_COUNT_LABELS.get(goals, f'{goals}球'),
-                'probability': prob,
-                'rank': 1
-            })
-            return recommendations
-    
-    # 前两名累计概率 ≥ 45%，推 2 个
-    if len(sorted_counts) >= 2:
-        first_second_total = sorted_counts[0][1] + sorted_counts[1][1]
-        if first_second_total >= 0.45:
-            for i, (goals, prob) in enumerate(sorted_counts[:2], 1):
-                recommendations.append({
-                    'goals': goals,
-                    'label': GOAL_COUNT_LABELS.get(goals, f'{goals}球'),
-                    'probability': prob,
-                    'rank': i
-                })
-            return recommendations
-    
-    # 默认策略：按概率覆盖和差距阈值选择
-    recommendations = [sorted_counts[0]]
-    
-    for goals, prob in sorted_counts[1:]:
-        if len(recommendations) >= 3:
-            break
-        
-        # 和第一名差距过大则不推荐
-        if prob < sorted_counts[0][1] * 0.72:
-            continue
-        
-        # 推荐累计概率至少覆盖 48%
-        recommendations.append((goals, prob))
-        if sum(x[1] for x in recommendations) >= 0.48:
-            break
-    
-    # 转换为输出格式
-    return [
-        {
-            'goals': goals,
-            'label': GOAL_COUNT_LABELS.get(goals, f'{goals}球'),
-            'probability': prob,
-            'rank': i + 1
-        }
-        for i, (goals, prob) in enumerate(recommendations)
-    ]
 
 def get_goal_count_distribution(prob_matrix: np.ndarray) -> List[Dict]:
     """获取进球数分布统计"""
@@ -350,17 +169,6 @@ def get_goal_count_distribution(prob_matrix: np.ndarray) -> List[Dict]:
     return distribution
 
 
-def get_goal_count_distribution_from_dist(goal_dist: Dict[int, float]) -> List[Dict]:
-    """从进球数分布字典获取分布统计（用于融合后的分布）"""
-    return [
-        {
-            'goals': goals,
-            'label': GOAL_COUNT_LABELS.get(goals, f'{goals}球'),
-            'probability': prob,
-            'percentage': f'{prob * 100:.1f}%'
-        }
-        for goals, prob in sorted(goal_dist.items())
-    ]
 
 def predict_goal_counts_from_candidates(candidates: List[Tuple], max_goals: int = 7, asian=None, total=None) -> Dict:
     """从候选比分列表计算进球数推荐"""
@@ -1069,6 +877,18 @@ class MarketTimingPredictor:
 # ==================== 训练好的ML模型加载与预测接口 ====================
 
 import json
+
+from ..domain.sports.football import ml_contract as _mlc
+
+# 纯计算转发给领域层
+get_dc_rho = _mlc.get_dc_rho
+poisson_pmf = _mlc.poisson_pmf
+dixon_coles_adjustment = _mlc.dixon_coles_adjustment
+dixon_coles_score_prob = _mlc.dixon_coles_score_prob
+recommend_goal_counts_from_dist = _mlc.recommend_goal_counts_from_dist
+get_goal_count_distribution_from_dist = _mlc.get_goal_count_distribution_from_dist
+# **与 parsing 那份逐字相同**（F-3 已 AST 确认），只留一份
+from ..domain.sports.football.parsing import get_close_total_line
 
 # 全局变量存储加载的模型
 _trained_ml_model = None

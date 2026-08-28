@@ -12,6 +12,15 @@ ML特征字段定义
 
 from typing import Dict, List, Any
 
+from ..domain.sports.football import ml_contract as _mlc
+
+# 纯计算转发给领域层
+get_feature_names = _mlc.get_feature_names
+get_feature_defaults = _mlc.get_feature_defaults
+validate_features = _mlc.validate_features
+audit_feature_payload = _mlc.audit_feature_payload
+get_feature_description = _mlc.get_feature_description
+
 
 # ==================== 特征版本 ====================
 FEATURE_VERSION = "v2"
@@ -116,61 +125,9 @@ ALL_FEATURES = (
 )
 
 
-def get_feature_names() -> List[str]:
-    """获取所有特征名称列表"""
-    return [f['name'] for f in ALL_FEATURES]
 
 
-def get_feature_defaults() -> Dict[str, Any]:
-    """获取特征默认值字典"""
-    return {f['name']: f['default'] for f in ALL_FEATURES}
 
 
-def validate_features(features: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    验证并标准化特征字典
-    
-    参数：
-        features: 原始特征字典
-    
-    返回：
-        标准化后的特征字典（补充缺失字段的默认值）
-    """
-    result = get_feature_defaults().copy()
-    
-    for key, value in features.items():
-        if key in result:
-            # 类型转换
-            feature_def = next((f for f in ALL_FEATURES if f['name'] == key), None)
-            if feature_def:
-                target_type = feature_def['type']
-                if target_type == 'float':
-                    result[key] = float(value) if value is not None else feature_def['default']
-                elif target_type == 'int':
-                    result[key] = int(value) if value is not None else feature_def['default']
-                else:
-                    result[key] = value
-    
-    return result
 
 
-def audit_feature_payload(features: Dict[str, Any]) -> Dict[str, Any]:
-    """Return a machine-readable contract audit without silently hiding drift."""
-    expected = set(get_feature_names())
-    supplied = set(features or {})
-    missing = sorted(expected - supplied)
-    unknown = sorted(supplied - expected)
-    return {
-        'feature_version': FEATURE_VERSION,
-        'expected_count': len(expected),
-        'supplied_count': len(supplied),
-        'missing': missing,
-        'unknown': unknown,
-        'complete': not missing and not unknown,
-    }
-
-
-def get_feature_description(name: str) -> str:
-    """获取特征描述"""
-    feature = next((f for f in ALL_FEATURES if f['name'] == name), None)
-    return feature['description'] if feature else ''

@@ -24,6 +24,11 @@ import numpy as np
 
 from ..common import kv_store
 
+from ..domain.sports.football import ml_contract as _mlc
+
+# 纯计算转发给领域层
+split_by_time = _mlc.split_by_time
+
 
 # ==================== 常量配置 ====================
 
@@ -72,33 +77,6 @@ def load_training_data(filepath: str) -> List[Dict]:
     return samples
 
 
-def split_by_time(samples: List[Dict], train_ratio: float = 0.7, 
-                  val_ratio: float = 0.15) -> Tuple[List[Dict], List[Dict], List[Dict]]:
-    """
-    按时间切分数据集
-    
-    参数：
-        samples: 所有样本
-        train_ratio: 训练集比例
-        val_ratio: 验证集比例
-    
-    返回：
-        (训练集, 验证集, 测试集)
-    """
-    n = len(samples)
-    train_end = int(n * train_ratio)
-    val_end = train_end + int(n * val_ratio)
-    
-    train_set = samples[:train_end]
-    val_set = samples[train_end:val_end]
-    test_set = samples[val_end:]
-    
-    print(f"数据切分完成:")
-    print(f"  训练集: {len(train_set)} 场 ({train_ratio*100:.0f}%)")
-    print(f"  验证集: {len(val_set)} 场 ({val_ratio*100:.0f}%)")
-    print(f"  测试集: {len(test_set)} 场 ({(1-train_ratio-val_ratio)*100:.0f}%)")
-    
-    return train_set, val_set, test_set
 
 
 def prepare_features_target(samples: List[Dict], feature_names: List[str]) -> Tuple[np.ndarray, np.ndarray]:
