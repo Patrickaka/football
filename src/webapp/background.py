@@ -13,6 +13,7 @@
 什么」有一个确定的答案。
 """
 import logging
+import os
 import threading
 
 from src.foundation.tasks import TaskScheduler
@@ -25,6 +26,16 @@ log = logging.getLogger('webapp.background')
 # ——`TaskScheduler.start()` 只会告警、不会拒绝，一次性任务从此排不上队。
 MAX_WORKERS = 8
 
+# 周期任务首轮之间错开多久。**这台机器上冻死过两次**，两次都紧跟在
+# `systemctl restart` 之后：重启把所有缓存清零，六个周期任务同时开跑，
+# 内存被吃穿到连 sshd 都 fork 不出来（云监控上 Available 归零、
+# 监控 agent 自己也断了上报）。
+#
+# 60 秒 × 五个间隔 = 最后一个任务晚五分钟才跑第一轮。这个代价是可接受的
+# ——周期最短的那个是十分钟，晚五分钟不改变任何一天的结果；
+# 而同时开跑的代价是整台机器失联半小时。
+STARTUP_STAGGER_SECONDS = int(os.getenv('TASK_STARTUP_STAGGER', '60'))
+
 _lock = threading.Lock()
 _scheduler = None
 _started = False
@@ -36,7 +47,9 @@ def scheduler():
     if _scheduler is None:
         with _lock:
             if _scheduler is None:
-                _scheduler = TaskScheduler(max_workers=MAX_WORKERS)
+                _scheduler = TaskScheduler(
+                    max_workers=MAX_WORKERS,
+                    startup_stagger_seconds=STARTUP_STAGGER_SECONDS)
     return _scheduler
 
 

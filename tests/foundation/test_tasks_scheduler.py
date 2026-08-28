@@ -212,3 +212,83 @@ class PeriodicTaskTests(unittest.TestCase):
         time.sleep(0.18)
         scheduler.shutdown(wait=True)
         self.assertGreaterEqual(scheduler.results()['tick']['runs'], 2)
+
+class StartupStaggerTests(unittest.TestCase):
+    """周期任务首轮错开。
+
+    **这台机器上因此整机冻死过两次**：重启把所有缓存清零，六个周期任务同时
+    开跑，内存被吃穿到连 sshd 都 fork 不出来——TCP 连得上、ping 通、
+    SSH 在 banner 交换阶段超时，而内核忙到没机会跑 OOM killer。
+    """
+
+    def test_zero_stagger_keeps_the_old_behaviour(self):
+        """**默认不错开**：错开多少是部署形态的事，不该由调度器决定。"""
+        scheduler = TaskScheduler(max_workers=4)
+        self.assertEqual(scheduler.startup_stagger_seconds, 0)
+
+    def test_a_negative_stagger_is_refused(self):
+        with self.assertRaises(ValueError):
+            TaskScheduler(max_workers=2, startup_stagger_seconds=-1)
+
+    def test_the_first_round_is_delayed_by_position(self):
+        """第 i 个任务等 `i × 间隔`。**要断言每一个的延迟**，
+        只看「有没有延迟」的话，把它写成常数也一样通过（判据 5）。"""
+        delays = []
+        scheduler = TaskScheduler(max_workers=4, startup_stagger_seconds=7)
+        original = scheduler._run_periodic
+
+        def record(name, fn, interval, start_delay=0):
+            delays.append((name, start_delay))
+
+        scheduler._run_periodic = record
+        for name in ('a', 'b', 'c'):
+            scheduler.submit_periodic(name, lambda: None, interval_seconds=60)
+        scheduler.start()
+        scheduler.shutdown()
+        self.assertEqual(sorted(delays), [('a', 0), ('b', 7), ('c', 14)])
+
+    def test_the_delay_only_postpones_the_first_round(self):
+        """错开只推迟第一轮，之后的间隔不受影响——否则周期就被改掉了。"""
+        runs = []
+        scheduler = TaskScheduler(max_workers=2, startup_stagger_seconds=0)
+        scheduler.submit_periodic('t', lambda: runs.append(1),
+                                  interval_seconds=0.01)
+        scheduler.start()
+        deadline = time.time() + 2
+        while len(runs) < 3 and time.time() < deadline:
+            time.sleep(0.01)
+        scheduler.shutdown()
+        self.assertGreaterEqual(len(runs), 3)
+
+    def test_shutdown_interrupts_the_stagger_wait(self):
+        """**等待期间也要响应停机**：一个错开五分钟的任务不该把停机拖住五分钟。
+
+        要看的那个任务必须排在第二位——**第一个的错开量是 0**，
+        它会立刻开跑，拿它测等于什么也没测（判据 23）。
+        """
+        started = threading.Event()
+        scheduler = TaskScheduler(max_workers=3, startup_stagger_seconds=30)
+        scheduler.submit_periodic('first', lambda: None, interval_seconds=60)
+        scheduler.submit_periodic('slow', lambda: started.set(),
+                                  interval_seconds=60)
+        scheduler.start()
+        began = time.time()
+        scheduler.shutdown()
+        self.assertLess(time.time() - began, 5, '停机被错开的等待拖住了')
+        self.assertFalse(started.is_set(), '错开期间不该已经跑过一轮')
+
+    def test_a_staggered_task_has_not_run_yet(self):
+        """错开生效的正面证据：等一小会儿，第二个任务还没动。"""
+        ran = set()
+        scheduler = TaskScheduler(max_workers=4, startup_stagger_seconds=30)
+        scheduler.submit_periodic('first', lambda: ran.add('first'),
+                                  interval_seconds=60)
+        scheduler.submit_periodic('second', lambda: ran.add('second'),
+                                  interval_seconds=60)
+        scheduler.start()
+        deadline = time.time() + 2
+        while 'first' not in ran and time.time() < deadline:
+            time.sleep(0.01)
+        scheduler.shutdown()
+        self.assertIn('first', ran, '第一个任务不该被错开')
+        self.assertNotIn('second', ran, '第二个任务应当还在等')
