@@ -1,0 +1,2489 @@
+{
+ "asian": [
+  {
+   "open": {
+    "handicap": -0.967,
+    "home_odds": 0.861,
+    "away_odds": 0.95
+   },
+   "close": {
+    "handicap": -0.75,
+    "home_odds": 0.978,
+    "away_odds": 0.859
+   }
+  },
+  {
+   "open": {
+    "handicap": -0.233,
+    "home_odds": 0.765,
+    "away_odds": 1.036
+   },
+   "close": {
+    "handicap": -0.15,
+    "home_odds": 0.859,
+    "away_odds": 0.945
+   }
+  },
+  {
+   "open": {
+    "handicap": -0.266,
+    "home_odds": 0.908,
+    "away_odds": 0.959
+   },
+   "close": {
+    "handicap": -0.141,
+    "home_odds": 0.904,
+    "away_odds": 0.941
+   }
+  },
+  {
+   "open": {
+    "handicap": 0,
+    "home_odds": 0.86,
+    "away_odds": 0.968
+   },
+   "close": {
+    "handicap": -1.453,
+    "home_odds": 0.876,
+    "away_odds": 0.937
+   }
+  },
+  {
+   "open": {
+    "handicap": -0.063,
+    "home_odds": 0.959,
+    "away_odds": 0.868
+   },
+   "close": {
+    "handicap": -0.094,
+    "home_odds": 0.872,
+    "away_odds": 0.933
+   }
+  },
+  {
+   "open": {
+    "handicap": 0.75,
+    "home_odds": 0.849,
+    "away_odds": 0.987
+   },
+   "close": {
+    "handicap": 0.719,
+    "home_odds": 0.869,
+    "away_odds": 0.956
+   }
+  },
+  {
+   "open": {
+    "handicap": 0.281,
+    "home_odds": 0.904,
+    "away_odds": 0.946
+   },
+   "close": {
+    "handicap": 0.281,
+    "home_odds": 0.903,
+    "away_odds": 0.944
+   }
+  },
+  {
+   "open": {
+    "handicap": 2.031,
+    "home_odds": 0.881,
+    "away_odds": 0.965
+   },
+   "close": {
+    "handicap": 1.719,
+    "home_odds": 0.896,
+    "away_odds": 0.934
+   }
+  },
+  {
+   "open": {
+    "handicap": -0.281,
+    "home_odds": 0.999,
+    "away_odds": 0.843
+   },
+   "close": {
+    "handicap": -0.313,
+    "home_odds": 0.916,
+    "away_odds": 0.926
+   }
+  },
+  {
+   "open": {
+    "handicap": 0.719,
+    "home_odds": 0.892,
+    "away_odds": 0.91
+   },
+   "close": {
+    "handicap": 0.813,
+    "home_odds": 0.948,
+    "away_odds": 0.875
+   }
+  },
+  {
+   "open": {
+    "handicap": -1.033,
+    "home_odds": 0.871,
+    "away_odds": 0.971
+   },
+   "close": {
+    "handicap": 0,
+    "home_odds": 0.91,
+    "away_odds": 0.922
+   }
+  },
+  {
+   "open": {
+    "handicap": 0.688,
+    "home_odds": 0.943,
+    "away_odds": 0.875
+   },
+   "close": {
+    "handicap": 0.938,
+    "home_odds": 0.893,
+    "away_odds": 0.926
+   }
+  },
+  {
+   "open": {
+    "handicap": 1.234,
+    "home_odds": 1.014,
+    "away_odds": 0.848
+   },
+   "close": {
+    "handicap": 1.359,
+    "home_odds": 0.916,
+    "away_odds": 0.923
+   }
+  },
+  {
+   "open": {
+    "handicap": 0.531,
+    "home_odds": 0.899,
+    "away_odds": 0.933
+   },
+   "close": {
+    "handicap": 0.484,
+    "home_odds": 0.905,
+    "away_odds": 0.956
+   }
+  },
+  {
+   "open": {
+    "handicap": -0.391,
+    "home_odds": 0.894,
+    "away_odds": 0.931
+   },
+   "close": {
+    "handicap": -0.25,
+    "home_odds": 0.954,
+    "away_odds": 0.886
+   }
+  },
+  {
+   "open": {
+    "handicap": 0.462,
+    "home_odds": 0.991,
+    "away_odds": 0.825
+   },
+   "close": {
+    "handicap": 0.385,
+    "home_odds": 0.982,
+    "away_odds": 0.825
+   }
+  },
+  {
+   "open": {
+    "handicap": -1.5,
+    "home_odds": 0.878,
+    "away_odds": 0.944
+   },
+   "close": {
+    "handicap": -1.321,
+    "home_odds": 1.094,
+    "away_odds": 0.889
+   }
+  },
+  {
+   "open": {
+    "handicap": -0.5,
+    "home_odds": 0.815,
+    "away_odds": 1.011
+   },
+   "close": {
+    "handicap": -0.483,
+    "home_odds": 0.845,
+    "away_odds": 1.021
+   }
+  },
+  {
+   "open": {
+    "handicap": 1.188,
+    "home_odds": 0.974,
+    "away_odds": 0.849
+   },
+   "close": {
+    "handicap": 1.203,
+    "home_odds": 0.951,
+    "away_odds": 0.858
+   }
+  },
+  {
+   "open": {
+    "handicap": 0.25,
+    "home_odds": 0.937,
+    "away_odds": 0.912
+   },
+   "close": {
+    "handicap": 0.25,
+    "home_odds": 0.989,
+    "away_odds": 0.853
+   }
+  },
+  {
+   "open": {
+    "handicap": 2.359,
+    "home_odds": 0.928,
+    "away_odds": 0.908
+   },
+   "close": {
+    "handicap": 2.109,
+    "home_odds": 0.899,
+    "away_odds": 0.947
+   }
+  },
+  {
+   "open": {
+    "handicap": 0.531,
+    "home_odds": 0.874,
+    "away_odds": 0.933
+   },
+   "close": {
+    "handicap": 0.563,
+    "home_odds": 0.907,
+    "away_odds": 0.932
+   }
+  },
+  {
+   "open": {
+    "handicap": -0.25,
+    "home_odds": 0.817,
+    "away_odds": 1.016
+   },
+   "close": {
+    "handicap": -0.234,
+    "home_odds": 0.866,
+    "away_odds": 0.984
+   }
+  },
+  {
+   "open": {
+    "handicap": 1.078,
+    "home_odds": 0.986,
+    "away_odds": 0.877
+   },
+   "close": {
+    "handicap": 1.063,
+    "home_odds": 0.935,
+    "away_odds": 0.9
+   }
+  },
+  {
+   "open": {
+    "handicap": 0.234,
+    "home_odds": 1.066,
+    "away_odds": 0.792
+   },
+   "close": {
+    "handicap": 0.203,
+    "home_odds": 0.994,
+    "away_odds": 0.874
+   }
+  },
+  {
+   "open": {
+    "handicap": 1.047,
+    "home_odds": 0.903,
+    "away_odds": 0.929
+   },
+   "close": {
+    "handicap": 1.219,
+    "home_odds": 0.979,
+    "away_odds": 0.867
+   }
+  },
+  {
+   "open": {
+    "handicap": -0.031,
+    "home_odds": 0.895,
+    "away_odds": 0.949
+   },
+   "close": {
+    "handicap": 0.125,
+    "home_odds": 0.953,
+    "away_odds": 0.898
+   }
+  },
+  {
+   "open": {
+    "handicap": 0.359,
+    "home_odds": 0.901,
+    "away_odds": 0.934
+   },
+   "close": {
+    "handicap": 0.281,
+    "home_odds": 0.867,
+    "away_odds": 0.988
+   }
+  },
+  {
+   "open": {
+    "handicap": -0.719,
+    "home_odds": 1.036,
+    "away_odds": 0.829
+   },
+   "close": {
+    "handicap": -0.953,
+    "home_odds": 0.883,
+    "away_odds": 0.971
+   }
+  },
+  {
+   "open": {
+    "handicap": 0.467,
+    "home_odds": 0.959,
+    "away_odds": 0.897
+   },
+   "close": {
+    "handicap": 0.467,
+    "home_odds": 0.878,
+    "away_odds": 1.052
+   }
+  },
+  {
+   "open": {
+    "handicap": 2.233,
+    "home_odds": 0.964,
+    "away_odds": 0.851
+   },
+   "close": {
+    "handicap": 2.217,
+    "home_odds": 0.947,
+    "away_odds": 0.866
+   }
+  },
+  {
+   "open": {
+    "handicap": -0.267,
+    "home_odds": 0.943,
+    "away_odds": 0.871
+   },
+   "close": {
+    "handicap": -0.283,
+    "home_odds": 0.918,
+    "away_odds": 0.899
+   }
+  },
+  {
+   "open": {
+    "handicap": -0.719,
+    "home_odds": 0.986,
+    "away_odds": 0.861
+   },
+   "close": {
+    "handicap": -0.656,
+    "home_odds": 0.961,
+    "away_odds": 0.899
+   }
+  },
+  {
+   "open": {
+    "handicap": 1.281,
+    "home_odds": 0.904,
+    "away_odds": 0.915
+   },
+   "close": {
+    "handicap": 1.281,
+    "home_odds": 0.964,
+    "away_odds": 0.878
+   }
+  },
+  {
+   "open": {
+    "handicap": 0.453,
+    "home_odds": 0.998,
+    "away_odds": 0.846
+   },
+   "close": {
+    "handicap": 0.438,
+    "home_odds": 0.906,
+    "away_odds": 0.984
+   }
+  },
+  {
+   "open": {
+    "handicap": -1.484,
+    "home_odds": 0.944,
+    "away_odds": 0.896
+   },
+   "close": {
+    "handicap": -1.5,
+    "home_odds": 0.959,
+    "away_odds": 0.867
+   }
+  },
+  {
+   "open": {
+    "handicap": 0.25,
+    "home_odds": 0.915,
+    "away_odds": 0.919
+   },
+   "close": {
+    "handicap": 0.109,
+    "home_odds": 0.883,
+    "away_odds": 0.924
+   }
+  },
+  {
+   "open": {
+    "handicap": 0.031,
+    "home_odds": 0.899,
+    "away_odds": 0.943
+   },
+   "close": {
+    "handicap": 0.047,
+    "home_odds": 0.941,
+    "away_odds": 0.908
+   }
+  },
+  {
+   "open": {
+    "handicap": -0.267,
+    "home_odds": 0.913,
+    "away_odds": 0.881
+   },
+   "close": {
+    "handicap": 0,
+    "home_odds": 0.93,
+    "away_odds": 0.878
+   }
+  },
+  {
+   "open": {
+    "handicap": -0.375,
+    "home_odds": 0.913,
+    "away_odds": 0.895
+   },
+   "close": {
+    "handicap": -0.578,
+    "home_odds": 0.888,
+    "away_odds": 0.938
+   }
+  },
+  {
+   "open": {
+    "handicap": -0.233,
+    "home_odds": 0.873,
+    "away_odds": 0.963
+   },
+   "close": {
+    "handicap": -0.233,
+    "home_odds": 0.852,
+    "away_odds": 0.977
+   }
+  },
+  {
+   "open": {
+    "handicap": 0.469,
+    "home_odds": 0.944,
+    "away_odds": 0.851
+   },
+   "close": {
+    "handicap": 0.5,
+    "home_odds": 0.877,
+    "away_odds": 0.919
+   }
+  },
+  {
+   "open": {
+    "handicap": 0.268,
+    "home_odds": 0.897,
+    "away_odds": 0.934
+   },
+   "close": {
+    "handicap": 0.375,
+    "home_odds": 0.905,
+    "away_odds": 0.921
+   }
+  },
+  {
+   "open": {
+    "handicap": -0.281,
+    "home_odds": 0.903,
+    "away_odds": 0.929
+   },
+   "close": {
+    "handicap": -0.219,
+    "home_odds": 0.877,
+    "away_odds": 0.966
+   }
+  },
+  {
+   "open": {
+    "handicap": 0.5,
+    "home_odds": 0.898,
+    "away_odds": 0.959
+   },
+   "close": {
+    "handicap": 0,
+    "home_odds": 0.95,
+    "away_odds": 0.911
+   }
+  },
+  {
+   "open": {
+    "handicap": 0.033,
+    "home_odds": 0.821,
+    "away_odds": 1.029
+   },
+   "close": {
+    "handicap": 0.017,
+    "home_odds": 0.871,
+    "away_odds": 0.986
+   }
+  },
+  {
+   "open": {
+    "handicap": 1.467,
+    "home_odds": 0.971,
+    "away_odds": 0.85
+   },
+   "close": {
+    "handicap": 0,
+    "home_odds": 0.92,
+    "away_odds": 1.03
+   }
+  },
+  {
+   "open": {
+    "handicap": -1.75,
+    "home_odds": 0.951,
+    "away_odds": 0.848
+   },
+   "close": {
+    "handicap": -1.703,
+    "home_odds": 0.863,
+    "away_odds": 0.907
+   }
+  },
+  {
+   "open": {
+    "handicap": -0.767,
+    "home_odds": 0.984,
+    "away_odds": 0.833
+   },
+   "close": {
+    "handicap": -0.767,
+    "home_odds": 1.028,
+    "away_odds": 0.831
+   }
+  },
+  {
+   "open": {
+    "handicap": 0.25,
+    "home_odds": 0.978,
+    "away_odds": 0.861
+   },
+   "close": {
+    "handicap": 0.234,
+    "home_odds": 0.868,
+    "away_odds": 0.986
+   }
+  },
+  {
+   "open": {
+    "handicap": 1.75,
+    "home_odds": 0.894,
+    "away_odds": 0.946
+   },
+   "close": {
+    "handicap": 1.719,
+    "home_odds": 0.881,
+    "away_odds": 0.956
+   }
+  },
+  {
+   "open": {
+    "handicap": 0.453,
+    "home_odds": 1.018,
+    "away_odds": 0.841
+   },
+   "close": {
+    "handicap": 0.141,
+    "home_odds": 0.879,
+    "away_odds": 0.958
+   }
+  },
+  {
+   "open": {
+    "handicap": 0.766,
+    "home_odds": 0.806,
+    "away_odds": 1.031
+   },
+   "close": {
+    "handicap": 0,
+    "home_odds": 0.84,
+    "away_odds": 0.995
+   }
+  },
+  {
+   "open": {
+    "handicap": -0.268,
+    "home_odds": 0.876,
+    "away_odds": 0.938
+   },
+   "close": {
+    "handicap": -0.214,
+    "home_odds": 0.873,
+    "away_odds": 0.926
+   }
+  },
+  {
+   "open": {
+    "handicap": 1.516,
+    "home_odds": 0.904,
+    "away_odds": 0.938
+   },
+   "close": {
+    "handicap": 1.516,
+    "home_odds": 0.954,
+    "away_odds": 0.879
+   }
+  },
+  {
+   "open": {
+    "handicap": -1.25,
+    "home_odds": 0.843,
+    "away_odds": 1.001
+   },
+   "close": {
+    "handicap": -1.094,
+    "home_odds": 0.899,
+    "away_odds": 0.95
+   }
+  },
+  {
+   "open": {
+    "handicap": 0.0,
+    "home_odds": 0.9,
+    "away_odds": 0.9
+   },
+   "close": {
+    "handicap": 0.0,
+    "home_odds": 0.9,
+    "away_odds": 0.9
+   }
+  },
+  {
+   "open": {
+    "handicap": 0.25,
+    "home_odds": 0.95,
+    "away_odds": 0.85
+   },
+   "close": {
+    "handicap": 0.25,
+    "home_odds": 0.95,
+    "away_odds": 0.85
+   }
+  },
+  {
+   "open": {
+    "handicap": 0.25,
+    "home_odds": 0.95,
+    "away_odds": 0.85
+   },
+   "close": {
+    "handicap": 0.75,
+    "home_odds": 0.8,
+    "away_odds": 1.0
+   }
+  },
+  {
+   "open": {
+    "handicap": 1.25,
+    "home_odds": 0.9,
+    "away_odds": 0.9
+   },
+   "close": {
+    "handicap": 1.0,
+    "home_odds": 0.98,
+    "away_odds": 0.82
+   }
+  },
+  {
+   "open": {
+    "handicap": 1.75,
+    "home_odds": 0.85,
+    "away_odds": 0.95
+   },
+   "close": {
+    "handicap": 1.75,
+    "home_odds": 0.85,
+    "away_odds": 0.95
+   }
+  },
+  {
+   "open": {
+    "handicap": 2.5,
+    "home_odds": 0.88,
+    "away_odds": 0.92
+   },
+   "close": {
+    "handicap": 3.0,
+    "home_odds": 0.75,
+    "away_odds": 1.05
+   }
+  },
+  {
+   "open": {
+    "handicap": -0.5,
+    "home_odds": 1.0,
+    "away_odds": 0.8
+   },
+   "close": {
+    "handicap": -1.25,
+    "home_odds": 1.05,
+    "away_odds": 0.75
+   }
+  },
+  {
+   "open": {
+    "handicap": -2.25,
+    "home_odds": 0.92,
+    "away_odds": 0.88
+   },
+   "close": {
+    "handicap": -2.25,
+    "home_odds": 0.86,
+    "away_odds": 0.94
+   }
+  },
+  {
+   "open": {
+    "handicap": 0.0,
+    "home_odds": 0.8,
+    "away_odds": 1.0
+   },
+   "close": {
+    "handicap": 0.0,
+    "home_odds": 1.0,
+    "away_odds": 0.8
+   }
+  },
+  {
+   "open": {
+    "handicap": 0.0,
+    "home_odds": 1.0,
+    "away_odds": 0.8
+   },
+   "close": {
+    "handicap": 0.0,
+    "home_odds": 0.8,
+    "away_odds": 1.0
+   }
+  },
+  {
+   "open": {
+    "handicap": 0.5,
+    "home_odds": 0.9,
+    "away_odds": 0.9
+   },
+   "close": {
+    "handicap": 0.52,
+    "home_odds": 0.9,
+    "away_odds": 0.9
+   }
+  }
+ ],
+ "euro": [
+  {
+   "open": {
+    "home": 4.07,
+    "draw": 4.05,
+    "away": 1.72,
+    "return_rate": 93.11
+   },
+   "close": {
+    "home": 4.64,
+    "draw": 4.37,
+    "away": 1.59,
+    "return_rate": 93.17
+   }
+  },
+  {
+   "open": {
+    "home": 2.8,
+    "draw": 3.1,
+    "away": 2.4,
+    "return_rate": 91.21
+   },
+   "close": {
+    "home": 2.85,
+    "draw": 3.11,
+    "away": 2.36,
+    "return_rate": 91.23
+   }
+  },
+  {
+   "open": {
+    "home": 2.83,
+    "draw": 3.44,
+    "away": 2.36,
+    "return_rate": 93.65
+   },
+   "close": {
+    "home": 3.13,
+    "draw": 3.46,
+    "away": 2.24,
+    "return_rate": 94.79
+   }
+  },
+  {
+   "open": {
+    "home": 8.18,
+    "draw": 4.98,
+    "away": 1.32,
+    "return_rate": 92.54
+   },
+   "close": {
+    "home": 8.73,
+    "draw": 4.97,
+    "away": 1.32,
+    "return_rate": 93.17
+   }
+  },
+  {
+   "open": {
+    "home": 2.63,
+    "draw": 3.45,
+    "away": 2.4,
+    "return_rate": 92.02
+   },
+   "close": {
+    "home": 2.71,
+    "draw": 3.49,
+    "away": 2.4,
+    "return_rate": 93.27
+   }
+  },
+  {
+   "open": {
+    "home": 1.66,
+    "draw": 3.97,
+    "away": 4.65,
+    "return_rate": 93.51
+   },
+   "close": {
+    "home": 1.67,
+    "draw": 3.99,
+    "away": 4.68,
+    "return_rate": 94.06
+   }
+  },
+  {
+   "open": {
+    "home": 2.09,
+    "draw": 3.66,
+    "away": 3.13,
+    "return_rate": 93.35
+   },
+   "close": {
+    "home": 2.13,
+    "draw": 3.61,
+    "away": 3.09,
+    "return_rate": 93.45
+   }
+  },
+  {
+   "open": {
+    "home": 1.27,
+    "draw": 6.28,
+    "away": 8.31,
+    "return_rate": 93.72
+   },
+   "close": {
+    "home": 1.23,
+    "draw": 6.92,
+    "away": 9.72,
+    "return_rate": 94.3
+   }
+  },
+  {
+   "open": {
+    "home": 3.32,
+    "draw": 3.33,
+    "away": 2.14,
+    "return_rate": 93.56
+   },
+   "close": {
+    "home": 3.49,
+    "draw": 3.37,
+    "away": 2.09,
+    "return_rate": 94.19
+   }
+  },
+  {
+   "open": {
+    "home": 1.65,
+    "draw": 3.65,
+    "away": 4.76,
+    "return_rate": 91.73
+   },
+   "close": {
+    "home": 1.7,
+    "draw": 3.54,
+    "away": 4.75,
+    "return_rate": 92.49
+   }
+  },
+  {
+   "open": {
+    "home": 5.31,
+    "draw": 4.55,
+    "away": 1.51,
+    "return_rate": 93.43
+   },
+   "close": {
+    "home": 4.97,
+    "draw": 4.43,
+    "away": 1.57,
+    "return_rate": 94.0
+   }
+  },
+  {
+   "open": {
+    "home": 1.56,
+    "draw": 4.05,
+    "away": 5.09,
+    "return_rate": 92.22
+   },
+   "close": {
+    "home": 1.78,
+    "draw": 3.74,
+    "away": 4.15,
+    "return_rate": 93.45
+   }
+  },
+  {
+   "open": {
+    "home": 1.34,
+    "draw": 4.8,
+    "away": 8.83,
+    "return_rate": 93.65
+   },
+   "close": {
+    "home": 1.44,
+    "draw": 4.55,
+    "away": 7.03,
+    "return_rate": 94.65
+   }
+  },
+  {
+   "open": {
+    "home": 1.9,
+    "draw": 3.6,
+    "away": 3.8,
+    "return_rate": 93.7
+   },
+   "close": {
+    "home": 1.87,
+    "draw": 3.5,
+    "away": 4.15,
+    "return_rate": 94.21
+   }
+  },
+  {
+   "open": {
+    "home": 3.1,
+    "draw": 3.54,
+    "away": 2.15,
+    "return_rate": 93.44
+   },
+   "close": {
+    "home": 3.39,
+    "draw": 3.57,
+    "away": 2.05,
+    "return_rate": 94.08
+   }
+  },
+  {
+   "open": {
+    "home": 2.16,
+    "draw": 3.26,
+    "away": 3.07,
+    "return_rate": 91.29
+   },
+   "close": {
+    "home": 1.98,
+    "draw": 3.31,
+    "away": 3.41,
+    "return_rate": 90.87
+   }
+  },
+  {
+   "open": {
+    "home": 6.8,
+    "draw": 4.98,
+    "away": 1.37,
+    "return_rate": 92.78
+   },
+   "close": {
+    "home": 7.37,
+    "draw": 5.24,
+    "away": 1.33,
+    "return_rate": 92.73
+   }
+  },
+  {
+   "open": {
+    "home": 3.69,
+    "draw": 3.11,
+    "away": 2.01,
+    "return_rate": 91.74
+   },
+   "close": {
+    "home": 3.74,
+    "draw": 3.14,
+    "away": 2.01,
+    "return_rate": 92.31
+   }
+  },
+  {
+   "open": {
+    "home": 1.46,
+    "draw": 4.63,
+    "away": 5.61,
+    "return_rate": 92.66
+   },
+   "close": {
+    "home": 1.49,
+    "draw": 4.57,
+    "away": 5.55,
+    "return_rate": 93.45
+   }
+  },
+  {
+   "open": {
+    "home": 2.28,
+    "draw": 3.28,
+    "away": 3.06,
+    "return_rate": 93.43
+   },
+   "close": {
+    "home": 2.25,
+    "draw": 3.29,
+    "away": 3.2,
+    "return_rate": 94.26
+   }
+  },
+  {
+   "open": {
+    "home": 1.17,
+    "draw": 7.43,
+    "away": 14.27,
+    "return_rate": 94.4
+   },
+   "close": {
+    "home": 1.13,
+    "draw": 8.84,
+    "away": 17.27,
+    "return_rate": 94.7
+   }
+  },
+  {
+   "open": {
+    "home": 1.83,
+    "draw": 3.65,
+    "away": 3.79,
+    "return_rate": 92.23
+   },
+   "close": {
+    "home": 1.83,
+    "draw": 3.71,
+    "away": 3.75,
+    "return_rate": 92.37
+   }
+  },
+  {
+   "open": {
+    "home": 3.14,
+    "draw": 3.14,
+    "away": 2.33,
+    "return_rate": 93.8
+   },
+   "close": {
+    "home": 3.11,
+    "draw": 3.15,
+    "away": 2.36,
+    "return_rate": 94.1
+   }
+  },
+  {
+   "open": {
+    "home": 1.52,
+    "draw": 4.44,
+    "away": 5.35,
+    "return_rate": 93.45
+   },
+   "close": {
+    "home": 1.54,
+    "draw": 4.46,
+    "away": 5.16,
+    "return_rate": 93.69
+   }
+  },
+  {
+   "open": {
+    "home": 2.39,
+    "draw": 3.11,
+    "away": 3.07,
+    "return_rate": 93.84
+   },
+   "close": {
+    "home": 2.45,
+    "draw": 3.08,
+    "away": 3.0,
+    "return_rate": 93.79
+   }
+  },
+  {
+   "open": {
+    "home": 1.46,
+    "draw": 4.57,
+    "away": 6.18,
+    "return_rate": 93.85
+   },
+   "close": {
+    "home": 1.52,
+    "draw": 4.44,
+    "away": 5.7,
+    "return_rate": 94.47
+   }
+  },
+  {
+   "open": {
+    "home": 2.41,
+    "draw": 3.5,
+    "away": 2.72,
+    "return_rate": 93.61
+   },
+   "close": {
+    "home": 2.52,
+    "draw": 3.54,
+    "away": 2.58,
+    "return_rate": 93.73
+   }
+  },
+  {
+   "open": {
+    "home": 2.08,
+    "draw": 3.39,
+    "away": 3.37,
+    "return_rate": 93.24
+   },
+   "close": {
+    "home": 2.07,
+    "draw": 3.32,
+    "away": 3.58,
+    "return_rate": 94.02
+   }
+  },
+  {
+   "open": {
+    "home": 5.15,
+    "draw": 4.13,
+    "away": 1.58,
+    "return_rate": 93.53
+   },
+   "close": {
+    "home": 4.86,
+    "draw": 4.0,
+    "away": 1.67,
+    "return_rate": 94.83
+   }
+  },
+  {
+   "open": {
+    "home": 1.9,
+    "draw": 3.21,
+    "away": 4.34,
+    "return_rate": 93.61
+   },
+   "close": {
+    "home": 1.99,
+    "draw": 3.13,
+    "away": 4.17,
+    "return_rate": 94.18
+   }
+  },
+  {
+   "open": {
+    "home": 1.17,
+    "draw": 7.26,
+    "away": 12.31,
+    "return_rate": 93.14
+   },
+   "close": {
+    "home": 1.16,
+    "draw": 7.58,
+    "away": 13.0,
+    "return_rate": 93.38
+   }
+  },
+  {
+   "open": {
+    "home": 3.27,
+    "draw": 3.24,
+    "away": 2.11,
+    "return_rate": 91.88
+   },
+   "close": {
+    "home": 3.25,
+    "draw": 3.25,
+    "away": 2.14,
+    "return_rate": 92.36
+   }
+  },
+  {
+   "open": {
+    "home": 4.14,
+    "draw": 3.83,
+    "away": 1.77,
+    "return_rate": 93.67
+   },
+   "close": {
+    "home": 4.8,
+    "draw": 3.89,
+    "away": 1.69,
+    "return_rate": 94.6
+   }
+  },
+  {
+   "open": {
+    "home": 1.41,
+    "draw": 4.71,
+    "away": 6.87,
+    "return_rate": 93.71
+   },
+   "close": {
+    "home": 1.4,
+    "draw": 4.87,
+    "away": 6.94,
+    "return_rate": 94.01
+   }
+  },
+  {
+   "open": {
+    "home": 1.92,
+    "draw": 3.61,
+    "away": 3.69,
+    "return_rate": 93.56
+   },
+   "close": {
+    "home": 2.06,
+    "draw": 3.48,
+    "away": 3.46,
+    "return_rate": 94.18
+   }
+  },
+  {
+   "open": {
+    "home": 8.24,
+    "draw": 5.63,
+    "away": 1.28,
+    "return_rate": 92.57
+   },
+   "close": {
+    "home": 8.73,
+    "draw": 5.37,
+    "away": 1.3,
+    "return_rate": 93.46
+   }
+  },
+  {
+   "open": {
+    "home": 2.4,
+    "draw": 3.25,
+    "away": 2.8,
+    "return_rate": 92.46
+   },
+   "close": {
+    "home": 2.22,
+    "draw": 3.31,
+    "away": 3.16,
+    "return_rate": 93.54
+   }
+  },
+  {
+   "open": {
+    "home": 2.55,
+    "draw": 3.44,
+    "away": 2.6,
+    "return_rate": 93.68
+   },
+   "close": {
+    "home": 2.54,
+    "draw": 3.36,
+    "away": 2.69,
+    "return_rate": 94.07
+   }
+  },
+  {
+   "open": {
+    "home": 3.18,
+    "draw": 3.21,
+    "away": 2.13,
+    "return_rate": 91.28
+   },
+   "close": {
+    "home": 3.17,
+    "draw": 3.21,
+    "away": 2.14,
+    "return_rate": 91.38
+   }
+  },
+  {
+   "open": {
+    "home": 3.72,
+    "draw": 3.74,
+    "away": 1.84,
+    "return_rate": 92.62
+   },
+   "close": {
+    "home": 3.24,
+    "draw": 3.67,
+    "away": 2.01,
+    "return_rate": 92.71
+   }
+  },
+  {
+   "open": {
+    "home": 2.94,
+    "draw": 3.63,
+    "away": 2.21,
+    "return_rate": 93.62
+   },
+   "close": {
+    "home": 2.85,
+    "draw": 3.66,
+    "away": 2.26,
+    "return_rate": 93.76
+   }
+  },
+  {
+   "open": {
+    "home": 1.85,
+    "draw": 3.54,
+    "away": 3.66,
+    "return_rate": 91.22
+   },
+   "close": {
+    "home": 1.94,
+    "draw": 3.48,
+    "away": 3.46,
+    "return_rate": 91.59
+   }
+  },
+  {
+   "open": {
+    "home": 1.98,
+    "draw": 3.21,
+    "away": 3.74,
+    "return_rate": 92.25
+   },
+   "close": {
+    "home": 2.15,
+    "draw": 3.16,
+    "away": 3.4,
+    "return_rate": 92.96
+   }
+  },
+  {
+   "open": {
+    "home": 2.95,
+    "draw": 3.39,
+    "away": 2.32,
+    "return_rate": 93.9
+   },
+   "close": {
+    "home": 3.26,
+    "draw": 3.35,
+    "away": 2.19,
+    "return_rate": 94.17
+   }
+  },
+  {
+   "open": {
+    "home": 1.84,
+    "draw": 3.61,
+    "away": 4.03,
+    "return_rate": 93.58
+   },
+   "close": {
+    "home": 1.89,
+    "draw": 3.6,
+    "away": 3.93,
+    "return_rate": 94.22
+   }
+  },
+  {
+   "open": {
+    "home": 2.6,
+    "draw": 3.07,
+    "away": 2.78,
+    "return_rate": 93.45
+   },
+   "close": {
+    "home": 2.52,
+    "draw": 3.03,
+    "away": 2.94,
+    "return_rate": 93.72
+   }
+  },
+  {
+   "open": {
+    "home": 1.41,
+    "draw": 4.85,
+    "away": 6.13,
+    "return_rate": 92.72
+   },
+   "close": {
+    "home": 1.37,
+    "draw": 5.14,
+    "away": 6.62,
+    "return_rate": 92.98
+   }
+  },
+  {
+   "open": {
+    "home": 8.54,
+    "draw": 5.73,
+    "away": 1.25,
+    "return_rate": 91.61
+   },
+   "close": {
+    "home": 9.95,
+    "draw": 6.04,
+    "away": 1.22,
+    "return_rate": 92.1
+   }
+  },
+  {
+   "open": {
+    "home": 4.13,
+    "draw": 4.26,
+    "away": 1.66,
+    "return_rate": 92.65
+   },
+   "close": {
+    "home": 4.24,
+    "draw": 4.29,
+    "away": 1.65,
+    "return_rate": 93.02
+   }
+  },
+  {
+   "open": {
+    "home": 2.14,
+    "draw": 3.58,
+    "away": 3.09,
+    "return_rate": 93.44
+   },
+   "close": {
+    "home": 2.26,
+    "draw": 3.64,
+    "away": 2.9,
+    "return_rate": 94.16
+   }
+  },
+  {
+   "open": {
+    "home": 1.21,
+    "draw": 6.24,
+    "away": 12.92,
+    "return_rate": 93.98
+   },
+   "close": {
+    "home": 1.21,
+    "draw": 6.33,
+    "away": 13.14,
+    "return_rate": 94.29
+   }
+  },
+  {
+   "open": {
+    "home": 2.31,
+    "draw": 3.38,
+    "away": 2.95,
+    "return_rate": 93.66
+   },
+   "close": {
+    "home": 2.08,
+    "draw": 3.51,
+    "away": 3.45,
+    "return_rate": 94.74
+   }
+  },
+  {
+   "open": {
+    "home": 1.58,
+    "draw": 4.05,
+    "away": 5.29,
+    "return_rate": 93.56
+   },
+   "close": {
+    "home": 1.62,
+    "draw": 4.0,
+    "away": 5.14,
+    "return_rate": 94.18
+   }
+  },
+  {
+   "open": {
+    "home": 2.82,
+    "draw": 3.56,
+    "away": 2.15,
+    "return_rate": 90.86
+   },
+   "close": {
+    "home": 2.93,
+    "draw": 3.48,
+    "away": 2.16,
+    "return_rate": 91.61
+   }
+  },
+  {
+   "open": {
+    "home": 1.33,
+    "draw": 5.23,
+    "away": 8.1,
+    "return_rate": 93.76
+   },
+   "close": {
+    "home": 1.31,
+    "draw": 5.45,
+    "away": 8.38,
+    "return_rate": 93.79
+   }
+  },
+  {
+   "open": {
+    "home": 6.78,
+    "draw": 4.1,
+    "away": 1.48,
+    "return_rate": 93.71
+   },
+   "close": {
+    "home": 7.44,
+    "draw": 4.4,
+    "away": 1.42,
+    "return_rate": 93.82
+   }
+  },
+  {
+   "open": {
+    "home": 2.0,
+    "draw": 3.4,
+    "away": 3.8
+   },
+   "close": {
+    "home": 2.0,
+    "draw": 3.4,
+    "away": 3.8
+   }
+  },
+  {
+   "open": {
+    "home": 2.5,
+    "draw": 3.3,
+    "away": 2.8
+   },
+   "close": {
+    "home": 1.9,
+    "draw": 3.5,
+    "away": 4.2
+   }
+  },
+  {
+   "open": {
+    "home": 1.9,
+    "draw": 3.5,
+    "away": 4.2
+   },
+   "close": {
+    "home": 2.6,
+    "draw": 3.2,
+    "away": 2.7
+   }
+  },
+  {
+   "open": {
+    "home": 2.0,
+    "draw": 3.0,
+    "away": 4.0,
+    "return_rate": 88.0
+   },
+   "close": {
+    "home": 2.0,
+    "draw": 3.0,
+    "away": 4.0,
+    "return_rate": 96.0
+   }
+  },
+  {
+   "open": {
+    "home": 1.05,
+    "draw": 15.0,
+    "away": 30.0
+   },
+   "close": {
+    "home": 1.02,
+    "draw": 20.0,
+    "away": 45.0
+   }
+  }
+ ],
+ "total": [
+  {
+   "open": {
+    "line": 3.32,
+    "over_odds": 0.88,
+    "under_odds": 0.92
+   },
+   "close": {
+    "line": 3.12,
+    "over_odds": 0.86,
+    "under_odds": 0.96
+   }
+  },
+  {
+   "open": {
+    "line": 2.3,
+    "over_odds": 0.89,
+    "under_odds": 0.89
+   },
+   "close": {
+    "line": 2.31,
+    "over_odds": 0.96,
+    "under_odds": 0.83
+   }
+  },
+  {
+   "open": {
+    "line": 2.6,
+    "over_odds": 0.9,
+    "under_odds": 0.93
+   },
+   "close": {
+    "line": 2.57,
+    "over_odds": 0.87,
+    "under_odds": 0.95
+   }
+  },
+  {
+   "open": {
+    "line": 2.71,
+    "over_odds": 0.88,
+    "under_odds": 0.94
+   },
+   "close": {
+    "line": 2.81,
+    "over_odds": 0.87,
+    "under_odds": 0.95
+   }
+  },
+  {
+   "open": {
+    "line": 2.71,
+    "over_odds": 0.82,
+    "under_odds": 0.99
+   },
+   "close": {
+    "line": 2.71,
+    "over_odds": 0.85,
+    "under_odds": 0.94
+   }
+  },
+  {
+   "open": {
+    "line": 2.72,
+    "over_odds": 0.81,
+    "under_odds": 1.03
+   },
+   "close": {
+    "line": 2.71,
+    "over_odds": 0.85,
+    "under_odds": 0.98
+   }
+  },
+  {
+   "open": {
+    "line": 2.72,
+    "over_odds": 0.86,
+    "under_odds": 0.95
+   },
+   "close": {
+    "line": 2.88,
+    "over_odds": 0.89,
+    "under_odds": 0.94
+   }
+  },
+  {
+   "open": {
+    "line": 4.18,
+    "over_odds": 0.89,
+    "under_odds": 1.06
+   },
+   "close": {
+    "line": 3.93,
+    "over_odds": 0.9,
+    "under_odds": 0.92
+   }
+  },
+  {
+   "open": {
+    "line": 2.5,
+    "over_odds": 0.96,
+    "under_odds": 0.87
+   },
+   "close": {
+    "line": 2.5,
+    "over_odds": 0.98,
+    "under_odds": 0.83
+   }
+  },
+  {
+   "open": {
+    "line": 2.38,
+    "over_odds": 0.91,
+    "under_odds": 0.89
+   },
+   "close": {
+    "line": 2.47,
+    "over_odds": 0.88,
+    "under_odds": 0.88
+   }
+  },
+  {
+   "open": {
+    "line": 3.29,
+    "over_odds": 1.01,
+    "under_odds": 0.82
+   },
+   "close": {
+    "line": 3.22,
+    "over_odds": 0.96,
+    "under_odds": 0.87
+   }
+  },
+  {
+   "open": {
+    "line": 2.71,
+    "over_odds": 0.85,
+    "under_odds": 0.96
+   },
+   "close": {
+    "line": 2.76,
+    "over_odds": 0.84,
+    "under_odds": 0.97
+   }
+  },
+  {
+   "open": {
+    "line": 2.71,
+    "over_odds": 0.9,
+    "under_odds": 0.95
+   },
+   "close": {
+    "line": 2.57,
+    "over_odds": 0.91,
+    "under_odds": 0.92
+   }
+  },
+  {
+   "open": {
+    "line": 2.5,
+    "over_odds": 0.87,
+    "under_odds": 0.96
+   },
+   "close": {
+    "line": 2.65,
+    "over_odds": 0.87,
+    "under_odds": 0.94
+   }
+  },
+  {
+   "open": {
+    "line": 2.74,
+    "over_odds": 0.82,
+    "under_odds": 1.03
+   },
+   "close": {
+    "line": 2.71,
+    "over_odds": 0.8,
+    "under_odds": 1.04
+   }
+  },
+  {
+   "open": {
+    "line": 2.5,
+    "over_odds": 0.92,
+    "under_odds": 0.86
+   },
+   "close": {
+    "line": 2.5,
+    "over_odds": 0.94,
+    "under_odds": 0.83
+   }
+  },
+  {
+   "open": {
+    "line": 3.23,
+    "over_odds": 0.88,
+    "under_odds": 0.95
+   },
+   "close": {
+    "line": 3.13,
+    "over_odds": 0.89,
+    "under_odds": 0.94
+   }
+  },
+  {
+   "open": {
+    "line": 2.22,
+    "over_odds": 1.01,
+    "under_odds": 0.82
+   },
+   "close": {
+    "line": 2.13,
+    "over_odds": 0.95,
+    "under_odds": 0.89
+   }
+  },
+  {
+   "open": {
+    "line": 3.24,
+    "over_odds": 0.97,
+    "under_odds": 0.86
+   },
+   "close": {
+    "line": 3.16,
+    "over_odds": 0.87,
+    "under_odds": 0.94
+   }
+  },
+  {
+   "open": {
+    "line": 2.49,
+    "over_odds": 1.01,
+    "under_odds": 0.82
+   },
+   "close": {
+    "line": 2.5,
+    "over_odds": 1.02,
+    "under_odds": 0.8
+   }
+  },
+  {
+   "open": {
+    "line": 3.46,
+    "over_odds": 0.84,
+    "under_odds": 1.03
+   },
+   "close": {
+    "line": 3.43,
+    "over_odds": 0.95,
+    "under_odds": 0.89
+   }
+  },
+  {
+   "open": {
+    "line": 2.75,
+    "over_odds": 0.8,
+    "under_odds": 1.0
+   },
+   "close": {
+    "line": 2.97,
+    "over_odds": 0.93,
+    "under_odds": 0.89
+   }
+  },
+  {
+   "open": {
+    "line": 2.29,
+    "over_odds": 1.03,
+    "under_odds": 0.82
+   },
+   "close": {
+    "line": 2.28,
+    "over_odds": 1.02,
+    "under_odds": 0.82
+   }
+  },
+  {
+   "open": {
+    "line": 3.29,
+    "over_odds": 1.02,
+    "under_odds": 0.82
+   },
+   "close": {
+    "line": 3.24,
+    "over_odds": 0.94,
+    "under_odds": 0.9
+   }
+  },
+  {
+   "open": {
+    "line": 2.29,
+    "over_odds": 1.09,
+    "under_odds": 0.77
+   },
+   "close": {
+    "line": 2.29,
+    "over_odds": 1.06,
+    "under_odds": 0.78
+   }
+  },
+  {
+   "open": {
+    "line": 2.91,
+    "over_odds": 0.93,
+    "under_odds": 0.92
+   },
+   "close": {
+    "line": 2.9,
+    "over_odds": 0.9,
+    "under_odds": 0.95
+   }
+  },
+  {
+   "open": {
+    "line": 2.9,
+    "over_odds": 0.93,
+    "under_odds": 0.9
+   },
+   "close": {
+    "line": 2.69,
+    "over_odds": 0.87,
+    "under_odds": 0.96
+   }
+  },
+  {
+   "open": {
+    "line": 2.31,
+    "over_odds": 0.88,
+    "under_odds": 0.95
+   },
+   "close": {
+    "line": 2.44,
+    "over_odds": 0.91,
+    "under_odds": 0.9
+   }
+  },
+  {
+   "open": {
+    "line": 2.71,
+    "over_odds": 0.86,
+    "under_odds": 0.98
+   },
+   "close": {
+    "line": 2.71,
+    "over_odds": 0.79,
+    "under_odds": 1.04
+   }
+  },
+  {
+   "open": {
+    "line": 2.25,
+    "over_odds": 1.06,
+    "under_odds": 0.8
+   },
+   "close": {
+    "line": 2.31,
+    "over_odds": 1.09,
+    "under_odds": 0.76
+   }
+  },
+  {
+   "open": {
+    "line": 3.71,
+    "over_odds": 0.91,
+    "under_odds": 0.89
+   },
+   "close": {
+    "line": 3.6,
+    "over_odds": 0.87,
+    "under_odds": 0.96
+   }
+  },
+  {
+   "open": {
+    "line": 2.31,
+    "over_odds": 0.86,
+    "under_odds": 0.95
+   },
+   "close": {
+    "line": 2.31,
+    "over_odds": 0.85,
+    "under_odds": 0.95
+   }
+  },
+  {
+   "open": {
+    "line": 2.69,
+    "over_odds": 0.92,
+    "under_odds": 0.92
+   },
+   "close": {
+    "line": 2.69,
+    "over_odds": 0.87,
+    "under_odds": 0.96
+   }
+  },
+  {
+   "open": {
+    "line": 2.93,
+    "over_odds": 0.91,
+    "under_odds": 0.92
+   },
+   "close": {
+    "line": 2.85,
+    "over_odds": 0.88,
+    "under_odds": 0.97
+   }
+  },
+  {
+   "open": {
+    "line": 2.5,
+    "over_odds": 0.88,
+    "under_odds": 0.95
+   },
+   "close": {
+    "line": 2.53,
+    "over_odds": 0.85,
+    "under_odds": 0.96
+   }
+  },
+  {
+   "open": {
+    "line": 2.93,
+    "over_odds": 0.92,
+    "under_odds": 0.91
+   },
+   "close": {
+    "line": 3.15,
+    "over_odds": 0.84,
+    "under_odds": 0.98
+   }
+  },
+  {
+   "open": {
+    "line": 2.41,
+    "over_odds": 0.94,
+    "under_odds": 0.88
+   },
+   "close": {
+    "line": 2.5,
+    "over_odds": 1.0,
+    "under_odds": 0.79
+   }
+  },
+  {
+   "open": {
+    "line": 2.5,
+    "over_odds": 0.88,
+    "under_odds": 0.94
+   },
+   "close": {
+    "line": 2.51,
+    "over_odds": 0.88,
+    "under_odds": 0.94
+   }
+  },
+  {
+   "open": {
+    "line": 2.31,
+    "over_odds": 0.85,
+    "under_odds": 0.94
+   },
+   "close": {
+    "line": 2.32,
+    "over_odds": 0.86,
+    "under_odds": 0.93
+   }
+  },
+  {
+   "open": {
+    "line": 3.12,
+    "over_odds": 0.93,
+    "under_odds": 0.88
+   },
+   "close": {
+    "line": 3.22,
+    "over_odds": 0.96,
+    "under_odds": 0.84
+   }
+  },
+  {
+   "open": {
+    "line": 3.04,
+    "over_odds": 0.91,
+    "under_odds": 0.93
+   },
+   "close": {
+    "line": 2.99,
+    "over_odds": 0.91,
+    "under_odds": 0.92
+   }
+  },
+  {
+   "open": {
+    "line": 2.69,
+    "over_odds": 0.89,
+    "under_odds": 0.89
+   },
+   "close": {
+    "line": 2.69,
+    "over_odds": 0.86,
+    "under_odds": 0.92
+   }
+  },
+  {
+   "open": {
+    "line": 2.3,
+    "over_odds": 1.03,
+    "under_odds": 0.79
+   },
+   "close": {
+    "line": 2.3,
+    "over_odds": 1.02,
+    "under_odds": 0.79
+   }
+  },
+  {
+   "open": {
+    "line": 2.5,
+    "over_odds": 0.97,
+    "under_odds": 0.86
+   },
+   "close": {
+    "line": 2.59,
+    "over_odds": 0.97,
+    "under_odds": 0.85
+   }
+  },
+  {
+   "open": {
+    "line": 2.5,
+    "over_odds": 0.85,
+    "under_odds": 0.98
+   },
+   "close": {
+    "line": 2.51,
+    "over_odds": 0.84,
+    "under_odds": 0.98
+   }
+  },
+  {
+   "open": {
+    "line": 2.25,
+    "over_odds": 1.06,
+    "under_odds": 0.79
+   },
+   "close": {
+    "line": 2.29,
+    "over_odds": 1.09,
+    "under_odds": 0.76
+   }
+  },
+  {
+   "open": {
+    "line": 3.44,
+    "over_odds": 0.92,
+    "under_odds": 0.9
+   },
+   "close": {
+    "line": 3.4,
+    "over_odds": 0.93,
+    "under_odds": 0.89
+   }
+  },
+  {
+   "open": {
+    "line": 3.25,
+    "over_odds": 0.88,
+    "under_odds": 0.93
+   },
+   "close": {
+    "line": 3.25,
+    "over_odds": 0.87,
+    "under_odds": 0.91
+   }
+  },
+  {
+   "open": {
+    "line": 3.38,
+    "over_odds": 0.9,
+    "under_odds": 0.92
+   },
+   "close": {
+    "line": 3.39,
+    "over_odds": 0.9,
+    "under_odds": 0.92
+   }
+  },
+  {
+   "open": {
+    "line": 2.88,
+    "over_odds": 0.93,
+    "under_odds": 0.92
+   },
+   "close": {
+    "line": 2.72,
+    "over_odds": 0.88,
+    "under_odds": 0.95
+   }
+  },
+  {
+   "open": {
+    "line": 2.7,
+    "over_odds": 0.8,
+    "under_odds": 1.04
+   },
+   "close": {
+    "line": 2.7,
+    "over_odds": 0.78,
+    "under_odds": 1.05
+   }
+  },
+  {
+   "open": {
+    "line": 2.71,
+    "over_odds": 0.85,
+    "under_odds": 0.99
+   },
+   "close": {
+    "line": 2.53,
+    "over_odds": 0.96,
+    "under_odds": 0.86
+   }
+  },
+  {
+   "open": {
+    "line": 2.69,
+    "over_odds": 0.94,
+    "under_odds": 0.88
+   },
+   "close": {
+    "line": 2.54,
+    "over_odds": 0.86,
+    "under_odds": 0.95
+   }
+  },
+  {
+   "open": {
+    "line": 2.71,
+    "over_odds": 0.82,
+    "under_odds": 0.98
+   },
+   "close": {
+    "line": 2.9,
+    "over_odds": 0.88,
+    "under_odds": 0.91
+   }
+  },
+  {
+   "open": {
+    "line": 3.28,
+    "over_odds": 1.02,
+    "under_odds": 0.82
+   },
+   "close": {
+    "line": 3.04,
+    "over_odds": 0.89,
+    "under_odds": 0.94
+   }
+  },
+  {
+   "open": {
+    "line": 2.5,
+    "over_odds": 0.92,
+    "under_odds": 0.9
+   },
+   "close": {
+    "line": 2.5,
+    "over_odds": 0.98,
+    "under_odds": 0.84
+   }
+  },
+  {
+   "open": {
+    "line": 0.5,
+    "over_odds": 0.8,
+    "under_odds": 1.0
+   },
+   "close": {
+    "line": 0.5,
+    "over_odds": 0.8,
+    "under_odds": 1.0
+   }
+  },
+  {
+   "open": {
+    "line": 1.5,
+    "over_odds": 0.9,
+    "under_odds": 0.9
+   },
+   "close": {
+    "line": 1.5,
+    "over_odds": 0.9,
+    "under_odds": 0.9
+   }
+  },
+  {
+   "open": {
+    "line": 2.5,
+    "over_odds": 0.75,
+    "under_odds": 1.05
+   },
+   "close": {
+    "line": 2.5,
+    "over_odds": 0.75,
+    "under_odds": 1.05
+   }
+  },
+  {
+   "open": {
+    "line": 2.5,
+    "over_odds": 1.05,
+    "under_odds": 0.75
+   },
+   "close": {
+    "line": 2.5,
+    "over_odds": 1.05,
+    "under_odds": 0.75
+   }
+  },
+  {
+   "open": {
+    "line": 3.0,
+    "over_odds": 0.75,
+    "under_odds": 1.05
+   },
+   "close": {
+    "line": 3.0,
+    "over_odds": 0.75,
+    "under_odds": 1.05
+   }
+  },
+  {
+   "open": {
+    "line": 3.5,
+    "over_odds": 0.75,
+    "under_odds": 1.05
+   },
+   "close": {
+    "line": 3.5,
+    "over_odds": 0.75,
+    "under_odds": 1.05
+   }
+  },
+  {
+   "open": {
+    "line": 3.5,
+    "over_odds": 1.05,
+    "under_odds": 0.75
+   },
+   "close": {
+    "line": 3.5,
+    "over_odds": 1.05,
+    "under_odds": 0.75
+   }
+  },
+  {
+   "open": {
+    "line": 4.5,
+    "over_odds": 0.75,
+    "under_odds": 1.05
+   },
+   "close": {
+    "line": 4.5,
+    "over_odds": 0.75,
+    "under_odds": 1.05
+   }
+  },
+  {
+   "open": {
+    "line": 2.0,
+    "over_odds": 0.9,
+    "under_odds": 0.9
+   },
+   "close": {
+    "line": 2.5,
+    "over_odds": 0.9,
+    "under_odds": 0.9
+   }
+  },
+  {
+   "open": {
+    "line": 3.5,
+    "over_odds": 0.9,
+    "under_odds": 0.9
+   },
+   "close": {
+    "line": 3.25,
+    "over_odds": 0.9,
+    "under_odds": 0.9
+   }
+  },
+  {
+   "open": {
+    "line": 2.5,
+    "over_odds": 0.9,
+    "under_odds": 0.9
+   },
+   "close": {
+    "line": 2.625,
+    "over_odds": 0.9,
+    "under_odds": 0.9
+   }
+  }
+ ],
+ "kelly_probs": [
+  [
+   0.55,
+   0.25,
+   0.2
+  ],
+  [
+   0.4,
+   0.3,
+   0.3
+  ],
+  [
+   0.33,
+   0.33,
+   0.34
+  ],
+  [
+   0.75,
+   0.15,
+   0.1
+  ],
+  [
+   0.2,
+   0.25,
+   0.55
+  ]
+ ]
+}
