@@ -82,6 +82,23 @@ class PairTableTests(unittest.TestCase):
         self.assertEqual(parsing.parse_pair_table(content),
                          {'1320957': {'1-0': 8.0}})
 
+    def test_a_comment_that_would_otherwise_parse_is_still_skipped(self):
+        """**注释那道检查要用一行「不注释掉就会被解析」的语料测**。
+
+        `'# 注释'` 分不出段数，不跳过它也照样进不了结果——用它测等于
+        什么也没测（判据 5 的形状）。这一行去掉 `#` 就是合法数据。
+        """
+        self.assertEqual(parsing.parse_pair_table('#1320957|1-0|8.00'), {})
+        self.assertEqual(parsing.parse_pair_table('1320957|1-0|8.00'),
+                         {'1320957': {'1-0': 8.0}})
+
+    def test_surrounding_whitespace_is_trimmed_off_each_line(self):
+        """不逐行 strip 的话，比赛号会带着缩进进结果——**下游按号取数就全落空**。"""
+        self.assertEqual(parsing.parse_pair_table('  1320957|1-0|8.00  '),
+                         {'1320957': {'1-0': 8.0}})
+        self.assertEqual(parsing.parse_pair_table('\n\t1320957|1-0|8.00\n'),
+                         {'1320957': {'1-0': 8.0}})
+
     def test_a_bad_price_drops_only_that_pair(self):
         """**与定长表相反**：坏价只丢那一对，整行还留着。"""
         result = parsing.parse_pair_table('1320957|1-0|8.00|1-1|x|2-1|9.00')
@@ -90,13 +107,26 @@ class PairTableTests(unittest.TestCase):
     def test_a_row_with_no_usable_price_is_dropped_entirely(self):
         self.assertEqual(parsing.parse_pair_table('1320957|1-0|x|1-1|y'), {})
 
+    def test_columns_are_read_two_at_a_time(self):
+        """**要用「价本身也像比分」的语料**才分得出步长是 2 还是 1。
+
+        寻常语料里第二段是 `1-1` 这种，按步长 1 读时 `float('1-1')` 抛掉、
+        结果碰巧一样。这里第三对的比分是 `9.5`，两种步长会给出不同的档位。
+        """
+        self.assertEqual(parsing.parse_pair_table('1320957|1-0|8.00|9.5|7.50'),
+                         {'1320957': {'1-0': 8.0, '9.5': 7.5}})
+
     def test_a_dangling_score_is_ignored(self):
         """末尾落单的比分没有配对的价，直接忽略而不是补一个默认值。"""
         self.assertEqual(parsing.parse_pair_table('1320957|1-0|8.00|1-1'),
                          {'1320957': {'1-0': 8.0}})
 
     def test_an_id_alone_is_not_enough(self):
+        """段数不足时那个取对的循环一对也取不出，末尾的 `if odds` 丢掉这一行
+        ——**迁移前那道 `len(parts) < 2` 的守卫因此一次也没拦下过东西**，
+        已删（判据 9 第一类）。"""
         self.assertEqual(parsing.parse_pair_table('1320957'), {})
+        self.assertEqual(parsing.parse_pair_table('1320957|1-0'), {})
 
     def test_empty_input(self):
         for content in ('', None, '   ', '#只有注释'):
@@ -132,15 +162,20 @@ class ColumnTableTests(unittest.TestCase):
         self.assertEqual(result['1320957']['负负'], 4.3)
 
     def test_minimum_length_is_tested_on_both_sides(self):
-        """门槛两侧各一条。只测「够长」那边，把门槛改小也发现不了。"""
+        """门槛两侧各一条，而且**要连 `failures` 一起断言**。
+
+        只看结果字典分不出「被门槛挡下」与「进去之后越界失败」——两种情况
+        的结果都是 `{}`。前者不该产生任何失败记录，后者会（判据 5：
+        只断言一侧，反方向照样通过）。
+        """
         exact = '|'.join(['1320957'] + ['1.5'] * (ZJQ_MINIMUM - 1))
         self.assertIn('1320957', self._zjq(exact)[0])
         short = '|'.join(['1320957'] + ['1.5'] * (ZJQ_MINIMUM - 2))
-        self.assertEqual(self._zjq(short)[0], {})
+        self.assertEqual(self._zjq(short), ({}, []))
 
     def test_bqc_needs_two_more_columns_than_zjq(self):
         nine = '|'.join(['1320957'] + ['1.5'] * (BQC_MINIMUM - 2))
-        self.assertEqual(self._bqc(nine)[0], {})
+        self.assertEqual(self._bqc(nine), ({}, []))
         ten = '|'.join(['1320957'] + ['1.5'] * (BQC_MINIMUM - 1))
         self.assertIn('1320957', self._bqc(ten)[0])
 
@@ -161,9 +196,16 @@ class ColumnTableTests(unittest.TestCase):
 
     def test_an_empty_field_reads_as_none_not_zero(self):
         """空水位是「没有报价」，不是「赔率为零」——读成 0 会让下游
-        把它当成一个真实的赔率。"""
-        result, _ = self._zjq('1320957|11.00||3.90|4.30|6.50|11.00|21.00|26.00')
-        self.assertIsNone(result['1320957']['1'])
+        把它当成一个真实的赔率。**每一档都要能空**，只测一档的话
+        把其中某一档改成「缺席容错」是发现不了的。"""
+        for position in range(1, ZJQ_MINIMUM):
+            with self.subTest(position=position):
+                parts = ['1320957'] + ['1.5'] * (ZJQ_MINIMUM - 1) + ['2.5']
+                parts[position] = ''
+                result, failures = self._zjq('|'.join(parts))
+                self.assertEqual(failures, [])
+                bucket = ZJQ_BUCKETS[position - 1]
+                self.assertIsNone(result['1320957'][bucket])
 
     def test_the_last_bucket_is_missing_tolerant_but_not_empty_tolerant(self):
         """**总进球最后一档的读法与其余七档不一样**（判据 17）。
@@ -208,6 +250,25 @@ class HistoryTableTests(unittest.TestCase):
                 records, _ = self._asian(
                     _table(['时间', keyword, '主', '客'], self.ASIAN_ROWS))
                 self.assertEqual(len(records), 2)
+
+    def test_only_the_header_row_decides_whether_a_table_counts(self):
+        """**关键字只在表头里找**。数据格里出现「亚盘」两个字不该让一张
+        欧赔表被当成亚盘表——按整张表匹配就会。
+        """
+        html = _table(['时间', '欧赔', '主', '客'],
+                      [('09:00', '亚盘', '0.95', '0.90')])
+        self.assertEqual(self._asian(html), ([], None))
+
+    def test_a_header_row_that_also_has_data_cells_is_not_read_as_data(self):
+        """表头行**只当表头**。真实页面里 `<th>` 与 `<td>` 混在同一行并不罕见，
+        把它也当数据行会凭空多出一条 `time='时间'` 的记录——而那条记录
+        能通过所有校验，不会报错。
+        """
+        header = ('<tr><th>时间</th><th>亚盘</th><th>主</th><th>客</th>'
+                  '<td>时间</td><td>亚盘</td><td>0.90</td><td>0.90</td></tr>')
+        body = ('<tr><td>09:00</td><td>-0.5</td><td>0.95</td><td>0.90</td></tr>')
+        records, _ = self._asian(f'<html><table>{header}{body}</table></html>')
+        self.assertEqual([r['time'] for r in records], ['09:00'])
 
     def test_a_table_without_a_keyword_is_skipped_entirely(self):
         records, source = self._asian(
@@ -292,10 +353,22 @@ class HistoryTableTests(unittest.TestCase):
         self.assertEqual(records[0]['home_odds'], 0.95)
 
     def test_hidden_tables_are_parsed_too(self):
-        """`display:none` 先被抹掉——**页面上藏与不藏在这一层没有区别**。"""
+        """`display:none` 挡不住解析——**页面上藏与不藏在这一层没有区别**。"""
         hidden = _table(['时间', '亚盘', '主', '客'], self.ASIAN_ROWS).replace(
             '<table>', '<table style="display:none">')
         self.assertEqual(len(self._asian(hidden)[0]), 2)
+
+    def test_the_hidden_style_scrub_only_touches_cell_text(self):
+        """**那道清洗对表格抽取是空操作**，钉住它真正的效果。
+
+        `<table[^>]*>` 这类正则本来就不看属性，所以上一条即使不做清洗也一样
+        通过。清洗唯一能改变的是**单元格文本里恰好出现这几个字**的情况
+        ——留着它是因为删掉算行为改动，但别以为「藏起来的行靠它才解析得到」。
+        """
+        records, _ = self._asian(_table(
+            ['时间', '亚盘', '主', '客'],
+            [('09:00', '-0.5display:none', '0.95', '0.90')]))
+        self.assertEqual(records[0]['handicap'], '-0.5')
 
 
 class HistoryScriptTests(unittest.TestCase):
@@ -376,6 +449,18 @@ class HistoryScriptTests(unittest.TestCase):
             + ', 0.95, 0.90'))
         self.assertEqual(source, parsing.FROM_SCRIPT)
         self.assertEqual(len(records[0]['handicap']), 40)
+
+    def test_only_the_first_matching_script_contributes(self):
+        """命中一段就停——**多段脚本往往是同一份数据的不同视图**，
+        全收进来会重复。用两段都能匹配的脚本才测得到这一点。
+        """
+        page = ('<html><body>'
+                f'<script>亚盘 {"x" * MIN_SCRIPT_LENGTH}{self.ONE_ROW}</script>'
+                f'<script>亚盘 {"x" * MIN_SCRIPT_LENGTH} 23:59, -9.5, 1.11, 2.22'
+                '</script></body></html>')
+        records, source = self._asian(page)
+        self.assertEqual(source, parsing.FROM_SCRIPT)
+        self.assertEqual([r['time'] for r in records], ['09:00'])
 
     def test_empty_html_yields_nothing(self):
         for html in ('', None):

@@ -67,8 +67,6 @@ BQC_COLUMNS = (('胜胜', 1, EMPTY_AS_NONE), ('胜平', 2, EMPTY_AS_NONE),
                ('负负', 9, EMPTY_AS_NONE))
 BQC_MINIMUM = 10
 
-PAIR_MINIMUM = 2
-
 
 def _data_lines(content):
     """去掉空行与注释行。`content` 为空时不产出任何一行。"""
@@ -86,12 +84,15 @@ def parse_pair_table(content):
     缺一列那一行就没有意义了。
 
     末尾落单的比分（没有配对的价）直接忽略。
+
+    **迁移前这里有一道 `len(parts) < 2` 的守卫，删掉了**：它一次也拦不下
+    任何东西——段数不足时那个取对的循环本来就一对也取不出，末尾的
+    `if odds` 会把这一行丢掉。留着一道任何输入都触发不了的检查比没有更糟，
+    它看起来像道防线（判据 9 第一类）。
     """
     result = {}
     for line in _data_lines(content):
         parts = line.split(FIELD_SEPARATOR)
-        if len(parts) < PAIR_MINIMUM:
-            continue
         odds = {}
         for index in range(1, len(parts), 2):
             if index + 1 < len(parts):
@@ -239,6 +240,9 @@ def parse_history_tables(html, spec):
     records = []
     for table in _TABLE.findall(html):
         rows = _ROW.findall(table)
+        # 首行是表头，所以至少要两行才有数据。**改成 `< 1` 是等价变异**
+        # （判据 9b，全语料验过）：只有表头时 `rows[1:]` 本来就是空的。
+        # 写 `< 2` 是因为它说的是「要有数据行」，而不是「别越界」。
         if len(rows) < 2:
             continue
         header = ''.join(_HEADER_CELL.findall(rows[0]))
@@ -298,11 +302,18 @@ def parse_history(html, spec):
     比分格式那几道都不走），调用方有理由区别对待。迁移前这一点只体现在
     两条不同的日志里。
     """
+    # `if not html` 与 `if html is None` 在输出上等价（空串走下去也是
+    # 空结果），差别只在白跑一趟正则。留短路是为了让「没有页面」这件事
+    # 在这一层就结束，而不是靠下游恰好也返回空。
     if not html:
         return [], None
     # `display:none` 先抹掉：藏起来的那部分表格同样有数据，而正则不认识
     # 样式——不抹的话它照样能匹配到，抹掉是为了让**页面上藏与不藏**
     # 在这一层没有区别。
+    # **这道清洗对表格抽取其实是空操作**：`<table[^>]*>` 这类正则本来就
+    # 不看属性，`style="display:none"` 挡不住任何一次匹配。它唯一能改变的
+    # 是**单元格文本里恰好出现这几个字**的情况。原样保留（删掉是行为改动），
+    # 但别把它当成「藏起来的行靠它才解析得到」——那件事正则自己就做到了。
     cleaned = html.replace('display:none', '').replace('display: none', '')
     records = parse_history_tables(cleaned, spec)
     if records:
