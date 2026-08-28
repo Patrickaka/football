@@ -282,3 +282,9 @@ from scripts.gen_football_parsing_golden import entries as football_parsing_entr
 
 dump('football_parsing',
      {k: _as_comparable(v) for k, v in football_parsing_entries()})
+
+# ---- football modeling ----
+from scripts.gen_football_modeling_golden import entries as football_modeling_entries
+
+dump('football_modeling',
+     {k: _as_comparable(v) for k, v in football_modeling_entries()})
