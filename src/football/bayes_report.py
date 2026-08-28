@@ -34,6 +34,27 @@ from threading import Lock
 from typing import Dict, List, Optional
 
 # ----- 路径解析（本文件位于 src/football/）-----
+from ..domain.sports.football.reporting import (  # noqa: F401
+    DRIFT_THRESHOLD,
+    REPORT_SCHEMA_VERSION,
+    _REPORT_CSS,
+    _beidan_p0_p1,
+    _beidan_scripts,
+    _extract_mid_from_report_path,
+    _to_implied,
+    build_scripts,
+    derive_prior_p0,
+    league_specifics,
+    likelihood_update,
+    pct,
+    possession_trap_warning,
+    render_beidan_html,
+    render_html,
+    report_url_from_path,
+    risk_list,
+    tactical_context,
+)
+
 MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.dirname(os.path.dirname(MODULE_DIR))
 DEFAULT_REPORTS_DIR = os.path.join(REPO_ROOT, "reports")
@@ -43,7 +64,6 @@ MANIFEST_PATH = os.path.join(DEFAULT_REPORTS_DIR, "football_bayes_manifest.json"
 
 # 防止并发请求同时生成同一报告
 REPORT_GEN_LOCK = Lock()
-REPORT_SCHEMA_VERSION = "8"
 _PRO_VALIDATION_CACHE = {"mtime": None, "value": {}, "checked_at": 0.0}
 
 
@@ -129,476 +149,28 @@ def load_professional_validation_summary() -> dict:
         return {"available": False, "production_ready": False, "reason": str(exc)}
 
 
-def pct(x: float) -> str:
-    return f"{x * 100:.1f}%"
 
 
-def derive_prior_p0(euro_open: Dict[str, float]) -> Dict[str, float]:
-    """由欧赔初盘隐含概率推导先验 P0（未叠加模型/实时信息）。
-
-    这是 skill 框架里的「先验」基准；模块最终输出已融合 Elo+DC+盘口，
-    对应 skill 的「更新后 P1」。二者之差即模型修正方向。
-    """
-    h = euro_open.get("home", 0.0)
-    d = euro_open.get("draw", 0.0)
-    a = euro_open.get("away", 0.0)
-    s = h + d + a
-    if s <= 0:
-        return {"home": 1/3, "draw": 1/3, "away": 1/3}
-    return {"home": h / s, "draw": d / s, "away": a / s}
 
 
-def tactical_context(live: dict) -> dict:
-    """战术语境修正：控球陷阱(定量) + 风格克制(定性)。支持部分接入。
-
-    - possession 提供 控球率/Field Tilt/xG → 控球陷阱可定量判定
-    - style_notes 提供 风格克制定性描述（来自前瞻/战术分析）
-    两者任一存在即视为「部分接入」；K联赛未覆盖 FBref/Understat 时
-    possession 缺，控球陷阱定量为 UNAVAILABLE（不编造）。
-    """
-    poss = live.get("possession")
-    notes = live.get("style_notes")
-    out = {
-        "available": bool(poss or notes),
-        "has_trap": False,
-        "possession_trap": None,
-        "style_matchup": [],
-    }
-
-    if poss and poss.get("home") is not None and poss.get("field_tilt") is not None:
-        home_poss = poss["home"]
-        field_tilt = poss["field_tilt"]
-        xg_home = poss.get("xg_home")
-        xg_away = poss.get("xg_away")
-        trap_home = home_poss > 0.60 and field_tilt < 0.50
-        trap_away = (1 - home_poss) > 0.60 and (1 - field_tilt) < 0.50
-        trap = trap_home or trap_away
-        out["has_trap"] = True
-        out["possession_trap"] = {
-            "home_possession": home_poss,
-            "field_tilt": field_tilt,
-            "xg_home": xg_home,
-            "xg_away": xg_away,
-            "trap_detected": trap,
-            "verdict": ("检测到无效控球风险（控球率高但推进质量差）"
-                        if trap else "控球与推进质量一致，未见明显控球陷阱"),
-            "source": poss.get("source", "UNAVAILABLE"),
-            "ts": poss.get("ts", "UNAVAILABLE"),
-        }
-    elif poss:
-        out["trap_note"] = "控球率/Field Tilt 不完整，控球陷阱检查无法判定（降级）。"
-    else:
-        out["trap_note"] = ("缺数据 → 降级推断：未获取实时控球率/Field Tilt/xG"
-                            "（K联赛未覆盖 FBref/Understat），控球陷阱定量为 UNAVAILABLE，不编造。")
-
-    if notes:
-        out["style_matchup"].append(notes)
-    out["style_matchup"].append(
-        "高中锋 vs 矮个防线：定位球/二点球风险方向需结合首发高度（缺数据时降级标注）。"
-    )
-    out["style_matchup"].append(
-        "反击速度 vs 慢速回追：身后球被打穿风险方向需结合边卫回追速度（缺数据时降级标注）。"
-    )
-    return out
 
 
-def league_specifics(league_profile: dict, league: str) -> dict:
-    """联赛特性修正：基于现有模块的 league_profile + 已知联赛特性。"""
-    name = league or league_profile.get("name", "")
-    avg_goal = league_profile.get("avg_goal")
-    low_score = league_profile.get("low_score")
-    home_boost = league_profile.get("home_boost")
-    lines = []
-    if avg_goal is not None:
-        lines.append(f"联赛场均进球 {avg_goal:.2f}，"
-                     f"{'偏低进球联赛' if (avg_goal < 1.5) else ('偏高进球联赛' if avg_goal > 2.0 else '中等进球联赛')}；"
-                     f"低比分修正系数 {low_score}。")
-    if home_boost is not None:
-        lines.append(f"主场加成系数 {home_boost}（反映主场优势强度）。")
-    if any(k in name for k in ("杯", "欧冠", "欧联", "世界杯", "欧洲杯")):
-        lines.append("杯赛/大赛：轮换与战意波动大，单场偶然性上升，建议下调覆盖确定性。")
-    if "K1" in name or "韩" in name:
-        lines.append("K联赛特性：主场优势相对明显、下半场进球占比偏高、强队客场易平。")
-    if "意甲" in name:
-        lines.append("意甲特性：防守强度高、低比分倾向、主场哨与长补时需注意。")
-    return {"applied": bool(lines), "lines": lines or ["无专门联赛规则，已使用静态 league_profile。"]}
 
 
-def likelihood_update(module_wdl: Dict[str, float], live: dict, league: str) -> dict:
-    """似然更新 P1：以模块校准输出为基准，叠加实时伤停/首发/赛程密度。"""
-    p1 = dict(module_wdl)
-    evidence = []
-    for inj in live.get("injuries", []) or []:
-        ev = (f"{inj.get('team')}方 {inj.get('player','?')}（{inj.get('role','?')}）"
-              f"状态={inj.get('status','?')}，影响={inj.get('impact','中')}"
-              f"｜来源:{inj.get('source','UNAVAILABLE')} @ {inj.get('ts','?')}")
-        evidence.append(ev)
-        if inj.get("status") in ("缺阵", "停赛") and inj.get("role") in ("门将", "中卫", "后腰", "中锋"):
-            delta = {"高": 0.04, "中": 0.02, "低": 0.01}.get(inj.get("impact", "中"), 0.02)
-            if inj.get("team") == "home":
-                p1["home"] = max(0.05, p1["home"] - delta)
-                p1["away"] = p1["away"] + delta * 0.6
-                p1["draw"] = p1["draw"] + delta * 0.4
-            else:
-                p1["away"] = max(0.05, p1["away"] - delta)
-                p1["home"] = p1["home"] + delta * 0.6
-                p1["draw"] = p1["draw"] + delta * 0.4
-    sd = live.get("schedule_density")
-    if sd:
-        evidence.append(f"赛程密度：主 {sd.get('home','?')} / 客 {sd.get('away','?')}"
-                        f"｜来源:{sd.get('source','UNAVAILABLE')} @ {sd.get('ts','?')}")
-    s = p1["home"] + p1["draw"] + p1["away"]
-    if s > 0:
-        p1 = {k: v / s for k, v in p1.items()}
-    return {"p1": p1, "evidence": evidence}
 
 
-def build_scripts(module: dict, tactical: dict, home: str, away: str) -> List[dict]:
-    """生成至少 2 套剧本（基于模块 Top 比分 + 战术语境）。"""
-    top = module.get("top_scores", [])[:3]
-    scripts = []
-    if top:
-        t1 = top[0]
-        scripts.append({
-            "name": "剧本A（模型首选路径）",
-            "text": (f"{home} 按预期主导控球与射门，凭借实力优势率先破门；"
-                     f"{away} 收缩防守伺机反击。最可能比分 {t1['home']}-{t1['away']}"
-                     f"（模型概率 {pct(t1['prob'])}）。若 {home} 久攻不下，"
-                     f"易被 {away} 偷袭，转向平局收场。"),
-        })
-    if len(top) > 1:
-        t2 = top[1]
-        scripts.append({
-            "name": "剧本B（次选/韧性路径）",
-            "text": (f"{away} 上半场低位防守顶住压力，下半场通过定位球或反击制造威胁；"
-                     f"双方陷入僵持，{t2['home']}-{t2['away']}（模型概率 {pct(t2['prob'])}）"
-                     f"成为合理结局。若主队早破门则切换为剧本A。"),
-        })
-    if tactical.get("available") and (tactical.get("possession_trap") or {}).get("trap_detected"):
-        scripts.append({
-            "name": "剧本C（控球陷阱反杀）",
-            "text": (f"一方控球虚高但推进效率差（Field Tilt 偏低），"
-                     f"对手以高效反击兑现机会，控球方最终哑火爆冷。"),
-        })
-    else:
-        scripts.append({
-            "name": "剧本C（均衡消耗）",
-            "text": (f"双方节奏胶着，进球分散在下半场，胜负由一次定位球或个体失误决定；"
-                     f"覆盖双选（主胜+平局）比单博更稳。"),
-        })
-    return scripts
 
 
-def possession_trap_warning(live: dict) -> dict:
-    """无效控球警示（反面教材）。无可靠历史案例则明确说明，不编造。"""
-    case = live.get("trap_case")
-    if case:
-        return {"available": True, **case}
-    return {
-        "available": False,
-        "note": ("未找到可验证来源：本报告不编造历史案例。原则阐述——"
-                 "控球率高但 Field Tilt（进攻三区进入率）低于 50% 时，"
-                 "多为后场倒脚，xG 往往极低（如 xG≈0.06），"
-                 "此类球队易被高效反击队克制。需结合本场实测数据判断。"),
-    }
 
 
-def risk_list(module_risk: dict, tactical: dict, live: dict) -> List[str]:
-    risks = []
-    rf = (module_risk or {}).get("risk_factors") or []
-    for r in rf:
-        risks.append(f"模块风险因子：{r}")
-    if not tactical.get("available"):
-        risks.append("战术语境缺失：未获取实时控球/xG，无法校验控球陷阱与风格克制，结论置信度下降。")
-    if not live.get("injuries"):
-        risks.append("伤停未知：关键中轴缺阵可能显著改变先验，当前按完整阵容估计。")
-    if not live.get("lineup"):
-        risks.append("首发未知：预计首发未获取，临场变阵风险未纳入。")
-    quality = live.get("quality") or {}
-    if quality.get("blockers"):
-        risks.append("实时数据质量门控：" + "、".join(quality["blockers"]) + "，禁止作为正式投注。")
-    risks.append("盘口已含市场预期：胜平负概率含庄家 margin，存在系统性偏差可能。")
-    risks.append("单场偶然性：即便高置信场次，足球单场噪声仍可能推翻模型结论。")
-    return risks[:6]
 
 
 # ===================== 足球渲染 =====================
 
-_REPORT_CSS = """
-:root{--bg:#f5f7fa;--card:#fff;--ink:#1f2933;--muted:#6b7280;--line:#e5e7eb;
-      --home:#2563eb;--draw:#d97706;--away:#059669;--warn:#dc2626;--ok:#059669;}
-*{box-sizing:border-box;}
-body{margin:0;background:var(--bg);color:var(--ink);
-     font-family:-apple-system,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif;
-     line-height:1.6;padding:24px;}
-.wrap{max-width:960px;margin:0 auto;}
-h1{font-size:22px;margin:0 0 4px;}
-.sub{color:var(--muted);font-size:13px;margin-bottom:18px;}
-.card{background:var(--card);border:1px solid var(--line);border-radius:12px;
-      padding:18px 20px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,.04);}
-.card h2{font-size:16px;margin:0 0 12px;display:flex;align-items:center;gap:8px;}
-.tag{font-size:11px;padding:2px 8px;border-radius:999px;background:#eef2ff;color:#3730a3;}
-.tag.u{background:#fef2f2;color:#b91c1c;}
-.tag.ok{background:#ecfdf5;color:#047857;}
-.prob{display:flex;gap:10px;margin:10px 0;}
-.prob .b{flex:1;text-align:center;border-radius:10px;padding:12px 6px;border:1px solid var(--line);}
-.prob .b .l{font-size:13px;color:var(--muted);}
-.prob .b .v{font-size:22px;font-weight:700;margin-top:2px;}
-.home .v{color:var(--home);} .draw .v{color:var(--draw);} .away .v{color:var(--away);}
-table{width:100%;border-collapse:collapse;font-size:13px;}
-td,th{border-bottom:1px solid var(--line);padding:6px 8px;text-align:left;}
-.arr{color:var(--muted);font-size:13px;margin:6px 0;}
-ul{margin:8px 0;padding-left:20px;font-size:13px;}
-li{margin:4px 0;}
-.log{font-size:12px;color:var(--muted);background:#fafafa;border:1px dashed var(--line);
-     border-radius:8px;padding:10px;max-height:180px;overflow:auto;}
-.log div{margin:3px 0;}
-.warn{border-left:4px solid var(--warn);padding-left:12px;color:#7f1d1d;font-size:13px;}
-.okb{border-left:4px solid var(--ok);padding-left:12px;font-size:13px;}
-.muted{color:var(--muted);}
-.grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
-@media(max-width:680px){.grid2{grid-template-columns:1fr;}}
-"""
 
 
-def render_html(report: dict) -> str:
-    m = report["match"]
-    title = f"{m['league']} {m['home']} vs {m['away']} | {m.get('time') or ''} | {m.get('num') or ''}"
-    w = report["wdl"]
-    p0 = report["p0"]
-    css = _REPORT_CSS
-    h = []
-    h.append(f"<!doctype html><html lang='zh-CN' data-report-schema='{REPORT_SCHEMA_VERSION}'><head><meta charset='utf-8'>"
-             f"<meta name='viewport' content='width=device-width,initial-scale=1'>"
-             f"<title>深度报告 · {title}</title><style>{css}</style></head><body><div class='wrap'>")
-    h.append(f"<h1>足球深度研究报告</h1>")
-    h.append(f"<div class='sub'>{title} ｜ 数据时间戳：{report['ts']} ｜ 模块版本：{report['module_version']}</div>")
-
-    quality = report.get("live_context_quality") or {}
-    validation = report.get("professional_validation") or {}
-    gate = report.get("decision_gate") or {}
-    gate_ok = gate.get("official_bet_allowed") is True
-    accuracy_gate = report.get("accuracy_gate") or {}
-    spf_gate = accuracy_gate.get("spf") or {}
-    evidence = report.get("match_evidence") or {}
-    ranked_wdl = sorted(
-        (("主胜", float(w.get("home", 0))), ("平局", float(w.get("draw", 0))),
-         ("客胜", float(w.get("away", 0)))),
-        key=lambda item: item[1],
-        reverse=True,
-    )
-    leading_label, leading_probability = ranked_wdl[0]
-    probability_gap = leading_probability - ranked_wdl[1][1]
-    selected = spf_gate.get("selected") is True
-    prediction_reliability = float(
-        spf_gate.get("prediction_reliability")
-        if spf_gate.get("prediction_reliability") is not None
-        else leading_probability
-    )
-    verdict = (
-        f"80%目标精选：{spf_gate.get('decision')}"
-        if selected else f"研究倾向：{leading_label}；未达到80%精选门槛，建议观望"
-    )
-    h.append("<div class='card'><h2>本场专属结论 "
-             f"<span class='tag {'ok' if selected else 'u'}'>"
-             f"{'精选通过' if selected else '观望'}</span></h2>")
-    h.append("<div class='prob'>"
-             f"<div class='b home'><div class='l'>主胜</div><div class='v'>{pct(w.get('home', 0))}</div></div>"
-             f"<div class='b draw'><div class='l'>平局</div><div class='v'>{pct(w.get('draw', 0))}</div></div>"
-             f"<div class='b away'><div class='l'>客胜</div><div class='v'>{pct(w.get('away', 0))}</div></div></div>")
-    h.append(f"<div class='{'okb' if selected else 'warn'}'><b>{verdict}</b><br>"
-             f"第一方向领先第二方向 {pct(probability_gap)}；"
-             f"信息完整度 {pct(float(report.get('confidence_score', 0) or 0))}；"
-             f"预测可信度 {pct(prediction_reliability)}；"
-             f"风险等级 {report.get('risk_level', '?')}。</div>")
-    market_notes = []
-    if evidence.get("asian_handicap") is not None:
-        market_notes.append(
-            f"亚盘 {evidence.get('asian_handicap'):+g}"
-            f"（{evidence.get('asian_trend') or '走势未标注'}）"
-        )
-    if evidence.get("total_line") is not None:
-        market_notes.append(f"大小球 {evidence.get('total_line'):g}")
-    if evidence.get("euro_close"):
-        close = evidence["euro_close"]
-        market_notes.append(
-            f"欧赔终盘隐含 主{pct(close.get('home', 0))}/"
-            f"平{pct(close.get('draw', 0))}/客{pct(close.get('away', 0))}"
-        )
-    h.append(f"<div class='muted'>{'；'.join(market_notes) or '本场盘口明细缺失'}</div>")
-    reasons = spf_gate.get("reasons") or []
-    if reasons:
-        h.append(f"<div class='muted'>未入选原因：{'；'.join(reasons)}</div>")
-    rqspf_gate = accuracy_gate.get("rqspf") or {}
-    if evidence.get("lottery_handicap") is not None and rqspf_gate.get("candidate"):
-        h.append(
-            f"<div class='muted'>让球胜平负（主队 {evidence['lottery_handicap']:+g}）："
-            f"{rqspf_gate.get('decision', '观望')}，最高概率 "
-            f"{pct(rqspf_gate.get('probability', 0))}。</div>"
-        )
-    else:
-        h.append("<div class='muted'>让球胜平负：本场未提供可核验的体彩让球盘，"
-                 "不生成0%占位结论。</div>")
-    h.append("</div>")
-
-    professional_evidence = report.get("professional_evidence") or {}
-    if professional_evidence:
-        coverage = float(professional_evidence.get("coverage_score", 0) or 0)
-        agreement_labels = {
-            "strong": "模型与市场高度一致",
-            "moderate": "模型与市场基本一致",
-            "conflict": "模型与市场分歧较大",
-            "unavailable": "缺少可比市场概率",
-        }
-        available_checks = [
-            item.get("label") for item in professional_evidence.get("checks", [])
-            if item.get("available")
-        ]
-        missing_checks = professional_evidence.get("missing") or []
-        h.append("<details class='card'><summary><b>本场专业证据审计</b> "
-                 f"<span class='tag {'ok' if coverage >= .70 else 'u'}'>"
-                 f"{professional_evidence.get('coverage_grade', '?')}级 · {pct(coverage)}</span></summary>")
-        h.append(f"<div class='muted'>"
-                 f"{agreement_labels.get(professional_evidence.get('model_market_agreement'), '未知')}；"
-                 f"已覆盖：{'、'.join(available_checks) or '无'}。</div>")
-        if missing_checks:
-            h.append(f"<div class='warn' style='margin-top:10px'>仍缺："
-                     f"{'、'.join(missing_checks)}。</div>")
-        h.append("</details>")
-
-    h.append("<details class='card'><summary><b>全局专业验证与使用限制</b> "
-             f"<span class='tag {'ok' if gate_ok else 'u'}'>"
-             f"{'生产门控通过' if gate_ok else '研究模式 / 禁止正式投注'}</span></summary>")
-    h.append("<div class='grid2'>")
-    h.append("<div><b>实时数据质量</b><br>"
-             f"<span class='muted'>质量分 {quality.get('quality_score', '-')}；"
-             f"置信乘数 {quality.get('confidence_multiplier', '-')}；"
-             f"时效 {quality.get('age_hours') if quality.get('age_hours') is not None else 'UNAVAILABLE'}"
-             f"{' 小时' if quality.get('age_hours') is not None else ''}</span></div>")
-    if validation.get("available"):
-        model = validation.get("model") or {}
-        market = validation.get("market") or {}
-        strategy = validation.get("strategy") or {}
-        roi = float(strategy.get("roi", 0) or 0)
-        clv = float(strategy.get("mean_clv", 0) or 0)
-        h.append("<div><b>严格样本外验证</b><br>"
-                 f"<span class='muted'>{validation.get('out_of_sample_n', 0)} 场；"
-                 f"LogLoss 模型 {model.get('logloss', 0):.3f} / 市场 {market.get('logloss', 0):.3f}；"
-                 f"ROI {roi*100:.2f}%；CLV {clv*100:.2f}%</span></div>")
-    else:
-        h.append("<div><b>严格样本外验证</b><br><span class='warn'>UNAVAILABLE</span></div>")
-    h.append("</div>")
-    if not gate_ok:
-        h.append("<div class='warn' style='margin-top:12px'>本报告用于研究展示。"
-                 "在模型未同时跑赢市场 LogLoss、取得正样本外 ROI 与正 CLV 前，不生成正式投注指令。</div>")
-    h.append("</details>")
-
-    h.append("<div class='card'><h2>数据来源与工具调用凭证 <span class='tag'>合规区</span></h2>")
-    if report["tool_log"]:
-        h.append("<div class='log'>")
-        for t in report["tool_log"]:
-            h.append(f"<div>[{t.get('action','?')}] {t.get('query', t.get('url',''))} "
-                     f"→ hit: {t.get('hit','-')} @ {t.get('ts','?')}</div>")
-        h.append("</div>")
-    else:
-        h.append("<div class='warn'>本次报告未执行联网抓取（未提供 live_context.tool_log）。"
-                 "概率底座来自现有模块缓存；实时战术语境/伤停字段按 skill 降级协议标注为 UNAVAILABLE。</div>")
-    h.append("</div>")
-
-    h.append("<div class='card'><h2>1) 先验 P0（欧赔初盘隐含）</h2>")
-    h.append("<div class='prob'>"
-             f"<div class='b home'><div class='l'>主胜</div><div class='v'>{pct(p0['home'])}</div></div>"
-             f"<div class='b draw'><div class='l'>平局</div><div class='v'>{pct(p0['draw'])}</div></div>"
-             f"<div class='b away'><div class='l'>客胜</div><div class='v'>{pct(p0['away'])}</div></div></div>")
-    h.append(f"<div class='muted'>来源：欧赔初盘（open）隐含概率，未叠加 Elo/DC/实时信息。"
-             f"现有模块已融合 Elo 先验（见 elo.py）与 Dixon-Coles 低比分相关。</div></div>")
-
-    tac = report["tactical"]
-    if not tac["available"]:
-        tag_cls, tag_txt = "u", "UNAVAILABLE"
-    elif tac.get("has_trap"):
-        tag_cls, tag_txt = "ok", "已接入"
-    else:
-        tag_cls, tag_txt = "ok", "部分接入"
-    h.append("<div class='card'><h2>2) 战术语境修正 "
-             f"<span class='tag {tag_cls}'>{tag_txt}</span></h2>")
-    if tac["available"]:
-        if tac.get("possession_trap"):
-            pt = tac["possession_trap"]
-            h.append(f"<div class='okb'>控球陷阱检查：主队控球 {pct(pt['home_possession'])}，"
-                     f"Field Tilt {pct(pt['field_tilt'])}，xG {pt.get('xg_home')}/{pt.get('xg_away')}。"
-                     f"结论：{pt['verdict']}（来源：{pt['source']} @ {pt['ts']}）</div>")
-        else:
-            h.append(f"<div class='warn'>{tac.get('trap_note','控球陷阱定量 UNAVAILABLE')}</div>")
-        for s in tac["style_matchup"]:
-            h.append(f"<div class='muted'>• {s}</div>")
-    else:
-        h.append(f"<div class='warn'>{tac.get('trap_note','缺数据 → 降级推断')}</div>")
-    h.append("</div>")
-
-    h.append("<div class='card'><h2>3) 联赛特性修正</h2><ul>")
-    for line in report["league"]["lines"]:
-        h.append(f"<li>{line}</li>")
-    h.append("</ul></div>")
-
-    h.append("<div class='card'><h2>4) 似然更新 P1（模块校准输出）</h2>")
-    h.append("<div class='prob'>"
-             f"<div class='b home'><div class='l'>主胜</div><div class='v'>{pct(w['home'])}</div></div>"
-             f"<div class='b draw'><div class='l'>平局</div><div class='v'>{pct(w['draw'])}</div></div>"
-             f"<div class='b away'><div class='l'>客胜</div><div class='v'>{pct(w['away'])}</div></div></div>")
-    dh = w['home'] - p0['home']
-    dd = w['draw'] - p0['draw']
-    da = w['away'] - p0['away']
-
-    def sgn(x):
-        return f"+{x*100:.1f}%" if x >= 0 else f"{x*100:.1f}%"
-    h.append(f"<div class='arr'>P0→P1 修正方向：主胜 {sgn(dh)} / "
-             f"平局 {sgn(dd)} / 客胜 {sgn(da)}"
-             f"（正值=模型上调）</div>")
-    if report["update"]["evidence"]:
-        h.append("<div class='muted'>导致更新的证据点：</div><ul>")
-        for e in report["update"]["evidence"]:
-            h.append(f"<li>{e}</li>")
-        h.append("</ul>")
-    else:
-        h.append("<div class='muted'>无实时伤停/赛程证据输入，P1 = 模块校准输出。</div>")
-    if report.get("injury_conflict"):
-        h.append(f"<div class='warn'>⚠️ 伤停数据冲突：{report['injury_conflict']}</div>")
-    h.append(f"<div class='muted'>置信度：{report['confidence_label']}（{report['confidence_score']}）；"
-             f"风险等级：{report['risk_level']}</div></div>")
-
-    h.append("<div class='card'><h2>5) 剧本预测</h2>")
-    for sc in report["scripts"]:
-        h.append(f"<div class='okb'><b>{sc['name']}</b><br>{sc['text']}</div><br>")
-    h.append("</div>")
-
-    h.append("<div class='card'><h2>6) 无效控球警示（反面教材） "
-             f"<span class='tag {'u' if not report['trap_warn']['available'] else 'ok'}'>"
-             f"{'UNAVAILABLE' if not report['trap_warn']['available'] else '有案例'}</span></h2>")
-    if report["trap_warn"]["available"]:
-        tw = report["trap_warn"]
-        h.append(f"<div class='warn'>案例：{tw.get('case','')} ｜ 数据：控球 {tw.get('possession')} / "
-                 f"Field Tilt {tw.get('field_tilt')} / xG={tw.get('xg')} ｜ 来源：{tw.get('source')}</div>")
-        h.append(f"<div class='muted'>启示：{tw.get('lesson','')}</div>")
-    else:
-        h.append(f"<div class='warn'>{report['trap_warn'].get('note','未找到可验证来源')}</div>")
-    h.append("</div>")
-
-    h.append("<div class='card'><h2>7) 关键不确定性与风险清单</h2><ul>")
-    for r in report["risks"]:
-        h.append(f"<li>{r}</li>")
-    h.append("</ul></div>")
-
-    h.append(f"<div class='sub'>本报告由 football-bayes skill 框架叠加现有足球模块（{report['module_version']}）"
-             f"生成，属信息分析用途，仅供参考不构成投资建议。</div>")
-    h.append("</div></body></html>")
-    return "".join(h)
 
 
-def report_url_from_path(out_path: str, match_id) -> str:
-    """将本地报告路径转换为前端可访问的 URL。"""
-    fname = os.path.basename(out_path)
-    return f"/reports/{fname}"
 
 
 def update_manifest(out_path: str, match: dict):
@@ -742,62 +314,8 @@ def build_report(cache_path: str, live: dict, out_path: str) -> dict:
 
 # ===================== 北单（beidan）深度报告 =====================
 
-def _beidan_p0_p1(rec: dict):
-    """北单 P0（胜平负赔率隐含）/ P1（模型胜平负概率）。
-
-    注意：北单 spf.odds 是十进制赔率，需先转隐含概率（1/赔率）再归一化；
-    现有 football 模块的 euro.open 已存隐含概率，故 derive_prior_p0 直接归一化，
-    此处需多做一步 1/odd 转换。
-    """
-    spf = rec.get("spf") or {}
-    odds = spf.get("odds") or {}
-    probs = spf.get("probabilities") or {}
-
-    def _impl(o):
-        try:
-            return 1.0 / float(o)
-        except (TypeError, ValueError, ZeroDivisionError):
-            return 0.0
-
-    if odds.get("胜") and odds.get("平") and odds.get("负"):
-        ip = {"home": _impl(odds["胜"]), "draw": _impl(odds["平"]), "away": _impl(odds["负"])}
-        s = ip["home"] + ip["draw"] + ip["away"]
-        p0 = {k: v / s for k, v in ip.items()} if s > 0 else {"home": 1/3, "draw": 1/3, "away": 1/3}
-    else:
-        p0 = {"home": 1/3, "draw": 1/3, "away": 1/3}
-
-    if probs.get("胜") is not None and probs.get("平") is not None and probs.get("负") is not None:
-        p1 = {"home": float(probs["胜"]), "draw": float(probs["平"]), "away": float(probs["负"])}
-    else:
-        p1 = dict(p0)
-    return p0, p1
 
 
-def _beidan_scripts(rec: dict, tactical: dict, home: str, away: str):
-    spf = rec.get("spf") or {}
-    pred = spf.get("prediction")
-    prob_key = {"胜": "home", "平": "draw", "负": "away"}
-    p1 = _beidan_p0_p1(rec)[1]
-    pred_prob = p1.get(prob_key.get(pred, "home"), 0) if pred else 0
-    sc = []
-    if pred:
-        sc.append({
-            "name": "剧本A（模型主线）",
-            "text": (f"模型首选「{pred}」（概率 {pct(pred_prob)}）。{home} 主导局面、"
-                     f"{away} 伺机反击，常规时间大概率依此路径收场。"),
-        })
-    sc.append({
-        "name": "剧本B（韧性/平局路径）",
-        "text": (f"若上半场僵持，定位球或一次个人能力成为破局点；亚盘走势与让球数据若示弱主队，"
-                 f"则平局/客不败概率抬升，需双选覆盖。"),
-    })
-    if tactical.get("available") and (tactical.get("possession_trap") or {}).get("trap_detected"):
-        sc.append({"name": "剧本C（控球陷阱反杀）",
-                   "text": "控球方虚高却推进低效，对手高效反击兑现，控球方哑火爆冷。"})
-    else:
-        sc.append({"name": "剧本C（均衡消耗）",
-                   "text": "节奏胶着，胜负由一次定位球或失误决定；双选覆盖比单博更稳。"})
-    return sc
 
 
 def build_beidan_report(rec: dict, live: dict, out_path: str) -> dict:
@@ -871,143 +389,6 @@ def build_beidan_report(rec: dict, live: dict, out_path: str) -> dict:
     return report
 
 
-def render_beidan_html(report: dict) -> str:
-    """北单深度报告渲染（复用足球版 CSS / skill 框架，增加北单专属维度）。"""
-    m = report["match"]
-    bd = report["beidan"]
-    title = f"{m['league']} {m['home']} vs {m['away']} | {m.get('time','')} | {m.get('num','')}"
-    css = _REPORT_CSS
-    p0 = report["p0"]
-    w = report["wdl"]
-    h = []
-    h.append(f"<!doctype html><html lang='zh-CN'><head><meta charset='utf-8'>"
-             f"<meta name='viewport' content='width=device-width,initial-scale=1'>"
-             f"<title>北单深度报告 · {title}</title><style>{css}</style></head><body><div class='wrap'>")
-    h.append(f"<h1>北单深度研究报告</h1>")
-    h.append(f"<div class='sub'>{title} ｜ 数据时间戳：{report['ts']} ｜ 模块版本：{report['module_version']}</div>")
-
-    h.append("<div class='card'><h2>数据来源与工具调用凭证 <span class='tag'>合规区</span></h2>")
-    if report["tool_log"]:
-        h.append("<div class='log'>")
-        for t in report["tool_log"]:
-            h.append(f"<div>[{t.get('action','?')}] {t.get('query', t.get('url',''))} "
-                     f"→ hit: {t.get('hit','-')} @ {t.get('ts','?')}</div>")
-        h.append("</div>")
-    else:
-        h.append("<div class='warn'>本次报告未执行联网抓取（未提供 live_context.tool_log）。"
-                 "概率底座来自现有北单模块；实时战术语境/伤停字段按 skill 降级协议标注为 UNAVAILABLE。</div>")
-    h.append("</div>")
-
-    h.append("<div class='card'><h2>1) 先验 P0（胜平负赔率隐含）</h2>")
-    h.append("<div class='prob'>"
-             f"<div class='b home'><div class='l'>主胜</div><div class='v'>{pct(p0['home'])}</div></div>"
-             f"<div class='b draw'><div class='l'>平局</div><div class='v'>{pct(p0['draw'])}</div></div>"
-             f"<div class='b away'><div class='l'>客胜</div><div class='v'>{pct(p0['away'])}</div></div></div>")
-    h.append("<div class='muted'>来源：北单胜平负官方赔率隐含概率（未叠加模型/实时信息）。"
-             "现有模块已融合 Dixon-Coles 低比分相关与历史校准。</div></div>")
-
-    tac = report["tactical"]
-    if not tac["available"]:
-        tag_cls, tag_txt = "u", "UNAVAILABLE"
-    elif tac.get("has_trap"):
-        tag_cls, tag_txt = "ok", "已接入"
-    else:
-        tag_cls, tag_txt = "ok", "部分接入"
-    h.append("<div class='card'><h2>2) 战术语境修正 "
-             f"<span class='tag {tag_cls}'>{tag_txt}</span></h2>")
-    if tac["available"]:
-        if tac.get("possession_trap"):
-            pt = tac["possession_trap"]
-            h.append(f"<div class='okb'>控球陷阱检查：主队控球 {pct(pt['home_possession'])}，"
-                     f"Field Tilt {pct(pt['field_tilt'])}，xG {pt.get('xg_home')}/{pt.get('xg_away')}。"
-                     f"结论：{pt['verdict']}（来源：{pt['source']} @ {pt['ts']}）</div>")
-        else:
-            h.append(f"<div class='warn'>{tac.get('trap_note','控球陷阱定量 UNAVAILABLE')}</div>")
-        for s in tac["style_matchup"]:
-            h.append(f"<div class='muted'>• {s}</div>")
-    else:
-        h.append(f"<div class='warn'>{tac.get('trap_note','缺数据 → 降级推断')}</div>")
-    h.append("</div>")
-
-    h.append("<div class='card'><h2>3) 联赛特性修正</h2><ul>")
-    for line in report["league"]["lines"]:
-        h.append(f"<li>{line}</li>")
-    h.append("</ul></div>")
-
-    h.append("<div class='card'><h2>4) 似然更新 P1（模块校准胜平负）</h2>")
-    h.append("<div class='prob'>"
-             f"<div class='b home'><div class='l'>主胜</div><div class='v'>{pct(w['home'])}</div></div>"
-             f"<div class='b draw'><div class='l'>平局</div><div class='v'>{pct(w['draw'])}</div></div>"
-             f"<div class='b away'><div class='l'>客胜</div><div class='v'>{pct(w['away'])}</div></div></div>")
-    dh = w['home'] - p0['home']; dd = w['draw'] - p0['draw']; da = w['away'] - p0['away']
-
-    def sgn(x):
-        return f"+{x*100:.1f}%" if x >= 0 else f"{x*100:.1f}%"
-    h.append(f"<div class='arr'>P0→P1 修正方向：主胜 {sgn(dh)} / "
-             f"平局 {sgn(dd)} / 客胜 {sgn(da)}（正值=模型上调）</div>")
-    if report["update"]["evidence"]:
-        h.append("<div class='muted'>导致更新的证据点：</div><ul>")
-        for e in report["update"]["evidence"]:
-            h.append(f"<li>{e}</li>")
-        h.append("</ul>")
-    else:
-        h.append("<div class='muted'>无实时伤停/赛程证据输入，P1 = 模块校准输出。</div>")
-    if report.get("injury_conflict"):
-        h.append(f"<div class='warn'>⚠️ 伤停数据冲突：{report['injury_conflict']}</div>")
-    h.append(f"<div class='muted'>置信度：{report['confidence_label']}（{report['confidence_score']}）；"
-             f"风险等级：{report['risk_level']}</div></div>")
-
-    spf = bd["spf"]
-    rqspf = bd["rqspf"]
-    zjq = bd["zjq"]
-    upset = bd["upset"]
-    h.append("<div class='card'><h2>5) 北单专属维度</h2>")
-    if spf.get("prediction"):
-        h.append(f"<div class='okb'><b>胜平负推荐：</b>{spf['prediction']}"
-                 f"（模型概率 主{pct(w['home'])}/平{pct(w['draw'])}/客{pct(w['away'])}）</div>")
-    if rqspf and not rqspf.get("error") and rqspf.get("prediction"):
-        h.append(f"<div class='okb'><b>让球胜平负：</b>让球 {rqspf.get('handicap','?')} → "
-                 f"推荐 {rqspf['prediction']}（概率 {pct(rqspf.get('probability',0))}）</div>")
-    if zjq and not zjq.get("error") and zjq.get("prediction"):
-        h.append(f"<div class='okb'><b>总进球：</b>{zjq['prediction']} "
-                 f"（概率 {pct(zjq.get('probability',0))}）</div>")
-    at = bd.get("asian_trend")
-    if at:
-        h.append(f"<div class='muted'>亚盘走势：{at if isinstance(at,str) else json.dumps(at, ensure_ascii=False)}</div>")
-    if isinstance(upset, dict) and upset.get("alert"):
-        cands = upset.get("candidates") or []
-        txt = "；".join([f"{c.get('score','?')}({pct(c.get('prob',0))})" for c in cands[:3]])
-        h.append(f"<div class='warn'>⚠️ 爆冷预警：{upset.get('reason','关注冷门方向')}｜候选比分：{txt}</div>")
-    if not (rqspf or zjq or upset):
-        h.append("<div class='muted'>本场未返回让球/总进球/爆冷维度，已省略。</div>")
-    h.append("</div>")
-
-    h.append("<div class='card'><h2>6) 剧本预测</h2>")
-    for sc in report["scripts"]:
-        h.append(f"<div class='okb'><b>{sc['name']}</b><br>{sc['text']}</div><br>")
-    h.append("</div>")
-
-    h.append("<div class='card'><h2>7) 无效控球警示（反面教材） "
-             f"<span class='tag {'u' if not report['trap_warn']['available'] else 'ok'}'>"
-             f"{'UNAVAILABLE' if not report['trap_warn']['available'] else '有案例'}</span></h2>")
-    if report["trap_warn"]["available"]:
-        tw = report["trap_warn"]
-        h.append(f"<div class='warn'>案例：{tw.get('case','')} ｜ 数据：控球 {tw.get('possession')} / "
-                 f"Field Tilt {tw.get('field_tilt')} / xG={tw.get('xg')} ｜ 来源：{tw.get('source')}</div>")
-        h.append(f"<div class='muted'>启示：{tw.get('lesson','')}</div>")
-    else:
-        h.append(f"<div class='warn'>{report['trap_warn'].get('note','未找到可验证来源')}</div>")
-    h.append("</div>")
-
-    h.append("<div class='card'><h2>8) 关键不确定性与风险清单</h2><ul>")
-    for r in report["risks"]:
-        h.append(f"<li>{r}</li>")
-    h.append("</ul></div>")
-
-    h.append(f"<div class='sub'>本报告由 football-bayes skill 框架叠加现有北单模块生成，"
-             f"属信息分析用途，仅供参考不构成投资建议。</div>")
-    h.append("</div></body></html>")
-    return "".join(h)
 
 
 # ===================== 批量扫描（scripts 用） =====================
@@ -1240,7 +621,6 @@ def persist_beidan_recs(recs: List[dict]) -> List[str]:
 # ===================== 赔率快照 & 变盘检测（自动重生成） =====================
 
 # 变盘阈值：胜平负隐含概率任一方绝对偏差 >= 此值即视为「变盘明显」，需重生成报告。
-DRIFT_THRESHOLD = 0.03  # 3 个百分点
 
 
 def _snapshot_path(mid: str, kind: str) -> str:
@@ -1273,29 +653,6 @@ def load_odds_snapshot(mid: str, kind: str):
         return None
 
 
-def _to_implied(odds):
-    """把 {home,draw,away} 或 {胜,平,负} 的赔率/概率统一转成隐含概率 dict。
-
-    输入若 >1（赔率量级）则取 1/odd 再归一化；若 <1（概率量级）则直接归一化。
-    返回 {home,draw,away} 或 None。
-    """
-    if not odds:
-        return None
-    h = odds.get("home", odds.get("胜"))
-    d = odds.get("draw", odds.get("平"))
-    a = odds.get("away", odds.get("负"))
-    try:
-        h, d, a = float(h), float(d), float(a)
-    except (TypeError, ValueError):
-        return None
-    if h <= 0 or d <= 0 or a <= 0:
-        return None
-    if h > 1.0 or d > 1.0 or a > 1.0:  # 赔率量级 → 转隐含概率
-        h, d, a = 1.0 / h, 1.0 / d, 1.0 / a
-    s = h + d + a
-    if s <= 0:
-        return None
-    return {"home": h / s, "draw": d / s, "away": a / s}
 
 
 def odds_drifted(mid: str, kind: str, current_odds, threshold: float = DRIFT_THRESHOLD) -> bool:
@@ -1359,11 +716,6 @@ def sync_beidan_reports(recs):
 
 # ===================== 报告留存清理（retention） =====================
 
-def _extract_mid_from_report_path(path: str):
-    """从 football_bayes_{mid}.html / beidan_bayes_{mid}.html 解析 match_id。"""
-    base = os.path.basename(path)
-    m = re.match(r"^(?:football|beidan)_bayes_(.+)\.html$", base)
-    return m.group(1) if m else None
 
 
 def _prune_manifest(reports_dir: str) -> int:
@@ -1461,3 +813,4 @@ def cleanup_old_reports(max_age_days: int = 3, reports_dir: str = None, dry_run:
         "freed_bytes": freed,
         "pruned_manifest": pruned,
     }
+

@@ -330,3 +330,9 @@ from scripts.gen_football_backtest_golden import entries as football_backtest_en
 
 dump('football_backtest',
      {k: _as_comparable(v) for k, v in football_backtest_entries()})
+
+# ---- football 报告层 ----
+from scripts.gen_football_reports_golden import entries as football_reports_entries
+
+dump('football_reports',
+     {k: _as_comparable(v) for k, v in football_reports_entries()})
