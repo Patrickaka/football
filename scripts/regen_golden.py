@@ -244,3 +244,9 @@ dump('beidan_market_state', {k: as_comparable(v) for k, v in beidan_ms_entries()
 from scripts.gen_beidan_settlement_golden import entries as beidan_settlement_entries
 
 dump('beidan_settlement', {k: as_comparable(v) for k, v in beidan_settlement_entries()})
+
+
+# ---- beidan 赛果解读与组装 ----
+from scripts.gen_beidan_analysis_golden import entries as beidan_analysis_entries
+
+dump('beidan_analysis', {k: as_comparable(v) for k, v in beidan_analysis_entries()})

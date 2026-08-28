@@ -23,8 +23,14 @@ from ..common import kv_store
 log = setup_logger('beidan')
 
 from .config import (
-    BASE_URL, BEIDAN_VERSION, BET_TYPES, LEAGUE_PROFILES, OKOOO_HEADERS, _okooo_session,
+    BASE_URL, BEIDAN_VERSION, BET_TYPES, LEAGUE_PROFILES, MAX_GOALS, OKOOO_HEADERS, _okooo_session,
 )
+
+# ─── 领域层适配 ───
+#
+# 赛果解读、分组、筛选的算法在 `src/domain/sports/beidan/analysis.py`。
+# 留在这里的是抓取、缓存、时钟与快照写入。
+from src.domain.sports.beidan import analysis as _analysis
 from .modeling import (
     BEIDAN_STRONG_MIN_LEAD, BEIDAN_STRONG_MIN_PROBABILITY, aggregate_goals_from_scores, anchor_score_outcomes, build_dixon_coles_matrix, calibrate_draw_probability, match_lambdas, match_target_total, parse_beidan_handicap, predict_scores_by_poisson, rqspf_probs_from_score_probs,
 )
@@ -48,31 +54,8 @@ from .upset import (
 )
 
 def build_zjq_group_recommendation(zjq_probs):
-    if not zjq_probs:
-        return {'groups': [], 'primary': None}
-
-    definitions = [
-        ('small', '小球组', ['0', '1', '2']),
-        ('middle', '中位组', ['2', '3']),
-        ('big', '大球组', ['3', '4', '5', '6', '7+']),
-    ]
-    groups = []
-    for key, label, options in definitions:
-        prob = sum(float(zjq_probs.get(opt, 0) or 0) for opt in options)
-        groups.append({
-            'key': key,
-            'label': label,
-            'options': options,
-            'probability': round(prob, 6),
-            'advice': f"{label} {'/'.join(options)}",
-        })
-
-    groups.sort(key=lambda item: -item['probability'])
-    primary = groups[0] if groups else None
-    return {
-        'groups': groups,
-        'primary': primary,
-    }
+    """总进球的三个可投注分组。分组定义在领域层，这里只透传。"""
+    return _analysis.zjq_groups(zjq_probs)
 
 
 def _compact_beidan_record(match, source, professional_snapshot=None):
@@ -277,201 +260,29 @@ def fetch_ouzhi_odds(match_id):
 
 
 def _clear_ouzhi_cache():
-    global _ouzhi_cache
-    _ouzhi_cache = {}
+    """就地清空，**不重新绑定**。
+
+    迁移前这里是 `global _ouzhi_cache; _ouzhi_cache = {}`，而
+    `__init__.py` 有一行 `from .recommending import _ouzhi_cache`——
+    重绑定之后那行导出的就是一份没人再写的孤儿副本（§五·2）。
+    改成就地清空，导出与源模块从此指向同一个对象。
+    """
+    _ouzhi_cache.clear()
 
 
 def build_beidan_match_analysis(spf_result):
     """本地 AI 式赛果分析（对齐足球模块），用于北单胜平负推荐。
 
-    关键原则：比分 / 进球数 / 胜平负 **全部从同一个完整比分分布(score_probs) 边际化得出**，
-    三者天然自洽。采用「比分区间法」(首推/次选/防冷)，并复用 upset 的反向比分作为防冷候选，
-    附中文理由叙述。
+    算法在 `src/domain/sports/beidan/analysis.py`。**兜异常留在这一层**：
+    迁移前整个函数体裹在一个 `except Exception` 里，任何缺陷都会被压成
+    一句 warning 加一个 `None`，与「这场数据不全」长得一模一样（判据 6）。
+    领域层现在算不出来才返回 `None`，别的照抛；要不要吞由这里决定。
     """
     try:
-        if not spf_result or spf_result.get('error'):
-            return None
-        score_probs = spf_result.get('score_probs') or {}
-        # 兼容两种格式：元组键字典 {(h,a):p} 或 JSON 安全列表 [[h,a,p], ...]
-        if isinstance(score_probs, list):
-            norm = {}
-            for item in score_probs:
-                if len(item) == 3:
-                    h, a, p = item
-                    norm[(int(h), int(a))] = float(p)
-            score_probs = norm
-        if not score_probs:
-            return None
-
-        lam_home = spf_result.get('lambda_home')
-        lam_away = spf_result.get('lambda_away')
-        upset = spf_result.get('upset') or {}
-        conf = spf_result.get('confidence') or 0.5
-        odds = spf_result.get('odds') or {}
-        asian_trend = spf_result.get('asian_trend')
-        match_info = {
-            'home': spf_result.get('home'),
-            'away': spf_result.get('away'),
-        }
-
-        # ---- 1. 胜平负边际化（与比分/进球数同源）----
-        w = d = l = 0.0
-        goals_map = {}
-        cands = [((h, a), p) for (h, a), p in score_probs.items()]
-        for (h, a), prob in cands:
-            if h > a:
-                w += prob
-            elif h == a:
-                d += prob
-            else:
-                l += prob
-            g = h + a
-            goals_map[g] = goals_map.get(g, 0.0) + prob
-        s = w + d + l
-        if s > 0:
-            w, d, l = w / s, d / s, l / s
-        from src.common.local_match_analysis import (
-            LOCAL_ANALYST_VERSION, build_decision, normalize_probabilities,
-            pick_high_score_scenario, build_score_strategy,
-        )
-        pprobs = normalize_probabilities({'home': w, 'draw': d, 'away': l})
-        w, d, l = pprobs['home'], pprobs['draw'], pprobs['away']
-        fav = max(pprobs, key=pprobs.get)
-        fav_p = pprobs[fav]
-        sec_p = sorted(pprobs.values(), reverse=True)[1]
-        margin = fav_p - sec_p
-        fav_cn = {'home': '胜', 'draw': '平', 'away': '负'}.get(fav, '胜')
-
-        # ---- 2. 比分区间法：首推 / 次选 / 防冷 ----
-        ranked = sorted(cands, key=lambda x: -x[1])
-        primary = ranked[0]
-        ph, pa = primary[0]
-        secondary = None
-        for (h, a), prob in ranked[1:]:
-            if (h > a) != (ph > pa) or (h == a) != (ph == pa) or (h + a) != (ph + pa):
-                secondary = ((h, a), prob)
-                break
-        if secondary is None and len(ranked) > 1:
-            secondary = ranked[1]
-
-        score_picks = [{
-            'type': '首推',
-            'score': f"{ph}-{pa}",
-            'home': ph, 'away': pa,
-            'result': _result_from_score((ph, pa)),
-            'probability': primary[1],
-        }]
-        if secondary:
-            sh, sa = secondary[0]
-            score_picks.append({
-                'type': '次选',
-                'score': f"{sh}-{sa}",
-                'home': sh, 'away': sa,
-                'result': _result_from_score((sh, sa)),
-                'probability': secondary[1],
-            })
-        upset_cands = upset.get('candidates') or []
-        if upset.get('alert') and upset_cands:
-            try:
-                uh, ua = (int(x) for x in upset_cands[0]['score'].split('-'))
-                uprob = score_probs.get((uh, ua), 0.0)
-                score_picks.append({
-                    'type': '防冷',
-                    'score': f"{uh}-{ua}",
-                    'home': uh, 'away': ua,
-                    'result': _result_from_score((uh, ua)),
-                    'probability': uprob,
-                })
-            except (ValueError, KeyError):
-                pass
-
-        # ---- 3. 进球数方向（从比分分布边际化）----
-        goals_sorted = sorted(goals_map.items(), key=lambda x: -x[1])
-        line = 2.5
-        over_p = sum(v for k, v in goals_map.items() if k > line)
-        under_p = sum(v for k, v in goals_map.items() if k < line)
-        expected = sum(k * v for k, v in goals_map.items())
-        top_goals = goals_sorted[:2]
-        interval = f"{top_goals[0][0]}-{top_goals[1][0]}球" if len(top_goals) > 1 else f"{top_goals[0][0]}球"
-        if over_p >= under_p:
-            ou_dir, ou_p = '大球', over_p
-        else:
-            ou_dir, ou_p = '小球', under_p
-        goals_read = {
-            'expected': expected,
-            'line': line,
-            'over_prob': over_p,
-            'under_prob': under_p,
-            'direction': ou_dir,
-            'direction_prob': ou_p,
-            'most_likely_interval': interval,
-            'top_goals': [{'goals': k, 'probability': v} for k, v in goals_sorted[:3]],
-        }
-        high_scenario = pick_high_score_scenario(cands)
-        if over_p >= 0.52 and high_scenario:
-            hh, ha = high_scenario['score']
-            if not any(pick['home'] == hh and pick['away'] == ha for pick in score_picks):
-                score_picks.append({
-                    'type': '大比分', 'score': f"{hh}-{ha}",
-                    'home': hh, 'away': ha,
-                    'result': _result_from_score((hh, ha)),
-                    'probability': high_scenario['probability'],
-                    'scenario_probability': high_scenario['tail_probability'],
-                })
-        goals_read['high_score_probability'] = (
-            high_scenario['tail_probability'] if high_scenario else 0.0
-        )
-
-        # ---- 4. 理由叙述 ----
-        reasons = []
-        if lam_home is not None and lam_away is not None:
-            bias = '主队进攻占优' if lam_home > lam_away else ('客队进攻占优' if lam_away > lam_home else '双方攻防均衡')
-            reasons.append(f"模型预期进球 主{lam_home:.1f}/客{lam_away:.1f}，{bias}")
-        if odds:
-            reasons.append(f"欧赔 胜{odds.get('胜')}/平{odds.get('平')}/负{odds.get('负')}")
-        if asian_trend and asian_trend.get('direction'):
-            reasons.append(f"亚盘走势：{asian_trend.get('direction')}")
-        if upset.get('alert'):
-            reasons.append(f"⚠️ 爆冷预警（{upset.get('label')}）：热门{upset.get('favorite')}仅{fav_p:.0%}，关注反向比分")
-        elif upset.get('confident'):
-            reasons.append(f"✅ 热门稳胆：{upset.get('favorite')}{fav_p:.0%} 且领先次选 {upset.get('gap'):.0%}，真实冷门率约 30%")
-
-        # ---- 5. 结论句 ----
-        if fav == 'home':
-            verdict = f"{match_info.get('home', '主队')}胜面最高 {fav_p:.0%}，优势{'明显' if margin >= 0.12 else '有限'}"
-        elif fav == 'away':
-            verdict = f"{match_info.get('away', '客队')}胜面最高 {fav_p:.0%}，优势{'明显' if margin >= 0.12 else '有限'}"
-        else:
-            verdict = f"平局概率 {d:.0%}，双方势均力敌"
-
-        quality_level = (spf_result.get('quality') or {}).get('level')
-        confidence_level = 'low' if quality_level in ('low', 'split') else quality_level
-        decision = build_decision(
-            pprobs, confidence=confidence_level,
-            upset_alert=bool(upset.get('alert')),
+        return _analysis.build_match_analysis(
+            spf_result,
             min_single=BEIDAN_STRONG_MIN_PROBABILITY,
-            min_margin=BEIDAN_STRONG_MIN_LEAD,
-        )
-        score_strategy = build_score_strategy(
-            cands, confidence=confidence_level,
-            upset_alert=bool(upset.get('alert')),
-        )
-        return {
-            'analysis_model': LOCAL_ANALYST_VERSION,
-            'verdict': verdict,
-            'favorite': fav_cn,
-            'favorite_prob': fav_p,
-            'margin': margin,
-            'wdl': {'胜': w, '平': d, '负': l},
-            'score_picks': score_picks,
-            'goals': goals_read,
-            'reasons': reasons,
-            'confidence': conf,
-            'risk_level': (spf_result.get('quality') or {}).get('level'),
-            'upset_alert': bool(upset.get('alert')),
-            'decision': decision,
-            'score_strategy': score_strategy,
-        }
+            min_margin=BEIDAN_STRONG_MIN_LEAD)
     except Exception as e:
         log.warning(f"build_beidan_match_analysis 失败: {e}")
         return None
@@ -752,33 +563,12 @@ def analyze_rqspf(match, asian_data=None, goals_data=None):
 def build_beidan_total_goals_accuracy_gate(section, goals_data, league):
     """Map Beidan HK-water O/U data into the frozen league O/U 2.5 gate."""
     line, over_water, under_water = _latest_ou_market(goals_data)
-    probabilities = {}
-    try:
-        over_decimal = 1.0 + float(over_water)
-        under_decimal = 1.0 + float(under_water)
-        inverse = {"over": 1.0 / over_decimal, "under": 1.0 / under_decimal}
-        total_inverse = sum(inverse.values())
-        if over_decimal > 1.0 and under_decimal > 1.0 and total_inverse > 0:
-            probabilities = {key: value / total_inverse for key, value in inverse.items()}
-    except (TypeError, ValueError, ZeroDivisionError):
-        probabilities = {}
-
-    zjq_probabilities = (section or {}).get("probabilities") or {}
-    model_over = model_under = 0.0
-    for key, value in zjq_probabilities.items():
-        try:
-            goals = 7 if str(key) == "7+" else int(key)
-            probability = float(value)
-        except (TypeError, ValueError):
-            continue
-        if goals >= 3:
-            model_over += probability
-        else:
-            model_under += probability
+    market, model_over, model_under = _analysis.total_goals_gate_inputs(
+        section, (over_water, under_water), max_goals=MAX_GOALS)
 
     from ..football.accuracy_gate import build_total_goals_gate
     return build_total_goals_gate(
-        {"close_line": line, "close_prob": probabilities},
+        {"close_line": line, "close_prob": market},
         league=league,
         goal_count={"over_under": {"over": model_over, "under": model_under}},
     )
@@ -998,58 +788,12 @@ def analyze_zjq(match, zjq_odds=None, asian_data=None, goals_data=None):
 
 
 def analyze_bqc(match, bqc_odds):
-    result = {
-        'match_id': match['id'],
-        'num': match['num'],
-        'home': match['home'],
-        'away': match['away'],
-        'league': match['league'],
-        'time': match['time'],
-        'type': 'bqc',
-    }
-    
-    if match['id'] not in bqc_odds:
-        result['error'] = '半全场数据不可用'
-        return result
-    
-    odds = bqc_odds[match['id']]
-    probs = calculate_implied_probability(odds)
-    
-    if probs:
-        result['odds'] = odds
-        result['probabilities'] = probs
-        
-        sorted_results = sorted(probs.items(), key=lambda x: -x[1])
-        result['top3'] = sorted_results[:3]
-        result['prediction'] = sorted_results[0][0]
-        result['confidence'] = sorted_results[0][1]
-        
-        half_probs = {}
-        full_probs = {}
-        for key, prob in probs.items():
-            half = key[0]
-            full = key[1]
-            half_probs[half] = half_probs.get(half, 0) + prob
-            full_probs[full] = full_probs.get(full, 0) + prob
-        
-        result['half_probabilities'] = half_probs
-        result['full_probabilities'] = full_probs
-    
-    return result
+    """半全场推荐。纯计算，赔率由调用方取好后传进来。"""
+    return _analysis.bqc(match, bqc_odds)
 
 
 def _candidate_beidan_dates(date, allow_fallback=True, days=2):
-    dates = [date]
-    if not allow_fallback:
-        return dates
-    try:
-        base = datetime.strptime(date, '%Y-%m-%d')
-    except (TypeError, ValueError):
-        return dates
-    for offset in range(1, days + 1):
-        candidate = base + timedelta(days=offset)
-        dates.append(f'{candidate.year:04d}-{candidate.month:02d}-{candidate.day:02d}')
-    return dates
+    return _analysis.candidate_dates(date, allow_fallback=allow_fallback, days=days)
 
 
 def _fetch_beidan_matches_with_fallback(date, source, allow_date_fallback=True):
@@ -1411,68 +1155,19 @@ def generate_beidan_recommendations(date=None, bet_types=None, source='okooo', s
 
 
 def find_value_bets(date=None, threshold=0.05, source='okooo'):
-    result = generate_beidan_recommendations(date, bet_types=['spf', 'rqspf', 'zjq'], source=source)
-    
+    """抓一轮推荐，再从中挑出模型概率高于市场隐含概率的注。
+
+    抓取在这里，筛选在领域层——迁移前两件事写在同一个函数里，
+    想测「怎么挑」就得先联网跑一整轮。
+    """
+    result = generate_beidan_recommendations(
+        date, bet_types=['spf', 'rqspf', 'zjq'], source=source)
     if 'error' in result:
         return result
-    
-    value_bets = []
-    
-    for match in result['recommendations']:
-        for bet_type in ['spf', 'rqspf', 'zjq']:
-            if bet_type not in match:
-                continue
-            
-            data = match[bet_type]
-            if 'probabilities' not in data:
-                continue
-            
-            probs = data['probabilities']
-            
-            if bet_type == 'zjq':
-                odds_map = data.get('odds') or {}
-                for key, prob in probs.items():
-                    if key == '7+':
-                        continue
-                    odd = odds_map.get(key)
-                    if odd and odd > 0:
-                        implied_prob = 1 / odd
-                        edge = prob - implied_prob
-                        if edge > threshold:
-                            value_bets.append({
-                                'num': match['num'],
-                                'home': match['home'],
-                                'away': match['away'],
-                                'type': bet_type,
-                                'option': key,
-                                'probability': prob,
-                                'odd': odd,
-                                'implied_probability': implied_prob,
-                                'edge': edge,
-                            })
-            else:
-                for key, prob in probs.items():
-                    odd = data['odds'].get(key)
-                    if odd and odd > 0:
-                        implied_prob = 1 / odd
-                        edge = prob - implied_prob
-                        if edge > threshold:
-                            value_bets.append({
-                                'num': match['num'],
-                                'home': match['home'],
-                                'away': match['away'],
-                                'type': bet_type,
-                                'option': key,
-                                'probability': prob,
-                                'odd': odd,
-                                'implied_probability': implied_prob,
-                                'edge': edge,
-                            })
-    
     return {
         'date': result['date'],
         'total_matches': result['total_matches'],
-        'value_bets': sorted(value_bets, key=lambda x: -x['edge']),
+        'value_bets': _analysis.value_bets(result['recommendations'], threshold),
     }
 
 
