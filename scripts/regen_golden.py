@@ -324,3 +324,9 @@ from scripts.gen_football_settlement_golden import entries as football_settlemen
 
 dump('football_settlement',
      {k: _as_comparable(v) for k, v in football_settlement_entries()})
+
+# ---- football 回测族 ----
+from scripts.gen_football_backtest_golden import entries as football_backtest_entries
+
+dump('football_backtest',
+     {k: _as_comparable(v) for k, v in football_backtest_entries()})
