@@ -564,18 +564,28 @@ class DeadOddsAsymmetryTests(unittest.TestCase):
         self.assertNotIn('平', result['raw_spf_probabilities'])
         self.assertEqual(sorted(result['probabilities']), ['让平', '让胜', '让负'])
 
-    def test_each_outcome_has_its_own_fallback_value(self):
-        """**三档的兜底值不一样**（0.33/0.33/0.34），所以要逐档撞。
+    LEVEL_MATCH = dict(MATCH, handicap='0')
 
-        只测平局那一档的话，把三个数轮换一下照样全绿——负那一档的 0.34
-        是为了让三者恰好加起来是 1，挪走它这条约束就没了。
+    def test_each_outcome_has_its_own_fallback_value(self):
+        """**三档的兜底值不一样**（0.33/0.33/0.34），所以要逐档撞、且要钉死数值。
+
+        只断言「主胜档缺」与「客胜档缺」两种结果不同是不够的——把 0.33 与
+        0.34 对调，两者照样不同，只是互换了方向。所以这里钉的是具体的值：
+        平手盘 + 两侧对称的赔率下，主胜档缺时让胜 0.26908026，客胜档缺时
+        让负 0.27455494。**两个数不相等，正因为兜底值不对称。**
         """
-        no_home = rqspf(ouzhi={'home': 0, 'draw': 3.60, 'away': 4.20})
+        no_home = recommendation.rqspf(self.LEVEL_MATCH,
+                                       {'home': 0, 'draw': 3.0, 'away': 3.0},
+                                       0.0, MODEL, MARKET)
+        no_away = recommendation.rqspf(self.LEVEL_MATCH,
+                                       {'home': 3.0, 'draw': 3.0, 'away': 0},
+                                       0.0, MODEL, MARKET)
         self.assertNotIn('胜', no_home['raw_spf_probabilities'])
-        no_away = rqspf(ouzhi={'home': 1.80, 'draw': 3.60, 'away': 0})
         self.assertNotIn('负', no_away['raw_spf_probabilities'])
-        # 补进去的那一档决定了让球概率，两条的结果必须不同
-        self.assertNotEqual(no_home['probabilities'], no_away['probabilities'])
+        self.assertAlmostEqual(no_home['probabilities']['让胜'], 0.26908026)
+        self.assertAlmostEqual(no_away['probabilities']['让负'], 0.27455494)
+        self.assertNotAlmostEqual(no_home['probabilities']['让胜'],
+                                  no_away['probabilities']['让负'])
 
     def test_the_three_fallbacks_sum_to_one(self):
         """三档兜底加起来正好是 1 —— 「三档全缺」等价于「毫无信息」。"""
