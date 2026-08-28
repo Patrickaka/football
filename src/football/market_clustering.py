@@ -22,6 +22,7 @@ from ..common import kv_store
 from ..common.logger import setup_logger
 
 from ..domain.sports.football import market_matching as _mm
+from ..domain.sports.football import value as _mm_value
 
 log = setup_logger('football.market_clustering')
 
@@ -115,40 +116,10 @@ class MarketCluster:
     def fuse_with_prior(self, poisson_probs: Dict[str, float],
                        handicap: float, total: float,
                        prior_weight: float = 0.3) -> Dict[str, float]:
-        """
-        将泊松概率与盘口先验融合
-        
-        参数：
-            poisson_probs: 泊松模型预测概率
-            handicap: 亚盘让球
-            total: 大小球线
-            prior_weight: 先验权重
-        
-        返回：
-            融合后的概率
-        """
-        prior = self.get_prior(handicap, total)
-        
-        if not prior:
-            # 没有先验数据，直接返回泊松概率
-            return poisson_probs
-        
-        # 获取所有比分
-        all_scores = set(poisson_probs.keys()) | set(prior.keys())
-        
-        fused = {}
-        for score in all_scores:
-            p_poisson = poisson_probs.get(score, 0.0)
-            p_prior = prior.get(score, 0.0)
-            
-            # 加权融合
-            fused[score] = (1 - prior_weight) * p_poisson + prior_weight * p_prior
-        
-        # 归一化
-        total_prob = sum(fused.values())
-        if total_prob > 0:
-            return {k: v / total_prob for k, v in fused.items()}
-        return poisson_probs
+        """先取先验（读聚类库），融合本身在领域层"""
+        return _mm_value.fuse_with_prior(
+            poisson_probs, handicap, total, prior_weight,
+            prior=self.get_prior(handicap, total))
 
 # ==================== 全局实例 ====================
 _cluster = None

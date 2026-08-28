@@ -30,6 +30,7 @@ from .scoring_model import (
     _estimate_dc_rho, _ou_total_distribution, _result_label,
 )
 from .upset import _evaluate_upset_risk
+from .value import calculate_ev, calculate_value
 
 log = logging.getLogger('domain.football.scoring')
 
@@ -1520,3 +1521,244 @@ def _diversify_score_recommendations(picked, scored, n: int, favor: str, upset_c
         break
 
     return picked
+
+
+def _pick_recommendations(candidates, asian, euro, total, n=2, pool=12, confidence=None, league_profile=None, team=None, similar_market=None, market_prior_fn=None):
+    """Top 池内按 概率×一致性×冷热×置信度×相似盘口 选取（基于比分簇）"""
+    if confidence:
+        n = confidence.get('recommend_count', n)
+    pool = min(16, len(candidates))  # 原12，扩大候选池让高比分有更多入选机会
+    conf_w = confidence['score'] if confidence else 1.0
+    
+    # 价值投注列表（单独输出，不参与命中率排序）
+    value_bets = []
+
+    # xG 一致性校验：ELO xG 与市场总进球线偏差 >0.5 则降低置信度
+    xg_penalty = 1.0
+    xg_total = total.get('xg_total')
+    total_line = get_close_total_line(total)
+    if xg_total is not None and total_line is not None:
+        xg_deviation = abs(xg_total - total_line)
+        if xg_deviation > 0.5:
+            xg_penalty = max(0.75, 1.0 - (xg_deviation - 0.5) * 0.20)  # 偏差>0.5开始渐进扣分
+
+    # 判断球队实力差距：通过亚盘让球判断
+    handicap = abs(asian.get('handicap', 0))
+    is_clear_favorite = handicap >= 1.0  # 让球>=1球视为强弱分明
+    
+    # 动态评估爆冷风险
+    upset_risk = _evaluate_upset_risk(asian, euro, team)
+    
+    # 相似盘口比分权重（融合历史数据）
+    similar_weight = {}
+    similar_confidence = 0.0
+    if similar_market and similar_market.get('goals_dist') and similar_market.get('confidence', 0) >= 0.3:
+        similar_confidence = similar_market['confidence']
+        for score, prob in similar_market['goals_dist'].items():
+            h, a = map(int, score.split('-'))
+            similar_weight[(h, a)] = prob
+
+    # 盘口聚类先验（与候选比分无关，循环外只计算一次）
+    market_prior = {}
+    if market_prior_fn and asian.get('handicap') is not None and total.get('close_line') is not None:
+        try:
+            market_prior = market_prior_fn(
+                asian['handicap'], total.get('close_line', total.get('line', 2.5))) or {}
+        except Exception as e:
+            log.debug(f"盘口聚类先验获取失败: {e}")
+
+    scored = []
+    favor = asian.get('favor', 'home')
+    
+    for (h, a), prob in candidates[:pool]:
+        align = _alignment_score(h, a, asian, euro, total)
+        heat, _ = score_heat_label(h, a, prob, league_profile)
+        w = _heat_filter_weight(heat)
+        
+        # 检查是否是冷门
+        diff = h - a
+        is_upset = False
+        if favor == 'home' and diff < 0:
+            is_upset = True  # 主队让球但客队赢
+        elif favor == 'away' and diff > 0:
+            is_upset = True  # 客队让球但主队赢
+        
+        # 根据爆冷风险动态调整冷门比分权重
+        upset_penalty = 1.0
+        if is_upset:
+            if is_clear_favorite and upset_risk < 0.3:
+                upset_penalty = 0.4
+            elif is_clear_favorite and upset_risk < 0.5:
+                upset_penalty = 0.7
+        
+        # 融合相似盘口比分权重
+        market_bonus = 1.0
+        if (h, a) in similar_weight and similar_confidence > 0:
+            market_bonus = 1.0 + similar_weight[(h, a)] * similar_confidence * 0.5
+
+        # 盘口聚类先验权重
+        prior_bonus = 1.0
+        if market_prior_fn and asian.get('handicap') is not None and total.get('close_line') is not None:
+            try:
+                prior = market_prior_fn(
+                    asian['handicap'], total.get('close_line', total.get('line', 2.5)))
+                if prior:
+                    score_key = f"{h}-{a}"
+                    prior_prob = prior.get(score_key, 0.0)
+                    if prior_prob > 0:
+                        prior_bonus = 1.0 + prior_prob * 0.3
+            except Exception as e:
+                log.debug(f"盘口聚类先验获取失败: {e}")
+
+        # 赔率价值计算（仅记录，不参与命中率排序）
+        value_info = None
+        if euro.get('raw_odds', {}).get('close'):
+            try:
+                close_odds = euro['raw_odds']['close']
+                score_odds = _estimate_score_odds(h, a, close_odds)
+                if score_odds > 1.0:
+                    value = calculate_value(prob, score_odds)
+                    ev = calculate_ev(prob, score_odds)
+                    value_info = {
+                        'score': f"{h}-{a}",
+                        'value': value,
+                        'ev': ev,
+                        'odds': score_odds,
+                        'probability': prob
+                    }
+            except Exception as e:
+                log.debug(f"赔率价值计算失败: {e}")
+
+        # 计算最终得分（不含价值投注调整，价值投注单独输出）
+        total_line_factor = _score_total_line_factor(h, a, total_line)
+        common_score_factor = _common_score_overheat_factor(h, a, prob, total_line)
+        final_score = (
+            prob
+            * (1.0 + 0.45 * align)
+            * w
+            * (0.65 + 0.35 * conf_w)
+            * xg_penalty
+            * upset_penalty
+            * market_bonus
+            * prior_bonus
+            * total_line_factor
+            * common_score_factor
+        )
+        
+        # 记录价值信息
+        if value_info:
+            value_bets.append(value_info)
+        cluster = _get_score_cluster(h, a)
+        scored.append(((h, a), prob, align, heat, cluster, final_score))
+
+    scored.sort(key=lambda x: -x[5])
+    
+    # ========== 比分簇推荐策略 ==========
+    # 核心比分：概率最高的比分所在簇
+    # 保护比分：同簇内的其他高概率比分 + 邻近簇的比分
+    # 冷门覆盖：对立簇的一个比分（如果爆冷风险足够）
+
+    seen = set()
+    picked = []
+    picked_clusters = set()
+    upset_count = 0
+    
+    # 确定最大冷门数量
+    max_upsets = 1 if upset_risk >= 0.3 else 0
+    if is_clear_favorite and upset_risk < 0.3:
+        max_upsets = 0
+    
+    # 阶段1：选择核心比分（概率最高的）
+    if scored:
+        (h, a), prob, _, _, cluster, _ = scored[0]
+        pattern = score_pattern(h, a)
+        picked.append((h, a, prob, cluster, pattern, 'core'))
+        seen.add((h, a))
+        picked_clusters.add(cluster)
+        picked_patterns = {pattern}
+    else:
+        picked_patterns = set()
+
+    # 阶段2：选择保护比分（优先覆盖不同剧本模式）
+    for (h, a), prob, _, _, cluster, _ in scored[1:]:
+        if (h, a) in seen:
+            continue
+        if len(picked) >= n:
+            break
+
+        # 获取当前比分的剧本模式
+        pattern = score_pattern(h, a)
+
+        # 检查是否是冷门
+        diff = h - a
+        is_upset_pick = False
+        if favor == 'home' and diff < 0:
+            is_upset_pick = True
+        elif favor == 'away' and diff > 0:
+            is_upset_pick = True
+        
+        # 冷门限制
+        if is_upset_pick:
+            if upset_count >= max_upsets:
+                continue
+            upset_count += 1
+            picked.append((h, a, prob, cluster, pattern, 'upset'))
+            seen.add((h, a))
+            picked_clusters.add(cluster)
+            picked_patterns.add(pattern)
+            continue
+
+        # 优先选择不同剧本模式的比分
+        if pattern not in picked_patterns:
+            picked.append((h, a, prob, cluster, pattern, 'protection'))
+            seen.add((h, a))
+            picked_clusters.add(cluster)
+            picked_patterns.add(pattern)
+        elif cluster in picked_clusters:
+            # 同簇的高概率比分作为保护
+            picked.append((h, a, prob, cluster, pattern, 'protection'))
+            seen.add((h, a))
+        elif len(picked) < n and cluster not in picked_clusters:
+            # 添加邻近簇作为分散保护
+            picked.append((h, a, prob, cluster, pattern, 'protection'))
+            seen.add((h, a))
+            picked_clusters.add(cluster)
+            picked_patterns.add(pattern)
+
+    # 阶段3：补充剩余推荐（如果还不够）
+    if len(picked) < n:
+        for (h, a), prob, _, _, cluster, _ in scored:
+            if (h, a) in seen:
+                continue
+            if len(picked) >= n:
+                break
+
+            pattern = score_pattern(h, a)
+            
+            diff = h - a
+            is_upset_pick = False
+            if favor == 'home' and diff < 0:
+                is_upset_pick = True
+            elif favor == 'away' and diff > 0:
+                is_upset_pick = True
+
+            if is_upset_pick and upset_count >= max_upsets:
+                continue
+
+            if is_upset_pick:
+                upset_count += 1
+                picked.append((h, a, prob, cluster, pattern, 'upset'))
+            else:
+                picked.append((h, a, prob, cluster, pattern, 'protection'))
+            seen.add((h, a))
+            picked_patterns.add(pattern)
+
+    # 转换为原有格式 (h, a, prob)
+    # 返回推荐列表和价值投注列表（分开输出）
+    picked = _diversify_score_recommendations(picked, scored, n, favor, upset_count, max_upsets)
+    recommendations = [(h, a, prob) for h, a, prob, _, _, _ in picked]
+    
+    # 对价值投注按 EV 排序
+    value_bets.sort(key=lambda x: -x.get('ev', 0))
+    
+    return recommendations, value_bets

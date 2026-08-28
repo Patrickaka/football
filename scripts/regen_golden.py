@@ -306,3 +306,9 @@ from scripts.gen_football_scoring_golden import entries as football_scoring_entr
 
 dump('football_scoring',
      {k: _as_comparable(v) for k, v in football_scoring_entries()})
+
+# ---- football value / 推荐挑选 ----
+from scripts.gen_football_value_golden import entries as football_value_entries
+
+dump('football_value',
+     {k: _as_comparable(v) for k, v in football_value_entries()})
