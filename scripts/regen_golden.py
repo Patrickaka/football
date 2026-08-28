@@ -288,3 +288,9 @@ from scripts.gen_football_modeling_golden import entries as football_modeling_en
 
 dump('football_modeling',
      {k: _as_comparable(v) for k, v in football_modeling_entries()})
+
+# ---- football calibration ----
+from scripts.gen_football_calibration_golden import entries as football_calibration_entries
+
+dump('football_calibration',
+     {k: _as_comparable(v) for k, v in football_calibration_entries()})
