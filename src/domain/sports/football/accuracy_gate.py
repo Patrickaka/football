@@ -110,12 +110,22 @@ def prediction_reliability(probability: float, information_completeness: float) 
     baseline = 1.0 / 3.0
     return baseline + (probability - baseline) * information_completeness
 
-def _static_spf_policy(league: Any) -> dict[str, Any] | None:
+def _league_policy(league: Any, policies: Mapping[str, Any]) -> tuple[str | None, dict]:
+    """按别名找联赛策略——**别名比较去空白、不分大小写**。
+
+    这段逻辑原本在本文件里有**逐字相同的两份**（另一份在
+    `_static_spf_policy`），变异验证时同一个锚点匹配到两处才发现。
+    同一件事实现两遍就会漂（判据 11），现在只剩这一份。
+    """
     text = str(league or "").strip().lower()
-    for code, policy in SPF_LEAGUE_POLICIES.items():
+    for code, policy in policies.items():
         if text and any(text == str(alias).strip().lower() for alias in policy["aliases"]):
-            return {"code": code, **policy}
-    return None
+            return code, policy
+    return None, {}
+
+def _static_spf_policy(league: Any) -> dict[str, Any] | None:
+    code, policy = _league_policy(league, SPF_LEAGUE_POLICIES)
+    return {"code": code, **policy} if code else None
 
 def has_static_spf_policy(league: Any) -> bool:
     return _static_spf_policy(league) is not None
@@ -150,12 +160,6 @@ def _spf_policy(
         "validation": SPF_HISTORICAL_PROXY,
     }
 
-def _league_policy(league: Any, policies: Mapping[str, Any]) -> tuple[str | None, dict]:
-    text = str(league or "").strip().lower()
-    for code, policy in policies.items():
-        if text and any(text == str(alias).strip().lower() for alias in policy["aliases"]):
-            return code, policy
-    return None, {}
 
 def build_total_goals_gate(
     total: Mapping[str, Any] | None,
