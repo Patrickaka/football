@@ -365,6 +365,10 @@ def bifen(match, ouzhi, model, market, market_odds=None, asian_data=None,
     matrix, result['outcome_anchor'] = model.anchor_outcomes(
         matrix, {'胜': p_home, '平': p_draw, '负': p_away})
 
+    # 这里的 `if market_odds` 是**等价变异的来源**：改成一律
+    # `implied_probability(market_odds or {})` 之后全语料 667 条一字不差
+    # ——空报价过去也是空概率，下一行照样短路（判据 9b）。
+    # 留着是因为「没有报价」与「报价全是脏值」是两件事，短路让这一点显式。
     market_probs = (settlement.implied_probability(market_odds)
                     if market_odds else None)
     if market_probs:

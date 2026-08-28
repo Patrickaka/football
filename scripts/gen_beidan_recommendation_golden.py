@@ -59,6 +59,10 @@ MATCHES = {
 OUZHI = {
     'home_favourite': {'home': 1.80, 'draw': 3.60, 'away': 4.20},
     'balanced': {'home': 2.70, 'draw': 3.20, 'away': 2.70},
+    # 归一后平局恰好 0.274 —— **落在联赛平局率唯一起作用的那条窄带上**。
+    # 英超 0.28 时不削平局、0.30 时要削（门槛分别是 0.2704 与 0.2773），
+    # 别的取值两个档案算出来一模一样，联赛档案改坏了也测不出来（判据 23）。
+    'draw_rate_sensitive': {'home': 2.20, 'draw': 3.363, 'away': 3.00},
     'away_favourite': {'home': 4.50, 'draw': 3.70, 'away': 1.75},
     'missing': None,
 }
@@ -103,15 +107,33 @@ GOALS = {
          'under_odds': 0.93},
     ]},
 }
+# 比分盘历史。**条目的键是 `time` / `score` / `odds` 三个平铺字段**，
+# 不是一个 `scores` 字典——第一版按命名猜成了后者，于是 `market_odds` 恒为空、
+# 整条融合从来没跑过，而 `cs_adjusted` 照样是 True（判据 10、23）。
+# 真实形状来自 `fetch_okooo_cs_history`（`fetching.py:513`）。
 CS = {
     'none': None,
     'empty': {'history': []},
+    # 只有一条 —— 融合要求至少两条
+    'single_entry': {'history': [{'time': '09:00', 'score': '1-0', 'odds': 8.0}]},
+    # 键名写错的那种：融合会原样返回，`cs_adjusted` 仍是 True
+    'wrong_shape': {'history': [{'ts': 't1', 'scores': {'1-0': 8.0}},
+                                {'ts': 't2', 'scores': {'1-0': 7.5}}]},
     'present': {'history': [
-        {'ts': '2026-08-28T09:00:00', 'scores': {'1-0': 8.0, '1-1': 7.5,
-                                                 '2-1': 9.0, '0-1': 11.0}},
-        {'ts': '2026-08-28T10:00:00', 'scores': {'1-0': 7.5, '1-1': 7.8,
-                                                 '2-1': 9.5, '0-1': 12.0}},
+        {'time': '09:00', 'score': '1-0', 'odds': 8.0},
+        {'time': '09:30', 'score': '1-1', 'odds': 7.5},
+        {'time': '10:00', 'score': '2-1', 'odds': 9.0},
+        {'time': '10:30', 'score': '0-1', 'odds': 11.0},
     ]},
+    # 盘口上有、模型 top3 里没有的比分 —— 走打折补入那一支
+    'new_scores_only': {'history': [
+        {'time': '09:00', 'score': '4-3', 'odds': 60.0},
+        {'time': '09:30', 'score': '3-3', 'odds': 45.0},
+    ]},
+    # 超出窗口的条目要被截掉
+    'long_history': {'history': [
+        {'time': f'{9 + i}:00', 'score': f'{i}-0', 'odds': 8.0 + i}
+        for i in range(8)]},
 }
 
 # ── 市场报价 ─────────────────────────────────────────────────────

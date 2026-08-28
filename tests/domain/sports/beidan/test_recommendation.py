@@ -217,6 +217,33 @@ class CalibrationVisibilityTests(unittest.TestCase):
         self.assertEqual({league for _, league in seen}, {'英超'})
 
 
+class NormalisationOrderTests(unittest.TestCase):
+    """归一发生在校准**之前**——校准拿到的是一组已经归一的概率。"""
+
+    @staticmethod
+    def _shift(probabilities, bet_type, league=None):
+        """故意做一个对输入规模敏感的校准：每档加 1。
+
+        真正的历史校准是规模无关的（乘因子再归一），所以拿它测不出顺序
+        ——两种顺序算出来一样。要分辨顺序，桩本身必须对规模敏感。
+        """
+        return ({key: value + 1.0 for key, value in probabilities.items()},
+                {'applied': True, 'reason': 'shift'})
+
+    def test_zjq_normalises_before_calibrating(self):
+        result = zjq(calibrate=self._shift)
+        buckets = len(result['probabilities'])
+        self.assertAlmostEqual(sum(result['probabilities'].values()),
+                               1.0 + buckets, places=6)
+
+    def test_a_calibration_returning_zeros_is_not_renormalised_to_nan(self):
+        """全零的校准输出会让归一的分母也归零——那道守卫是唯一拦它的。"""
+        zeros = lambda probabilities, bet_type, league=None: (
+            {key: 0.0 for key in probabilities}, {'applied': True, 'reason': 'zero'})
+        result = bifen(calibrate=zeros)
+        self.assertEqual(set(result['probabilities'].values()), {0.0})
+
+
 class HandicapGateTests(unittest.TestCase):
 
     def test_missing_handicap_stops_before_anything_else(self):
@@ -229,6 +256,17 @@ class HandicapGateTests(unittest.TestCase):
         level = rqspf(handicap_value=0.0)
         minus_one = rqspf(handicap_value=-1.0)
         self.assertNotEqual(level['probabilities'], minus_one['probabilities'])
+
+    def test_an_empty_probability_set_is_reported_as_a_failure(self):
+        """`rqspf_from_scores` 算不出东西时要写 error——**返回空字典也算算不出**，
+        判 `is None` 的话这条就漏了。`model` 是注入的，所以造得出来。"""
+        import types
+        broken = types.SimpleNamespace(
+            **{**vars(MODEL),
+               'rqspf_from_scores': lambda scores, handicap: ({}, {'why': 'empty'})})
+        result = recommendation.rqspf(MATCH, OUZHI, -1.0, broken, MARKET)
+        self.assertEqual(result['error'], '让球胜平负概率计算失败')
+        self.assertEqual(result['rqspf_meta'], {'why': 'empty'})
 
     def test_handicap_is_echoed_in_the_header(self):
         self.assertEqual(rqspf()['handicap'], '(-1)')
@@ -245,6 +283,15 @@ class OfficialRqspfOddsTests(unittest.TestCase):
     def test_lottery_odds_are_the_second_source(self):
         odds = {'让胜': 2.05, '让平': 3.50, '让负': 3.30}
         self.assertEqual(rqspf(dict(MATCH, lottery_rqspf_odds=odds))['odds'], odds)
+
+    def test_the_two_sources_have_a_fixed_priority(self):
+        """两个来源都在时以 `rqspf_odds` 为准。**只喂其中一个是分不出优先级的**
+        ——两条各自单独测都能过，把 `or` 的两边对调照样全绿。"""
+        primary = {'让胜': 2.20, '让平': 3.40, '让负': 3.10}
+        secondary = {'让胜': 2.05, '让平': 3.50, '让负': 3.30}
+        result = rqspf(dict(MATCH, rqspf_odds=primary,
+                            lottery_rqspf_odds=secondary))
+        self.assertEqual(result['odds'], primary)
 
     def test_three_prices_are_assembled_in_order(self):
         result = rqspf(dict(MATCH, rqspf_sp=2.20, rqspf_s=3.40, rqspf_f=3.10))
@@ -339,18 +386,74 @@ class MarketBlendTests(unittest.TestCase):
                            model_only['probabilities']['2'])
 
 
+class LeagueProfileTests(unittest.TestCase):
+    """注入的联赛档案**只有 `draw_rate` 被读**，而且只在一条很窄的带上起作用。
+
+    参照率是 `(0.25 + 0.25 + 联赛平局率) / 3`，让一球以上再打八折——联赛那一份
+    只占三分之一，所以 0.28 与 0.30 算出来的削平局门槛只差 0.0069
+    （0.2704 与 0.2773）。归一后的平局概率落在带外时，换哪个档案结果一模一样。
+    取平局恰好 0.274 的一组赔率，两者才分得开（判据 28：先算再断言）。
+
+    **`avg_goals` 走的是另一条路**：`target_total` 内部自己按联赛名查了一次表，
+    没有读注入的这份。同一份配置被查两次是判据 11 的形状——两处漂了不会报错，
+    只会让「联赛档案」这个名字在两个地方指不同的东西。下面第二条把它钉住。
+    """
+
+    SENSITIVE = {'home': 2.20, 'draw': 3.363, 'away': 3.00}
+
+    def _with_profile(self, **profile):
+        import types
+        model = types.SimpleNamespace(
+            **{**vars(MODEL), 'league_profile': lambda league: profile})
+        return recommendation.bifen(MATCH, self.SENSITIVE, model,
+                                    MARKET)['probabilities']
+
+    def test_the_injected_draw_rate_changes_the_calibration(self):
+        self.assertNotEqual(self._with_profile(avg_goals=2.8, draw_rate=0.28),
+                            self._with_profile(avg_goals=2.8, draw_rate=0.30))
+
+    def test_the_injected_average_goals_is_never_read(self):
+        """钉住现状：档案里的 `avg_goals` 改成 1.0 也毫无反应。"""
+        self.assertEqual(self._with_profile(avg_goals=2.8, draw_rate=0.28),
+                         self._with_profile(avg_goals=1.0, draw_rate=0.28))
+
+    def test_outside_the_band_the_draw_rate_makes_no_difference(self):
+        """带外一模一样——**这正是上面那条必须挑赔率的原因**。"""
+        import types
+        plain = {'home': 1.80, 'draw': 3.60, 'away': 4.20}
+        results = [recommendation.bifen(
+            MATCH, plain,
+            types.SimpleNamespace(**{**vars(MODEL),
+                                     'league_profile': lambda l, r=rate: {
+                                         'avg_goals': 2.8, 'draw_rate': r}}),
+            MARKET)['probabilities'] for rate in (0.28, 0.30)]
+        self.assertEqual(results[0], results[1])
+
+
 class TrendAttachmentTests(unittest.TestCase):
     """三份走势历史各自决定一个字段出不出现。"""
 
-    def test_asian_history_attaches_the_trend_and_feeds_quality(self):
-        """走势不只是多一个字段——它作为上下文喂进质量分档，
-        改变了 `conflict` 的判定。只断言字段出现，把这条链断掉也发现不了。"""
+    def test_asian_history_attaches_the_trend(self):
         without = spf()
         self.assertNotIn('asian_trend', without)
-        self.assertFalse(without['quality']['conflict'])
-        with_asian = spf(asian_data=ASIAN)
-        self.assertIn('asian_trend', with_asian)
-        self.assertTrue(with_asian['quality']['conflict'])
+        self.assertIn('asian_trend', spf(asian_data=ASIAN))
+
+    def test_asian_direction_reaches_the_quality_grade(self):
+        """走势不只是多一个字段——它作为 `asian_direction` 喂进质量分档。
+
+        **要撞上冲突组合才看得见**：冲突只在「盘口支持主队而推荐客胜」
+        （或反过来）时成立。上一版拿主队热门的赔率测，推荐是「胜」、
+        盘口也是 home_backing，两者一致，把这条链断掉照样全绿（判据 23）。
+        """
+        away_favourite = {'home': 4.50, 'draw': 3.70, 'away': 1.75}
+        self.assertEqual(MARKET.analyze_asian(ASIAN['history'])['direction'],
+                         'home_backing')
+        calm = spf(ouzhi=away_favourite)
+        self.assertEqual(calm['prediction'], '负')
+        self.assertFalse(calm['quality']['conflict'])
+        conflicted = spf(ouzhi=away_favourite, asian_data=ASIAN)
+        self.assertEqual(conflicted['prediction'], '负')
+        self.assertTrue(conflicted['quality']['conflict'])
 
     def test_empty_asian_history_attaches_nothing(self):
         self.assertNotIn('asian_trend', spf(asian_data={'history': []}))
@@ -363,17 +466,38 @@ class TrendAttachmentTests(unittest.TestCase):
         self.assertTrue(with_goals['goals_adjusted'])
         self.assertIn('goals_trend', with_goals)
 
+    # 比分盘历史的条目是 `time` / `score` / `odds` 三个平铺字段
+    # ——**第一版按命名猜成了 `{'ts', 'scores': {...}}`**，于是融合里的
+    # `market_odds` 恒为空、整条路从来没跑过，而 `cs_adjusted` 照样是 True
+    # （判据 10、23）。真实形状来自 `fetch_okooo_cs_history`。
+    CS = {'history': [{'time': '09:00', 'score': '1-0', 'odds': 8.0},
+                      {'time': '09:30', 'score': '1-1', 'odds': 7.5},
+                      {'time': '10:00', 'score': '2-1', 'odds': 9.0}]}
+
     def test_correct_score_history_marks_both_flags(self):
-        cs = {'history': [{'ts': '2026-08-28T09:00:00',
-                           'scores': {'1-0': 8.0, '1-1': 7.5}},
-                          {'ts': '2026-08-28T10:00:00',
-                           'scores': {'1-0': 7.5, '1-1': 7.8}}]}
         without = spf()
         self.assertNotIn('cs_adjusted', without)
         self.assertNotIn('cs_trend', without)
-        with_cs = spf(cs_data=cs)
+        with_cs = spf(cs_data=self.CS)
         self.assertTrue(with_cs['cs_adjusted'])
         self.assertIn('cs_trend', with_cs)
+
+    def test_correct_score_history_really_changes_the_scores(self):
+        """**标记为真不等于融合生效**：键名写错的那份也会把 `cs_adjusted`
+        置真，却什么也没融合。要断言 `scores` 真的变了。"""
+        self.assertNotEqual(spf()['scores'], spf(cs_data=self.CS)['scores'])
+
+    def test_a_wrongly_shaped_history_sets_the_flag_but_blends_nothing(self):
+        """钉住这处落差——它是判据 27 的又一个实例。"""
+        wrong = {'history': [{'ts': 't1', 'scores': {'1-0': 8.0}},
+                             {'ts': 't2', 'scores': {'1-0': 7.5}}]}
+        result = spf(cs_data=wrong)
+        self.assertTrue(result['cs_adjusted'])
+        self.assertEqual(result['scores'], spf()['scores'])
+
+    def test_a_single_entry_is_not_enough_to_blend(self):
+        single = {'history': [{'time': '09:00', 'score': '1-0', 'odds': 8.0}]}
+        self.assertEqual(spf(cs_data=single)['scores'], spf()['scores'])
 
     def test_goals_history_moves_the_total_line(self):
         """大小球历史要真的喂进目标总进球——不然它只是个装饰字段。"""
@@ -439,6 +563,19 @@ class DeadOddsAsymmetryTests(unittest.TestCase):
         result = rqspf(ouzhi=self.DEAD)
         self.assertNotIn('平', result['raw_spf_probabilities'])
         self.assertEqual(sorted(result['probabilities']), ['让平', '让胜', '让负'])
+
+    def test_each_outcome_has_its_own_fallback_value(self):
+        """**三档的兜底值不一样**（0.33/0.33/0.34），所以要逐档撞。
+
+        只测平局那一档的话，把三个数轮换一下照样全绿——负那一档的 0.34
+        是为了让三者恰好加起来是 1，挪走它这条约束就没了。
+        """
+        no_home = rqspf(ouzhi={'home': 0, 'draw': 3.60, 'away': 4.20})
+        self.assertNotIn('胜', no_home['raw_spf_probabilities'])
+        no_away = rqspf(ouzhi={'home': 1.80, 'draw': 3.60, 'away': 0})
+        self.assertNotIn('负', no_away['raw_spf_probabilities'])
+        # 补进去的那一档决定了让球概率，两条的结果必须不同
+        self.assertNotEqual(no_home['probabilities'], no_away['probabilities'])
 
     def test_the_three_fallbacks_sum_to_one(self):
         """三档兜底加起来正好是 1 —— 「三档全缺」等价于「毫无信息」。"""
