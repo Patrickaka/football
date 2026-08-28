@@ -318,3 +318,9 @@ from scripts.gen_football_ml_golden import entries as football_ml_entries
 
 dump('football_ml',
      {k: _as_comparable(v) for k, v in football_ml_entries()})
+
+# ---- football 赛果判定 ----
+from scripts.gen_football_settlement_golden import entries as football_settlement_entries
+
+dump('football_settlement',
+     {k: _as_comparable(v) for k, v in football_settlement_entries()})

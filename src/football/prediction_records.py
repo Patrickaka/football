@@ -43,21 +43,10 @@ from collections import defaultdict
 
 from ..common import repositories
 
+# **与 result_sync / tune_params 那两份逐字相同**（F-1 已 AST 确认）
+from ..domain.sports.football.settlement import normalize_1x2_probs
 
-def normalize_1x2_probs(probs: Dict[str, float]) -> Dict[str, float]:
-    """Normalize 1X2 probability keys to H/D/A."""
-    if not probs:
-        return {}
 
-    normalized = {
-        'H': probs.get('H', probs.get('home', 0.0)),
-        'D': probs.get('D', probs.get('draw', 0.0)),
-        'A': probs.get('A', probs.get('away', 0.0)),
-    }
-    total = sum(normalized.values())
-    if total > 0:
-        normalized = {key: value / total for key, value in normalized.items()}
-    return normalized
 
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), 'data')
