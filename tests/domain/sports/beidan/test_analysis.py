@@ -83,6 +83,13 @@ class ScoreMatrixInputTests(unittest.TestCase):
         self.assertAlmostEqual(result['wdl']['负'], 0.4)
         self.assertAlmostEqual(result['wdl']['平'], 0.0)
 
+    def test_an_errored_result_is_rejected_even_with_a_usable_matrix(self):
+        """**`error` 那道守卫要单独测**：只喂「出错且没有分布」的输入时，
+        它被后面那道空分布守卫遮住了，删掉照样全绿（判据 5 的形状）。"""
+        self.assertIsNone(analysis.build_match_analysis(
+            _spf({(1, 0): 1.0}, error='欧赔数据不可用'),
+            min_single=STRONG_MIN_PROBABILITY, min_margin=STRONG_MIN_LEAD))
+
     def test_missing_or_empty_input_returns_none(self):
         for bad in (None, {}, {'error': 'x'}, _spf({}), _spf([])):
             with self.subTest(bad=bad):
@@ -120,6 +127,21 @@ class MarginalConsistencyTests(unittest.TestCase):
         # 相等时归大球（`over >= under`），把它改成 `>` 这条就会翻
         self.assertEqual(result['direction'], '大球')
 
+    def test_a_whole_number_line_leaves_a_push_band(self):
+        """线是整数时，**恰好打平那条线的进球数既不算大也不算小**。
+
+        默认线 2.5 上这件事看不出来——整数进球永远不等于 2.5，所以
+        `>` 与 `>=` 完全等价。线是参数，传 3.0 进来这道边界才有意义：
+        3 球的那 0.5 两边都不进，大小球之和只有 0.5。
+        """
+        result = analysis.build_match_analysis(
+            _spf({(2, 1): 0.5, (1, 0): 0.3, (3, 1): 0.2}),
+            min_single=STRONG_MIN_PROBABILITY, min_margin=STRONG_MIN_LEAD,
+            total_line=3.0)['goals']
+        self.assertAlmostEqual(result['over_prob'], 0.2)
+        self.assertAlmostEqual(result['under_prob'], 0.3)
+        self.assertAlmostEqual(result['over_prob'] + result['under_prob'], 0.5)
+
     def test_under_wins_when_strictly_larger(self):
         result = _analyse({(1, 0): 0.60, (2, 1): 0.40})['goals']
         self.assertEqual(result['direction'], '小球')
@@ -143,6 +165,16 @@ class ScorePickTests(unittest.TestCase):
         picks = _analyse({(2, 1): 0.40, (3, 0): 0.35, (1, 1): 0.25})['score_picks']
         self.assertEqual(picks[0]['score'], '2-1')
         self.assertEqual(picks[1]['score'], '1-1')
+
+    def test_draw_versus_loss_at_the_same_goal_count(self):
+        """**只有「是否平局」这一个维度能分辨的一对**。
+
+        首推 `1-1`、候选 `0-2`：都不是主胜（第一个条件相同）、都是 2 球
+        （第三个条件相同），只有平局那一维不同。把那个条件删掉，次选就会
+        跳过 `0-2` 去挑 `2-0`——三个维度里少任何一个都要有一条用例专门守。
+        """
+        picks = _analyse({(1, 1): 0.5, (0, 2): 0.3, (2, 0): 0.2})['score_picks']
+        self.assertEqual([p['score'] for p in picks], ['1-1', '0-2'])
 
     def test_falls_back_to_the_runner_up_when_nothing_differs(self):
         picks = _analyse({(2, 1): 0.60, (3, 0): 0.40})['score_picks']
@@ -245,6 +277,23 @@ class VerdictAndReasonTests(unittest.TestCase):
         self.assertLess(narrow['margin'], CLEAR_EDGE_MARGIN)
         self.assertIn('有限', narrow['verdict'])
 
+    def test_wording_boundary_is_inclusive(self):
+        """门槛是 `>=`，**恰好等于时算「明显」**。
+
+        浮点上凑不出恰好 0.12（判据 28），所以反过来做：先算出这一局真实的
+        `margin`，再把它当门槛传进去。这样等号那一侧是精确命中的。
+        """
+        matrix = {(3, 0): 0.56, (0, 1): 0.44}
+        exact = _analyse(matrix)['margin']
+        at_boundary = analysis.build_match_analysis(
+            _spf(matrix), min_single=STRONG_MIN_PROBABILITY,
+            min_margin=STRONG_MIN_LEAD, clear_edge_margin=exact)
+        self.assertIn('明显', at_boundary['verdict'])
+        just_above = analysis.build_match_analysis(
+            _spf(matrix), min_single=STRONG_MIN_PROBABILITY,
+            min_margin=STRONG_MIN_LEAD, clear_edge_margin=exact + 1e-9)
+        self.assertIn('有限', just_above['verdict'])
+
     def test_draw_favourite_gets_its_own_sentence(self):
         result = _analyse({(1, 1): 0.50, (2, 1): 0.25, (0, 1): 0.25})
         self.assertEqual(result['favorite'], '平')
@@ -274,6 +323,11 @@ class VerdictAndReasonTests(unittest.TestCase):
         with_trend = _analyse({(2, 1): 1.0}, asian_trend={'direction': '升盘'})
         self.assertEqual(len(with_trend['reasons']), 1)
 
+    def test_one_lambda_alone_is_not_enough(self):
+        """两个都在才出这条理由。改成「有一个就出」会拿 `None` 去格式化。"""
+        self.assertEqual(_analyse({(2, 1): 1.0}, lambda_home=1.8)['reasons'], [])
+        self.assertEqual(_analyse({(2, 1): 1.0}, lambda_away=0.9)['reasons'], [])
+
     def test_trend_without_a_direction_adds_no_reason(self):
         result = _analyse({(2, 1): 1.0}, asian_trend={'strength': 9.9})
         self.assertEqual(result['reasons'], [])
@@ -300,13 +354,27 @@ class ConfidenceAndDecisionTests(unittest.TestCase):
 
     MATRIX = {(2, 1): 0.40, (1, 1): 0.35, (0, 1): 0.25}
 
+    STRONG = {(3, 0): 0.80, (0, 1): 0.20}
+
+    def _decide(self, level):
+        """门槛放宽到让 confidence 成为唯一的决定因素。
+
+        **第一版这条用例喂的是 0.40 的均势语料**，`build_decision` 第一个
+        条件（首选不足 0.50）就把它判成双选了，confidence 根本没参与——
+        于是「split 折不折叠成 low」改坏了也全绿（判据 23）。
+        """
+        return analysis.build_match_analysis(
+            _spf(self.STRONG, quality={'level': level}),
+            min_single=0.50, min_margin=0.05)
+
     def test_split_is_folded_into_low_for_the_decision(self):
         """`split` 与 `low` 在决策层是同一件事，而在 quality 里不是。"""
-        as_split = _analyse(self.MATRIX, quality={'level': 'split'})
-        as_low = _analyse(self.MATRIX, quality={'level': 'low'})
-        self.assertEqual(as_split['decision'], as_low['decision'])
-        self.assertEqual(as_split['risk_level'], 'split')
-        self.assertEqual(as_low['risk_level'], 'low')
+        self.assertEqual(self._decide('strong')['decision']['action'], '单选')
+        self.assertEqual(self._decide('split')['decision']['action'], '观望')
+        self.assertEqual(self._decide('low')['decision']['action'], '观望')
+        self.assertEqual(self._decide('split')['decision'],
+                         self._decide('low')['decision'])
+        self.assertEqual(self._decide('split')['risk_level'], 'split')
 
     def test_risk_level_reports_the_original_grade(self):
         """`risk_level` 报的是原始分档，不是折叠之后的——两者不能混。"""
@@ -335,6 +403,18 @@ class ConfidenceAndDecisionTests(unittest.TestCase):
             _spf(strong, quality={'level': 'strong'}),
             min_single=0.99, min_margin=0.05)
         self.assertEqual(blocked['decision']['action'], '观望')
+
+    def test_upset_alert_also_reaches_the_score_strategy(self):
+        """预警要同时传给**两道**判定。只有比分那边够格单挑时才看得出来
+        ——把它写死成 False，这条会翻，而决策那边照样是双选。"""
+        matrix = {(3, 0): 0.5, (0, 1): 0.3, (1, 1): 0.2}
+        calm = _analyse(matrix, quality={'level': 'strong'})
+        self.assertEqual(calm['score_strategy']['action'], '谨慎单比分')
+        self.assertTrue(calm['score_strategy']['playable'])
+        alerted = _analyse(matrix, quality={'level': 'strong'},
+                           upset={'alert': True})
+        self.assertEqual(alerted['score_strategy']['action'], '比分区间')
+        self.assertFalse(alerted['score_strategy']['playable'])
 
     def test_upset_alert_forces_a_double(self):
         strong = {(3, 0): 0.80, (0, 1): 0.20}
@@ -450,6 +530,14 @@ class TotalGoalsGateInputTests(unittest.TestCase):
         _, over, under = analysis.total_goals_gate_inputs(section, (1.0, 1.0))
         self.assertAlmostEqual(over, 0.4)
         self.assertAlmostEqual(under, 0.4)
+
+    def test_a_dirty_first_bucket_does_not_poison_the_rest(self):
+        """脏档位要 `continue`，不能只把概率归零——**归零会让 `goals` 留着
+        上一轮的值**，而第一个档位就脏时那个名字根本还没绑定。"""
+        _, over, under = analysis.total_goals_gate_inputs(
+            {'probabilities': {'x': 0.5, '2': 0.5}}, (1.0, 1.0))
+        self.assertAlmostEqual(over, 0.0)
+        self.assertAlmostEqual(under, 0.5)
 
     def test_missing_section_is_all_zero(self):
         for section in (None, {}, {'probabilities': {}}):
@@ -605,6 +693,12 @@ class AdapterTests(unittest.TestCase):
         self.assertEqual(gate['line'], 2.5)
         self.assertEqual(gate['model_direction'], 'over')
 
+    # 优势只有 0.0154 的一注：它在 threshold=0.0 时入选、在默认的 0.05 时落选
+    # ——**用一注优势 0.115 的语料是分辨不出 threshold 有没有传下去的**
+    THIN_EDGE = {'num': '1', 'home': 'A', 'away': 'B',
+                 'spf': {'probabilities': {'胜': 0.40, '平': 0.30, '负': 0.30},
+                         'odds': {'胜': 2.60, '平': 3.30, '负': 3.20}}}
+
     def test_value_bets_adapter_reuses_the_domain_filter(self):
         payload = {'date': '2026-08-28', 'total_matches': 1,
                    'recommendations': [ValueBetTests.MATCH]}
@@ -614,6 +708,17 @@ class AdapterTests(unittest.TestCase):
         self.assertEqual(result['date'], '2026-08-28')
         self.assertEqual(result['value_bets'],
                          analysis.value_bets([ValueBetTests.MATCH], 0.0))
+
+    def test_value_bets_adapter_forwards_the_threshold(self):
+        payload = {'date': '2026-08-28', 'total_matches': 1,
+                   'recommendations': [self.THIN_EDGE]}
+        with mock.patch.object(adapter, 'generate_beidan_recommendations',
+                               return_value=payload):
+            loose = adapter.find_value_bets(threshold=0.0)
+            default = adapter.find_value_bets()
+        self.assertEqual(len(loose['value_bets']), 1)
+        self.assertAlmostEqual(loose['value_bets'][0]['edge'], 0.40 - 1 / 2.60)
+        self.assertEqual(default['value_bets'], [])
 
     def test_value_bets_adapter_passes_errors_through(self):
         with mock.patch.object(adapter, 'generate_beidan_recommendations',

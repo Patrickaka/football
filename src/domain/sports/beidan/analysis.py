@@ -71,6 +71,10 @@ def _outcome_marginals(candidates):
         total = home + away
         goals[total] = goals.get(total, 0.0) + probability
     mass = win + draw + lose
+    # **这次归一是等价变异的来源**：调用方紧接着又过一遍
+    # `normalize_probabilities`，归一两次与归一一次结果相同，把这行改成
+    # 恒不执行、全语料 150 条一字不差（判据 9b）。留着是因为这个函数的
+    # 契约是「返回一组概率」，让契约成立不该依赖调用方多做一步。
     if mass > 0:
         win, draw, lose = win / mass, draw / mass, lose / mass
     return (win, draw, lose), goals
@@ -84,6 +88,10 @@ def _pick_secondary(ranked, primary_score):
     实在找不到就退回概率第二高的那个。
     """
     home, away = primary_score
+    # 第一个条件把 `>` 换成 `>=` 是**等价变异**：两者只在「一方是平局」时
+    # 取值不同，而那种情况下第二个条件必然为真，整个 or 的结果不变。
+    # 全语料验证过（判据 9b）。第二个条件因此是不可省的——删掉它，
+    # 平局与负局同球数的那一对就分辨不出来了。
     for score, probability in ranked[1:]:
         candidate_home, candidate_away = score
         if ((candidate_home > candidate_away) != (home > away)
@@ -204,6 +212,9 @@ def build_match_analysis(spf_result, min_single, min_margin,
                        probabilities['away'])
     favorite = max(probabilities, key=probabilities.get)
     favorite_prob = probabilities[favorite]
+    # 胜平负恒为三档，所以升序与降序的 `[1]` 都是中间那个——把 `reverse`
+    # 去掉是**等价变异**（判据 9b）。写成降序是因为「第二高」才是这里的本意，
+    # 换成四档以上时它仍然对。
     margin = favorite_prob - sorted(probabilities.values(), reverse=True)[1]
 
     ranked = sorted(candidates, key=lambda item: -item[1])
