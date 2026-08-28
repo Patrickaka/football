@@ -256,6 +256,8 @@ def fetch_beidan_schedule(date=None, source='jczq'):
 
     try:
         html = fetch(url, referer=referer)
+        # 改成 `is None` 输出等价（空串解析出来也是空列表），
+        # 短路只是省一次空转。
         if not html:
             return []
         matches = _parsing.parse_500_schedule(html, date, datetime.now())

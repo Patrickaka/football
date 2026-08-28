@@ -413,6 +413,9 @@ def _match_status(match, now):
     所以迁移期没有动它。修它会改变回退路径的返回值，应单独决策。
     """
     try:
+        # 换成 `or` 是等价变异（判据 9b，全语料验过）：`date` 恒有值，
+        # 而时间为空时 `strptime` 照样落到下面的 `except ValueError`。
+        # 写 `and` 是因为它说的是「两样都齐了才拼得出时刻」。
         if match['date'] and match['time']:
             kickoff = _datetime.strptime(f"{match['date']} {match['time']}",
                                          '%Y-%m-%d %H:%M')

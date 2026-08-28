@@ -297,14 +297,18 @@ class OkoooScheduleTests(unittest.TestCase):
                 self.assertEqual(len(matches), 1)
 
     def test_the_cell_count_threshold_is_tested_on_both_sides(self):
-        """**差一格就不是比赛行**。只喂六格的行，把门槛改成五格发现不了。
+        """**差一格就不是比赛行**，而且要用「五格但队名齐全」的行来测。
 
-        五格的行会被当成日期行——它本来就是日期分隔行的样子。
+        随便五个 `<td>x</td>` 是分不出门槛的：门槛放宽之后那一行照样会在
+        「找不到队名」那步被跳过，结果一样（判据 23）。要让它一路走下去，
+        队名得是全的——那时门槛放宽会在读比分栏（第六格）时越界。
         """
-        five_cells = '<tr>' + ''.join('<td>x</td>' for _ in range(5)) + '</tr>'
+        teams = ('<span class="homenameobj" title="甲">甲</span>'
+                 '<span class="awaynameobj" title="乙">乙</span>')
+        five_cells = ('<tr><td>a</td><td>b</td>' + f'<td>{teams}</td>'
+                      + '<td>d</td><td>e</td></tr>')
         matches, _ = self._parse(self._page(five_cells, self._row()))
-        self.assertEqual(len(matches), 1)
-        self.assertEqual(matches[0]['id'], '1320957')
+        self.assertEqual([m['id'] for m in matches], ['1320957'])
 
     def test_rows_with_too_few_cells_carry_the_section_date(self):
         """短行不是比赛，是日期分隔行——**它决定后面几场归哪一天**。"""
