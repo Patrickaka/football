@@ -628,7 +628,8 @@ def _assess_result_quality(record: Dict,
                            actual_score: str,
                            actual_result: str,
                            source: str = None,
-                           actual_half_score: str = None) -> Dict:
+                           actual_half_score: str = None,
+                           now: datetime = None) -> Dict:
     """Assess whether a fetched result is trustworthy enough for calibration."""
     reasons = []
     score = 1.0
@@ -649,7 +650,7 @@ def _assess_result_quality(record: Dict,
     except Exception:
         pass
 
-    if not _is_match_settle_due(record.get('match_time'), minutes=180):
+    if not _is_match_settle_due(record.get('match_time'), minutes=180, now=now):
         reasons.append('not_settle_due')
         score -= 0.70
 

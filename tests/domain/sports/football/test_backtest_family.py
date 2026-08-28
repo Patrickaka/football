@@ -22,6 +22,8 @@ import gzip
 import json
 import pathlib
 import unittest
+from datetime import datetime
+from unittest import mock
 
 from src.domain.sports.football import backtest, calibration_history, policy
 from src.domain.sports.football import quality, settlement, weights
@@ -30,6 +32,14 @@ from tests.domain.golden import as_comparable
 FIXTURES = pathlib.Path(__file__).resolve().parents[3] / 'fixtures'
 GOLDEN = json.load(gzip.open(FIXTURES / 'golden/football_backtest.json.gz',
                              'rt', encoding='utf-8'))
+
+
+class _FrozenDatetime(datetime):
+    """一个"现在"停在两年后的 datetime——用来证明没有漏网的时钟读取。"""
+
+    @classmethod
+    def now(cls, tz=None):
+        return datetime(2028, 3, 1, 4, 30, 0)
 
 
 def golden_entries():
@@ -44,6 +54,17 @@ class GoldenTests(unittest.TestCase):
             with self.subTest(key=key):
                 self.assertIn(key, GOLDEN)
                 self.assertEqual(GOLDEN[key], as_comparable(value))
+
+    def test_the_golden_does_not_move_when_the_wall_clock_does(self):
+        """**换一个"现在"重跑，黄金必须一字不差。**
+
+        这一族自己不读时钟，但它调得到 `settlement`——顺着调用链漏进来的
+        时钟依赖症状是「本地绿、CI 红」（CI 跑 UTC，本地东八区）。
+        """
+        with mock.patch.object(settlement, 'datetime', _FrozenDatetime):
+            for key, value in golden_entries():
+                with self.subTest(key=key):
+                    self.assertEqual(GOLDEN[key], as_comparable(value))
 
 
 class SampleQuality(unittest.TestCase):
