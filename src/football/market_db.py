@@ -27,6 +27,16 @@ from collections import defaultdict
 from ..common import kv_store
 from ..common.logger import setup_logger
 
+from ..domain.sports.football import market_matching as _mm
+
+# 纯计算转发给领域层
+parse_handicap_value = _mm.parse_handicap_value
+parse_odds_value = _mm.parse_odds_value
+to_internal_asian = _mm.to_internal_asian
+normalize_asian = _mm.normalize_asian
+normalize_ou = _mm.normalize_ou
+normalize_handicap_from_odds = _mm.normalize_handicap_from_odds
+
 log = setup_logger('football.market_db')
 
 # ==================== 常量配置 ====================
@@ -235,111 +245,18 @@ def parse_match_row(row: Dict) -> Optional[Dict]:
         return None
 
 
-def parse_handicap_value(value: str) -> Optional[float]:
-    """解析让球值"""
-    if not value or value.strip() == '':
-        return None
-    try:
-        return round(float(value), 2)
-    except ValueError:
-        return None
 
 
-def parse_odds_value(value: str) -> Optional[float]:
-    """解析赔率值"""
-    if not value or value.strip() == '':
-        return None
-    try:
-        return round(float(value), 2)
-    except ValueError:
-        return None
 
 
 # ==================== 盘口标准化模块 ====================
 
-def to_internal_asian(raw_asian: float, source: str = 'football_data') -> float:
-    """
-    将外部数据源的亚盘值转换为内部统一格式
-    
-    内部约定：
-    - asian > 0: 主队让球
-    - asian < 0: 客队让球
-    
-    参数：
-        raw_asian: 原始让球值
-        source: 数据源名称
-    
-    返回：
-        转换后的内部格式让球值
-    """
-    if raw_asian is None:
-        return None
-    
-    # Football-Data 的 AHh 字段符号与内部约定相反
-    # AHh 为正数表示客队让球（负数为主队让球）
-    # 转换为内部格式：正数为主队让球，负数为客队让球
-    if source == 'football_data':
-        return -raw_asian
-    
-    return raw_asian
 
 
-def normalize_asian(handicap: float) -> float:
-    """
-    将亚盘值标准化到标准值列表
-    
-    参数：
-        handicap: 原始让球值（已转换为内部格式）
-    
-    返回：
-        标准化后的让球值
-    """
-    if handicap is None:
-        return None
-    
-    # 找到最近的标准值
-    nearest = min(STANDARD_ASIAN, key=lambda x: abs(x - handicap))
-    return round(nearest, 2)
 
 
-def normalize_ou(line: float) -> float:
-    """
-    将大小球值标准化到标准值列表
-    
-    参数：
-        line: 原始大小球线
-    
-    返回：
-        标准化后的大小球线
-    """
-    if line is None:
-        return None
-    
-    # 找到最近的标准值
-    nearest = min(STANDARD_OU, key=lambda x: abs(x - line))
-    return round(nearest, 2)
 
 
-def normalize_handicap_from_odds(home_odds: float, away_odds: float) -> float:
-    """
-    从赔率反推让球值（当没有直接让球数据时）
-    
-    参数：
-        home_odds: 主队赔率
-        away_odds: 客队赔率
-    
-    返回：
-        反推的让球值（内部格式：正数为主队让球）
-    """
-    if home_odds is None or away_odds is None:
-        return 0.0
-    
-    # 简化的让球反推公式
-    odds_ratio = away_odds / home_odds
-    # 赔率比 > 1 表示主队赔率低（更被看好），应该主队让球（正数）
-    # 赔率比 < 1 表示客队赔率低（更被看好），应该客队让球（负数）
-    handicap = (odds_ratio - 1) * 0.5
-    return normalize_asian(handicap)
 
 
 # ==================== 比分频率统计模块 ====================
@@ -388,8 +305,8 @@ class MarketScoreDB:
         print(f"数据库已保存，{len(self.db)} 个盘口组合")
     
     def _get_key(self, asian: float, ou: float) -> str:
-        """生成盘口组合的唯一键"""
-        return f"{asian:.2f}_{ou:.2f}"
+        """纯计算在领域层"""
+        return _mm.market_score_key(asian, ou)
     
     def add_record(self, asian: float, ou: float, score: str):
         """
@@ -477,23 +394,8 @@ class MarketScoreDB:
         print(f"从 matches 构建完成，共 {count} 条记录")
     
     def _implied_total_from_odds(self, over_odds: float, under_odds: float) -> float:
-        """从大小球赔率反推期望总进球"""
-        if over_odds is None or under_odds is None:
-            return 2.5
-        
-        # 简化计算：赔率比对应的总进球
-        try:
-            p_over = 1.0 / over_odds
-            p_under = 1.0 / under_odds
-            total = p_over + p_under
-            p_over_normalized = p_over / total
-            
-            # 从大球概率反推总进球（简化版）
-            # P(over 2.5) = 1 - P(0) - P(1) - P(2)
-            # 这里用线性近似
-            return 2.5 + (p_over_normalized - 0.5) * 2.0
-        except:
-            return 2.5
+        """纯计算在领域层"""
+        return _mm.implied_total_from_odds(over_odds, under_odds)
     
     def _normalize_all(self):
         """归一化所有盘口组合的概率"""
@@ -608,32 +510,8 @@ class MarketScoreDB:
         return sorted_scores[:top_n]
     
     def get_htf_probs(self, asian: float, ou: float) -> Dict[str, float]:
-        """
-        获取指定盘口组合的半全场概率分布
-        
-        参数：
-            asian: 亚盘让球
-            ou: 大小球线
-        
-        返回：
-            半全场概率字典
-        """
-        """
-        获取指定盘口组合的半全场概率分布
-        
-        注意：此方法已废弃，不再生成伪半场数据。
-        半全场概率应从 HalfTimeStatsDB 获取真实半场数据。
-        
-        参数：
-            asian: 亚盘让球
-            ou: 大小球线
-        
-        返回：
-            空字典（半全场概率应从 HalfTimeStatsDB 获取）
-        """
-        # 返回空字典，强制使用真实半场数据
-        # 伪数据（从全场比分推算半场比分）会严重影响准确率
-        return {}
+        """纯计算在领域层"""
+        return _mm.half_full_probs_from_records(asian, ou)
     
     def get_htf_probs_with_meta(self, asian: float, ou: float) -> Dict:
         """

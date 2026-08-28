@@ -24,6 +24,15 @@ from datetime import datetime
 from ..common import repositories
 from ..common.logger import setup_logger
 
+from ..domain.sports.football import market_matching as _mm
+
+# 纯计算转发给领域层
+_parse_record_date = _mm._parse_record_date
+_recency_weight = _mm._recency_weight
+parse_float = _mm.parse_float
+infer_handicap = _mm.infer_handicap
+estimate_total = _mm.estimate_total
+
 log = setup_logger('football.similar_market')
 
 # ==================== 常量配置 ====================
@@ -46,37 +55,8 @@ DISTANCE_THRESHOLDS = [
 ]
 
 
-def _parse_record_date(value: str) -> Optional[datetime]:
-    if not value:
-        return None
-    text = str(value).strip()
-    for fmt in ('%d/%m/%Y', '%d/%m/%y', '%Y-%m-%d', '%Y/%m/%d', '%d-%m-%Y', '%d-%m-%y'):
-        try:
-            return datetime.strptime(text, fmt)
-        except ValueError:
-            continue
-    return None
 
 
-def _recency_weight(record: 'MatchRecord', now: datetime = None) -> float:
-    now = now or datetime.now()
-    record_date = _parse_record_date(getattr(record, 'date', ''))
-    if not record_date:
-        season = str(getattr(record, 'season', '') or '')
-        if any(season_key in season for season_key in RECENT_SEASONS):
-            return 0.90
-        return 0.70
-
-    age_days = max(0, (now - record_date).days)
-    if age_days <= 180:
-        return 1.00
-    if age_days <= 365:
-        return 0.92
-    if age_days <= 730:
-        return 0.78
-    if age_days <= 1095:
-        return 0.62
-    return 0.48
 
 # 距离权重系数
 DISTANCE_WEIGHT_FACTOR = 2.5
@@ -219,46 +199,8 @@ class SimilarMarketDB:
                       filter_friendly: bool = True, 
                       filter_recent_seasons: bool = True,
                       filter_odds_anomaly: bool = True) -> bool:
-        """
-        过滤记录（样本质量控制）
-        
-        参数：
-            record: 待过滤的记录
-            query_league: 查询的联赛（用于同联赛优先）
-            filter_friendly: 是否过滤友谊赛
-            filter_recent_seasons: 是否只保留近三赛季
-            filter_odds_anomaly: 是否过滤赔率异常记录
-        
-        返回：
-            True: 保留该记录
-            False: 过滤掉该记录
-        """
-        # 1. 过滤友谊赛
-        if filter_friendly and record.is_friendly:
-            return False
-        
-        # 2. 过滤赔率异常记录
-        if filter_odds_anomaly:
-            odds_values = [
-                record.euro_home, record.euro_draw, record.euro_away,
-                record.asian_odds_home, record.asian_odds_away,
-                record.total_over, record.total_under
-            ]
-            for odds in odds_values:
-                if odds > 0:
-                    if odds < MIN_ODDS or odds > MAX_ODDS:
-                        return False
-        
-        # 3. 过滤非近三赛季（如果指定了赛季）
-        if filter_recent_seasons and record.season:
-            if record.season not in RECENT_SEASONS:
-                return False
-        
-        # 4. 检查结果是否存在
-        if not record.result:
-            return False
-        
-        return True
+        """纯计算在领域层"""
+        return _mm.filter_record(record, query_league, filter_friendly, filter_recent_seasons, filter_odds_anomaly)
     
     def _load(self):
         """从 MySQL 加载数据库"""
@@ -290,74 +232,8 @@ class SimilarMarketDB:
         self.records.extend(records)
     
     def _extract_features(self, record: MatchRecord) -> List[float]:
-        """
-        提取特征向量（已标准化）
-        
-        返回：[asian_norm, asian_odds_norm, total_norm, total_odds_norm, 
-               euro_home_norm, euro_draw_norm, euro_away_norm]
-        """
-        features = []
-        
-        # 亚盘让球 (-3.0 ~ +3.0) → (-1 ~ +1)
-        asian_norm = max(-1.0, min(1.0, record.asian / 3.0))
-        features.append(asian_norm * FEATURE_WEIGHTS['asian'])
-        
-        # 亚盘赔率比值 (转换为概率后标准化)
-        if record.asian_odds_home > 0 and record.asian_odds_away > 0:
-            p_home = 1.0 / record.asian_odds_home
-            p_away = 1.0 / record.asian_odds_away
-            total = p_home + p_away
-            if total > 0:
-                p_home_norm = (p_home / total - 0.5) * 2  # (-1 ~ +1)
-                features.append(p_home_norm * FEATURE_WEIGHTS['asian_odds'])
-            else:
-                features.append(0.0)
-        else:
-            features.append(0.0)
-        
-        # 大小球 (1.0 ~ 5.0) → (-1 ~ +1)
-        total_norm = max(-1.0, min(1.0, (record.total - 3.0) / 2.0))
-        features.append(total_norm * FEATURE_WEIGHTS['total'])
-        
-        # 大小球赔率比值
-        if record.total_over > 0 and record.total_under > 0:
-            p_over = 1.0 / record.total_over
-            p_under = 1.0 / record.total_under
-            total = p_over + p_under
-            if total > 0:
-                p_over_norm = (p_over / total - 0.5) * 2
-                features.append(p_over_norm * FEATURE_WEIGHTS['total_odds'])
-            else:
-                features.append(0.0)
-        else:
-            features.append(0.0)
-        
-        # 主胜赔率 (转换为概率的对数)
-        if record.euro_home > 1.0:
-            p_home = 1.0 / record.euro_home
-            # 将概率压缩到 (-1 ~ +1) 范围
-            home_norm = math.tanh((p_home - 0.5) * 4)
-            features.append(home_norm * FEATURE_WEIGHTS['euro_home'])
-        else:
-            features.append(0.0)
-        
-        # 平局赔率
-        if record.euro_draw > 1.0:
-            p_draw = 1.0 / record.euro_draw
-            draw_norm = math.tanh((p_draw - 0.33) * 6)
-            features.append(draw_norm * FEATURE_WEIGHTS['euro_draw'])
-        else:
-            features.append(0.0)
-        
-        # 客胜赔率
-        if record.euro_away > 1.0:
-            p_away = 1.0 / record.euro_away
-            away_norm = math.tanh((p_away - 0.5) * 4)
-            features.append(away_norm * FEATURE_WEIGHTS['euro_away'])
-        else:
-            features.append(0.0)
-        
-        return features
+        """纯计算在领域层"""
+        return _mm.extract_features(record)
     
     def _distance(self, record1: MatchRecord, record2: MatchRecord) -> float:
         """
@@ -412,29 +288,12 @@ class SimilarMarketDB:
         return distances[:k]
     
     def _get_dynamic_k(self, asian: float) -> int:
-        """
-        根据让球大小动态调整K值
-        
-        深盘口样本少，用较小的K值
-        平手盘样本多，用较大的K值
-        """
-        abs_asian = abs(asian)
-        if abs_asian >= 1.5:
-            return 200    # 深盘口
-        elif abs_asian >= 1.0:
-            return 500    # 中深盘
-        elif abs_asian >= 0.5:
-            return 1000   # 普通盘
-        else:
-            return 1500   # 平手盘
+        """纯计算在领域层"""
+        return _mm.dynamic_k(asian)
     
     def _get_league_tier(self, league_name: str) -> Optional[str]:
-        """获取联赛所属层级"""
-        for tier, leagues in LEAGUE_TIERS.items():
-            for league in leagues:
-                if league in league_name or league_name in league:
-                    return tier
-        return None
+        """纯计算在领域层"""
+        return _mm.league_tier(league_name)
     
     def _find_similar_with_league_filter(self, query: MatchRecord, k: int, league_filter: List[str] = None) -> List[Tuple[float, MatchRecord]]:
         """
@@ -773,58 +632,10 @@ def parse_football_data_row(row: Dict, league: str = '') -> Optional[MatchRecord
         return None
 
 
-def parse_float(value: str) -> Optional[float]:
-    """解析浮点数值"""
-    if not value or value.strip() == '':
-        return None
-    try:
-        return float(value.strip())
-    except ValueError:
-        return None
 
 
-def infer_handicap(home_odds: float, away_odds: float) -> float:
-    """从欧赔反推亚盘让球"""
-    if home_odds is None or away_odds is None:
-        return 0.0
-    
-    # 简化公式：让球 ≈ (客胜赔率 - 主胜赔率) / (主胜赔率 + 客胜赔率) * 2
-    try:
-        ratio = away_odds / home_odds
-        handicap = (1 - ratio) * 0.8
-        # 限制范围
-        return max(-2.0, min(2.0, round(handicap * 4) / 4))  # 标准化到0.25间隔
-    except:
-        return 0.0
 
 
-def estimate_total(over_odds: float, under_odds: float) -> float:
-    """从大小球赔率估算大小球线"""
-    if over_odds is None or under_odds is None:
-        return 2.5
-    
-    try:
-        p_over = 1.0 / over_odds
-        p_under = 1.0 / under_odds
-        total_prob = p_over + p_under
-        
-        if total_prob <= 0:
-            return 2.5
-        
-        p_over_norm = p_over / total_prob
-        
-        # 从大球概率反推总进球线
-        # P(over 2.5) ≈ 0.5 对应 2.5球
-        # P(over 2.5) ≈ 0.7 对应 3.0球
-        # P(over 2.5) ≈ 0.3 对应 2.0球
-        total_line = 2.5 + (p_over_norm - 0.5) * 3.0
-        
-        # 标准化到标准大小球线
-        standard_lines = [1.5, 1.75, 2.0, 2.25, 2.5, 2.75, 3.0, 3.25, 3.5, 3.75, 4.0]
-        return min(standard_lines, key=lambda x: abs(x - total_line))
-    
-    except:
-        return 2.5
 
 
 # ==================== 批量构建工具 ====================
