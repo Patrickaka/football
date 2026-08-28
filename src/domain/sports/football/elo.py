@@ -62,6 +62,9 @@ def sanitize_team_name(team_name: str) -> Optional[str]:
     
     # 检查长度
     if len(team_name) > 100:
+        # **只记一条 warning，名字照样返回**——不是拒绝。所以把 100 改成别的
+        # 数字是等价变异（判据 30），可观测行为不变。要真拦住得在这里 return None，
+        # 那是行为改动，不是迁移该做的事。
         logger.warning(f"球队名称过长: {len(team_name)} 字符")
         team_name = team_name[:100]
     

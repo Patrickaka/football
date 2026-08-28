@@ -109,6 +109,40 @@ class KFactorAndLeagueWeight(unittest.TestCase):
         self.assertEqual(elo.league_weight('英超'), 1.1)
 
 
+class InitialEloIsTheFallbackForMissingRatings(unittest.TestCase):
+    """`float(x) if x else INITIAL_ELO`——**falsy 才走兜底**，0 也算 falsy。"""
+
+    def test_a_missing_rating_falls_back_to_fifteen_hundred(self):
+        both_missing = elo.elo_to_goals_expected(None, None)
+        both_default = elo.elo_to_goals_expected(1500, 1500)
+        self.assertAlmostEqual(both_missing, both_default)
+
+    def test_zero_is_a_real_rating_not_a_missing_one(self):
+        """兜底只对**非数值**生效（`not isinstance(x, (int, float))`），
+        而 `0` 是合法数值——它一路走到下限夹紧，得到 0.2 而不是 1.5。
+
+        第一版用例以为 `0` 是 falsy 会走兜底（判据 9c：先验算）。
+        """
+        self.assertAlmostEqual(elo.elo_to_goals_expected(0, 1500), 0.2)
+        self.assertNotAlmostEqual(elo.elo_to_goals_expected(0, 1500),
+                                  elo.elo_to_goals_expected(1500, 1500))
+
+    def test_a_non_numeric_rating_is_what_reaches_the_fallback(self):
+        for bad in (None, '', [], {}):
+            with self.subTest(bad=bad):
+                self.assertAlmostEqual(elo.elo_to_goals_expected(bad, 1500),
+                                       elo.elo_to_goals_expected(1500, 1500))
+
+    def test_a_present_rating_is_not_overwritten(self):
+        """**反方向**：给了真评分就不该走兜底，否则上面两条对任何常量都成立。"""
+        self.assertNotAlmostEqual(elo.elo_to_goals_expected(1800, 1500),
+                                  elo.elo_to_goals_expected(1500, 1500))
+
+    def test_the_strength_factor_uses_the_same_fallback(self):
+        self.assertAlmostEqual(elo.elo_to_strength_factor(None),
+                               elo.elo_to_strength_factor(1500))
+
+
 class TeamNameSanitising(unittest.TestCase):
 
     def test_surrounding_whitespace_is_stripped(self):
@@ -191,6 +225,29 @@ class UpsetThresholdsAreOrNotAnd(unittest.TestCase):
         self.assertGreaterEqual(strong['favorite_prob'], 0.55)
         self.assertGreaterEqual(strong['risk_score'], 0.55)
         self.assertEqual(strong['level'], 'high')
+
+    def test_high_needs_the_risk_score_to_actually_clear_the_bar(self):
+        """把 `risk_score >= 0.55` 这道门槛单独钉住。
+
+        上一条用的样本 `risk_score = 1.0` 远超门槛，把门槛改到 5.0 才测得出来；
+        这里补一个恰好落在 0.55 两侧的对照。
+        """
+        loose = {'handicap': 0.5, 'open_handicap': 0.75,
+                 'close_water': {'home': 0.98, 'away': 0.82},
+                 'open_water': {'home': 0.90, 'away': 0.90}, 'favor': 'home'}
+        euro = {'close': {'home': 0.62, 'draw': 0.22, 'away': 0.16},
+                'open': {'home': 0.66, 'draw': 0.20, 'away': 0.14},
+                'kelly': {'hardest': 'neutral', 'favored': 'neutral'}}
+        mild = upset.assess_football_upset(loose, euro, None, self.CANDIDATES, self.TOTAL)
+        self.assertLess(mild['risk_score'], 0.55)
+        self.assertNotEqual(mild['level'], 'high')
+
+    def test_the_confident_gap_boundary_is_a_float_trap(self):
+        """`gap >= 0.20`：`0.58 - 0.38` 在浮点下是 **0.19999999999999998**，
+        所以那组样本 **不** confident（判据 28：边界样本要避开等于门槛的值）。
+        """
+        self.assertFalse(self._assess(0.58, 0.38, 0.04)['confident'])
+        self.assertTrue(self._assess(0.59, 0.30, 0.11)['confident'])
 
     def test_the_confident_tier_is_an_and_of_four_conditions(self):
         """`confident` 才是 AND：未预警 **且** 热门 ≥0.58 **且** 领先 ≥0.20
