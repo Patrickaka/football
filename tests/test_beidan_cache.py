@@ -13,6 +13,7 @@ from unittest.mock import patch
 import server
 import src.webapp.beidan_api as beidan_api
 import src.webapp.beidan_cache as beidan_cache
+from src.foundation.cache import Cache, MemoryBackend
 from src.webapp.beidan_cache import (
     beidan_cache_key, beidan_earliest_kickoff, beidan_refresh_after, prune_beidan_payload,
 )
@@ -107,9 +108,10 @@ class BeidanPrunePayloadTests(unittest.TestCase):
     def test_write_cache_prunes_before_storing(self):
         """预热线程与接口计算都经由 write_beidan_cache，剔除必须发生在落盘前"""
         result = {'history_summary': {'latest': [1] * 30}, 'recommendations': []}
-        with patch.object(beidan_cache, 'set_cache') as setter:
+        cache = Cache(l1=MemoryBackend(), l2=MemoryBackend(), default_ttl=60)
+        with patch.object(beidan_cache, 'get_shared_cache', return_value=cache):
             beidan_cache.write_beidan_cache('k', result)
-        stored = setter.call_args[0][2]
+            stored, _ = beidan_cache.read_beidan_cache('k')
         self.assertNotIn('latest', stored['history_summary'])
 
 

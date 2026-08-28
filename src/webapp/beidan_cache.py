@@ -16,11 +16,23 @@ import time
 from datetime import datetime
 
 from src.common.logger import setup_logger
-from src.football.cache_manager import get_cache, set_cache
+from src.football.cache_manager import get_cache as _memory_get_cache
+from src.football.cache_manager import set_cache as _memory_set_cache
+from .shared_cache import get_cache as get_shared_cache
 
 log = setup_logger('server')
 
 BEIDAN_CACHE_TYPE = 'beidan_recommendations'
+# 两层缓存里的键前缀。L2 是 Redis，与别的业务共用一个库。
+BEIDAN_CACHE_PREFIX = 'beidan:pred'
+# **一天只是内存上限，不是有效期。** 真正的有效期由 `_cached_at` 与
+# `beidan_refresh_after` 决定（见 `read_beidan_cache`）——键里带了日期，
+# 隔天自然换键，旧值随 TTL 自行淘汰。
+#
+# 这个数还决定 Redis 的物理过期（`RedisBackend` 按逻辑 TTL 的十倍存），
+# **而跨重启保留靠的正是物理过期够长**：拿刷新档位（120~1800 秒）当 TTL
+# 的话物理过期最短只有 20 分钟，一次部署加冷启动就把它耗光了。
+BEIDAN_CACHE_TTL_SECONDS = 86400
 # 没有临近场次时的默认刷新间隔
 BEIDAN_REFRESH_DEFAULT = int(os.getenv('BEIDAN_REFRESH_SECONDS', '1800'))
 
@@ -71,7 +83,7 @@ def read_beidan_cache(cache_key):
     这里刻意按天读、不传 match_time：分层 TTL 会让缓存管理器直接判过期返回 None，
     那样就拿不到「可以先顶上去的旧数据」了，而旧数据正是不 504 的关键。
     """
-    payload = get_cache(BEIDAN_CACHE_TYPE, cache_key)
+    payload = _read(cache_key)
     if payload is None:
         return None, False
     cached_at = payload.get('_cached_at') or 0
@@ -93,10 +105,34 @@ def prune_beidan_payload(result):
     return result
 
 
+def _shared_key(cache_key):
+    return '%s:%s' % (BEIDAN_CACHE_PREFIX, cache_key)
+
+
+def _read(cache_key):
+    """从两层缓存里取一份（可能已过期的）结果。
+
+    **降级路径存在但不该被当成常态**：`get_shared_cache()` 只在共享缓存
+    连建都建不起来时才返回 `None`（Redis 不可用它自己会退化成纯内存，
+    不会返回 None）。真走到这里说明有更严重的问题，此时退回迁移前那个
+    进程内缓存——代价正是「不跨重启保留」，也就是这次改动要解决的问题本身。
+    """
+    cache = get_shared_cache()
+    if cache is None:
+        log.warning('共享缓存不可用，北单缓存退回进程内存（不跨重启保留）')
+        return _memory_get_cache(BEIDAN_CACHE_TYPE, cache_key)
+    entry = cache.peek(_shared_key(cache_key))
+    return entry.value if entry is not None else None
+
+
 def write_beidan_cache(cache_key, result):
     prune_beidan_payload(result)
     result['_cached_at'] = time.time()
-    set_cache(BEIDAN_CACHE_TYPE, cache_key, result)
+    cache = get_shared_cache()
+    if cache is None:
+        _memory_set_cache(BEIDAN_CACHE_TYPE, cache_key, result)
+        return
+    cache.set(_shared_key(cache_key), result, ttl=BEIDAN_CACHE_TTL_SECONDS)
 
 
 def try_begin_refresh(cache_key):
