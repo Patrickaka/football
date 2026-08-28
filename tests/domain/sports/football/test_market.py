@@ -74,10 +74,12 @@ class RecencyWeighting(unittest.TestCase):
     每条都落到默认 0.7，看着"通过"其实什么也没测（判据 23）。
     """
 
-    RECORD_DATA = {'league': '英超', 'season': '2526', 'date': '2026-08-28',
-                   'home_team': 'A', 'away_team': 'B', 'home_odds': 2.0,
-                   'draw_odds': 3.4, 'away_odds': 3.8, 'handicap': 0.5,
-                   'total': 2.5, 'home_goals': 2, 'away_goals': 1, 'ftr': 'H'}
+    RECORD_DATA = {'asian': 0.5, 'asian_odds_home': 0.0, 'asian_odds_away': 0.0,
+                   'total': 2.5, 'total_over': 0.0, 'total_under': 0.0,
+                   'euro_home': 2.0, 'euro_draw': 3.4, 'euro_away': 3.8,
+                   'result': 'H', 'goals_home': 2, 'goals_away': 1,
+                   'date': '2026-08-28', 'league': '英超',
+                   'home_team': 'A', 'away_team': 'B', 'season': '2026-27'}
 
     def _weight(self, days):
         from src.football.similar_market import MatchRecord
@@ -99,6 +101,77 @@ class RecencyWeighting(unittest.TestCase):
         self.assertIsInstance(fallback, float)
 
 
+class SampleQualityFilter(unittest.TestCase):
+    """`filter_record` 的四道过滤，每道都测两侧。
+
+    **键名要用 `MatchRecord` 真正读的那一套**：`euro_home` 不是 `home_odds`、
+    `result` 不是 `ftr`、赛季是 `'2026-27'` 不是 `'2526'`。第一版语料全喂错，
+    于是它对任何输入都返回 False——三道过滤一条都没走到，把
+    `RECENT_SEASONS` / `MIN_ODDS` / `MAX_ODDS` 改坏都测不出来（判据 23）。
+    """
+
+    RECORD_DATA = {'asian': 0.5, 'asian_odds_home': 0.0, 'asian_odds_away': 0.0,
+                   'total': 2.5, 'total_over': 0.0, 'total_under': 0.0,
+                   'euro_home': 2.0, 'euro_draw': 3.4, 'euro_away': 3.8,
+                   'result': 'H', 'goals_home': 2, 'goals_away': 1,
+                   'date': '2026-08-28', 'league': '英超',
+                   'home_team': 'A', 'away_team': 'B', 'season': '2026-27'}
+
+    def _record(self, **kw):
+        from src.football.similar_market import MatchRecord
+        return MatchRecord(dict(self.RECORD_DATA, **kw))
+
+    def test_a_clean_record_is_kept(self):
+        self.assertTrue(mm.filter_record(self._record()))
+
+    def test_a_friendly_is_dropped_unless_the_filter_is_off(self):
+        friendly = self._record(league='友谊赛')
+        self.assertFalse(mm.filter_record(friendly))
+        self.assertTrue(mm.filter_record(friendly, '', False, True, True))
+
+    def test_an_old_season_is_dropped_unless_the_filter_is_off(self):
+        old = self._record(season='2009-10')
+        self.assertFalse(mm.filter_record(old))
+        self.assertTrue(mm.filter_record(old, '', True, False, True))
+
+    def test_odds_outside_the_band_are_dropped_unless_the_filter_is_off(self):
+        """`MIN_ODDS = 1.01` / `MAX_ODDS = 100.0`——两端都测。"""
+        too_low = self._record(euro_home=1.0)
+        too_high = self._record(euro_home=500.0)
+        self.assertFalse(mm.filter_record(too_low))
+        self.assertFalse(mm.filter_record(too_high))
+        self.assertTrue(mm.filter_record(too_low, '', True, True, False))
+        self.assertTrue(mm.filter_record(too_high, '', True, True, False))
+        # 恰好在带内的要留下
+        self.assertTrue(mm.filter_record(self._record(euro_home=1.02)))
+        self.assertTrue(mm.filter_record(self._record(euro_home=99.0)))
+
+    def test_asian_water_levels_are_judged_by_the_european_odds_band(self):
+        """**★ 缺陷：两个量纲不同的量共用一道过滤 ★**
+
+        `filter_odds_anomaly` 把 `asian_odds_home` / `total_over` 这些**水位**
+        （天然在 0.7~1.1）和 `euro_home` 这些**欧赔**（1.01~100）放进同一个
+        列表，用同一对上下限判。于是**任何带真实亚盘水位的记录都会被挡掉**
+        ——0.9 < MIN_ODDS(1.01)。
+
+        线上「相似盘口样本不足」在 114 场里出现 24 次（F-4 实测），
+        这道过滤很可能是原因之一。**行为原样保留**，见交接文档 §四。
+        """
+        with_water = self._record(asian_odds_home=0.9, asian_odds_away=0.9)
+        self.assertFalse(mm.filter_record(with_water))
+        # 关掉赔率过滤就留得下——证明挡它的确实是这一道
+        self.assertTrue(mm.filter_record(with_water, '', True, True, False))
+        # 而同样的 0.9 如果出现在欧赔位上，本来就该被挡
+        self.assertFalse(mm.filter_record(self._record(euro_home=0.9)))
+
+    def test_a_record_without_a_result_is_always_dropped(self):
+        """**这一道没有开关**——四道里只有它不可关（判据 17 的形状）。"""
+        no_result = self._record(result='')
+        for flags in ((True, True, True), (False, False, False)):
+            with self.subTest(flags=flags):
+                self.assertFalse(mm.filter_record(no_result, '', *flags))
+
+
 class SteamDetection(unittest.TestCase):
 
     ASIAN = {'open_handicap': 0.5, 'handicap': 0.25,
@@ -111,6 +184,38 @@ class SteamDetection(unittest.TestCase):
         result = steam._analyze_asian_steam(self.ASIAN, self.MATCH_TIME)
         self.assertTrue(result['signals'])
         self.assertNotEqual(result['handicap_speed'], 0.0)
+
+    def test_the_two_speed_thresholds_pick_different_signal_strengths(self):
+        """`>= 0.05` 是急速（置信度封顶 1.0）、`elif >= 0.02` 是快速（封顶 0.8）
+        ——**是 if/elif 两档**。
+
+        只断言「有信号」分不出这两档：把急速门槛调到极大，信号照样有，
+        只是掉进快速那一档（判据 5）。这里断言**置信度**，它是分档的产物。
+        速度是「变化量 ÷ 分钟数」，所以要靠**时间窗口**来分档，不是靠变化量
+        （判据 28：先验算——10 分钟变 0.5 球是 -3.0/分钟，570 分钟变 0.25 球
+        只有 -0.026/分钟）。
+        """
+        base = {'open_handicap': 0.5, 'open_water': {'home': 0.9, 'away': 0.9}}
+        critical = steam._analyze_asian_steam(
+            dict(base, handicap=0.0, open_time='2026-08-28 19:00:00',
+                 close_time='2026-08-28 19:10:00',
+                 close_water={'home': 1.4, 'away': 0.5}), self.MATCH_TIME)['signals']
+        self.assertTrue(critical)
+        self.assertTrue(all(sig['confidence'] == 1.0 for sig in critical))
+
+        fast = steam._analyze_asian_steam(
+            dict(base, handicap=0.25, open_time='2026-08-28 10:00:00',
+                 close_time='2026-08-28 19:30:00',
+                 close_water={'home': 1.05, 'away': 0.75}), self.MATCH_TIME)['signals']
+        self.assertTrue(fast)
+        self.assertTrue(all(sig['confidence'] <= 0.8 for sig in fast))
+
+    def test_the_critical_window_only_fires_close_to_kickoff(self):
+        """`CRITICAL_TIME_WINDOW = 30` 分钟——**两侧都测**。"""
+        near = dict(self.ASIAN, close_time='2026-08-28 19:50:00')
+        far = dict(self.ASIAN, close_time='2026-08-28 17:00:00')
+        self.assertTrue(steam._analyze_asian_steam(near, self.MATCH_TIME)['is_critical_period'])
+        self.assertFalse(steam._analyze_asian_steam(far, self.MATCH_TIME)['is_critical_period'])
 
     def test_a_still_market_produces_none(self):
         """**反方向**：盘口水位都不动就不该报信号。"""

@@ -26,10 +26,15 @@ TOTAL = {'open_line': 2.5, 'close_line': 2.75,
          'open_water': {'over': 0.9, 'under': 0.9},
          'close_water': {'over': 1.02, 'under': 0.78}}
 MATCH_TIME = '2026-08-28 20:00:00'
-RECORD_DATA = {'league': '英超', 'season': '2526', 'date': '2026-08-28',
-               'home_team': 'A', 'away_team': 'B', 'home_odds': 2.0, 'draw_odds': 3.4,
-               'away_odds': 3.8, 'handicap': 0.5, 'total': 2.5,
-               'home_goals': 2, 'away_goals': 1, 'ftr': 'H'}
+RECORD_DATA = {'asian': 0.5, 'asian_odds_home': 0.0, 'asian_odds_away': 0.0,
+               'total': 2.5, 'total_over': 0.0, 'total_under': 0.0,
+               'euro_home': 2.0, 'euro_draw': 3.4, 'euro_away': 3.8,
+               'result': 'H', 'goals_home': 2, 'goals_away': 1,
+               'date': '2026-08-28', 'league': '英超',
+               'home_team': 'A', 'away_team': 'B', 'season': '2026-27'}
+# **键名要用 MatchRecord 真正读的那一套**：`euro_home` 不是 `home_odds`、
+# `result` 不是 `ftr`、赛季是 `'2026-27'` 不是 `'2526'`。第一版全喂错了，
+# 于是 `filter_record` 对任何输入都返回 False，三道过滤一条都没走到（判据 23）。
 NOW = datetime.datetime(2026, 8, 28, 12, 0, 0)
 
 
@@ -71,8 +76,10 @@ def entries():
         yield f'implied_total:{sorted(odds.items())}', mm.implied_total_from_odds(2.5, odds)
 
     from src.football.similar_market import MatchRecord
-    for i, kw in enumerate(({}, {'league': '友谊赛'}, {'season': '1011'},
-                            {'home_odds': 60.0}, {'handicap': -1.5})):
+    for i, kw in enumerate(({}, {'league': '友谊赛'}, {'season': '2009-10'},
+                            {'euro_home': 1.001}, {'euro_home': 500.0},
+                            {'result': ''}, {'asian': -1.5},
+                            {'asian_odds_home': 0.9, 'asian_odds_away': 0.9})):
         record = MatchRecord(dict(RECORD_DATA, **kw))
         yield f'features:{i}', mm.extract_features(record)
         for flag in (True, False):
