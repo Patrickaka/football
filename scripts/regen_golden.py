@@ -276,3 +276,9 @@ from tests.domain.golden import as_comparable as _as_comparable
 
 dump('football_markets',
      {k: _as_comparable(v) for k, v in football_markets_entries()})
+
+# ---- football parsing / lottery ----
+from scripts.gen_football_parsing_golden import entries as football_parsing_entries
+
+dump('football_parsing',
+     {k: _as_comparable(v) for k, v in football_parsing_entries()})
