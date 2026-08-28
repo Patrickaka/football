@@ -268,3 +268,11 @@ dump('beidan_parsing', {k: as_comparable(v) for k, v in beidan_parsing_entries()
 from scripts.gen_beidan_schedule_golden import entries as beidan_schedule_entries
 
 dump('beidan_schedule', {k: as_comparable(v) for k, v in beidan_schedule_entries()})
+
+
+# ---- football markets ----
+from scripts.gen_football_markets_golden import entries as football_markets_entries
+from tests.domain.golden import as_comparable as _as_comparable
+
+dump('football_markets',
+     {k: _as_comparable(v) for k, v in football_markets_entries()})
