@@ -22,6 +22,10 @@ from typing import Dict, List, Optional, Any
 from collections import defaultdict
 
 from ..common import kv_store
+from ..domain.sports.football import calibration_buckets as _cb
+
+_restore_goal_keys = _cb._restore_goal_keys
+_int_keyed = _cb._int_keyed
 
 
 # ==================== 常量配置 ====================
@@ -57,40 +61,8 @@ POOLING_K = 12.0               # 收缩强度：n=K 时因子只生效一半，n
 # 存储格式的约束不再渗进算法。写出去仍是 JSON 的形状，不需要改存储。
 
 
-def _restore_goal_keys(db):
-    """把整个 db 里所有「进球数 → 概率」映射的键还原成 int。
-
-    只动 `calibration_factors` 与 `predicted_distributions`——分桶键
-    （`'瑞典超_2.75_+0.50_2.50'`）本来就是字符串，不能碰。
-    """
-    if not isinstance(db, dict):
-        return {}
-    for bucket in db.values():
-        if not isinstance(bucket, dict):
-            continue
-        factors = bucket.get('calibration_factors')
-        if isinstance(factors, dict):
-            bucket['calibration_factors'] = _int_keyed(factors)
-        dists = bucket.get('predicted_distributions')
-        if isinstance(dists, list):
-            bucket['predicted_distributions'] = [
-                _int_keyed(dist) if isinstance(dist, dict) else dist
-                for dist in dists
-            ]
-    return db
 
 
-def _int_keyed(mapping):
-    """键转 int。**转不动的原样留下**——宁可留一个查不到的键，
-    也不能把它悄悄丢掉：丢掉之后概率就不再归一，而那不会报错。
-    """
-    restored = {}
-    for key, value in mapping.items():
-        try:
-            restored[int(key)] = value
-        except (TypeError, ValueError):
-            restored[key] = value
-    return restored
 
 
 class GoalCountCalibrator:
@@ -119,32 +91,11 @@ class GoalCountCalibrator:
     
     def _get_bucket_key(self, league: str, total_line: float, 
                         asian: float = 0.0, expected_total: float = 2.5) -> str:
-        """
-        生成分桶键
-        
-        分桶维度：
-        - 联赛名
-        - 大小球盘口（四舍五入到0.25）
-        - 让球盘口（四舍五入到0.5，带符号）
-        - 预测总进球（四舍五入到0.5）
-        
-        参数：
-            league: 联赛名称
-            total_line: 大小球盘口线
-            asian: 亚盘让球
-            expected_total: 模型预测总进球数
-        
-        返回：
-            分桶键字符串
-        """
-        # 大小球盘口按0.25分桶
-        bucketed_line = round(total_line * 4) / 4
-        # 让球盘口按0.5分桶，带符号（+/-）
-        bucketed_asian = round(asian * 2) / 2
-        # 预测总进球按0.5分桶
-        bucketed_expected = round(expected_total * 2) / 2
-        
-        return f"{league}_{bucketed_line:.2f}_{bucketed_asian:+.2f}_{bucketed_expected:.2f}"
+        """分桶键；纯计算在领域层"""
+        # **按名字传**：签名是 (league, total_line, asian, expected_total)，
+        # 第一版按位置传成了 (…, expected_total, asian)，桶键整个错位。
+        return _cb.goal_bucket_key(league, total_line,
+                                   asian=asian, expected_total=expected_total)
     
     def _ensure_bucket(self, bucket_key, league, total_line=None, asian=None, expected_total=None):
         """惰性创建分桶（兼容粗粒度回退桶）"""
@@ -206,69 +157,9 @@ class GoalCountCalibrator:
                             predicted_goal_dist, actual_total_goals, sample_weight)
     
     def _update_calibration_factors(self, bucket_key: str):
-        """
-        更新分桶的校准因子
-        
-        计算每个进球数的实际频率与预测频率的比值，作为校准因子。
-        """
-        bucket = self.db[bucket_key]
-        sample_count = bucket.get('weighted_sample_count', bucket['sample_count'])
+        """重算某个桶的校准因子；纯计算在领域层"""
+        _cb.compute_calibration_factors(self.db[bucket_key])
 
-        if sample_count < MIN_ACTIVATION_SAMPLES:
-            # 样本过少，噪声太大，不计算校准因子
-            bucket['calibration_factors'] = {}
-            return
-        
-        # 计算实际频率分布
-        weights = bucket.get('sample_weights') or [1.0] * len(bucket['actual_goals'])
-        if len(weights) < len(bucket['actual_goals']):
-            weights = weights + [1.0] * (len(bucket['actual_goals']) - len(weights))
-
-        actual_dist = defaultdict(float)
-        for goals, weight in zip(bucket['actual_goals'], weights):
-            actual_dist[goals] += weight
-        
-        # 归一化
-        actual_total = sum(actual_dist.values())
-        actual_dist = {k: v / actual_total for k, v in actual_dist.items()}
-        
-        # 计算平均预测分布
-        pred_dist = defaultdict(float)
-        for dist, weight in zip(bucket['predicted_distributions'], weights):
-            for goals, prob in dist.items():
-                pred_dist[goals] += prob * weight
-        
-        # 归一化
-        pred_total = sum(pred_dist.values())
-        if pred_total > 0:
-            pred_dist = {k: v / pred_total for k, v in pred_dist.items()}
-        else:
-            bucket['calibration_factors'] = {}
-            return
-        
-        # 计算校准因子：实际频率 / 预测频率
-        # 添加平滑处理，避免除零和极端值；并按样本量做部分池化收缩，
-        # 样本少时因子向 1.0 收缩（弱校准），样本多时逐步逼近观测频率比。
-        calibration_factors = {}
-        all_goals = set(actual_dist.keys()) | set(pred_dist.keys())
-
-        shrink_weight = sample_count / (sample_count + POOLING_K)
-
-        for goals in all_goals:
-            actual_prob = actual_dist.get(goals, 0.01)  # 平滑
-            pred_prob = pred_dist.get(goals, 0.01)      # 平滑
-
-            # 原始校准因子，限制在合理范围
-            factor = actual_prob / pred_prob
-            factor = max(0.5, min(2.0, factor))  # 限制在0.5~2.0之间
-
-            # 部分池化：向 1.0（不校准）收缩，收缩程度随样本量增大而减弱
-            factor = 1.0 + (factor - 1.0) * shrink_weight
-
-            calibration_factors[goals] = factor
-
-        bucket['calibration_factors'] = calibration_factors
-    
     def get_calibration_factors(self, league: str, total_line: float,
                                 expected_total: float, asian: float = 0.0,
                                 min_samples: int = MIN_ACTIVATION_SAMPLES) -> Dict[int, float]:
@@ -327,28 +218,10 @@ class GoalCountCalibrator:
         返回：
             校准后的进球数分布
         """
-        factors = self.get_calibration_factors(league, total_line, expected_total, asian, min_samples=min_samples)
-        
-        if not factors:
-            # 没有校准因子，返回原始分布
-            return goal_dist
-        
-        # 应用校准因子
-        calibrated = {}
-        all_goals = set(goal_dist.keys()) | set(factors.keys())
-        
-        for goals in all_goals:
-            original_prob = goal_dist.get(goals, 0.0)
-            factor = factors.get(goals, 1.0)
-            calibrated[goals] = original_prob * factor
-        
-        # 归一化
-        total = sum(calibrated.values())
-        if total > 0:
-            calibrated = {k: v / total for k, v in sorted(calibrated.items())}
-        
-        return calibrated
-    
+        factors = self.get_calibration_factors(league, total_line, expected_total,
+                                               asian, min_samples=min_samples)
+        return _cb.apply_goal_calibration(goal_dist, factors)
+
     def get_bucket_stats(self, league: str = None) -> List[Dict]:
         """
         获取分桶统计信息
