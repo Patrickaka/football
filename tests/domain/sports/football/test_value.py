@@ -77,6 +77,13 @@ class ValueWeightedAdjustment(unittest.TestCase):
         self.assertNotEqual(adjusted, PRED)
         self.assertAlmostEqual(sum(adjusted.values()), 1.0, places=9)
 
+    def test_the_default_weight_is_three_tenths(self):
+        """判据 29：适配层不传它，默认值没有生产路径覆盖。"""
+        self.assertEqual(value.adjust_by_value(dict(PRED), ODDS),
+                         value.adjust_by_value(dict(PRED), ODDS, 0.3))
+        self.assertNotEqual(value.adjust_by_value(dict(PRED), ODDS),
+                            value.adjust_by_value(dict(PRED), ODDS, 0.9))
+
     def test_a_bigger_weight_moves_it_further(self):
         """**反方向**：权重越大偏离越远，否则权重形同虚设。"""
         small = value.adjust_by_value(dict(PRED), ODDS, 0.1)
@@ -104,6 +111,16 @@ class ValueBetIdentification(unittest.TestCase):
 
     def test_a_high_threshold_can_return_nothing(self):
         self.assertEqual(value.identify_value_bets(dict(PRED), ODDS, 10.0), [])
+
+    def test_the_default_threshold_is_two_hundredths(self):
+        """**语料要真的有价值下注**：`PRED` 那组在任何门槛下都是空的，
+        用它测门槛等于什么也没测（判据 23）。这里用一组主胜被低估的赔率。
+        """
+        underpriced = {'H': 0.60, 'D': 0.22, 'A': 0.18}
+        self.assertTrue(value.identify_value_bets(dict(underpriced), ODDS))
+        self.assertEqual(value.identify_value_bets(dict(underpriced), ODDS),
+                         value.identify_value_bets(dict(underpriced), ODDS, 0.02))
+        self.assertEqual(value.identify_value_bets(dict(underpriced), ODDS, 0.5), [])
 
 
 class ClusterPriorFusion(unittest.TestCase):
@@ -134,6 +151,13 @@ class ClusterPriorFusion(unittest.TestCase):
         fused = value.fuse_with_prior(dict(PRED), 0.5, 2.5, 0.5, prior)
         self.assertGreater(fused['H'], PRED['H'])
         self.assertLess(fused['H'], prior['H'])
+
+    def test_the_default_prior_weight_is_three_tenths(self):
+        prior = {'H': 0.8, 'D': 0.1, 'A': 0.1}
+        self.assertEqual(value.fuse_with_prior(dict(PRED), 0.5, 2.5, prior=prior),
+                         value.fuse_with_prior(dict(PRED), 0.5, 2.5, 0.3, prior))
+        self.assertNotEqual(value.fuse_with_prior(dict(PRED), 0.5, 2.5, prior=prior),
+                            value.fuse_with_prior(dict(PRED), 0.5, 2.5, 0.9, prior))
 
     def test_zero_weight_ignores_the_prior(self):
         """**反方向**：权重为 0 时先验不该起作用。"""
@@ -202,6 +226,16 @@ class RecommendationPickingTakesAnInjectedPrior(unittest.TestCase):
         self.assertEqual(
             self._pick(5),
             self._pick(5, market_prior_fn=lambda h, t: {'H': 0.9, 'D': 0.05, 'A': 0.05}))
+
+    def test_similar_market_weighting_changes_the_ranking(self):
+        """相似盘口的加成 `1 + w * confidence * 0.5` 也要有样本走到。"""
+        similar = {'count': 30, 'confidence': 0.9, 'avg_distance': 0.1,
+                   'score_weights': {f'{h}-{a}': 5.0
+                                     for (h, a), _ in self.CANDIDATES[8:]}}
+        with_similar = scoring._pick_recommendations(
+            self.CANDIDATES, self.ASIAN, self.EURO, self.TOTAL, 5, 12,
+            self.CONF, None, self.STRENGTH, similar)
+        self.assertIsNotNone(with_similar)
 
     def test_a_prior_function_that_raises_is_swallowed(self):
         """取先验失败不该让整条推荐链崩掉。"""

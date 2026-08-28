@@ -101,7 +101,7 @@ def adjust_by_value(predictions: Dict[str, float],
 
 def identify_value_bets(predictions: Dict[str, float], 
                        market_odds: Dict[str, float],
-                       threshold: float = 0.5) -> List[Tuple[str, float, float]]:
+                       threshold: float = 0.02) -> List[Tuple[str, float, float]]:
     """
     识别存在价值的投注
     
@@ -132,7 +132,7 @@ def identify_value_bets(predictions: Dict[str, float],
 
 def fuse_with_prior(poisson_probs: Dict[str, float],
                    handicap: float, total: float,
-                   prior_weight: float = 0.9, prior=None) -> Dict[str, float]:
+                   prior_weight: float = 0.3, prior=None) -> Dict[str, float]:
     """
     将泊松概率与盘口先验融合
     
