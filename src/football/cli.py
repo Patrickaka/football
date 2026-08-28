@@ -281,6 +281,11 @@ def render_cli(result):
 
 
 if __name__ == '__main__':
+    # 这里打 75 处中文。原来这行在 config.py 的模块级，于是 import 一个业务包
+    # 就顺手改掉调用方进程的标准输出编码——挪到真正的入口处。
+    # POSIX 上它其实是空操作（PEP 538/540 的 locale 强制已实测把 LC_ALL=C
+    # 也纠正成 utf-8），留着是为了 Windows 控制台。
+    sys.stdout.reconfigure(encoding='utf-8')
     main()
 
 
