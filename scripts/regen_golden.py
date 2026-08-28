@@ -294,3 +294,9 @@ from scripts.gen_football_calibration_golden import entries as football_calibrat
 
 dump('football_calibration',
      {k: _as_comparable(v) for k, v in football_calibration_entries()})
+
+# ---- football elo / upset ----
+from scripts.gen_football_elo_upset_golden import entries as football_elo_upset_entries
+
+dump('football_elo_upset',
+     {k: _as_comparable(v) for k, v in football_elo_upset_entries()})

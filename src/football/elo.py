@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""
+"""【适配层】
 球队 ELO 实力评分系统
 用于衡量球队长期真实实力，参与进球期望值和比分预测计算
 
@@ -30,6 +30,7 @@ logger = logging.getLogger(__name__)
 # ELO 配置
 from ..common.paths import data_path
 from ..common import repositories
+from ..domain.sports.football import elo as _elo
 ELO_FILE = data_path('elo_ratings.json')
 INITIAL_ELO = 1500
 HOME_ADVANTAGE = 50
@@ -80,51 +81,8 @@ class ELORatingSystem:
         self._load_ratings()
     
     def _sanitize_team_name(self, team_name: str) -> Optional[str]:
-        """
-        清理并验证球队名称
-        
-        参数:
-            team_name: 原始球队名称
-        
-        返回:
-            清理后的球队名称，无效则返回 None
-        """
-        if team_name is None:
-            logger.warning("球队名称为 None")
-            return None
-        
-        # 转换为字符串
-        if not isinstance(team_name, str):
-            team_name = str(team_name)
-        
-        # 去除空白字符
-        team_name = team_name.strip()
-        
-        # 检查是否为空
-        if not team_name:
-            logger.warning("球队名称为空")
-            return None
-        
-        # 检查长度
-        if len(team_name) > 100:
-            logger.warning(f"球队名称过长: {len(team_name)} 字符")
-            team_name = team_name[:100]
-        
-        # 检查是否包含非法字符（只允许中文、英文、数字和常见符号）
-        # 移除不可打印字符
-        team_name = re.sub(r'[\x00-\x1f\x7f-\x9f]', '', team_name)
-        
-        # 验证编码（尝试编码为 UTF-8）
-        try:
-            team_name.encode('utf-8').decode('utf-8')
-        except (UnicodeEncodeError, UnicodeDecodeError) as e:
-            logger.error(f"球队名称编码异常: {e}")
-            return None
-        
-        # 替换特殊字符
-        team_name = re.sub(r'[<>:"/\\|?*]', '_', team_name)
-        
-        return team_name if team_name else None
+        """纯计算在领域层"""
+        return _elo.sanitize_team_name(team_name)
     
     def _load_ratings(self):
         """从 MySQL 加载 ELO 评分（容错版本）"""
@@ -288,53 +246,16 @@ class ELORatingSystem:
             logger.error(f"初始化球队失败: {team_name}, 错误: {e}")
     
     def _get_expected_score(self, rating1: float, rating2: float) -> float:
-        """
-        计算预期得分概率
-        
-        参数:
-            rating1: 球队1评分
-            rating2: 球队2评分
-        
-        返回:
-            球队1的预期得分概率
-        """
-        return 1 / (1 + 10 ** ((rating2 - rating1) / 400))
+        """纯计算在领域层"""
+        return _elo.expected_score(rating1, rating2)
     
     def _get_k_factor(self, league_type: str) -> int:
-        """
-        获取 K 因子
-        
-        参数:
-            league_type: 联赛类型
-        
-        返回:
-            K 因子值
-        """
-        if not isinstance(league_type, str):
-            league_type = str(league_type)
-        
-        for key in K_FACTORS:
-            if key in league_type:
-                return K_FACTORS[key]
-        return K_FACTORS['联赛']  # 默认值
+        """纯计算在领域层"""
+        return _elo.k_factor(league_type)
     
     def _get_league_weight(self, league_type: str) -> float:
-        """
-        获取联赛权重系数
-        
-        参数:
-            league_type: 联赛类型
-        
-        返回:
-            权重系数
-        """
-        if not isinstance(league_type, str):
-            league_type = str(league_type)
-        
-        for key in LEAGUE_WEIGHTS:
-            if key in league_type:
-                return LEAGUE_WEIGHTS[key]
-        return 1.0  # 默认值
+        """纯计算在领域层"""
+        return _elo.league_weight(league_type)
     
     def update_ratings(self, home_team: str, away_team: str, 
                        home_score: int, away_score: int, 
@@ -715,68 +636,3 @@ def elo_to_strength_factor(elo_rating: float, league_avg_elo: float = 1500) -> f
 
 
 # ==================== 测试函数 ====================
-
-def test_error_handling():
-    """
-    测试容错处理功能
-    """
-    print("="*60)
-    print("ELO 容错处理测试")
-    print("="*60)
-    
-    # 测试 1: 损坏的 JSON 文件
-    print("\n1. 测试损坏的 JSON 文件处理")
-    if os.path.exists(ELO_FILE):
-        os.rename(ELO_FILE, ELO_FILE + '.bak')
-    
-    # 创建损坏的文件
-    with open(ELO_FILE, 'w', encoding='utf-8') as f:
-        f.write('{"ratings": { "曼联": 1500, "利物浦":')  # 不完整的 JSON
-    
-    elo = ELORatingSystem()
-    print(f"   损坏文件处理后球队数: {elo.get_team_count()}")
-    
-    # 测试 2: 空球队名称
-    print("\n2. 测试空球队名称")
-    result = elo.get_rating("")
-    print(f"   空名称评分: {result}")
-    
-    # 测试 3: None 球队名称
-    print("\n3. 测试 None 球队名称")
-    result = elo.get_rating(None)
-    print(f"   None 名称评分: {result}")
-    
-    # 测试 4: 编码异常
-    print("\n4. 测试编码异常球队名称")
-    try:
-        bad_name = '球队\x00名称'  # 包含空字符
-        result = elo.get_rating(bad_name)
-        print(f"   异常名称评分: {result}")
-    except Exception as e:
-        print(f"   异常名称处理: 捕获异常 {type(e).__name__}")
-    
-    # 测试 5: 新球队首次出现
-    print("\n5. 测试新球队首次出现")
-    result = elo.get_rating("新球队测试")
-    print(f"   新球队评分: {result}")
-    print(f"   球队总数: {elo.get_team_count()}")
-    
-    # 测试 6: 无效比分
-    print("\n6. 测试无效比分")
-    h, a = elo.update_ratings("曼联", "利物浦", -1, "abc", "英超")
-    print(f"   无效比分处理后: 曼联={h}, 利物浦={a}")
-    
-    # 测试 7: 恢复备份
-    if os.path.exists(ELO_FILE + '.bak'):
-        os.remove(ELO_FILE)
-        os.rename(ELO_FILE + '.bak', ELO_FILE)
-        print("\n7. 已恢复原始数据")
-    
-    print("\n" + "="*60)
-    print("容错测试完成！")
-    print("="*60)
-
-
-if __name__ == '__main__':
-    # 运行测试
-    test_error_handling()
