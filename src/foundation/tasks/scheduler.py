@@ -136,7 +136,7 @@ class TaskScheduler:
         with self._guard:
             self._results[name] = {'status': 'ok', 'value': value}
 
-    def _run_periodic(self, name, fn, interval, start_delay=0):
+    def _run_periodic(self, name, fn, interval, start_delay):
         """周期执行直到 shutdown。
 
         单次失败只记录不终止循环——一次瞬时故障（源站抖动、网络超时）
@@ -144,6 +144,10 @@ class TaskScheduler:
 
         `start_delay` 只推迟**第一轮**，之后的间隔不受影响。等待期间也响应
         `shutdown()`——否则一个错开了五分钟的任务会把停机拖住五分钟。
+
+        **没有默认值是有意的**：`start()` 总是显式传，给它配一个默认值等于
+        写下一条任何调用方都走不到的分支（判据 9 第一类）。变异验证里把默认值
+        改成 60 一样全绿，正是这个原因。
         """
         if start_delay and self._stop.wait(start_delay):
             return
