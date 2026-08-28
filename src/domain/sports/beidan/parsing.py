@@ -458,16 +458,16 @@ def parse_500_schedule(html, date, now):
     for match in matches:
         match_id = match['id']
         if match_id in times:
-            when = times[match_id]
-            parsed = _DAY_AND_TIME.match(when)
-            if parsed:
-                match['time'] = parsed.group(2)
-                # 时间里的日期与请求的日期不同时，记录跟着挪过去
-                # ——跨零点的比赛属于第二天
-                if parsed.group(1) != date[5:]:
-                    match['date'] = f'{date[:4]}-{parsed.group(1)}'
-            else:
-                match['time'] = when
+            # 能进 `times` 的字符串都是被 `\d{2}-\d{2}\s+\d{2}:\d{2}`
+            # 捕获出来的，而这里用的是同一个形状——**所以它必然匹配成功**。
+            # 迁移前这里有一条 `else: match['time'] = when` 的兜底，
+            # 任何输入都走不到，已删（判据 9 第一类）。
+            parsed = _DAY_AND_TIME.match(times[match_id])
+            match['time'] = parsed.group(2)
+            # 时间里的日期与请求的日期不同时，记录跟着挪过去
+            # ——跨零点的比赛属于第二天
+            if parsed.group(1) != date[5:]:
+                match['date'] = f'{date[:4]}-{parsed.group(1)}'
         if match_id in leagues:
             match['league'] = leagues[match_id].strip()
         if match_id in numbers:

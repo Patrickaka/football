@@ -93,6 +93,23 @@ class FiveHundredScheduleTests(unittest.TestCase):
                 match = _parse_500(html)[0]
                 self.assertEqual((match['home'], match['away']), ('甲队', '乙队'))
 
+    def test_only_a_trailing_suffix_is_stripped(self):
+        """**后缀要在末尾才剥**。队名里带「数据」两个字的球队并不稀奇，
+        按「包含」匹配会把它截掉一截——而截出来的还是个像样的名字，
+        不会报错，只会让这场比赛在下游对不上号。
+        """
+        html = (_link('999001', '数据队', '乙队')
+                + _time_cell('999001', '08-28 19:30'))
+        self.assertEqual(_parse_500(html)[0]['home'], '数据队')
+
+    def test_a_name_that_is_entirely_a_suffix_drops_the_match(self):
+        """剥完之后队名空了 → 整场丢掉。**这条才真正走到那道守卫**：
+        上一版用的 `title="VS乙队数据"` 连正则都匹配不上，守卫根本没参与
+        （判据 23）。
+        """
+        html = '<a href="shuju-999001.shtml" title="数据VS乙队数据"></a>'
+        self.assertEqual(_parse_500(html), [])
+
     def test_a_kickoff_on_another_day_moves_the_record(self):
         """跨零点的比赛属于第二天——**日期跟着时间走，不跟着请求走**。"""
         html = _link('999001', '甲队', '乙队') + _time_cell('999001', '08-29 02:00')
@@ -108,10 +125,23 @@ class FiveHundredScheduleTests(unittest.TestCase):
                 + '<a href="shuju-999001.shtml"></a>08-28 19:30')
         self.assertEqual(_parse_500(html)[0]['time'], '19:30')
 
-    def test_an_unrecognised_time_is_kept_verbatim(self):
+    def test_an_unrecognised_time_never_reaches_the_record(self):
+        r"""**认不出格式的时间根本进不了 `times`**，所以时间栏留空。
+
+        迁移前这里有一条 `else: match['time'] = when` 的兜底，写这条用例时
+        才发现它任何输入都走不到：能进 `times` 的字符串是被
+        `\d{2}-\d{2}\s+\d{2}:\d{2}` 捕获出来的，而兜底前面那次匹配
+        用的是同一个形状，必然成功。已删（判据 9 第一类）。
+        """
         html = (_link('999001', '甲队', '乙队')
                 + '<td rowspan="2">稍后</td><a href="shuju-999001.shtml"></a>')
-        # 时间认不出来 → 后面按日期判断，而那条路会抛（见下面一组）
+        matches = parsing.parse_500_schedule(html, '不是日期',
+                                             datetime.datetime(2026, 8, 28))
+        self.assertEqual(matches[0]['time'], '')
+
+    def test_a_time_that_cannot_be_parsed_still_reaches_the_status_check(self):
+        html = (_link('999001', '甲队', '乙队')
+                + '<td rowspan="2">稍后</td><a href="shuju-999001.shtml"></a>')
         with self.assertRaises(TypeError):
             _parse_500(html)
 
@@ -149,21 +179,29 @@ class MatchStatusTests(unittest.TestCase):
                          'not_started')
 
     def test_within_an_hour_of_kickoff_is_in_progress(self):
-        """开赛前一小时那道门槛的两侧。"""
+        """开赛前一小时那道门槛的两侧，**含恰好等于的那一刻**。
+
+        只测 ±1 秒是分不出 `<` 与 `<=` 的——门槛的严格与否只在相等时才
+        显形（判据 5）。恰好差一小时时算「未开始」，因为判的是
+        `开赛时刻 < 现在 + 1 小时`。
+        """
         just_outside = KICKOFF - datetime.timedelta(
             hours=IN_PROGRESS_BEFORE_HOURS, seconds=1)
         self.assertEqual(self._status_at(just_outside), 'not_started')
-        just_inside = KICKOFF - datetime.timedelta(
-            hours=IN_PROGRESS_BEFORE_HOURS) + datetime.timedelta(seconds=1)
+        exactly = KICKOFF - datetime.timedelta(hours=IN_PROGRESS_BEFORE_HOURS)
+        self.assertEqual(self._status_at(exactly), 'not_started')
+        just_inside = exactly + datetime.timedelta(seconds=1)
         self.assertEqual(self._status_at(just_inside), 'in_progress')
 
     def test_three_hours_after_kickoff_is_finished_and_filtered_out(self):
-        """赛后三小时那道门槛的两侧。已结束的**在返回前就被滤掉**。"""
+        """赛后三小时那道门槛的两侧，同样含恰好等于的那一刻。
+        已结束的**在返回前就被滤掉**。"""
         just_inside = KICKOFF + datetime.timedelta(
             hours=FINISHED_AFTER_HOURS) - datetime.timedelta(seconds=1)
         self.assertEqual(self._status_at(just_inside), 'in_progress')
-        just_outside = KICKOFF + datetime.timedelta(
-            hours=FINISHED_AFTER_HOURS, seconds=1)
+        exactly = KICKOFF + datetime.timedelta(hours=FINISHED_AFTER_HOURS)
+        self.assertEqual(self._status_at(exactly), 'in_progress')
+        just_outside = exactly + datetime.timedelta(seconds=1)
         self.assertIsNone(self._status_at(just_outside))
 
     def test_a_match_without_a_kickoff_time_raises(self):
@@ -258,6 +296,16 @@ class OkoooScheduleTests(unittest.TestCase):
                 matches, _ = self._parse(self._page(self._row(score=score)))
                 self.assertEqual(len(matches), 1)
 
+    def test_the_cell_count_threshold_is_tested_on_both_sides(self):
+        """**差一格就不是比赛行**。只喂六格的行，把门槛改成五格发现不了。
+
+        五格的行会被当成日期行——它本来就是日期分隔行的样子。
+        """
+        five_cells = '<tr>' + ''.join('<td>x</td>' for _ in range(5)) + '</tr>'
+        matches, _ = self._parse(self._page(five_cells, self._row()))
+        self.assertEqual(len(matches), 1)
+        self.assertEqual(matches[0]['id'], '1320957')
+
     def test_rows_with_too_few_cells_carry_the_section_date(self):
         """短行不是比赛，是日期分隔行——**它决定后面几场归哪一天**。"""
         matches, _ = self._parse(self._page(
@@ -297,11 +345,18 @@ class OkoooScheduleTests(unittest.TestCase):
         self.assertIsNone(one[0]['spf_s'])
 
     def test_the_handicap_odds_bundle_needs_every_price_above_one(self):
-        """赔率不可能不到 1——**整组都不给**，不是只丢那一个。"""
+        """赔率不可能不到 1——**整组都不给**，不是只丢那一个。
+        门槛是严格大于：恰好 1.00 也不认（赢了不赚不亏不是一个真实报价）。"""
         matches, _ = self._parse(self._page(self._row(
             odds=('1.80', '3.60', '4.20', '2.20', '0.95', '3.10'))))
         self.assertIsNone(matches[0]['rqspf_odds'])
         self.assertEqual(matches[0]['rqspf_s'], 0.95)
+        exactly_one, _ = self._parse(self._page(self._row(
+            odds=('1.80', '3.60', '4.20', '2.20', '1.00', '3.10'))))
+        self.assertIsNone(exactly_one[0]['rqspf_odds'])
+        above, _ = self._parse(self._page(self._row(
+            odds=('1.80', '3.60', '4.20', '2.20', '1.01', '3.10'))))
+        self.assertIsNotNone(above[0]['rqspf_odds'])
 
     def test_a_missing_match_id_is_synthesised_from_the_date_and_number(self):
         html = self._page(self._row().replace(
