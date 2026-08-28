@@ -475,7 +475,7 @@ def main():
     samples = load_training_data(TRAINING_DATA_FILE)
     
     if not samples:
-        print("没有找到训练数据，请先运行 ml_dataset_builder.py")
+        print(f"没有找到训练数据: {TRAINING_DATA_FILE}")
         return
     
     # 获取特征名称

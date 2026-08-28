@@ -29,8 +29,9 @@
     M_tact   = 若战术特征存在，三路融合（base / late / tactical）
 - 指标：logloss / brier / 1x2 命中率（argmax==actual）。
 - 切分：LOOCV（样本小，N≈6，适合留一交叉验证）。
-- 融合闸门：对照 ml_shadow_evaluator.should_integrate(min_samples=100)，
-  明确本诊断 N 远小于生产融合门槛，属「方法论/可行性验证」而非生产决策。
+- 融合闸门：生产融合曾以 min_samples=100 为门槛（原 ml_shadow_evaluator，
+  2026-08-28 已随零消费者一并删除）。这里沿用这个数只为说明本诊断的
+  N 远小于它，属「方法论/可行性验证」而非生产决策。
 
 用法：
   python diagnose_tactical_feature.py \
@@ -273,7 +274,7 @@ def main():
     print("=" * 64)
     print("战术特征 walk-forward 诊断（足球贝叶斯 skill 验证）")
     print("=" * 64)
-    print(f"已结算样本 N = {len(records)}（融合生产闸门需 ≥100，见 ml_shadow_evaluator）")
+    print(f"已结算样本 N = {len(records)}（融合生产闸门需 ≥100）")
     print(f"含 late 时段概率的场次 = {sum(1 for r in records if r['late'])}")
     print(f"含真实战术特征(xG/FT/伤停)的场次 = {n_tac}"
           f"{'  → 已纳入三路融合' if n_tac else '  → UNAVAILABLE（无历史战术数据集，未编造）'}")

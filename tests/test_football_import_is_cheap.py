@@ -68,19 +68,25 @@ class FootballImportIsCheap(unittest.TestCase):
         self.assertEqual(before, after,
                          f'import 前是 {before}，import 后变成了 {after}')
 
-    def test_the_lazy_meta_model_is_still_reachable_and_still_builds(self):
-        """惰性化不能把东西弄丢：访问 _global_meta_model 仍要拿到一个实例，
-        且此时三个 ML 库才被真正导入（判据 27：既断言不报错，也断言真生效）。
+    def test_importing_dynamic_weights_is_free_even_though_calling_it_is_not(self):
+        """`MetaWeightModel` 删除后（活死清单 §四），**导入**这个模块只用标准库。
+
+        但**调用** `get_dynamic_weights` 仍会拉起 ML 库——它内部
+        `import src.football.ml` 去做 ML 融合资格判定，那是活功能
+        （线上 7 天 1549 次「ML模型加载成功」）。两件事要分开断言，
+        否则会把「导入变便宜了」误当成「这些库不再需要了」。
         """
         out = _run(
             'import sys;'
             'import src.football.dynamic_weights as dw;'
-            "assert 'xgboost' not in sys.modules, '访问之前不该导入';"
-            'm = dw._global_meta_model;'
-            "print(type(m).__name__, dw._global_meta_model is m, 'xgboost' in sys.modules)"
+            "before = 'xgboost' in sys.modules;"
+            'w = dw.get_dynamic_weights(0.6);'
+            "print('RESULT', before, len(w), round(sum(w), 6), 'xgboost' in sys.modules)"
         )
-        self.assertEqual(out, 'MetaWeightModel True True')
-
+        # src.football.ml 加载模型时会往 stdout 打一行「ML模型加载成功」，
+        # 所以按标记取行，不能整段比对
+        line = next(ln for ln in out.splitlines() if ln.startswith('RESULT'))
+        self.assertEqual(line, 'RESULT False 4 1.0 True')
 
 if __name__ == '__main__':
     unittest.main()

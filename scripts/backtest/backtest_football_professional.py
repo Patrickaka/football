@@ -45,14 +45,28 @@ def load_prices():
                 continue
             with open(path, encoding='utf-8-sig') as handle:
                 for row in csv.DictReader(handle):
-                    from src.football.ml_dataset_builder import parse_date
-                    match_id = f"{division}_{parse_date(row.get('Date', ''))}_{row.get('HomeTeam')}_{row.get('AwayTeam')}"
+                    match_id = f"{division}_{_parse_date(row.get('Date', ''))}_{row.get('HomeTeam')}_{row.get('AwayTeam')}"
                     offered = {label: _float(row, key) for label, key in zip(('H', 'D', 'A'), ('AvgH', 'AvgD', 'AvgA'))}
                     closing = {label: _float(row, key) for label, key in zip(('H', 'D', 'A'), ('AvgCH', 'AvgCD', 'AvgCA'))}
                     if all(value > 1 for value in offered.values()):
                         prices[match_id] = {'odds': offered, 'closing_odds': closing}
     return prices
 
+
+
+def _parse_date(date_str: str) -> str:
+    """统一日期格式为ISO格式
+
+    原在 `src/football/ml_dataset_builder.py`。那个模块 694 行、零日志、
+    产物两个月没更新，而全仓对它的唯一引用就是这一个日期解析函数
+    （活死清单 §三）。搬过来之后模块整体删除。
+    """
+    for fmt in ('%Y-%m-%d', '%d/%m/%Y', '%d-%m-%Y', '%m/%d/%Y'):
+        try:
+            return datetime.strptime(date_str.strip(), fmt).strftime('%Y-%m-%d')
+        except ValueError:
+            continue
+    return date_str
 
 def load_samples():
     path = os.path.join(DATA, 'ml_training_data.jsonl')
