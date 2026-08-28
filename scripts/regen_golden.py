@@ -256,3 +256,9 @@ dump('beidan_analysis', {k: as_comparable(v) for k, v in beidan_analysis_entries
 from scripts.gen_beidan_recommendation_golden import entries as beidan_rec_entries
 
 dump('beidan_recommendation', {k: as_comparable(v) for k, v in beidan_rec_entries()})
+
+
+# ---- beidan 页面解析 ----
+from scripts.gen_beidan_parsing_golden import entries as beidan_parsing_entries
+
+dump('beidan_parsing', {k: as_comparable(v) for k, v in beidan_parsing_entries()})

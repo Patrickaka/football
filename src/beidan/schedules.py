@@ -29,144 +29,52 @@ from .fetching import (
     fetch,
 )
 
-def fetch_beidan_bifen(date=None):
+# ─── 领域层适配 ───
+#
+# 三张表的解析在 `src/domain/sports/beidan/parsing.py`。留在这里的只有
+# 取数、拼 URL、记日志——**「哪一行没读懂」由领域层返回，怎么记由这里决定**。
+
+from src.domain.sports.beidan import parsing as _parsing
+
+
+def _fetch_table(date, game_type, label, parse):
     if date is None:
         date = time.strftime('%Y-%m-%d')
-    
-    url = f'{BASE_URL}/football/jc/data/ssq_match_info.jsp?date={date}&gameType=bifen'
-    log.info(f"抓取北单比分数据: {date}")
-    
+
+    url = f'{BASE_URL}/football/jc/data/ssq_match_info.jsp?date={date}&gameType={game_type}'
+    log.info(f"抓取北单{label}数据: {date}")
+
     try:
         content = fetch(url, referer=SCHEDULE_URL)
+        # 同上：改成 `is None` 输出等价，短路只是省一次空转。
         if not content:
             return {}
-        
-        result = {}
-        lines = content.strip().split('\n')
-        
-        for line in lines:
-            line = line.strip()
-            if not line or line.startswith('#'):
-                continue
-            
-            parts = line.split('|')
-            if len(parts) < 2:
-                continue
-            
-            match_id = parts[0]
-            odds = {}
-            
-            for i in range(1, len(parts), 2):
-                if i + 1 < len(parts):
-                    score = parts[i]
-                    try:
-                        odd = float(parts[i + 1])
-                        odds[score] = odd
-                    except ValueError:
-                        pass
-            
-            if odds:
-                result[match_id] = odds
-        
+        result, failures = parse(content)
+        for line, reason in failures:
+            log.warning(f"解析{label}数据失败: {line} - {reason}")
         return result
-    
     except Exception as e:
-        log.error(f"抓取北单比分数据失败: {e}")
+        log.error(f"抓取北单{label}数据失败: {e}")
         return {}
+
+
+def fetch_beidan_bifen(date=None):
+    """比分盘赔率。**坏价只丢那一对**，整行还留着——比分一场几十个选项。"""
+    return _fetch_table(date, 'bifen', '比分',
+                        lambda content: (_parsing.parse_pair_table(content), []))
 
 
 def fetch_beidan_zjq(date=None):
-    if date is None:
-        date = time.strftime('%Y-%m-%d')
-    
-    url = f'{BASE_URL}/football/jc/data/ssq_match_info.jsp?date={date}&gameType=zjq'
-    log.info(f"抓取北单总进球数据: {date}")
-    
-    try:
-        content = fetch(url, referer=SCHEDULE_URL)
-        if not content:
-            return {}
-        
-        result = {}
-        lines = content.strip().split('\n')
-        
-        for line in lines:
-            line = line.strip()
-            if not line or line.startswith('#'):
-                continue
-            
-            parts = line.split('|')
-            if len(parts) < 8:
-                continue
-            
-            match_id = parts[0]
-            try:
-                zjq_odds = {
-                    '0': float(parts[1]) if parts[1] else None,
-                    '1': float(parts[2]) if parts[2] else None,
-                    '2': float(parts[3]) if parts[3] else None,
-                    '3': float(parts[4]) if parts[4] else None,
-                    '4': float(parts[5]) if parts[5] else None,
-                    '5': float(parts[6]) if parts[6] else None,
-                    '6': float(parts[7]) if parts[7] else None,
-                    '7+': float(parts[8]) if len(parts) > 8 else None,
-                }
-                result[match_id] = zjq_odds
-            except Exception as e:
-                log.warning(f"解析总进球数据失败: {line} - {e}")
-        
-        return result
-    
-    except Exception as e:
-        log.error(f"抓取北单总进球数据失败: {e}")
-        return {}
+    """总进球赔率。定长八档，**一个坏价带走整行**。"""
+    return _fetch_table(date, 'zjq', '总进球', lambda content:
+                        _parsing.parse_column_table(
+                            content, _parsing.ZJQ_COLUMNS, _parsing.ZJQ_MINIMUM))
 
 
 def fetch_beidan_bqc(date=None):
-    if date is None:
-        date = time.strftime('%Y-%m-%d')
-    
-    url = f'{BASE_URL}/football/jc/data/ssq_match_info.jsp?date={date}&gameType=bqc'
-    log.info(f"抓取北单半全场数据: {date}")
-    
-    try:
-        content = fetch(url, referer=SCHEDULE_URL)
-        if not content:
-            return {}
-        
-        result = {}
-        lines = content.strip().split('\n')
-        
-        for line in lines:
-            line = line.strip()
-            if not line or line.startswith('#'):
-                continue
-            
-            parts = line.split('|')
-            if len(parts) < 10:
-                continue
-            
-            match_id = parts[0]
-            try:
-                bqc_odds = {
-                    '胜胜': float(parts[1]) if parts[1] else None,
-                    '胜平': float(parts[2]) if parts[2] else None,
-                    '胜负': float(parts[3]) if parts[3] else None,
-                    '平胜': float(parts[4]) if parts[4] else None,
-                    '平平': float(parts[5]) if parts[5] else None,
-                    '平负': float(parts[6]) if parts[6] else None,
-                    '负胜': float(parts[7]) if parts[7] else None,
-                    '负平': float(parts[8]) if parts[8] else None,
-                    '负负': float(parts[9]) if parts[9] else None,
-                }
-                result[match_id] = bqc_odds
-            except Exception as e:
-                log.warning(f"解析半全场数据失败: {line} - {e}")
-        
-        return result
-    
-    except Exception as e:
-        log.error(f"抓取北单半全场数据失败: {e}")
-        return {}
+    """半全场赔率。定长九档，**一个坏价带走整行**。"""
+    return _fetch_table(date, 'bqc', '半全场', lambda content:
+                        _parsing.parse_column_table(
+                            content, _parsing.BQC_COLUMNS, _parsing.BQC_MINIMUM))
 
 

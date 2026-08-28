@@ -38,6 +38,44 @@ from .config import (
 _SHARED_RATE_LIMIT_HOST = 'odds.500.com'
 
 
+# ─── 领域层适配（页面解析）───
+#
+# 走势历史的解析在 `src/domain/sports/beidan/parsing.py`——迁移前这里是
+# 三段几乎相同的一百行，差别只在表头关键字、列数、字段名和几条校验上。
+# 留在这一层的只有：拼 URL、抓、记日志。
+
+from src.domain.sports.beidan import parsing as _parsing
+
+
+def _fetch_history(match_id, spec, what, unit, path_suffixes):
+    """按顺序试几个页面，第一个解析出记录的就用它。
+
+    **日志要分清是从表格还是从脚本刮出来的**：脚本那条路不走表格的
+    时间长度、让球值长度、比分格式那几道校验，同样一条记录的可信度不同。
+    """
+    urls = [f'{OKOOO_MATCH_URL}{match_id}/{suffix}/' for suffix in path_suffixes]
+    log.debug(f"抓取okooo{what}: match_id={match_id}")
+
+    for url in urls:
+        try:
+            html = fetch_okooo(url, referer=OKOOO_DANCHANG_URL)
+            # 空页面直接换下一个。改成 `is None` 在输出上等价（空串解析出来
+            # 也是空记录），留短路是为了不在空串上白跑一遍正则。
+            if not html:
+                continue
+            records, source = _parsing.parse_history(html, spec)
+            if records:
+                via = '通过脚本' if source == _parsing.FROM_SCRIPT else ''
+                log.info(f"从 {url} {via}获取到 {len(records)} 条{unit}记录")
+                return {'history': records}
+        except Exception as e:
+            log.warning(f"抓取okooo{what}失败({url}): {e}")
+            continue
+
+    log.debug(f"未获取到{what}数据")
+    return {'history': []}
+
+
 def _shares_football_rate_budget(url):
     return _SHARED_RATE_LIMIT_HOST in (url or '')
 
@@ -281,279 +319,22 @@ def fetch_okooo_schedule(date=None):
 
 
 def fetch_okooo_asian_history(match_id):
-    urls = [
-        f'{OKOOO_MATCH_URL}{match_id}/ah/',
-        f'{OKOOO_MATCH_URL}{match_id}/hodds/',
-        f'{OKOOO_MATCH_URL}{match_id}/odds/',
-        f'{OKOOO_MATCH_URL}{match_id}/history/',
-    ]
-    log.debug(f"抓取okooo亚盘赔率变化: match_id={match_id}")
-    
-    for url in urls:
-        try:
-            html = fetch_okooo(url, referer=OKOOO_DANCHANG_URL)
-            if not html:
-                continue
-            
-            html_clean = html.replace('display:none', '').replace('display: none', '')
-            
-            asian_history = []
-            
-            tables = re.findall(r'<table[^>]*>(.*?)</table>', html_clean, re.DOTALL)
-            for table in tables:
-                rows = re.findall(r'<tr[^>]*>(.*?)</tr>', table, re.DOTALL)
-                if len(rows) < 2:
-                    continue
-                
-                headers = re.findall(r'<th[^>]*>(.*?)</th>', rows[0], re.DOTALL)
-                header_text = ''.join(headers)
-                
-                if '亚盘' in header_text or '让球' in header_text or '盘口' in header_text:
-                    for row in rows[1:]:
-                        cells = re.findall(r'<td[^>]*>(.*?)</td>', row, re.DOTALL)
-                        if len(cells) >= 4:
-                            try:
-                                time_val = cells[0].strip()
-                                handicap_val = cells[1].strip()
-                                home_val = cells[2].strip()
-                                away_val = cells[3].strip()
-                                
-                                time_val = re.sub(r'<[^>]+>', '', time_val).strip()
-                                handicap_val = re.sub(r'<[^>]+>', '', handicap_val).strip()
-                                home_val = re.sub(r'<[^>]+>', '', home_val).strip()
-                                away_val = re.sub(r'<[^>]+>', '', away_val).strip()
-                                
-                                if not time_val or len(time_val) > 8:
-                                    continue
-                                if not handicap_val or len(handicap_val) > 20:
-                                    continue
-                                
-                                asian_history.append({
-                                    'time': time_val,
-                                    'handicap': handicap_val,
-                                    'home_odds': float(home_val) if home_val.replace('.', '').isdigit() else None,
-                                    'away_odds': float(away_val) if away_val.replace('.', '').isdigit() else None,
-                                })
-                            except Exception:
-                                continue
-            
-            if asian_history:
-                log.info(f"从 {url} 获取到 {len(asian_history)} 条亚盘赔率记录")
-                return {'history': asian_history}
-            
-            script_pattern = re.compile(r'<script[^>]*>(.*?)</script>', re.DOTALL)
-            scripts = script_pattern.findall(html_clean)
-            for script in scripts:
-                if len(script) < 50:
-                    continue
-                if '亚盘' not in script and 'asian' not in script.lower() and 'AH' not in script:
-                    continue
-                
-                data_patterns = re.findall(r'(\d{2}:\d{2})\s*,\s*["\']?([^\s"\',]+)["\']?\s*,\s*([\d.]+)\s*,\s*([\d.]+)', script)
-                for time_val, handicap_val, home_val, away_val in data_patterns:
-                    try:
-                        asian_history.append({
-                            'time': time_val,
-                            'handicap': handicap_val,
-                            'home_odds': float(home_val),
-                            'away_odds': float(away_val),
-                        })
-                    except Exception:
-                        continue
-                
-                if asian_history:
-                    break
-            
-            if asian_history:
-                log.info(f"从 {url} 通过脚本获取到 {len(asian_history)} 条亚盘赔率记录")
-                return {'history': asian_history}
-        
-        except Exception as e:
-            log.warning(f"抓取okooo亚盘赔率变化失败({url}): {e}")
-            continue
-    
-    log.debug(f"未获取到亚盘赔率变化数据")
-    return {'history': []}
+    """亚盘水位变化。**四个候选路径依次试**，第一个解析出记录的就返回。"""
+    return _fetch_history(
+        match_id, _parsing.ASIAN, '亚盘赔率变化', '亚盘赔率',
+        ('ah', 'hodds', 'odds', 'history'))
 
 
 def fetch_okooo_goals_history(match_id):
-    urls = [
-        f'{OKOOO_MATCH_URL}{match_id}/goals/',
-    ]
-    log.debug(f"抓取okooo总进球赔率变化: match_id={match_id}")
-    
-    for url in urls:
-        try:
-            html = fetch_okooo(url, referer=OKOOO_DANCHANG_URL)
-            if not html:
-                continue
-            
-            html_clean = html.replace('display:none', '').replace('display: none', '')
-            
-            goals_history = []
-            
-            tables = re.findall(r'<table[^>]*>(.*?)</table>', html_clean, re.DOTALL)
-            for table in tables:
-                rows = re.findall(r'<tr[^>]*>(.*?)</tr>', table, re.DOTALL)
-                if len(rows) < 2:
-                    continue
-                
-                headers = re.findall(r'<th[^>]*>(.*?)</th>', rows[0], re.DOTALL)
-                header_text = ''.join(headers)
-                
-                if '进球' in header_text or '大小球' in header_text:
-                    for row in rows[1:]:
-                        cells = re.findall(r'<td[^>]*>(.*?)</td>', row, re.DOTALL)
-                        if len(cells) >= 3:
-                            try:
-                                time_val = cells[0].strip()
-                                goals_val = cells[1].strip()
-                                over_val = cells[2].strip()
-                                under_val = cells[3].strip() if len(cells) >= 4 else None
-                                
-                                time_val = re.sub(r'<[^>]+>', '', time_val).strip()
-                                goals_val = re.sub(r'<[^>]+>', '', goals_val).strip()
-                                over_val = re.sub(r'<[^>]+>', '', over_val).strip()
-                                under_val = re.sub(r'<[^>]+>', '', under_val).strip() if under_val else None
-                                
-                                if not time_val or len(time_val) > 8:
-                                    continue
-                                
-                                goals_history.append({
-                                    'time': time_val,
-                                    'line': goals_val,
-                                    'over_odds': float(over_val) if over_val.replace('.', '').isdigit() else None,
-                                    'under_odds': float(under_val) if under_val and under_val.replace('.', '').isdigit() else None,
-                                })
-                            except Exception:
-                                continue
-            
-            if goals_history:
-                log.info(f"从 {url} 获取到 {len(goals_history)} 条总进球赔率记录")
-                return {'history': goals_history}
-            
-            script_pattern = re.compile(r'<script[^>]*>(.*?)</script>', re.DOTALL)
-            scripts = script_pattern.findall(html_clean)
-            for script in scripts:
-                if len(script) < 50:
-                    continue
-                if '进球' not in script and 'goals' not in script.lower() and 'total' not in script.lower():
-                    continue
-                
-                data_patterns = re.findall(r'(\d{2}:\d{2})\s*,\s*["\']?([^\s"\',]+)["\']?\s*,\s*([\d.]+)\s*,\s*([\d.]+)', script)
-                for time_val, line_val, over_val, under_val in data_patterns:
-                    try:
-                        goals_history.append({
-                            'time': time_val,
-                            'line': line_val,
-                            'over_odds': float(over_val),
-                            'under_odds': float(under_val),
-                        })
-                    except Exception:
-                        continue
-                
-                if goals_history:
-                    break
-            
-            if goals_history:
-                log.info(f"从 {url} 通过脚本获取到 {len(goals_history)} 条总进球赔率记录")
-                return {'history': goals_history}
-        
-        except Exception as e:
-            log.warning(f"抓取okooo总进球赔率变化失败({url}): {e}")
-            continue
-    
-    log.debug(f"未获取到总进球赔率变化数据")
-    return {'history': []}
+    """大小球水位变化。只有一个路径——与亚盘的四个不同，原样保留。"""
+    return _fetch_history(
+        match_id, _parsing.GOALS, '总进球赔率变化', '总进球赔率', ('goals',))
 
 
 def fetch_okooo_cs_history(match_id):
-    urls = [
-        f'{OKOOO_MATCH_URL}{match_id}/cs/',
-    ]
-    log.debug(f"抓取okooo比分赔率变化: match_id={match_id}")
-    
-    for url in urls:
-        try:
-            html = fetch_okooo(url, referer=OKOOO_DANCHANG_URL)
-            if not html:
-                continue
-            
-            html_clean = html.replace('display:none', '').replace('display: none', '')
-            
-            cs_history = []
-            
-            tables = re.findall(r'<table[^>]*>(.*?)</table>', html_clean, re.DOTALL)
-            for table in tables:
-                rows = re.findall(r'<tr[^>]*>(.*?)</tr>', table, re.DOTALL)
-                if len(rows) < 2:
-                    continue
-                
-                headers = re.findall(r'<th[^>]*>(.*?)</th>', rows[0], re.DOTALL)
-                header_text = ''.join(headers)
-                
-                if '比分' in header_text or 'cs' in header_text.lower():
-                    for row in rows[1:]:
-                        cells = re.findall(r'<td[^>]*>(.*?)</td>', row, re.DOTALL)
-                        if len(cells) >= 3:
-                            try:
-                                time_val = cells[0].strip()
-                                score_val = cells[1].strip()
-                                odds_val = cells[2].strip()
-                                
-                                time_val = re.sub(r'<[^>]+>', '', time_val).strip()
-                                score_val = re.sub(r'<[^>]+>', '', score_val).strip()
-                                odds_val = re.sub(r'<[^>]+>', '', odds_val).strip()
-                                
-                                if not time_val or len(time_val) > 8:
-                                    continue
-                                if not score_val or '-' not in score_val:
-                                    continue
-                                
-                                cs_history.append({
-                                    'time': time_val,
-                                    'score': score_val,
-                                    'odds': float(odds_val) if odds_val.replace('.', '').isdigit() else None,
-                                })
-                            except Exception:
-                                continue
-            
-            if cs_history:
-                log.info(f"从 {url} 获取到 {len(cs_history)} 条比分赔率记录")
-                return {'history': cs_history}
-            
-            script_pattern = re.compile(r'<script[^>]*>(.*?)</script>', re.DOTALL)
-            scripts = script_pattern.findall(html_clean)
-            for script in scripts:
-                if len(script) < 50:
-                    continue
-                if '比分' not in script and 'cs' not in script.lower() and 'score' not in script.lower():
-                    continue
-                
-                data_patterns = re.findall(r'(\d{2}:\d{2})\s*,\s*["\']?([^\s"\',]+)["\']?\s*,\s*([\d.]+)', script)
-                for time_val, score_val, odds_val in data_patterns:
-                    try:
-                        cs_history.append({
-                            'time': time_val,
-                            'score': score_val,
-                            'odds': float(odds_val),
-                        })
-                    except Exception:
-                        continue
-                
-                if cs_history:
-                    break
-            
-            if cs_history:
-                log.info(f"从 {url} 通过脚本获取到 {len(cs_history)} 条比分赔率记录")
-                return {'history': cs_history}
-        
-        except Exception as e:
-            log.warning(f"抓取okooo比分赔率变化失败({url}): {e}")
-            continue
-    
-    log.debug(f"未获取到比分赔率变化数据")
-    return {'history': []}
+    """比分盘赔率变化。同样只有一个路径。"""
+    return _fetch_history(
+        match_id, _parsing.CORRECT_SCORE, '比分赔率变化', '比分赔率', ('cs',))
 
 
 def fetch_beidan_schedule(date=None, source='jczq'):
