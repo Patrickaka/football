@@ -60,7 +60,11 @@ def test_asian_supremacy_differs_from_handicap_line():
 
 
 def test_quarter_handicap_half_win_counts_half_probability():
-    with patch.object(fb_modeling, 'build_score_matrix', return_value={(1, 0): 1.0}):
+    # F-4 之后 `_asian_cover_prob` 住在 `domain/sports/football/lambdas`，
+    # 它引用的是自己模块里的 `build_score_matrix`——打桩要打在那里。
+    # 打适配层 `src.football.modeling` 的属性已经到不了实现了。
+    from src.domain.sports.football import lambdas as fb_lambdas
+    with patch.object(fb_lambdas, 'build_score_matrix', return_value={(1, 0): 1.0}):
         cover = football._asian_cover_prob(1.5, 1.0, 0.75)
     assert cover == 0.5, cover
 
