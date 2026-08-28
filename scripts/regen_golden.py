@@ -232,3 +232,9 @@ dump('beidan_quality', {k: as_comparable(v) for k, v in beidan_quality_entries()
 from scripts.gen_beidan_trends_golden import entries as beidan_trends_entries
 
 dump('beidan_trends', {k: as_comparable(v) for k, v in beidan_trends_entries()})
+
+
+# ---- beidan 联合市场状态 ----
+from scripts.gen_beidan_market_state_golden import entries as beidan_ms_entries
+
+dump('beidan_market_state', {k: as_comparable(v) for k, v in beidan_ms_entries()})

@@ -30,184 +30,8 @@ from .modeling import (
 
 
 
-def build_beidan_joint_market_state(asian_data=None, goals_data=None):
-    """Build one direction/tempo state from Beidan handicap and O/U histories."""
-    asian_history = (asian_data or {}).get('history') or []
-    goals_history = (goals_data or {}).get('history') or []
-    asian_trend = analyze_asian_trend(asian_history)
-    goals_trend = analyze_goals_trend(goals_history)
-
-    direction_map = {
-        'home_backing': 1.0, 'away_laying': 0.65,
-        'away_backing': -1.0, 'home_laying': -0.65,
-    }
-    direction = direction_map.get(asian_trend.get('direction'), 0.0)
-    try:
-        direction *= min(1.0, max(0.25, float(asian_trend.get('strength', 0.0)) / 0.12))
-    except (TypeError, ValueError):
-        direction = 0.0
-
-    handicap_signal = 0.0
-    if len(asian_history) >= 2:
-        try:
-            handicap_signal = max(-1.0, min(1.0,
-                (float(asian_history[-1].get('handicap')) -
-                 float(asian_history[0].get('handicap'))) / 0.5
-            ))
-        except (TypeError, ValueError):
-            handicap_signal = 0.0
-    direction = 0.65 * direction + 0.35 * handicap_signal
-
-    tempo_map = {
-        'over_backing': 1.0, 'under_laying': 0.65,
-        'under_backing': -1.0, 'over_laying': -0.65,
-    }
-    water_tempo = tempo_map.get(goals_trend.get('direction'), 0.0)
-    line_signal = 0.0
-    if len(goals_history) >= 2:
-        try:
-            first_line = float(re.search(r'[\d.]+', str(goals_history[0].get('line'))).group())
-            last_line = float(re.search(r'[\d.]+', str(goals_history[-1].get('line'))).group())
-            line_signal = max(-1.0, min(1.0, (last_line - first_line) / 0.5))
-        except (AttributeError, TypeError, ValueError):
-            line_signal = 0.0
-    water_line_conflict = water_tempo * line_signal < -0.12
-    tempo = 0.55 * water_tempo + 0.45 * line_signal
-
-    if water_line_conflict:
-        tempo *= 0.40
-    return {
-        'direction_signal': max(-1.0, min(1.0, direction)),
-        'tempo_signal': max(-1.0, min(1.0, tempo)),
-        'handicap_signal': handicap_signal,
-        'line_signal': line_signal,
-        'asian_trend': asian_trend,
-        'goals_trend': goals_trend,
-        'conflict': water_line_conflict,
-        'agreement_factor': 0.40 if water_line_conflict else 1.0,
-    }
 
 
-def apply_beidan_joint_market_state(score_probs, asian_data=None, goals_data=None):
-    """Fit the shared score matrix to fair Asian and O/U closing prices.
-
-    Open-to-close movement controls reliability/conflict; it is not counted as
-    a second independent prediction after the closing price has already
-    absorbed that information.
-    """
-    if not score_probs:
-        return score_probs, {'applied': False, 'reason': 'empty_distribution'}
-    state = build_beidan_joint_market_state(asian_data, goals_data)
-    matrix = {}
-    for score, probability in score_probs.items():
-        try:
-            parsed = int(score[0]), int(score[1])
-            matrix[parsed] = matrix.get(parsed, 0.0) + max(0.0, float(probability))
-        except (TypeError, ValueError, IndexError):
-            continue
-    total = sum(matrix.values())
-    if total <= 0:
-        return score_probs, {**state, 'applied': False, 'reason': 'zero_raw_mass'}
-    matrix = {score: probability / total for score, probability in matrix.items()}
-    before = dict(matrix)
-
-    def constrain(source, feature, strength):
-        values = {score: feature(score) for score in source}
-        buckets = defaultdict(float)
-        for score, probability in source.items():
-            buckets[round(values[score], 12)] += probability
-
-        def expectation(theta):
-            weighted = [
-                (value, probability * math.exp(max(-20.0, min(20.0, theta * value))))
-                for value, probability in buckets.items()
-            ]
-            denominator = sum(probability for _, probability in weighted)
-            return sum(value * probability for value, probability in weighted) / denominator
-
-        lo, hi = -12.0, 12.0
-        if expectation(lo) > 0 or expectation(hi) < 0:
-            return source, {'applied': False, 'reason': 'target_outside_support'}
-        expected_before = expectation(0.0)
-        for _ in range(40):
-            mid = (lo + hi) / 2.0
-            if expectation(mid) < 0:
-                lo = mid
-            else:
-                hi = mid
-        theta = strength * (lo + hi) / 2.0
-        adjusted = {
-            score: probability * math.exp(max(-20.0, min(20.0, theta * values[score])))
-            for score, probability in source.items()
-        }
-        denominator = sum(adjusted.values())
-        adjusted = {score: probability / denominator for score, probability in adjusted.items()}
-        return adjusted, {
-            'applied': True,
-            'theta': round(theta, 5),
-            'fair_profit_before': round(expected_before, 5),
-            'fair_profit_after': round(
-                sum(adjusted[score] * values[score] for score in adjusted), 5
-            ),
-        }
-
-    asian_market = None
-    for entry in reversed((asian_data or {}).get('history') or []):
-        if entry.get('home_odds') and entry.get('away_odds'):
-            asian_market = entry
-            break
-    total_line, over_odds, under_odds = _latest_ou_market(goals_data)
-    reliability = 0.40 if state.get('conflict') else 1.0
-    pass_strength = 0.35 * reliability / 3.0
-    asian_meta = {'applied': False, 'reason': 'missing_price_or_line'}
-    total_meta = {'applied': False, 'reason': 'missing_price_or_line'}
-
-    for _ in range(3):
-        if asian_market:
-            home_odds = _to_euro_odds(asian_market.get('home_odds'))
-            away_odds = _to_euro_odds(asian_market.get('away_odds'))
-            if home_odds and away_odds:
-                inverse_home, inverse_away = 1.0 / home_odds, 1.0 / away_odds
-                fair_home_odds = (inverse_home + inverse_away) / inverse_home
-                # Some fallback feeds omit the line while retaining two-way
-                # prices. Treat those rare records as a PK market instead of
-                # discarding the only directional price evidence.
-                line = float(asian_market.get('handicap') or 0.0)
-                matrix, asian_meta = constrain(
-                    matrix,
-                    lambda score, line=line, odds=fair_home_odds: _asian_over_profit(
-                        score[0] - score[1], line, odds
-                    ),
-                    pass_strength,
-                )
-        over_decimal, under_decimal = _to_euro_odds(over_odds), _to_euro_odds(under_odds)
-        if over_decimal and under_decimal:
-            inverse_over, inverse_under = 1.0 / over_decimal, 1.0 / under_decimal
-            fair_over_odds = (inverse_over + inverse_under) / inverse_over
-            matrix, total_meta = constrain(
-                matrix,
-                lambda score, line=total_line, odds=fair_over_odds: _asian_over_profit(
-                    score[0] + score[1], line, odds
-                ),
-                pass_strength,
-            )
-
-    if not asian_meta.get('applied') and not total_meta.get('applied'):
-        return score_probs, {**state, 'applied': False, 'reason': 'missing_closing_market_prices'}
-
-    adjusted = matrix
-    state.update({
-        'applied': True,
-        'method': 'maximum_entropy_fair_price_constraint',
-        'constraint_strength': round(0.35 * reliability, 3),
-        'asian_constraint': asian_meta,
-        'total_constraint': total_meta,
-        'expected_goals_before': sum(sum(score) * p for score, p in before.items()),
-        'expected_goals_after': sum(sum(score) * p for score, p in adjusted.items()),
-        'home_win_before': sum(p for (h, a), p in before.items() if h > a),
-        'home_win_after': sum(p for (h, a), p in adjusted.items() if h > a),
-    })
-    return adjusted, state
 
 
 def build_water_market_prediction(spf_result, handicap):
@@ -470,3 +294,110 @@ def enhance_scores_with_cs(score_prediction, cs_history):
     if blended:
         score_prediction['top3'] = blended
     return score_prediction
+
+
+# ─── 领域层适配（联合市场状态）───
+#
+# 算法在 `src/domain/sports/beidan/market_state.py`：走势合成、指数倾斜、
+# 公平赔率换算。这里只喂权重与门槛——迁移前它们同样是函数体里的裸数字。
+
+from src.domain.sports.beidan import market_state as _state
+
+# 走势合成：强度的归一化除数与下限
+JOINT_STRENGTH_DIVISOR = 0.12
+JOINT_STRENGTH_FLOOR = 0.25
+# 盘口线移动归一化的除数：半球算满格
+JOINT_HANDICAP_DIVISOR = 0.5
+JOINT_LINE_DIVISOR = 0.5
+# 水位与线的融合权重（线的权重略低——它是离散的，单次变动信息量更少）
+JOINT_DIRECTION_BLEND = 0.65
+JOINT_TEMPO_BLEND = 0.55
+# 水位与线指向相反时判为冲突，并把节奏信号衰减到这个比例
+JOINT_CONFLICT_THRESHOLD = -0.12
+JOINT_CONFLICT_DAMPING = 0.40
+
+# 约束强度：总量 0.35，分三轮施加，冲突时按 damping 打折。
+# **分多轮是有意的**——亚盘与大小球两个约束会互相拉扯，
+# 一次到位会让后施加的那个把前一个顶掉
+CONSTRAINT_STRENGTH = 0.35
+CONSTRAINT_PASSES = 3
+
+
+def build_beidan_joint_market_state(asian_data=None, goals_data=None):
+    """由亚盘与大小球的走势合成方向与节奏信号。"""
+    asian_history = (asian_data or {}).get('history') or []
+    goals_history = (goals_data or {}).get('history') or []
+    return _state.joint_state(
+        analyze_asian_trend(asian_history), analyze_goals_trend(goals_history),
+        asian_history, goals_history,
+        strength_divisor=JOINT_STRENGTH_DIVISOR,
+        strength_floor=JOINT_STRENGTH_FLOOR,
+        handicap_divisor=JOINT_HANDICAP_DIVISOR,
+        line_divisor=JOINT_LINE_DIVISOR,
+        direction_blend=JOINT_DIRECTION_BLEND,
+        tempo_blend=JOINT_TEMPO_BLEND,
+        conflict_threshold=JOINT_CONFLICT_THRESHOLD,
+        conflict_damping=JOINT_CONFLICT_DAMPING)
+
+
+def apply_beidan_joint_market_state(score_probs, asian_data=None, goals_data=None):
+    """把比分矩阵拟合到亚盘与大小球的公平价上。
+
+    开盘到临场的走势**不当作第二个独立预测**——终盘价已经吸收了那段信息，
+    再叠一次等于把同一条证据用两遍；走势只用来判断可靠性与冲突。
+    """
+    if not score_probs:
+        return score_probs, {'applied': False, 'reason': 'empty_distribution'}
+
+    state = build_beidan_joint_market_state(asian_data, goals_data)
+    matrix = _state.normalise_matrix(score_probs)
+    if matrix is None:
+        return score_probs, {**state, 'applied': False, 'reason': 'zero_raw_mass'}
+    before = dict(matrix)
+
+    asian_market = None
+    for entry in reversed((asian_data or {}).get('history') or []):
+        if entry.get('home_odds') and entry.get('away_odds'):
+            asian_market = entry
+            break
+    total_line, over_odds, under_odds = _latest_ou_market(goals_data)
+
+    reliability = JOINT_CONFLICT_DAMPING if state.get('conflict') else 1.0
+    pass_strength = CONSTRAINT_STRENGTH * reliability / CONSTRAINT_PASSES
+    missing = {'applied': False, 'reason': 'missing_price_or_line'}
+    asian_meta, total_meta = dict(missing), dict(missing)
+
+    for _ in range(CONSTRAINT_PASSES):
+        if asian_market:
+            fair_home = _state.fair_odds(_to_euro_odds(asian_market.get('home_odds')),
+                                         _to_euro_odds(asian_market.get('away_odds')))
+            if fair_home:
+                # 少数备用源只给两侧报价而没有盘口线。**按平手盘处理**
+                # 而不是丢弃——那是这场唯一的方向性价格证据
+                line = float(asian_market.get('handicap') or 0.0)
+                matrix, asian_meta = _state.tilt_to_fair_price(
+                    matrix,
+                    lambda score, line=line, odds=fair_home: _asian_over_profit(
+                        score[0] - score[1], line, odds),
+                    pass_strength)
+        fair_over = _state.fair_odds(_to_euro_odds(over_odds), _to_euro_odds(under_odds))
+        if fair_over:
+            matrix, total_meta = _state.tilt_to_fair_price(
+                matrix,
+                lambda score, line=total_line, odds=fair_over: _asian_over_profit(
+                    score[0] + score[1], line, odds),
+                pass_strength)
+
+    if not asian_meta.get('applied') and not total_meta.get('applied'):
+        return score_probs, {**state, 'applied': False,
+                             'reason': 'missing_closing_market_prices'}
+
+    state.update({
+        'applied': True,
+        'method': 'maximum_entropy_fair_price_constraint',
+        'constraint_strength': round(CONSTRAINT_STRENGTH * reliability, 3),
+        'asian_constraint': asian_meta,
+        'total_constraint': total_meta,
+        **_state.summarise_shift(before, matrix),
+    })
+    return matrix, state
