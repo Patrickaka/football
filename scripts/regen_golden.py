@@ -262,3 +262,9 @@ dump('beidan_recommendation', {k: as_comparable(v) for k, v in beidan_rec_entrie
 from scripts.gen_beidan_parsing_golden import entries as beidan_parsing_entries
 
 dump('beidan_parsing', {k: as_comparable(v) for k, v in beidan_parsing_entries()})
+
+
+# ---- beidan 赛程解析 ----
+from scripts.gen_beidan_schedule_golden import entries as beidan_schedule_entries
+
+dump('beidan_schedule', {k: as_comparable(v) for k, v in beidan_schedule_entries()})
