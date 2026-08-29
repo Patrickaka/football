@@ -88,6 +88,23 @@ def build_database(settings):
     return Database(make_engine(url))
 
 
+def query_params(request: Request) -> dict:
+    """把 `request.query_params` 还原成 `parse_qs` 的 `{键: [值]}` 形状。
+
+    给**参数全是字符串语义**的接口用（服务层自己转类型、自己定默认值）。
+    这类接口不能加 FastAPI 的类型标注：标了就会在参数非法时返回 422，
+    而旧入口是把错误吞成 `200` 里的一句 error 串——那是**行为改变**，
+    对 kl8 的十三个参数逐个引入不值得。
+
+    `multi_items()` 而不是 `dict(...)`：重复键要全留下，
+    `?x=1&x=2` 在 `parse_qs` 下是 `{'x': ['1', '2']}`。
+    """
+    collected: dict = {}
+    for key, value in request.query_params.multi_items():
+        collected.setdefault(key, []).append(value)
+    return collected
+
+
 def get_cache(request: Request) -> Cache:
     """FastAPI 依赖：从 app.state 取出装配好的 Cache 单例。
 
