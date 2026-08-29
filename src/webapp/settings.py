@@ -32,7 +32,10 @@ _ROOT = Path(__file__).resolve().parents[2]
 INDEX_FILE = _ROOT / 'web' / 'index.html'
 
 
-sys.stdout.reconfigure(encoding='utf-8')
+# stdout 的编码由**进程入口**设置，不在库模块顶层做。
+# 放这里的代价：pytest 一旦有任何测试导入到本模块，就会把它的捕获流换掉，
+# 之后每个用例的 setup/teardown 都报 UnicodeDecodeError——**从那一刻起
+# 整套测试全红，而且看不出跟谁有关**。判据同 `src/football/config.py`。
 
 
 HOST = os.environ.get('FOOTBALL_HOST', '0.0.0.0')  # 默认监听所有网卡；线上经反代时设为 127.0.0.1 收窄暴露面

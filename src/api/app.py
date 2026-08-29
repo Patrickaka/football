@@ -11,7 +11,8 @@ from src.api.deps import Settings, build_cache, build_database, get_executor, sh
 from src.api.rate_limit import ClientRateLimiters, install_rate_limit
 from src.api.routers import auth as auth_routes
 from src.api.routers import basketball, beidan, football, health, kl8, lottery, pages
-from src.foundation.tasks import TaskScheduler
+from src.api import startup as startup_orchestration
+from src.webapp import background
 
 log = logging.getLogger('api.app')
 
@@ -36,16 +37,23 @@ def create_app(settings=None, auth_settings=None):
         else:
             log.info('鉴权已启用，用户: %s', ', '.join(sorted(auth_settings.credentials)))
         app.state.db = build_database(settings)
-        # 本阶段不提交任何实际任务（业务预热任务属于后续阶段），仅完成装配：
-        # 调度器创建后挂到 app.state，供健康检查观测；不调用 start()——
-        # 没有待跑任务时启动线程池纯属空转，且会提前关闭 submit() 窗口
-        # （TaskScheduler.submit 在 start() 之后一律 RuntimeError）。
-        # 后续阶段在此处补充 submit(...) 调用后再决定何时 start()。
-        app.state.tasks = TaskScheduler(max_workers=settings.max_task_workers)
+        # **用进程级的那一个调度器，不再另建一个**。原来这里建了个空的
+        # `TaskScheduler` 只为让健康检查有东西可看——它永远 0 个任务、
+        # 永远不 start()，是个纯粹的摆设。真正跑着三族周期任务的是
+        # `src.webapp.background` 的单例；健康检查要看的是那一个。
+        app.state.tasks = background.scheduler()
         # get_executor 是模块级全局单例，只有首次调用的 workers 参数生效；
         # 必须在任何 run_blocking(...) 之前、在此显式用 settings.executor_workers
         # 完成首次初始化，否则该字段会因为“从未被首次调用消费”而形同虚设。
         get_executor(settings.executor_workers)
+
+        # 磁盘清理、缓存恢复、三族后台任务、三个预热线程、周期维护。
+        # **漏掉任何一件都不会让服务起不来**，只会安静地少干活——
+        # 后台不再回填赛果、缓存不再跨重启保留、用户重新承担冷计算。
+        if settings.run_startup_tasks:
+            startup_orchestration.run_all()
+        else:
+            log.info('启动编排已跳过（RUN_STARTUP_TASKS=0）')
         log.info('API 启动完成')
         yield
         # 关闭顺序：先排空 SWR 后台刷新，再停消费者，最后释放消费者依赖的资源。
@@ -58,7 +66,7 @@ def create_app(settings=None, auth_settings=None):
         #    dispose db 再关 executor，executor 里仍在跑的任务可能这期间
         #    还在用 db。
         app.state.cache.wait_for_refreshes(timeout=app.state.cache.lock_timeout)
-        app.state.tasks.shutdown(wait=True)
+        background.shutdown(wait=True)
         shutdown_executor()
         app.state.db.dispose()
         log.info('API 已停止')

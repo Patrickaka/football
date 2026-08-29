@@ -68,8 +68,12 @@ class LifespanShutdownOrderTests(unittest.TestCase):
         fake_db = mock.Mock()
         fake_db.dispose.side_effect = lambda: order.append('db.dispose')
 
-        fake_tasks = mock.Mock()
-        fake_tasks.shutdown.side_effect = lambda wait=True: order.append('tasks.shutdown')
+        # 关闭的是**进程级的那一个调度器**，不是 lifespan 里另建的对象。
+        # 原来这里建了个空的 TaskScheduler 只为让健康检查有东西可看——
+        # 永远 0 个任务、永远不 start()，是个摆设。现在 app.state.tasks
+        # 指向 `src.webapp.background` 的单例，关闭也走它。
+        def recording_background_shutdown(wait=True):
+            order.append('tasks.shutdown')
 
         def recording_shutdown_executor():
             order.append('shutdown_executor')
@@ -78,7 +82,8 @@ class LifespanShutdownOrderTests(unittest.TestCase):
 
         with mock.patch('src.api.app.build_cache', return_value=fake_cache), \
                 mock.patch('src.api.app.build_database', return_value=fake_db), \
-                mock.patch('src.api.app.TaskScheduler', return_value=fake_tasks), \
+                mock.patch('src.api.app.background.shutdown',
+                           side_effect=recording_background_shutdown), \
                 mock.patch(
                     'src.api.app.shutdown_executor', side_effect=recording_shutdown_executor
                 ):

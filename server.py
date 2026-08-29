@@ -77,80 +77,20 @@ def _candidate_ips():
 
 
 def _start_background_sync():
-    """启动后台自动同步线程（football + KL8 + basketball）"""
-    # 后台周期任务统一登记到一个调度器，登记完再一次性启动。
-    # 迁移前它们分散在三处（kl8 用 APScheduler、篮球采样自建调度器、
-    # 另有裸线程），没有任何一个地方能回答「现在后台在跑什么」。
-    from src.webapp import background
+    """后台任务与预热的编排住在 `src.api.startup`，新旧入口共用一份（判据 11）。"""
+    from src.api import startup
 
-    try:
-        from src.kl8.scheduler import register_kl8_tasks
-        register_kl8_tasks(background.submit_periodic, interval_hours=1)
-    except Exception as e:
-        log.warning(f"登记快乐8后台任务失败: {e}")
+    startup.register_background_tasks()
+    startup.start_cache_warmups()
+    startup.start_maintenance_schedule()
 
-    # 篮球盘口/水位自动采样，为开盘 -> 即时盘反推持续积累真实快照。
-    # 夜里没人看的时候盘口照样在动，而那段变化正是开盘到临场的主要部分，
-    # 所以必须周期采样，不能只在有人请求时才采。
-    try:
-        from src.webapp.basketball_service import (
-            ODDS_TRACKING_INTERVAL_MINUTES, register_odds_tracking,
-        )
-        # 用 server 自己的 logger 报告结果：领域层的 logger 没开 INFO，
-        # 那条日志在 journal 里看不见，运维就无从判断采样到底登记上没有。
-        if register_odds_tracking():
-            log.info(f'篮球赔率采样已登记: 每 {ODDS_TRACKING_INTERVAL_MINUTES} 分钟')
-        else:
-            log.warning('篮球赔率采样未登记（数据库不可用）')
-    except Exception as e:
-        log.warning(f"登记篮球赔率采样失败: {e}")
-
-    # 足球赛后回填与时间分层扫描。迁移前这两个不在这里——它们由本函数开头
-    # 另起的一个 daemon 线程跑 APScheduler，游离在进程级调度器之外，
-    # `background.task_count()` 数不到，健康检查也看不见。
-    try:
-        from src.football.result_sync import register_football_tasks
-        register_football_tasks(background.submit_periodic)
-    except Exception as e:
-        log.warning(f"登记足球后台任务失败: {e}")
-
-    # 全部登记完毕，启动唯一的后台调度器
-    try:
-        background.start()
-        log.info(f'后台调度器已启动: {background.task_count()} 个周期任务')
-    except Exception as e:
-        log.warning(f"启动后台调度器失败: {e}")
-
-    # 3D 缓存预热：启动后台线程提前算好规则 + ML 结果，用户永不承担冷计算
-    threading.Thread(target=_warm_3d_caches, daemon=True, name='Warm3DThread').start()
-    log.info('3D 缓存预热线程已启动')
-
-    # 足球缓存预热：同理，把每日首次打开的全量冷分析挪到后台
-    threading.Thread(target=_warm_football_caches, daemon=True, name='WarmFootballThread').start()
-    log.info('足球缓存预热线程已启动')
-
-    # 北单缓存预热：北单一次请求要算完整页，冷算 12 秒以上，同样挪到后台
-    threading.Thread(target=_warm_beidan_caches, daemon=True, name='WarmBeidanThread').start()
-    log.info('北单缓存预热线程已启动')
-
-    # 定时维护：启动时已同步执行过一轮，这里只负责后续周期清理。
-    try:
-        from src.common.maintenance import start_maintenance_scheduler
-        start_maintenance_scheduler(run_immediately=False)
-    except Exception as e:
-        log.warning(f"启动定时维护线程失败: {e}")
 
 def main():
+    from src.api import startup
+
     # 必须早于缓存恢复和各类预热线程。生产磁盘已满时，先回收可再生
     # 日志/报告与过期 binlog，避免启动任务继续放大磁盘压力。
-    try:
-        from src.common.maintenance import run_maintenance
-        emergency_on_startup = os.getenv(
-            'MAINTENANCE_EMERGENCY_ON_STARTUP', '1'
-        ).strip().lower() not in ('0', 'false', 'no', 'off')
-        run_maintenance(force_emergency=emergency_on_startup)
-    except Exception as e:
-        log.warning('启动前磁盘清理失败: %s', e)
+    startup.run_startup_maintenance()
 
     server = ThreadingHTTPServer((HOST, PORT), Handler)
     local_url = f'http://localhost:{PORT}'
@@ -166,7 +106,7 @@ def main():
         log.warning('鉴权: 未启用 — 公网暴露前请设置 FOOTBALL_USERS')
     
     # 启动后台自动同步
-    _load_persisted_caches()  # 恢复当天有效的落盘结果，重启后无需冷计算
+    startup.restore_persisted_caches()  # 恢复当天有效的落盘结果，重启后无需冷计算
     _start_background_sync()
     
     log.info('=' * 50)
@@ -182,4 +122,7 @@ def main():
 
 
 if __name__ == '__main__':
+    # 编码设置属于进程入口。放在 `src/webapp/settings.py` 顶层时，
+    # pytest 只要导入到那个模块就会被换掉捕获流，整套测试从那一刻起全红。
+    sys.stdout.reconfigure(encoding='utf-8')
     main()
