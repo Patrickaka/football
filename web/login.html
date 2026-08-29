@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>登录 · 预测助手</title>
+<style>
+  :root {
+    --bg: #0f1419; --card: #1a2230; --line: #2c3a4e;
+    --text: #e6edf3; --muted: #8b98a9;
+    --accent: #2ea043; --accent2: #3fb950; --danger: #f85149;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+    line-height: 1.6; min-height: 100vh;
+    display: flex; align-items: center; justify-content: center; padding: 24px 16px;
+  }
+  .card {
+    background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+    padding: 32px 28px; width: 100%; max-width: 360px;
+  }
+  h1 { font-size: 20px; margin-bottom: 4px; }
+  .sub { color: var(--muted); font-size: 13px; margin-bottom: 24px; }
+  label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 6px; }
+  input {
+    width: 100%; padding: 10px 12px; margin-bottom: 16px;
+    background: var(--bg); color: var(--text);
+    border: 1px solid var(--line); border-radius: 6px; font-size: 15px;
+  }
+  input:focus { outline: none; border-color: var(--accent); }
+  button {
+    width: 100%; padding: 11px; border: 0; border-radius: 6px;
+    background: var(--accent); color: #fff; font-size: 15px; cursor: pointer;
+  }
+  button:hover:not(:disabled) { background: var(--accent2); }
+  button:disabled { opacity: .6; cursor: default; }
+  .error { color: var(--danger); font-size: 13px; min-height: 20px; margin-top: 12px; }
+</style>
+</head>
+<body>
+  <form class="card" id="form">
+    <h1>预测助手</h1>
+    <p class="sub">请登录后继续</p>
+    <label for="user">用户名</label>
+    <input id="user" name="user" autocomplete="username" autofocus required>
+    <label for="password">密码</label>
+    <input id="password" name="password" type="password" autocomplete="current-password" required>
+    <button type="submit" id="submit">登录</button>
+    <p class="error" id="error"></p>
+  </form>
+<script>
+  const form = document.getElementById('form');
+  const submit = document.getElementById('submit');
+  const error = document.getElementById('error');
+
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    error.textContent = '';
+    submit.disabled = true;
+    submit.textContent = '登录中…';
+    try {
+      const response = await fetch('auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        // 反代把服务挂在子路径下，用相对地址才能同时适配 / 和 /football/
+        body: JSON.stringify({
+          user: document.getElementById('user').value,
+          password: document.getElementById('password').value,
+        }),
+      });
+      if (response.ok) {
+        window.location.replace('./');
+        return;
+      }
+      const payload = await response.json().catch(() => ({}));
+      error.textContent = payload.detail || '登录失败';
+    } catch (e) {
+      error.textContent = '网络错误，请重试';
+    }
+    submit.disabled = false;
+    submit.textContent = '登录';
+  });
+</script>
+</body>
+</html>

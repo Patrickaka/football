@@ -22,6 +22,13 @@ class Settings:
     cache_default_ttl: int = 300
     max_task_workers: int = 2
     executor_workers: int = 4
+    #: 每客户端每秒允许的请求数；<= 0 表示不限流。
+    rate_limit_per_sec: float = 0.0
+    #: 突发额度——正常网页一次打开会并发打好几个接口，
+    #: burst 设得太小会把正常使用限死。
+    rate_limit_burst: int = 20
+    #: 限流桶的容量上限，超出按最久未用淘汰。
+    rate_limit_clients: int = 4096
 
     @classmethod
     def from_env(cls, env=None):
@@ -32,6 +39,9 @@ class Settings:
             cache_default_ttl=int(env.get('CACHE_DEFAULT_TTL', '300')),
             max_task_workers=int(env.get('MAX_TASK_WORKERS', '2')),
             executor_workers=int(env.get('EXECUTOR_WORKERS', '4')),
+            rate_limit_per_sec=float(env.get('RATE_LIMIT_PER_SEC', '0')),
+            rate_limit_burst=int(env.get('RATE_LIMIT_BURST', '20')),
+            rate_limit_clients=int(env.get('RATE_LIMIT_CLIENTS', '4096')),
         )
 
 

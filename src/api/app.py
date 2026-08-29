@@ -1,22 +1,38 @@
 import logging
+import pathlib
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+from src.api.auth import AuthSettings, build_session_manager, install_auth
 from src.api.deps import Settings, build_cache, build_database, get_executor, shutdown_executor
+from src.api.rate_limit import ClientRateLimiters, install_rate_limit
+from src.api.routers import auth as auth_routes
 from src.api.routers import health
 from src.foundation.tasks import TaskScheduler
 
 log = logging.getLogger('api.app')
 
 
-def create_app(settings=None):
+LOGIN_PAGE = pathlib.Path(__file__).resolve().parents[2] / 'web' / 'login.html'
+
+
+def create_app(settings=None, auth_settings=None):
     settings = settings or Settings.from_env()
+    auth_settings = auth_settings or AuthSettings.from_env()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         app.state.settings = settings
         app.state.cache = build_cache(settings)
+        # 会话存 L2：生产态是 Redis，跨进程重启保留，撤销也是真的撤销。
+        # 降级为内存时重启即全员登出——是预期行为，不是故障。
+        app.state.auth = auth_settings
+        app.state.sessions = build_session_manager(app.state.cache.l2, auth_settings)
+        if not auth_settings.enabled:
+            log.warning('鉴权未启用（未配置 FOOTBALL_USERS）——所有接口对外开放')
+        else:
+            log.info('鉴权已启用，用户: %s', ', '.join(sorted(auth_settings.credentials)))
         app.state.db = build_database(settings)
         # 本阶段不提交任何实际任务（业务预热任务属于后续阶段），仅完成装配：
         # 调度器创建后挂到 app.state，供健康检查观测；不调用 start()——
@@ -46,5 +62,34 @@ def create_app(settings=None):
         log.info('API 已停止')
 
     app = FastAPI(title='Football 预测服务', version='2.0.0', lifespan=lifespan)
+    # 登录页在建 app 时读一次。读不到不该让服务起不来——鉴权本身照常工作，
+    # 只是登录页显示一句提示（`/auth/login` 仍可直接调用）。
+    try:
+        app.state.login_page = LOGIN_PAGE.read_text(encoding='utf-8')
+    except OSError as exc:
+        log.error('登录页读取失败（%s）：%s', LOGIN_PAGE, exc)
+        app.state.login_page = '<!doctype html><meta charset="utf-8">登录页缺失'
+    app.state.auth = auth_settings
     app.include_router(health.router)
+    app.include_router(auth_routes.router)
+
+    # 中间件按**注册的逆序**执行：后注册的先跑。限流要排在鉴权前面，
+    # 否则未登录的洪水请求会先去查一遍会话（打 Redis）再被 401 挡下——
+    # 那正好是最不该在被攻击时做的事。
+    install_auth(app)
+    install_rate_limit(app, build_rate_limiters(settings))
     return app
+
+
+def build_rate_limiters(settings):
+    """限流器；未配置速率则返回 None（不限流）。"""
+    if settings.rate_limit_per_sec <= 0:
+        log.info('入站限流未启用（RATE_LIMIT_PER_SEC 未配置）')
+        return None
+    log.info('入站限流已启用：%.1f 次/秒，突发 %d',
+             settings.rate_limit_per_sec, settings.rate_limit_burst)
+    return ClientRateLimiters(
+        rate_per_sec=settings.rate_limit_per_sec,
+        burst=settings.rate_limit_burst,
+        maxsize=settings.rate_limit_clients,
+    )
