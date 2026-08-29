@@ -10,7 +10,7 @@ from src.api.auth import AuthSettings, build_session_manager, install_auth
 from src.api.deps import Settings, build_cache, build_database, get_executor, shutdown_executor
 from src.api.rate_limit import ClientRateLimiters, install_rate_limit
 from src.api.routers import auth as auth_routes
-from src.api.routers import basketball, beidan, health
+from src.api.routers import basketball, beidan, health, lottery
 from src.foundation.tasks import TaskScheduler
 
 log = logging.getLogger('api.app')
@@ -77,6 +77,7 @@ def create_app(settings=None, auth_settings=None):
     app.include_router(auth_routes.router)
     app.include_router(basketball.router)
     app.include_router(beidan.router)
+    app.include_router(lottery.router)
 
     # 中间件按**注册的逆序**执行：后注册的先跑。限流要排在鉴权前面，
     # 否则未登录的洪水请求会先去查一遍会话（打 Redis）再被 401 挡下——
