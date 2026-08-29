@@ -19,6 +19,7 @@ from urllib.parse import urlparse, parse_qs
 from pathlib import Path
 
 from src.common.logger import setup_logger
+from src.foundation.auth import parse_credentials
 from src.common.paths import data_path
 
 log = setup_logger('server')
@@ -40,21 +41,8 @@ HOST = os.environ.get('FOOTBALL_HOST', '0.0.0.0')  # 默认监听所有网卡；
 PORT = int(os.environ.get('FOOTBALL_PORT', '9004'))
 
 
-def _load_credentials():
-    """解析鉴权凭据为 {用户名: 密码}；无任何配置则返回空（不启用鉴权）"""
-    creds = {}
-    for pair in os.environ.get('FOOTBALL_USERS', '').split(','):
-        user, sep, pwd = pair.strip().partition(':')
-        if sep and user.strip() and pwd.strip():
-            creds[user.strip()] = pwd.strip()
-    single_user = os.environ.get('FOOTBALL_USER', '').strip()
-    single_pass = os.environ.get('FOOTBALL_PASS', '').strip()
-    if single_user and single_pass:
-        creds.setdefault(single_user, single_pass)
-    return creds
-
-
-CREDENTIALS = _load_credentials()
+# 解析逻辑住在底座，新旧两个入口共用同一份——各写一份必然会漂（判据 11）
+CREDENTIALS = parse_credentials(os.environ)
 
 
 AUTH_ENABLED = bool(CREDENTIALS)
