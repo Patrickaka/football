@@ -59,6 +59,16 @@ def _cached_prediction_logic_version(result: Dict) -> str:
     )
 
 
+def analysis_cache_key(match: Dict) -> str:
+    """一场比赛的分析缓存键。
+
+    **只读缓存的地方（BFF 首屏）必须和写入方共用这一份**：key 算错不会
+    报错，只会永远 miss——那个接口就变成一个永远返回"计算中"的空壳，
+    看起来在工作、实际什么也没做。
+    """
+    return f"{match['match_id']}_{match.get('home', '')}_{match.get('away', '')}"
+
+
 def _is_prediction_cache_current(result: Dict) -> bool:
     return _cached_prediction_logic_version(result) == FOOTBALL_PREDICTION_LOGIC_VERSION
 
@@ -343,7 +353,7 @@ def analyze_match(match, force_refresh=False):
     log.debug('分析比赛 %s vs %s (id=%s)', home, away, mid)
     
     # 尝试从缓存获取结果
-    cache_key = f"{mid}_{home}_{away}"
+    cache_key = analysis_cache_key(match)
     match_time = match.get('time', '')
     
     if force_refresh:

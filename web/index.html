@@ -1535,9 +1535,11 @@ function showError(text) {
 
 async function loadMatches() {
   loading('正在联网获取今日比赛列表…');
-  loadFootballProfessionalStatus();
   try {
-    const data = await fetchJson('/api/matches');
+    // 首屏走 BFF：一次拿到比赛列表、职业化状态、以及后台已经算好的预测。
+    // 后端只读缓存、绝不代跑分析，所以这一次请求很快；没算好的那几场
+    // 会如实列在 pending 里，由 loadAllPredictions 单独去补。
+    const data = await fetchJson('bff/football/home');
     if (data.error) {
       const source = data.source_status?.source || 'unknown';
       const errorType = data.error_type ? ` (${data.error_type})` : '';
@@ -1545,7 +1547,13 @@ async function loadMatches() {
     }
     allMatches = data.matches || [];
     if (!allMatches.length) return showError('未找到任何比赛数据，请稍后重试。');
-    await loadAllPredictions();
+    if (data.professional_status && !data.professional_status.error) {
+      footballProfessionalStatus = data.professional_status.result || data.professional_status;
+      renderFootballProfessionalStatus();
+    } else {
+      loadFootballProfessionalStatus();
+    }
+    await loadAllPredictions(data.predictions);
   } catch (e) {
     showError('网络请求失败：' + e.message);
   }
@@ -1982,7 +1990,7 @@ function buildBatchMatch(m) {
   };
 }
 
-async function loadAllPredictions() {
+async function loadAllPredictions(warmed) {
   loading('正在分析比赛数据…');
   allPredictions = [];
   footballAnalysisFailures = [];
@@ -1994,6 +2002,10 @@ async function loadAllPredictions() {
 
   // 按赛程下标占位，保证并发完成顺序不打乱列表顺序
   const slots = new Array(total).fill(null);
+
+  // BFF 已经把后台算好的那部分带回来了，直接填进占位槽——**这几场不必
+  // 再发请求**。首屏能立刻画出多少，取决于后台预热跑到哪儿。
+  const readyById = new Map((warmed?.ready || []).map(e => [String(e.match_id), e.result]));
   const doneResults = () => slots.filter(Boolean);
   let completed = 0;
   let cursor = 0;
@@ -2018,9 +2030,29 @@ async function loadAllPredictions() {
     if (renderTimer === null) renderTimer = setTimeout(paint, FOOTBALL_RENDER_INTERVAL_MS);
   };
 
+  let prefilled = 0;
+  allMatches.forEach((m, index) => {
+    const cached = readyById.get(String(m.match_id));
+    if (cached) {
+      slots[index] = { match: m, result: cached };
+      prefilled += 1;
+    }
+  });
+  if (prefilled) {
+    completed = prefilled;
+    renderFootballPredictions(slots.filter(Boolean));
+  }
+
+  // 只给没算好的那几场排批次
+  const remaining = allMatches
+    .map((m, index) => ({ match: m, index }))
+    .filter(({ index }) => !slots[index]);
+
   const chunks = [];
-  for (let start = 0; start < total; start += FOOTBALL_BATCH_SIZE) {
-    chunks.push({ start, matches: allMatches.slice(start, start + FOOTBALL_BATCH_SIZE) });
+  for (let start = 0; start < remaining.length; start += FOOTBALL_BATCH_SIZE) {
+    const slice = remaining.slice(start, start + FOOTBALL_BATCH_SIZE);
+    chunks.push({ start: slice[0].index, matches: slice.map(e => e.match),
+                  indexes: slice.map(e => e.index) });
   }
 
   const analyzeSingle = async (m, index) => {
@@ -2036,7 +2068,9 @@ async function loadAllPredictions() {
 
   // 整批失败（旧后端没有该接口、网关拦 POST、批量超时）时逐场重试，
   // 保证新前端配旧后端也能出结果，只是退回到原来的往返次数。
-  const analyzeChunk = async ({ start, matches }) => {
+  // **槽位用显式的 indexes，不能再用 start + offset**：BFF 预填之后
+  // 剩下要算的场次在赛程里不再连续，按偏移写会把结果落到别人的位置上。
+  const analyzeChunk = async ({ matches, indexes }) => {
     try {
       const data = await fetchJsonWithTimeout('/api/predict/batch', 60000, {
         method: 'POST',
@@ -2048,13 +2082,13 @@ async function loadAllPredictions() {
       }
       matches.forEach((m, offset) => {
         const entry = data.results[offset];
-        if (entry && !entry.error && entry.result) slots[start + offset] = { match: m, result: entry.result };
+        if (entry && !entry.error && entry.result) slots[indexes[offset]] = { match: m, result: entry.result };
         else footballAnalysisFailures.push({ match: m, reason: (entry && entry.error) || '未返回预测结果' });
       });
     } catch (e) {
       console.warn('批量预测失败，回退到单场请求:', e);
       for (let offset = 0; offset < matches.length; offset++) {
-        await analyzeSingle(matches[offset], start + offset);
+        await analyzeSingle(matches[offset], indexes[offset]);
       }
     }
     completed += matches.length;
