@@ -46,7 +46,6 @@ BASE_PARTS = dict(
     goal_dist_before_calibration=dict(DIST),
     half_full_time={'胜/胜': 0.2, '平/胜': 0.15},
     joint_anomaly={'level': 'none'},
-    k=3,
     lam_away=1.1, lam_home=1.5,
     league_profile={'avg_goals': 2.7, 'home_advantage': 0.3, 'league': '英超'},
     live_context={'lineup': {}},

@@ -1445,7 +1445,6 @@ def analyze_match(match, force_refresh=False):
         goal_dist_before_calibration=goal_dist_before_calibration,
         half_full_time=half_full_time,
         joint_anomaly=joint_anomaly,
-        k=k,
         lam_away=lam_away,
         lam_home=lam_home,
         league_profile=league_profile,
