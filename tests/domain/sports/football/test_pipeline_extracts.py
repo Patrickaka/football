@@ -20,6 +20,7 @@
 """
 import ast
 import gzip
+import inspect
 import json
 import pathlib
 import unittest
@@ -150,11 +151,60 @@ class AnalysisResult(unittest.TestCase):
         result = build_analysis_result(**deepcopy(BASE_PARTS))
         self.assertIn('accuracy_gate', result['lottery'])
 
+    def test_the_caller_supplies_exactly_the_declared_parameters(self):
+        """**调用处传的名字，必须在调用处真的存在。**
+
+        这条是补出来的：抽取时把 `k` 也列成了参数——它其实只是原代码里
+        推导式的局部变量（`{k: match.get(k) for k in (...)}`），
+        我的数据流分析把推导式的绑定当成了从外部读入的自由名。
+
+        于是 `pipeline.py` 里生成了 `k=k`，而 `analyze_match` 里根本没有 `k`。
+        **每次调用必抛 NameError**，被上层 try 吞成一行日志——线上一天报了
+        2450 次「时间分层预测异常」，足球分析实际全挂。
+
+        黄金、双跑差分、四十个部件的置空测试**全都没发现**：它们无一例外
+        地显式传了 `k=3`，谁也没去看调用处到底有没有这个名字。
+        """
+        import ast
+        import pathlib
+
+        signature = set(inspect.signature(build_analysis_result).parameters)
+        source = pathlib.Path('src/football/pipeline.py').read_text(encoding='utf-8')
+        caller = next(n for n in ast.walk(ast.parse(source))
+                      if isinstance(n, ast.Call)
+                      and getattr(n.func, 'id', None) == 'build_analysis_result')
+        passed = {kw.arg for kw in caller.keywords}
+        self.assertEqual(passed, signature,
+                         f'调用处与签名对不上: 多传 {passed - signature}, '
+                         f'少传 {signature - passed}')
+
+    def test_no_parameter_is_really_a_comprehension_variable(self):
+        """推导式的 `for x in ...` 绑定的是**局部**名字，不是外部入参。
+
+        把它当成参数，调用处就会去传一个根本不存在的变量。
+        """
+        import ast
+        import pathlib
+
+        tree = ast.parse(pathlib.Path(
+            'src/domain/sports/football/analysis_result.py').read_text(encoding='utf-8'))
+        function = next(n for n in tree.body if isinstance(n, ast.FunctionDef))
+        params = {a.arg for a in function.args.kwonlyargs + function.args.args}
+        bound_by_comprehensions = set()
+        for node in ast.walk(function):
+            if isinstance(node, (ast.ListComp, ast.SetComp,
+                                 ast.DictComp, ast.GeneratorExp)):
+                for generator in node.generators:
+                    for target in ast.walk(generator.target):
+                        if isinstance(target, ast.Name):
+                            bound_by_comprehensions.add(target.id)
+        self.assertEqual(params & bound_by_comprehensions, set())
+
     # 逐个部件 × 三种空值实测出来的分界（判据 10：读实测值，别按名字猜）
     BLANK_TOLERANT = frozenset({
         'calibration_effect', 'candidates', 'confidence', 'dixon_coles_result',
         'euro', 'euro_asian_dev', 'goal_dist_after_calibration',
-        'goal_dist_before_calibration', 'half_full_time', 'joint_anomaly', 'k',
+        'goal_dist_before_calibration', 'half_full_time', 'joint_anomaly',
         'lam_away', 'lam_home', 'league_profile', 'live_context',
         'live_context_quality', 'market_change_result', 'ml_result',
         'model_status', 'model_weights', 'probability_rank',
@@ -170,7 +220,7 @@ class AnalysisResult(unittest.TestCase):
         parts[key] = value
         return parts
 
-    def test_thirty_four_parts_survive_any_blank(self):
+    def test_thirty_three_parts_survive_any_blank(self):
         """**逐个置空**——上游降级不该让组装塌掉。四十个里三十四个全撑得住。"""
         for key in sorted(self.BLANK_TOLERANT):
             for blank in (None, {}, []):
@@ -182,7 +232,7 @@ class AnalysisResult(unittest.TestCase):
         classified = (self.BLANK_TOLERANT | self.DICT_ONLY
                       | self.NOT_A_LIST | self.MANDATORY)
         self.assertEqual(classified, set(BASE_PARTS))
-        self.assertEqual(len(classified), 40)
+        self.assertEqual(len(classified), 39)
 
     def test_four_parts_only_tolerate_an_empty_dict(self):
         """`asian`/`match`/`meta`/`lottery` 被直接 `.get` 或解包——
