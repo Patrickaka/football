@@ -4,10 +4,10 @@ import time
 
 # 这些符号原来通过 `import server` 的 re-export 取；旧入口删掉后
 # 直接引它们真正住的模块。
-from src.webapp import caching, jobs
-from src.webapp import caching as webapp_caching
-from src.webapp import jobs as webapp_jobs
-from src.webapp import lazy_modules as webapp_lazy
+from src.api.runtime import caching, jobs
+from src.api.runtime import caching as webapp_caching
+from src.api.runtime import jobs as webapp_jobs
+from src.api.runtime import lazy_modules as webapp_lazy
 
 
 class Server3DCacheVersionTests(unittest.TestCase):

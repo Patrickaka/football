@@ -12,7 +12,7 @@ L2 是 Redis，跨重启保留。
 """
 import logging
 
-log = logging.getLogger('webapp.kl8_cache')
+log = logging.getLogger('api.runtime.kl8_cache')
 
 # 一期的预测在下一期开奖前不会变，24 小时只是内存上限，不是有效期——
 # 真正的有效期由 key 里的期号决定。

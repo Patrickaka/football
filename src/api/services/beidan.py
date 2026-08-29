@@ -10,11 +10,11 @@ dict——**新旧两个入口共用同一份**（判据 11）。
 
 import logging
 
-from src.webapp.beidan_cache import (
+from src.api.runtime.beidan_cache import (
     beidan_cache_key, read_beidan_cache, refresh_beidan_async,
 )
-from src.webapp.jobs import finalize_beidan_recs
-from src.webapp.lazy_modules import _load_beidan_helpers
+from src.api.runtime.jobs import finalize_beidan_recs
+from src.api.runtime.lazy_modules import _load_beidan_helpers
 
 log = logging.getLogger('api.services.beidan')
 

@@ -13,7 +13,7 @@ from src.api.rate_limit import ClientRateLimiters, install_rate_limit
 from src.api.routers import auth as auth_routes
 from src.api.routers import basketball, beidan, football, health, kl8, lottery, pages
 from src.api import startup as startup_orchestration
-from src.webapp import background
+from src.api.runtime import background
 
 log = logging.getLogger('api.app')
 
@@ -41,7 +41,7 @@ def create_app(settings=None, auth_settings=None):
         # **用进程级的那一个调度器，不再另建一个**。原来这里建了个空的
         # `TaskScheduler` 只为让健康检查有东西可看——它永远 0 个任务、
         # 永远不 start()，是个纯粹的摆设。真正跑着三族周期任务的是
-        # `src.webapp.background` 的单例；健康检查要看的是那一个。
+        # `src.api.runtime.background` 的单例；健康检查要看的是那一个。
         app.state.tasks = background.scheduler()
         # get_executor 是模块级全局单例，只有首次调用的 workers 参数生效；
         # 必须在任何 run_blocking(...) 之前、在此显式用 settings.executor_workers

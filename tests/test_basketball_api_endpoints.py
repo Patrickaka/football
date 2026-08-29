@@ -9,7 +9,7 @@ import threading
 import unittest
 from unittest import mock
 
-from src.webapp import basketball_service
+from src.api.runtime import basketball_service
 from src.api.services import basketball as service
 
 
@@ -262,7 +262,7 @@ class OddsTrackingSchedulerTests(unittest.TestCase):
     """
 
     def setUp(self):
-        from src.webapp import background
+        from src.api.runtime import background
 
         basketball_service.reset()
         background.reset()
@@ -312,7 +312,7 @@ class OddsTrackingSchedulerTests(unittest.TestCase):
         self.assertIsNotNone(self._call(basketball_service.get_context))
 
     def test_registers_one_periodic_task(self):
-        from src.webapp import background
+        from src.api.runtime import background
 
         self._with_tracker(mock.Mock())
         self.assertTrue(self._call(basketball_service.register_odds_tracking))
@@ -320,7 +320,7 @@ class OddsTrackingSchedulerTests(unittest.TestCase):
 
     def test_registered_task_runs_after_start(self):
         """登记了却不跑，是这类接线最典型的无声失败。"""
-        from src.webapp import background
+        from src.api.runtime import background
 
         tracker = mock.Mock()
         ran = threading.Event()
@@ -338,7 +338,7 @@ class OddsTrackingSchedulerTests(unittest.TestCase):
 
     def test_not_registered_without_a_database(self):
         """采集的全部意义就是落盘。没有库就别假装在采。"""
-        from src.webapp import background
+        from src.api.runtime import background
 
         self._with_tracker(None)
         self.assertFalse(self._call(basketball_service.register_odds_tracking))

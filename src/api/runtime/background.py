@@ -18,7 +18,7 @@ import threading
 
 from src.foundation.tasks import TaskScheduler
 
-log = logging.getLogger('webapp.background')
+log = logging.getLogger('api.runtime.background')
 
 # 每个周期任务会长期占住一个 worker，所以这个数必须大于周期任务总数，
 # 否则一次性任务永远排不上队。当前六个：kl8 三个 + 篮球采样一个

@@ -8,18 +8,18 @@
 import logging
 import time
 
-from src.webapp.lazy_modules import (
+from src.api.runtime.lazy_modules import (
     clear_ml_cache, get_lottery_analyzer, predict_with_ml,
 )
-from src.webapp.caching import (
+from src.api.runtime.caching import (
     _CACHE, _compute_3d, _compute_3d_ml, _is_cache_valid,
 )
-from src.webapp.jobs import (
+from src.api.runtime.jobs import (
     LOTTERY_BACKGROUND_JOBS, LOTTERY_BACKGROUND_LOCK,
 )
-from src.webapp import caching as _caching_mod
-from src.webapp import jobs as _jobs_mod
-from src.webapp import lazy_modules as _lazy_mod
+from src.api.runtime import caching as _caching_mod
+from src.api.runtime import jobs as _jobs_mod
+from src.api.runtime import lazy_modules as _lazy_mod
 
 log = logging.getLogger('api.services.lottery')
 

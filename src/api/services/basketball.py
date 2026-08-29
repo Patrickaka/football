@@ -14,7 +14,7 @@ dict——**新旧两个入口共用同一份**，迁移期间各写一份必然
 
 import logging
 
-from src.webapp.basketball_service import get_context
+from src.api.runtime.basketball_service import get_context
 
 log = logging.getLogger('api.services.basketball')
 

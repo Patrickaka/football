@@ -21,10 +21,10 @@ from http.server import BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
 from pathlib import Path
 from src.common.paths import data_path
-from src.webapp import lazy_modules as _lazy_mod
-from src.webapp.lazy_modules import _import_backtest_modules, analyze_match, ensure_beidan_report, ensure_football_report, fetch_match_list, football_reportable_ids, get_match_list_status
-from src.webapp.jobs import _attach_bayes_report_url, _match_started, _trigger_football_analysis, _trigger_football_report_sync
-from src.webapp import jobs as _jobs_mod
+from src.api.runtime import lazy_modules as _lazy_mod
+from src.api.runtime.lazy_modules import _import_backtest_modules, analyze_match, ensure_beidan_report, ensure_football_report, fetch_match_list, football_reportable_ids, get_match_list_status
+from src.api.runtime.jobs import _attach_bayes_report_url, _match_started, _trigger_football_analysis, _trigger_football_report_sync
+from src.api.runtime import jobs as _jobs_mod
 
 log = logging.getLogger('api.services.football')
 

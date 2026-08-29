@@ -5,10 +5,10 @@ import time
 import unittest
 from unittest.mock import patch
 
-from src.webapp import caching, jobs
-from src.webapp import caching as webapp_caching
-from src.webapp import jobs as webapp_jobs
-from src.webapp import lazy_modules as webapp_lazy
+from src.api.runtime import caching, jobs
+from src.api.runtime import caching as webapp_caching
+from src.api.runtime import jobs as webapp_jobs
+from src.api.runtime import lazy_modules as webapp_lazy
 
 
 class ServerLotteryPerformanceTests(unittest.TestCase):

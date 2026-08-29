@@ -13,7 +13,7 @@ import unittest
 from unittest import mock
 
 from src.foundation.cache import Cache, MemoryBackend
-from src.webapp import kl8_cache
+from src.api.runtime import kl8_cache
 
 
 class CacheKeyTests(unittest.TestCase):
@@ -128,18 +128,18 @@ class PredictTests(unittest.TestCase):
 
 class SharedCacheTests(unittest.TestCase):
     def setUp(self):
-        from src.webapp import shared_cache
+        from src.api.runtime import shared_cache
 
         shared_cache.reset()
         self.addCleanup(shared_cache.reset)
 
     def test_is_a_process_singleton(self):
-        from src.webapp import shared_cache
+        from src.api.runtime import shared_cache
 
         self.assertIs(shared_cache.get_cache(), shared_cache.get_cache())
 
     def test_failure_degrades_to_none(self):
-        from src.webapp import shared_cache
+        from src.api.runtime import shared_cache
 
         with mock.patch('src.api.deps.build_cache', side_effect=RuntimeError('炸了')):
             shared_cache.reset()

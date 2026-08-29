@@ -71,7 +71,7 @@ class LifespanShutdownOrderTests(unittest.TestCase):
         # 关闭的是**进程级的那一个调度器**，不是 lifespan 里另建的对象。
         # 原来这里建了个空的 TaskScheduler 只为让健康检查有东西可看——
         # 永远 0 个任务、永远不 start()，是个摆设。现在 app.state.tasks
-        # 指向 `src.webapp.background` 的单例，关闭也走它。
+        # 指向 `src.api.runtime.background` 的单例，关闭也走它。
         def recording_background_shutdown(wait=True):
             order.append('tasks.shutdown')
 
