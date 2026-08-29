@@ -276,7 +276,10 @@ def predict_goal_counts_from_candidates(candidates: List[Tuple], max_goals: int 
         'matrix': prob_matrix.tolist() if NUMPY_AVAILABLE else prob_matrix,
         'sample_info': {
             'sample_count': sample_count,
-            'distance': round(distance, 2),
+            # `inf` 是"没找到匹配盘口"的**内部哨兵**，上面判 quality 时已经用完。
+            # 对外必须换成 None：JSON 没有 Infinity 字面量，输出它浏览器的
+            # `JSON.parse` 会直接抛错，整页数据都拿不到。
+            'distance': round(distance, 2) if math.isfinite(distance) else None,
             'blend_weight': round(history_weight, 3),
             'quality': quality,
             'warnings': sample_warnings

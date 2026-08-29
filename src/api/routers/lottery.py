@@ -9,7 +9,7 @@
 
 from fastapi import APIRouter
 
-from src.api.deps import json_result
+from src.api.deps import run_blocking
 from src.api.services import lottery as service
 
 router = APIRouter(tags=['lottery'])
@@ -17,12 +17,12 @@ router = APIRouter(tags=['lottery'])
 
 @router.get('/api/3d')
 async def lottery_3d():
-    return await json_result(service.lottery_3d_payload)
+    return await run_blocking(service.lottery_3d_payload)
 
 
 @router.get('/api/3d-ml')
 async def lottery_3d_ml():
-    return await json_result(service.lottery_3d_ml_payload)
+    return await run_blocking(service.lottery_3d_ml_payload)
 
 
 @router.get('/api/3d-refresh')
@@ -30,76 +30,76 @@ async def lottery_3d_refresh(backtest: str = '0'):
     """**`backtest` 收成字符串**：服务层认的是 `1/true/yes/on` 四个字面量。
     换成 FastAPI 的 `bool` 会连 `y`、`t` 一起认，那是悄悄放宽。
     """
-    return await json_result(service.lottery_3d_refresh_payload,
+    return await run_blocking(service.lottery_3d_refresh_payload,
                               {'backtest': [backtest]})
 
 
 @router.get('/api/ssq')
 async def ssq():
-    return await json_result(service.ssq_payload)
+    return await run_blocking(service.ssq_payload)
 
 
 @router.get('/api/ssq-refresh')
 async def ssq_refresh():
-    return await json_result(service.ssq_refresh_payload)
+    return await run_blocking(service.ssq_refresh_payload)
 
 
 @router.get('/api/lottery')
 async def lottery():
-    return await json_result(service.lottery_payload)
+    return await run_blocking(service.lottery_payload)
 
 
 @router.get('/api/lottery-refresh')
 async def lottery_refresh():
-    return await json_result(service.lottery_refresh_payload)
+    return await run_blocking(service.lottery_refresh_payload)
 
 
 @router.get('/api/lottery/task-status')
 async def task_status():
-    return await json_result(service.lottery_task_status_payload)
+    return await run_blocking(service.lottery_task_status_payload)
 
 
 @router.get('/api/lottery/recommend')
 async def recommend():
-    return await json_result(service.lottery_recommend_payload, {})
+    return await run_blocking(service.lottery_recommend_payload, {})
 
 
 @router.get('/api/lottery/rank')
 async def rank(top_n: int = 10):
-    return await json_result(service.lottery_rank_payload, {'top_n': [top_n]})
+    return await run_blocking(service.lottery_rank_payload, {'top_n': [top_n]})
 
 
 @router.get('/api/lottery/ensemble')
 async def ensemble():
-    return await json_result(service.lottery_ensemble_payload)
+    return await run_blocking(service.lottery_ensemble_payload)
 
 
 @router.get('/api/lottery/cycles')
 async def cycles():
-    return await json_result(service.lottery_cycles_payload)
+    return await run_blocking(service.lottery_cycles_payload)
 
 
 @router.get('/api/lottery/contribution')
 async def contribution():
-    return await json_result(service.lottery_contribution_payload)
+    return await run_blocking(service.lottery_contribution_payload)
 
 
 @router.get('/api/lottery/backtest')
 async def backtest(method: str = 'balanced', periods: int = 30):
-    return await json_result(service.lottery_backtest_payload,
+    return await run_blocking(service.lottery_backtest_payload,
                               {'method': [method], 'periods': [periods]})
 
 
 @router.get('/api/lottery/fetch')
 async def fetch():
-    return await json_result(service.lottery_fetch_payload)
+    return await run_blocking(service.lottery_fetch_payload)
 
 
 @router.get('/api/lottery/ml')
 async def lottery_ml():
-    return await json_result(service.lottery_ml_payload)
+    return await run_blocking(service.lottery_ml_payload)
 
 
 @router.get('/api/lottery/ml-refresh')
 async def lottery_ml_refresh():
-    return await json_result(service.lottery_ml_refresh_payload)
+    return await run_blocking(service.lottery_ml_refresh_payload)

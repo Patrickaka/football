@@ -19,6 +19,27 @@ from .readiness import build_match_evidence_profile
 log = logging.getLogger('domain.football.analysis_result')
 
 
+def _native(value):
+    """把 numpy 的标量与数组换成原生 Python 类型。
+
+    Dixon-Coles 的比分矩阵在**计算时**就该是 numpy——那是它该有的样子。
+    但它一旦进入对外的 `result`，就得是原生类型：JSON 序列化器不认识
+    `ndarray`，FastAPI 的 `jsonable_encoder` 撞上它直接 500。
+
+    转换放在**输出契约的构造点**，而不是响应层：响应层兜底等于承认
+    领域层可以吐任何东西，那种兜底一旦漏掉一条路由就是一个 500。
+    """
+    if hasattr(value, 'tolist') and not isinstance(value, (str, bytes, bytearray)):
+        return value.tolist()
+    if hasattr(value, 'item') and not isinstance(value, (str, bytes, bytearray, bool)):
+        return value.item()
+    if isinstance(value, dict):
+        return {key: _native(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_native(item) for item in value]
+    return value
+
+
 def build_analysis_result(*,
                             asian,
                             calibration_effect,
@@ -137,7 +158,7 @@ def build_analysis_result(*,
                 'after': goal_dist_after_calibration,
                 'calibrated': goal_dist_after_calibration is not None
             },
-            'dixon_coles': dixon_coles_result,
+            'dixon_coles': _native(dixon_coles_result),
             'ml': ml_result,
             'risk_level': {
                 'level': risk['level'],
