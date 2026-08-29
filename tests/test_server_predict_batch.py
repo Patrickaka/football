@@ -4,7 +4,9 @@ import unittest
 from unittest.mock import patch
 
 import server
-import src.webapp.football_api as football_api
+# 业务逻辑已迁至 `src.api.services.football`，新旧入口共用一份（判据 11）。
+# patch 要打在它现在住的地方——打在旧模块上不会报错，只是什么也没替换掉。
+import src.api.services.football as football_api
 
 
 def _handler():
