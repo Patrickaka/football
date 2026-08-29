@@ -161,34 +161,26 @@ class AppLifespan(unittest.TestCase):
         self.assertIs(background.scheduler(), scheduler)
 
 
-class SharedWithTheOldEntryPoint(unittest.TestCase):
+class TheOldEntryPointIsGone(unittest.TestCase):
+    """旧入口已删除（阶段 5-10a）。
 
-    def test_the_old_server_delegates_to_the_same_module(self):
-        import inspect
+    这一族原来断言"新旧两个入口共用同一份编排"——那是迁移期的保证。
+    旧入口没了之后，要盯的变成另一件事：**编排没有跟着一起被删掉**。
+    """
 
-        import server
-        source = inspect.getsource(server._start_background_sync)
-        self.assertIn('startup.register_background_tasks', source)
-        self.assertIn('startup.start_cache_warmups', source)
-        self.assertIn('startup.start_maintenance_schedule', source)
+    def test_the_old_server_module_is_gone(self):
+        import pathlib
+        self.assertFalse(pathlib.Path('server.py').exists())
+        with self.assertRaises(ModuleNotFoundError):
+            __import__('server')
 
-    def test_the_old_server_no_longer_has_its_own_copy(self):
-        """两份并存必然会漂——旧的那份编排已经删干净了。
-
-        **只看函数体**：`server.py` 顶部还有一大块 re-export
-        （`from src.webapp.caching import ... _warm_3d_caches`），
-        那是为了兼容 `import server` 的既有用法，不是重复实现。
-        按整个文件搜名字会把它误判成没删干净。
-        """
-        import inspect
-
-        import server
-        for function in (server._start_background_sync, server.main):
-            source = inspect.getsource(function)
-            for duplicated in ('register_kl8_tasks', 'register_odds_tracking',
-                               '_warm_3d_caches', 'run_maintenance('):
-                with self.subTest(function=function.__name__, name=duplicated):
-                    self.assertNotIn(duplicated, source)
+    def test_the_orchestration_survived_the_deletion(self):
+        """删旧入口时最容易连坐的就是它——那会让后台任务静静地不再登记。"""
+        for step in ('run_startup_maintenance', 'restore_persisted_caches',
+                     'register_background_tasks', 'start_cache_warmups',
+                     'start_maintenance_schedule', 'run_all'):
+            with self.subTest(step=step):
+                self.assertTrue(callable(getattr(startup, step, None)))
 
 
 if __name__ == '__main__':

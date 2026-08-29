@@ -3,6 +3,7 @@ import pathlib
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
+from starlette.middleware.gzip import GZipMiddleware
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
@@ -93,6 +94,17 @@ def create_app(settings=None, auth_settings=None):
     # 中间件按**注册的逆序**执行：后注册的先跑。限流要排在鉴权前面，
     # 否则未登录的洪水请求会先去查一遍会话（打 Redis）再被 401 挡下——
     # 那正好是最不该在被攻击时做的事。
+    # **接口返回的是高度重复的 JSON，压缩比能到数倍以上**（北单整页
+    # 332 KB → 45 KB，一次批量预测 456 KB），代价只有几毫秒 CPU。
+    # 旧入口一直在压，切过来时漏了——那是手机端能直接感觉到的降级，
+    # 而且不会有任何报错。
+    #
+    # **必须最先注册**（= 最内层，紧贴路由）：`@app.middleware('http')`
+    # 加的是 `BaseHTTPMiddleware`，它把响应转成流式、丢掉 `Content-Length`。
+    # GZip 拿不到长度就只能一律压缩，`minimum_size` 形同虚设——
+    # 8 字节的 `{"ok":1}` 也会被压，白白多出压缩头。
+    app.add_middleware(GZipMiddleware, minimum_size=settings.gzip_min_bytes,
+                       compresslevel=settings.gzip_level)
     install_auth(app)
     install_rate_limit(app, build_rate_limiters(settings))
     return app

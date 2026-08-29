@@ -29,6 +29,11 @@ class Settings:
     rate_limit_burst: int = 20
     #: 限流桶的容量上限，超出按最久未用淘汰。
     rate_limit_clients: int = 4096
+    #: 响应体超过这个字节数才压缩。小响应压了反而不划算（压缩头本身有开销），
+    #: 阈值照抄旧入口。
+    gzip_min_bytes: int = 1024
+    #: gzip 压缩级别，同样照抄旧入口。
+    gzip_level: int = 6
     #: 启动时是否执行编排（磁盘清理、后台任务、预热线程）。
     #:
     #: **字段默认 False、`from_env` 默认 True**，这个不对称是有意的：
@@ -51,6 +56,8 @@ class Settings:
             rate_limit_per_sec=float(env.get('RATE_LIMIT_PER_SEC', '0')),
             rate_limit_burst=int(env.get('RATE_LIMIT_BURST', '20')),
             rate_limit_clients=int(env.get('RATE_LIMIT_CLIENTS', '4096')),
+            gzip_min_bytes=int(env.get('JSON_GZIP_MIN_BYTES', '1024')),
+            gzip_level=int(env.get('JSON_GZIP_LEVEL', '6')),
             run_startup_tasks=env.get('RUN_STARTUP_TASKS', '1').strip().lower()
             not in ('0', 'false', 'no', 'off'),
         )

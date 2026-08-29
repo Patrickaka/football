@@ -140,20 +140,7 @@ class SlowRoutesStillWired(unittest.TestCase):
 
 class SharedImplementation(unittest.TestCase):
 
-    def test_the_old_mixin_forwards_to_the_service(self):
-        from src.webapp.kl8_api import KL8ApiMixin
-        with mock.patch.object(service, 'kl8_conflicts_payload',
-                               return_value={'sentinel': True}):
-            self.assertEqual(KL8ApiMixin()._kl8_conflicts_payload(), {'sentinel': True})
 
-    def test_the_helper_methods_kept_their_parameter_names(self):
-        """`_kl8_backfill_settlements(records)` 的形参名不能被机械改成
-        `params`——按关键字调用的地方会直接 TypeError。
-        """
-        import inspect
-        from src.webapp.kl8_api import KL8ApiMixin
-        signature = inspect.signature(KL8ApiMixin._kl8_backfill_settlements)
-        self.assertIn('records', signature.parameters)
 
     def test_no_lifted_function_kept_a_self_parameter(self):
         import ast

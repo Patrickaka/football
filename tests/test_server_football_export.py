@@ -1,13 +1,11 @@
 import unittest
 from unittest.mock import patch
 
-import server
+from src.api.services import football as service
 
 
 class ServerFootballExportTests(unittest.TestCase):
     def test_export_uses_full_prediction_snapshots(self):
-        handler = server.Handler.__new__(server.Handler)
-        handler._log = server.log
         full_record = {
             'match_id': 'full-1',
             'settled': True,
@@ -22,9 +20,10 @@ class ServerFootballExportTests(unittest.TestCase):
         ), patch(
             'src.football.result_sync.get_sync_status_summary', return_value={'settled': 1}
         ), patch.object(
-            handler, '_football_diagnostics_payload', return_value={'result': {'available_samples': 1}}
+            service, 'football_diagnostics_payload',
+            return_value={'result': {'available_samples': 1}}
         ):
-            payload = handler._predictions_export_payload()['result']
+            payload = service.predictions_export_payload()['result']
 
         self.assertEqual(payload['records'][0]['predicted_1x2']['H'], 0.55)
         self.assertEqual(payload['stats']['valid_1x2_predictions'], 1)

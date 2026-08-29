@@ -88,11 +88,14 @@ except Exception as e:
     HAS_SKLEARN = False
     log_import_sklearn_error = e
 
-if hasattr(sys.stdout, "reconfigure"):
-    try:
-        sys.stdout.reconfigure(encoding="utf-8")
-    except Exception:
-        pass
+# stdout 的编码由**进程入口**设置（`main.py`），不在库模块顶层做。
+# 放这里的代价：pytest 一旦有任何测试导入到本模块，就会把它的捕获流换掉，
+# 之后每个用例的 setup/teardown 都报 UnicodeDecodeError——**从那一刻起
+# 整套测试全红，而且看不出跟谁有关**。
+#
+# `try/except` 与 `hasattr` 挡不住这件事：`reconfigure` 在 pytest 下**会成功**，
+# 成功本身就是问题。同样的坑 `src/football/config.py` 与
+# `src/webapp/settings.py` 各踩过一次。
 
 # ===================== 常量配置 =====================
 FRONT_NUMBERS = list(range(1, 36))

@@ -10,12 +10,7 @@ import unittest
 from unittest import mock
 
 from src.webapp import basketball_service
-from src.webapp.basketball_api import BasketballApiMixin
-
-
-class _Handler(BasketballApiMixin):
-    def __init__(self):
-        self._log = logging.getLogger('test.basketball_api')
+from src.api.services import basketball as service
 
 
 ANALYSIS = {
@@ -65,7 +60,6 @@ def _context(prediction=None, tracker=None, history=None):
 
 class _Base(unittest.TestCase):
     def setUp(self):
-        self.handler = _Handler()
         self.addCleanup(basketball_service.reset)
 
     def _with(self, ctx):
@@ -85,7 +79,7 @@ class RecommendationEndpointTests(_Base):
         prediction.generate.return_value = PAYLOAD
         self.prediction = prediction
         self._with(_context(prediction=prediction))
-        return self.handler._basketball_payload(params or {})
+        return service.basketball_payload(params or {})
 
     def test_response_shape_is_unchanged(self):
         result = self._payload()['result']
@@ -132,7 +126,7 @@ class RecommendationEndpointTests(_Base):
         }]
         prediction.generate.return_value = payload
         self._with(_context(prediction=prediction))
-        match = self.handler._basketball_payload({})['result']['matches'][0]
+        match = service.basketball_payload({})['result']['matches'][0]
         self.assertEqual(match['spf'], {'error': 'missing_odds'})
         self.assertEqual(match['rqspf'], {'error': 'no_data'})
         self.assertFalse(match['official_open'])
@@ -141,7 +135,7 @@ class RecommendationEndpointTests(_Base):
         prediction = mock.Mock()
         prediction.generate.side_effect = RuntimeError('炸了')
         self._with(_context(prediction=prediction))
-        self.assertIn('error', self.handler._basketball_payload({}))
+        self.assertIn('error', service.basketball_payload({}))
 
 
 class ScheduleEndpointTests(_Base):
@@ -149,7 +143,7 @@ class ScheduleEndpointTests(_Base):
         prediction = mock.Mock()
         prediction.fetch_schedule.return_value = SCHEDULE
         self._with(_context(prediction=prediction))
-        self.assertEqual(self.handler._basketball_matches_payload({}),
+        self.assertEqual(service.basketball_matches_payload({}),
                          {'matches': SCHEDULE})
         prediction.fetch_schedule.assert_called_once_with(date=None)
 
@@ -157,7 +151,7 @@ class ScheduleEndpointTests(_Base):
         prediction = mock.Mock()
         prediction.fetch_schedule.side_effect = IOError('源站挂了')
         self._with(_context(prediction=prediction))
-        self.assertIn('error', self.handler._basketball_matches_payload({}))
+        self.assertIn('error', service.basketball_matches_payload({}))
 
 
 class ValueBetEndpointTests(_Base):
@@ -165,8 +159,8 @@ class ValueBetEndpointTests(_Base):
         prediction = mock.Mock()
         prediction.generate.return_value = PAYLOAD
         self._with(_context(prediction=prediction))
-        loose = self.handler._basketball_value_payload({'threshold': ['0.0']})
-        strict = self.handler._basketball_value_payload({'threshold': ['0.9']})
+        loose = service.basketball_value_payload({'threshold': ['0.0']})
+        strict = service.basketball_value_payload({'threshold': ['0.9']})
         self.assertTrue(loose['result'])
         self.assertEqual(strict['result'], [])
 
@@ -174,7 +168,7 @@ class ValueBetEndpointTests(_Base):
         prediction = mock.Mock()
         prediction.generate.side_effect = RuntimeError('炸了')
         self._with(_context(prediction=prediction))
-        self.assertIn('error', self.handler._basketball_value_payload({}))
+        self.assertIn('error', service.basketball_value_payload({}))
 
 
 class TrackEndpointTests(_Base):
@@ -182,20 +176,20 @@ class TrackEndpointTests(_Base):
         tracker = mock.Mock()
         tracker.track.return_value = 7
         self._with(_context(tracker=tracker))
-        result = self.handler._basketball_track_payload({'date': ['2026-08-27']})
+        result = service.basketball_track_payload({'date': ['2026-08-27']})
         self.assertEqual(result['result'], {'tracked': 7, 'date': '2026-08-27'})
         tracker.track.assert_called_once_with('2026-08-27')
 
     def test_reports_when_the_database_is_missing(self):
         """采集的全部意义就是落盘，没有库时明说，而不是假装采集成功。"""
         self._with(_context(tracker=None))
-        self.assertIn('error', self.handler._basketball_track_payload({}))
+        self.assertIn('error', service.basketball_track_payload({}))
 
     def test_failure_is_reported_not_raised(self):
         tracker = mock.Mock()
         tracker.track.side_effect = IOError('库挂了')
         self._with(_context(tracker=tracker))
-        self.assertIn('error', self.handler._basketball_track_payload({}))
+        self.assertIn('error', service.basketball_track_payload({}))
 
 
 class MovementEndpointTests(_Base):
@@ -210,14 +204,14 @@ class MovementEndpointTests(_Base):
         「这一场的快照」和「所有场次的字典」。"""
         store = self._store()
         self._with(_context(history=store))
-        result = self.handler._basketball_movement_payload({'match_id': ['m1']})
+        result = service.basketball_movement_payload({'match_id': ['m1']})
         self.assertEqual(result['result']['match_id'], 'm1')
         self.assertEqual(result['result']['snapshots'], SNAPSHOTS['m1'])
         store.load.assert_not_called()
 
     def test_summary_reports_the_move_per_match(self):
         self._with(_context(history=self._store()))
-        detail = self.handler._basketball_movement_payload({})['result']['detail']
+        detail = service.basketball_movement_payload({})['result']['detail']
         by_id = {d['match_id']: d for d in detail}
         self.assertAlmostEqual(by_id['m1']['spf_home_move'], -0.3)
         self.assertAlmostEqual(by_id['m1']['spf_away_move'], 0.3)
@@ -226,7 +220,7 @@ class MovementEndpointTests(_Base):
 
     def test_reports_when_the_database_is_missing(self):
         self._with(_context(history=None))
-        self.assertIn('error', self.handler._basketball_movement_payload({}))
+        self.assertIn('error', service.basketball_movement_payload({}))
 
 
 class ContextTests(unittest.TestCase):
