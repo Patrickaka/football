@@ -11,7 +11,9 @@ from datetime import datetime, timedelta
 from unittest.mock import patch
 
 import server
-import src.webapp.beidan_api as beidan_api
+# 业务逻辑已迁至 `src.api.services.beidan`，新旧入口共用一份（判据 11）。
+# patch 要打在它现在住的地方——打在旧模块上不会报错，只是什么也没替换掉。
+import src.api.services.beidan as beidan_api
 import src.webapp.beidan_cache as beidan_cache
 from src.foundation.cache import Cache, MemoryBackend
 from src.webapp.beidan_cache import (
