@@ -11,7 +11,7 @@
 
 from fastapi import APIRouter, Depends
 
-from src.api.deps import json_result, query_params
+from src.api.deps import query_params, run_blocking
 from src.api.services import kl8 as service
 
 router = APIRouter(tags=['kl8'])
@@ -19,69 +19,69 @@ router = APIRouter(tags=['kl8'])
 
 @router.get('/api/kl8')
 async def kl8():
-    return await json_result(service.kl8_payload)
+    return await run_blocking(service.kl8_payload)
 
 
 @router.get('/api/kl8-refresh')
 async def refresh():
-    return await json_result(service.kl8_refresh_payload)
+    return await run_blocking(service.kl8_refresh_payload)
 
 
 @router.get('/api/kl8/fetch')
 async def fetch():
-    return await json_result(service.kl8_fetch_payload)
+    return await run_blocking(service.kl8_fetch_payload)
 
 
 @router.get('/api/kl8/exclude-recalculate')
 async def exclude_recalculate(params: dict = Depends(query_params)):
-    return await json_result(service.kl8_exclude_recalculate_payload, params)
+    return await run_blocking(service.kl8_exclude_recalculate_payload, params)
 
 
 @router.get('/api/kl8/snapshots')
 async def snapshots():
-    return await json_result(service.kl8_snapshots_payload)
+    return await run_blocking(service.kl8_snapshots_payload)
 
 
 @router.get('/api/kl8/records')
 async def records():
-    return await json_result(service.kl8_records_payload)
+    return await run_blocking(service.kl8_records_payload)
 
 
 @router.get('/api/kl8/settle')
 async def settle(params: dict = Depends(query_params)):
-    return await json_result(service.kl8_settle_payload, params)
+    return await run_blocking(service.kl8_settle_payload, params)
 
 
 @router.get('/api/kl8/backtest')
 async def backtest(params: dict = Depends(query_params)):
-    return await json_result(service.kl8_backtest_payload, params)
+    return await run_blocking(service.kl8_backtest_payload, params)
 
 
 @router.get('/api/kl8/parameter-search')
 async def parameter_search(params: dict = Depends(query_params)):
-    return await json_result(service.kl8_parameter_search_payload, params)
+    return await run_blocking(service.kl8_parameter_search_payload, params)
 
 
 @router.get('/api/kl8/parameter-search/start')
 async def parameter_search_start(params: dict = Depends(query_params)):
-    return await json_result(service.kl8_parameter_search_start_payload, params)
+    return await run_blocking(service.kl8_parameter_search_start_payload, params)
 
 
 @router.get('/api/kl8/parameter-search/status')
 async def parameter_search_status(params: dict = Depends(query_params)):
-    return await json_result(service.kl8_parameter_search_status_payload, params)
+    return await run_blocking(service.kl8_parameter_search_status_payload, params)
 
 
 @router.get('/api/kl8/integrity')
 async def integrity():
-    return await json_result(service.kl8_integrity_payload)
+    return await run_blocking(service.kl8_integrity_payload)
 
 
 @router.get('/api/kl8/conflicts')
 async def conflicts():
-    return await json_result(service.kl8_conflicts_payload)
+    return await run_blocking(service.kl8_conflicts_payload)
 
 
 @router.get('/api/kl8/activate')
 async def activate(params: dict = Depends(query_params)):
-    return await json_result(service.kl8_activate_payload, params)
+    return await run_blocking(service.kl8_activate_payload, params)

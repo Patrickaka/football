@@ -160,22 +160,6 @@ async def run_blocking(fn, *args, **kwargs):
     return await loop.run_in_executor(get_executor(), fn, *args)
 
 
-async def json_result(fn, *args, **kwargs):
-    """把同步重活的返回值算完并**直接包成 Response**。
-
-    路由不能 `return payload`：FastAPI 会先拿 `jsonable_encoder` 处理一遍，
-    而它处理不了这个项目的 numpy 标量/数组与带 `to_dict` 的对象，直接 500。
-    **`default_response_class` 挡不住这一步**——那只管最后的渲染，
-    `jsonable_encoder` 在它之前就跑完了。
-
-    FastAPI 的规则是：路由函数返回 `Response` 实例时原样使用、不再加工。
-    所以唯一可靠的做法是在这里就包好。
-    """
-    from src.api.responses import SanitizedJSONResponse
-
-    return SanitizedJSONResponse(content=await run_blocking(fn, *args, **kwargs))
-
-
 def shutdown_executor():
     global _executor
     if _executor is not None:

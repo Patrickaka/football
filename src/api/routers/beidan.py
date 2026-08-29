@@ -13,7 +13,7 @@ from typing import Optional
 
 from fastapi import APIRouter
 
-from src.api.deps import json_result
+from src.api.deps import run_blocking
 from src.api.services import beidan as service
 
 router = APIRouter(prefix='/api/beidan', tags=['beidan'])
@@ -25,7 +25,7 @@ async def recommendations(date: Optional[str] = None,
                           source: str = 'okooo',
                           force_refresh: str = 'false'):
     """北单推荐预测。"""
-    return await json_result(service.beidan_payload, {
+    return await run_blocking(service.beidan_payload, {
         'date': [date], 'types': [types], 'source': [source],
         'force_refresh': [force_refresh],
     })
@@ -34,7 +34,7 @@ async def recommendations(date: Optional[str] = None,
 @router.get('/matches')
 async def matches(date: Optional[str] = None, source: str = 'okooo'):
     """比赛列表。"""
-    return await json_result(service.beidan_matches_payload,
+    return await run_blocking(service.beidan_matches_payload,
                               {'date': [date], 'source': [source]})
 
 
@@ -42,7 +42,7 @@ async def matches(date: Optional[str] = None, source: str = 'okooo'):
 async def value_bets(date: Optional[str] = None, source: str = 'okooo',
                      threshold: float = 0.05):
     """价值投注推荐。"""
-    return await json_result(service.beidan_value_payload,
+    return await run_blocking(service.beidan_value_payload,
                               {'date': [date], 'source': [source],
                                'threshold': [threshold]})
 
@@ -50,4 +50,4 @@ async def value_bets(date: Optional[str] = None, source: str = 'okooo',
 @router.get('/history')
 async def history(limit: int = 200):
     """历史推荐汇总。"""
-    return await json_result(service.beidan_history_payload, {'limit': [limit]})
+    return await run_blocking(service.beidan_history_payload, {'limit': [limit]})
