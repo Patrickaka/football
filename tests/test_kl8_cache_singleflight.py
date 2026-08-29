@@ -22,12 +22,9 @@ import unittest
 from unittest.mock import patch
 
 from src.foundation.cache import Cache, MemoryBackend
-from src.webapp.kl8_api import KL8ApiMixin
+from src.api.services import kl8 as service
 
 
-class _StubHandler(KL8ApiMixin):
-    def __init__(self):
-        self._log = logging.getLogger('kl8-cache-test')
 
 
 class _StubAnalyzer:
@@ -45,7 +42,6 @@ def _result(issue, version='v-test'):
 
 class _Base(unittest.TestCase):
     def setUp(self):
-        self.handler = _StubHandler()
         # 每个用例一份独立缓存：共享单例会让上一个用例算出的值漏到下一个，
         # 表现为「明明打了桩却拿到别的结果」。
         self.cache = Cache(l1=MemoryBackend(), l2=MemoryBackend(),
@@ -64,7 +60,7 @@ class _Base(unittest.TestCase):
     def _payload(self, predict, issue, version='v-test'):
         p1, p2, p3, p4 = self._patches(predict, issue, version)
         with p1, p2, p3, p4:
-            return self.handler._kl8_payload()
+            return service.kl8_payload()
 
 
 class SingleFlightTests(_Base):
@@ -83,7 +79,7 @@ class SingleFlightTests(_Base):
 
         def worker():
             barrier.wait()
-            results.append(self.handler._kl8_payload())
+            results.append(service.kl8_payload())
 
         with p1, p2, p3, p4:
             threads = [threading.Thread(target=worker) for _ in range(5)]

@@ -1,19 +1,18 @@
+import logging
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-import server
-from src.webapp import caching as webapp_caching
-from src.webapp import jobs as webapp_jobs
-from src.webapp import lazy_modules as webapp_lazy
+from src.api.services import football as service
+from src.api.runtime import caching as webapp_caching
+from src.api.runtime import jobs as webapp_jobs
+from src.api.runtime import lazy_modules as webapp_lazy
 
 
 class ServerProfessionalStatusTests(unittest.TestCase):
     def test_status_exposes_honest_production_gate(self):
-        handler = server.Handler.__new__(server.Handler)
-        handler._log = server.log
-        payload = handler._football_professional_status_payload()
+        payload = service.football_professional_status_payload()
         self.assertNotIn('error', payload)
         result = payload['result']
         self.assertEqual(result['schema_version'], 'football-professional-status-v1')
@@ -30,11 +29,9 @@ class ServerProfessionalStatusTests(unittest.TestCase):
         self.assertIn('market_timing', result['monitoring'])
 
     def test_status_uses_bundled_baseline_without_report_file(self):
-        handler = server.Handler.__new__(server.Handler)
-        handler._log = server.log
         with TemporaryDirectory() as temp_dir:
             with patch.object(webapp_jobs, 'REPORTS_DIR', Path(temp_dir)):
-                payload = handler._football_professional_status_payload()
+                payload = service.football_professional_status_payload()
         result = payload['result']
         self.assertEqual(result['out_of_sample_n'], 1804)
         self.assertEqual(result['validation_source'], 'bundled_audited_baseline')

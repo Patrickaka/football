@@ -1,17 +1,16 @@
+from src.api.services import football as service
+import logging
 """批量预测接口：顺序、错误隔离、入参归一化与限额"""
 
 import unittest
 from unittest.mock import patch
 
-import server
 # 业务逻辑已迁至 `src.api.services.football`，新旧入口共用一份（判据 11）。
 # patch 要打在它现在住的地方——打在旧模块上不会报错，只是什么也没替换掉。
 import src.api.services.football as football_api
 
 
 def _handler():
-    handler = server.Handler.__new__(server.Handler)
-    handler._log = server.log
     return handler
 
 
@@ -22,14 +21,12 @@ def _match(match_id, **extra):
 
 
 class PredictBatchPayloadTests(unittest.TestCase):
-    def setUp(self):
-        self.handler = _handler()
 
     def test_results_follow_input_order(self):
         matches = [_match(str(i)) for i in range(5)]
         with patch.object(football_api, 'analyze_match',
                           side_effect=lambda m, force_refresh=False: {'id': m['match_id']}):
-            payload = self.handler._predict_batch_payload({'matches': matches})
+            payload = service.predict_batch_payload({'matches': matches})
 
         self.assertEqual([entry['match_id'] for entry in payload['results']],
                          ['0', '1', '2', '3', '4'])
@@ -44,7 +41,7 @@ class PredictBatchPayloadTests(unittest.TestCase):
 
         matches = [_match(str(i)) for i in range(4)]
         with patch.object(football_api, 'analyze_match', side_effect=flaky):
-            results = self.handler._predict_batch_payload({'matches': matches})['results']
+            results = service.predict_batch_payload({'matches': matches})['results']
 
         self.assertEqual(results[2]['error'], '亚盘数据获取失败')
         self.assertNotIn('result', results[2])
@@ -57,7 +54,7 @@ class PredictBatchPayloadTests(unittest.TestCase):
             return {'id': match['match_id']}
 
         with patch.object(football_api, 'analyze_match', side_effect=boom):
-            results = self.handler._predict_batch_payload(
+            results = service.predict_batch_payload(
                 {'matches': [_match('0'), _match('1')]})['results']
 
         self.assertIn('数据库连接断开', results[1]['error'])
@@ -67,7 +64,7 @@ class PredictBatchPayloadTests(unittest.TestCase):
         seen = []
         with patch.object(football_api, 'analyze_match',
                           side_effect=lambda m, force_refresh=False: seen.append(force_refresh) or {}):
-            self.handler._predict_batch_payload({'matches': [_match('1')], 'force_refresh': True})
+            service.predict_batch_payload({'matches': [_match('1')], 'force_refresh': True})
         self.assertEqual(seen, [True])
 
     def test_batch_and_single_build_the_same_match(self):
@@ -80,8 +77,8 @@ class PredictBatchPayloadTests(unittest.TestCase):
                      okooo_id='ok9', schedule_source='500')
         with patch.object(football_api, 'analyze_match',
                           side_effect=lambda m, force_refresh=False: captured.append(m) or {}):
-            self.handler._predict_batch_payload({'matches': [raw]})
-            self.handler._predict_payload({
+            service.predict_batch_payload({'matches': [raw]})
+            service.predict_payload({
                 'match_id': ['99'], 'home': ['主99'], 'away': ['客99'],
                 'league': ['英超'], 'time': ['08-21 22:00'], 'num': ['周三201'],
                 'lottery_handicap': ['-1'], 'lottery_source': ['available'],
@@ -95,14 +92,14 @@ class PredictBatchPayloadTests(unittest.TestCase):
 
     def test_rejects_batch_over_limit(self):
         oversized = [_match(str(i)) for i in range(football_api.FOOTBALL_BATCH_LIMIT + 1)]
-        payload = self.handler._predict_batch_payload({'matches': oversized})
+        payload = service.predict_batch_payload({'matches': oversized})
         self.assertIn('单批最多', payload['error'])
         self.assertNotIn('results', payload)
 
     def test_rejects_malformed_body(self):
         for body in (None, [], 'x', {}, {'matches': []}, {'matches': 'abc'}, {'matches': ['x', 1]}):
             with self.subTest(body=body):
-                payload = self.handler._predict_batch_payload(body)
+                payload = service.predict_batch_payload(body)
                 self.assertIn('error', payload)
                 self.assertNotIn('results', payload)
 

@@ -3,6 +3,7 @@ import pathlib
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
+from starlette.middleware.gzip import GZipMiddleware
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
@@ -12,7 +13,7 @@ from src.api.rate_limit import ClientRateLimiters, install_rate_limit
 from src.api.routers import auth as auth_routes
 from src.api.routers import basketball, beidan, football, health, kl8, lottery, pages
 from src.api import startup as startup_orchestration
-from src.webapp import background
+from src.api.runtime import background
 
 log = logging.getLogger('api.app')
 
@@ -40,7 +41,7 @@ def create_app(settings=None, auth_settings=None):
         # **用进程级的那一个调度器，不再另建一个**。原来这里建了个空的
         # `TaskScheduler` 只为让健康检查有东西可看——它永远 0 个任务、
         # 永远不 start()，是个纯粹的摆设。真正跑着三族周期任务的是
-        # `src.webapp.background` 的单例；健康检查要看的是那一个。
+        # `src.api.runtime.background` 的单例；健康检查要看的是那一个。
         app.state.tasks = background.scheduler()
         # get_executor 是模块级全局单例，只有首次调用的 workers 参数生效；
         # 必须在任何 run_blocking(...) 之前、在此显式用 settings.executor_workers
@@ -93,6 +94,17 @@ def create_app(settings=None, auth_settings=None):
     # 中间件按**注册的逆序**执行：后注册的先跑。限流要排在鉴权前面，
     # 否则未登录的洪水请求会先去查一遍会话（打 Redis）再被 401 挡下——
     # 那正好是最不该在被攻击时做的事。
+    # **接口返回的是高度重复的 JSON，压缩比能到数倍以上**（北单整页
+    # 332 KB → 45 KB，一次批量预测 456 KB），代价只有几毫秒 CPU。
+    # 旧入口一直在压，切过来时漏了——那是手机端能直接感觉到的降级，
+    # 而且不会有任何报错。
+    #
+    # **必须最先注册**（= 最内层，紧贴路由）：`@app.middleware('http')`
+    # 加的是 `BaseHTTPMiddleware`，它把响应转成流式、丢掉 `Content-Length`。
+    # GZip 拿不到长度就只能一律压缩，`minimum_size` 形同虚设——
+    # 8 字节的 `{"ok":1}` 也会被压，白白多出压缩头。
+    app.add_middleware(GZipMiddleware, minimum_size=settings.gzip_min_bytes,
+                       compresslevel=settings.gzip_level)
     install_auth(app)
     install_rate_limit(app, build_rate_limiters(settings))
     return app

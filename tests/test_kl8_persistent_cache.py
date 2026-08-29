@@ -8,11 +8,12 @@
 再判断。新开奖或版本变更自然产生新 key，旧值随 TTL 自行淘汰——比「读回来
 逐字段校验版本，不符就丢掉」少一整条容易出错的路径。
 """
+from src.api.services import kl8 as service
 import unittest
 from unittest import mock
 
 from src.foundation.cache import Cache, MemoryBackend
-from src.webapp import kl8_cache
+from src.api.runtime import kl8_cache
 
 
 class CacheKeyTests(unittest.TestCase):
@@ -127,18 +128,18 @@ class PredictTests(unittest.TestCase):
 
 class SharedCacheTests(unittest.TestCase):
     def setUp(self):
-        from src.webapp import shared_cache
+        from src.api.runtime import shared_cache
 
         shared_cache.reset()
         self.addCleanup(shared_cache.reset)
 
     def test_is_a_process_singleton(self):
-        from src.webapp import shared_cache
+        from src.api.runtime import shared_cache
 
         self.assertIs(shared_cache.get_cache(), shared_cache.get_cache())
 
     def test_failure_degrades_to_none(self):
-        from src.webapp import shared_cache
+        from src.api.runtime import shared_cache
 
         with mock.patch('src.api.deps.build_cache', side_effect=RuntimeError('炸了')):
             shared_cache.reset()
@@ -152,16 +153,6 @@ if __name__ == '__main__':
 class EndpointWiringTests(unittest.TestCase):
     """端点接线：算错 key 不会报错，只会安静地返回上一期的预测。"""
 
-    def setUp(self):
-        import logging
-
-        from src.webapp.kl8_api import KL8ApiMixin
-
-        class _Handler(KL8ApiMixin):
-            def __init__(self):
-                self._log = logging.getLogger('test.kl8')
-
-        self.handler = _Handler()
 
     def _with_analyzer(self, history):
         analyzer = mock.Mock()
@@ -170,17 +161,17 @@ class EndpointWiringTests(unittest.TestCase):
 
     def test_latest_issue_comes_from_the_analyzer(self):
         with self._with_analyzer([{'issue': '2026227'}, {'issue': '2026226'}]):
-            self.assertEqual(self.handler._kl8_latest_issue(), '2026227')
+            self.assertEqual(service.kl8_latest_issue(), '2026227')
 
     def test_empty_history_yields_no_issue(self):
         with self._with_analyzer([]):
-            self.assertEqual(self.handler._kl8_latest_issue(), '')
+            self.assertEqual(service.kl8_latest_issue(), '')
 
     def test_analyzer_failure_yields_no_issue(self):
         """取不到期号就绕过缓存，而不是让端点失败。"""
         with mock.patch('src.api.services.kl8.get_kl8_analyzer',
                         side_effect=RuntimeError('历史没加载')):
-            self.assertEqual(self.handler._kl8_latest_issue(), '')
+            self.assertEqual(service.kl8_latest_issue(), '')
 
     def test_payload_caches_by_issue(self):
         calls = []
@@ -191,8 +182,8 @@ class EndpointWiringTests(unittest.TestCase):
                         lambda: 'v9.3'), \
              mock.patch('src.api.services.kl8.kl8_run_prediction',
                         lambda force_refresh=False: calls.append(1) or {'ok': True}):
-            first = self.handler._kl8_payload()
-            second = self.handler._kl8_payload()
+            first = service.kl8_payload()
+            second = service.kl8_payload()
         self.assertEqual(first, {'result': {'ok': True}})
         self.assertEqual(first, second)
         self.assertEqual(len(calls), 1)
@@ -205,4 +196,4 @@ class EndpointWiringTests(unittest.TestCase):
                         lambda: 'v9.3'), \
              mock.patch('src.api.services.kl8.kl8_run_prediction',
                         lambda force_refresh=False: {'error': '数据不足'}):
-            self.assertIn('error', self.handler._kl8_payload())
+            self.assertIn('error', service.kl8_payload())

@@ -104,12 +104,6 @@ class ReportFileServing(unittest.TestCase):
             self.assertEqual(response.status_code, 200)
             self.assertIn('探针', response.text)
 
-    def test_the_old_entry_point_still_serves_files_itself(self):
-        """旧入口的 `_serve_report_file` **留在原处**——它写的是
-        `self.wfile`，两边各自处理自己那套响应机制。
-        """
-        from src.webapp.football_api import FootballApiMixin
-        self.assertTrue(hasattr(FootballApiMixin, '_serve_report_file'))
 
 
 class BatchPrediction(unittest.TestCase):
@@ -171,12 +165,6 @@ class SideEffectRoutesStillWired(unittest.TestCase):
 
 class SharedImplementation(unittest.TestCase):
 
-    def test_the_old_mixin_forwards_to_the_service(self):
-        from src.webapp.football_api import FootballApiMixin
-        with mock.patch.object(service, 'sync_status_payload',
-                               return_value={'sentinel': True}):
-            self.assertEqual(FootballApiMixin()._sync_status_payload(),
-                             {'sentinel': True})
 
     def test_no_lifted_function_kept_a_self_parameter(self):
         import ast

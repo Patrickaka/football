@@ -113,14 +113,6 @@ class Routing(unittest.TestCase):
         app = create_app(auth_settings=AuthSettings(credentials={}))
         self.assertIn('/healthz', app.openapi()['paths'])
 
-    def test_the_service_still_backs_the_old_mixin(self):
-        """旧入口必须仍然走同一份实现，否则迁移期间两边会漂。"""
-        from src.webapp.basketball_api import BasketballApiMixin
-        with mock.patch.object(service, 'basketball_matches_payload',
-                               return_value={'sentinel': True}) as spy:
-            self.assertEqual(
-                BasketballApiMixin()._basketball_matches_payload({}), {'sentinel': True})
-        self.assertTrue(spy.called)
 
     def test_basketball_routes_need_a_session_when_auth_is_on(self):
         """业务路由**不在豁免清单里**——加路由时别顺手把它放进去。"""

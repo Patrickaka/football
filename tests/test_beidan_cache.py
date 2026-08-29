@@ -1,3 +1,5 @@
+from src.api.services import beidan as service
+import logging
 """北单缓存：键构造、刷新档位，以及「有缓存绝不阻塞请求」这条硬约束
 
 线上曾因整页重算 160 秒超过网关超时而 504：缓存按最早开赛场次判过期，
@@ -10,13 +12,12 @@ import unittest
 from datetime import datetime, timedelta
 from unittest.mock import patch
 
-import server
 # 业务逻辑已迁至 `src.api.services.beidan`，新旧入口共用一份（判据 11）。
 # patch 要打在它现在住的地方——打在旧模块上不会报错，只是什么也没替换掉。
 import src.api.services.beidan as beidan_api
-import src.webapp.beidan_cache as beidan_cache
+import src.api.runtime.beidan_cache as beidan_cache
 from src.foundation.cache import Cache, MemoryBackend
-from src.webapp.beidan_cache import (
+from src.api.runtime.beidan_cache import (
     beidan_cache_key, beidan_earliest_kickoff, beidan_refresh_after, prune_beidan_payload,
 )
 
@@ -177,8 +178,6 @@ class BeidanSingleFlightTests(unittest.TestCase):
 
 class BeidanPayloadNeverBlocksTests(unittest.TestCase):
     def setUp(self):
-        self.handler = server.Handler.__new__(server.Handler)
-        self.handler._log = server.log
         self.params = {'source': ['okooo'], 'types': ['spf,rqspf,zjq']}
 
     def _run(self, cached, fresh, force_refresh=False):
@@ -196,7 +195,7 @@ class BeidanPayloadNeverBlocksTests(unittest.TestCase):
              patch.object(beidan_api, 'finalize_beidan_recs') as finalize, \
              patch.object(beidan_api, '_load_beidan_helpers',
                           return_value=(fake_generate, None, None)):
-            payload = self.handler._beidan_payload(params)
+            payload = service.beidan_payload(params)
         self.finalize = finalize
         return payload, sync_calls, bg
 
@@ -235,7 +234,7 @@ class BeidanPayloadNeverBlocksTests(unittest.TestCase):
              patch.object(beidan_api, 'finalize_beidan_recs'), \
              patch.object(beidan_api, '_load_beidan_helpers',
                           return_value=(lambda **kw: {}, None, None)):
-            payload = self.handler._beidan_payload(params)
+            payload = service.beidan_payload(params)
         self.assertTrue(payload['result']['refreshing'])
 
     def test_cache_hit_does_not_run_persist_or_report_side_effects(self):

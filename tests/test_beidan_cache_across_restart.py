@@ -22,7 +22,7 @@ import time
 import unittest
 from unittest.mock import patch
 
-import src.webapp.beidan_cache as beidan_cache
+import src.api.runtime.beidan_cache as beidan_cache
 from src.foundation.cache import Cache, MemoryBackend
 from src.foundation.cache.redis_backend import RedisBackend
 

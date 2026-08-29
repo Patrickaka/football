@@ -160,12 +160,6 @@ class ValidationErrors(unittest.TestCase):
 
 class SharedImplementation(unittest.TestCase):
 
-    def test_the_old_mixin_forwards_to_the_service(self):
-        from src.webapp.lottery_api import LotteryApiMixin
-        with mock.patch.object(service, 'lottery_cycles_payload',
-                               return_value={'sentinel': True}):
-            self.assertEqual(LotteryApiMixin()._lottery_cycles_payload(),
-                             {'sentinel': True})
 
     def test_the_lifted_functions_carry_no_self(self):
         """机械提升最容易留下的痕迹是一个悬空的 `self` 形参。"""

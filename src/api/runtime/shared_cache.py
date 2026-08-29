@@ -10,7 +10,7 @@ Redis 不可用时降级为纯进程内存：缓存不该成为可用性的单�
 import logging
 import threading
 
-log = logging.getLogger('webapp.cache')
+log = logging.getLogger('api.runtime.cache')
 
 _lock = threading.Lock()
 _cache = None

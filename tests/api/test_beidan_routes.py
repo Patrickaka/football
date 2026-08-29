@@ -111,12 +111,6 @@ class Routing(unittest.TestCase):
         app = create_app(auth_settings=AuthSettings(credentials={}))
         self.assertEqual(self.EXPECTED - set(app.openapi()['paths']), set())
 
-    def test_the_old_mixin_still_shares_the_implementation(self):
-        from src.webapp.beidan_api import BeidanApiMixin
-        with mock.patch.object(service, 'beidan_history_payload',
-                               return_value={'sentinel': True}):
-            self.assertEqual(
-                BeidanApiMixin()._beidan_history_payload({}), {'sentinel': True})
 
     def test_beidan_routes_are_not_public(self):
         client = TestClient(create_app(auth_settings=AuthSettings(credentials={'a': 'b'})))

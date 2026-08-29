@@ -21,9 +21,9 @@ log = logging.getLogger('api.startup')
 
 #: 预热是纯粹的"提前算好"，失败了只影响首次访问的延迟，不该拖垮启动。
 WARMUP_THREADS = (
-    ('Warm3DThread', 'src.webapp.caching', '_warm_3d_caches', '3D'),
-    ('WarmFootballThread', 'src.webapp.jobs', '_warm_football_caches', '足球'),
-    ('WarmBeidanThread', 'src.webapp.jobs', '_warm_beidan_caches', '北单'),
+    ('Warm3DThread', 'src.api.runtime.caching', '_warm_3d_caches', '3D'),
+    ('WarmFootballThread', 'src.api.runtime.jobs', '_warm_football_caches', '足球'),
+    ('WarmBeidanThread', 'src.api.runtime.jobs', '_warm_beidan_caches', '北单'),
 )
 
 
@@ -46,7 +46,7 @@ def run_startup_maintenance():
 def restore_persisted_caches():
     """恢复当天有效的落盘结果，重启后无需冷计算。"""
     try:
-        from src.webapp.caching import _load_persisted_caches
+        from src.api.runtime.caching import _load_persisted_caches
 
         _load_persisted_caches()
     except Exception as exc:
@@ -62,7 +62,7 @@ def register_background_tasks():
     每一族**各自 try**：一族登记失败不该连累另外两族——那会把"少一个任务"
     放大成"后台全停"。
     """
-    from src.webapp import background
+    from src.api.runtime import background
 
     try:
         from src.kl8.scheduler import register_kl8_tasks
@@ -72,7 +72,7 @@ def register_background_tasks():
         log.warning('登记快乐8后台任务失败: %s', exc)
 
     try:
-        from src.webapp.basketball_service import (
+        from src.api.runtime.basketball_service import (
             ODDS_TRACKING_INTERVAL_MINUTES, register_odds_tracking,
         )
 
