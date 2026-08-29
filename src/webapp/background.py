@@ -84,6 +84,17 @@ def task_count():
     return _scheduler.task_count() if _scheduler is not None else 0
 
 
+def shutdown(wait=True):
+    """停掉调度器，保留单例。
+
+    与 `reset()` 的区别：`reset` 会把单例丢掉（测试用，好让下一个用例
+    重新登记任务），这里只是停——进程关闭时调用，之后不会再有人登记。
+    """
+    with _lock:
+        if _scheduler is not None:
+            _scheduler.shutdown(wait=wait)
+
+
 def reset():
     """测试用：停掉并丢弃。"""
     global _scheduler, _started

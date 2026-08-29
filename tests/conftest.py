@@ -11,6 +11,20 @@ _POLLUTING_FILES = [
 
 
 @pytest.fixture(scope='session', autouse=True)
+def skip_startup_orchestration():
+    """测试里不执行启动编排。
+
+    编排会抓网络、起三个预热线程（3D 那个要跑 ML）、登记周期任务。
+    几百个用例里每个 `TestClient(create_app())` 都做一遍，套件会从三分钟
+    涨到十分钟以上——**这不是慢，是每个用例都在打外网**。
+
+    需要验证编排本身的用例（`tests/api/test_startup.py`）显式打开。
+    """
+    os.environ.setdefault('RUN_STARTUP_TASKS', '0')
+    yield
+
+
+@pytest.fixture(scope='session', autouse=True)
 def isolate_kl8_state():
     """kl8 测试的落盘产物会污染 reference 策略断言，测试期间移开，结束后还原。
 

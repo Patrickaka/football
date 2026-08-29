@@ -4,6 +4,7 @@
 不启多 worker。
 """
 import os
+import sys
 
 import uvicorn
 
@@ -22,6 +23,9 @@ def server_config():
 
 
 def main():
+    # 编码设置属于进程入口——库模块顶层做这件事会换掉调用方的 stdout，
+    # 在 pytest 下表现为整套测试从某个用例起全红且查不出关联。
+    sys.stdout.reconfigure(encoding='utf-8')
     config = server_config()
     uvicorn.run(
         'main:app',
