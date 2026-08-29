@@ -194,6 +194,42 @@ class Interception(unittest.TestCase):
             self.assertEqual(response.status_code, 303)
             self.assertEqual(response.headers['location'], '/login')
 
+    def test_the_redirect_carries_the_mount_prefix(self):
+        """**线上就是栽在这里**：跳转写死了 `/login`，而反代
+        `location /football/ { proxy_pass http://127.0.0.1:9000/; }`
+        剥掉了前缀。浏览器被送到 `https://域名/login`——那条路径在反代上
+        没有对应 location，用户拿到一个 openresty 的 404，根本进不来。
+
+        本文件此前所有用例都在 `cookie_path='/'` 下跑，那种配置下
+        `/login` 恰好是对的，于是**测试全绿、线上打不开**。
+        """
+        with make_client(cookie_path='/football/') as client:
+            response = client.get('/', headers={'accept': 'text/html'},
+                                  follow_redirects=False)
+            self.assertEqual(response.headers['location'], '/football/login')
+
+    def test_a_deep_path_also_redirects_to_the_prefixed_login(self):
+        """**相对地址 `./login` 同样不行**：从 `/football/api/xxx` 被拦下时，
+        相对解析的结果是 `/football/api/login`，一样不存在。
+        """
+        with make_client(cookie_path='/football/') as client:
+            response = client.get('/api/deep/thing', headers={'accept': 'text/html'},
+                                  follow_redirects=False)
+            self.assertEqual(response.headers['location'], '/football/login')
+
+    def test_the_prefix_comes_from_the_cookie_path(self):
+        """挂载前缀与 Cookie 的 Path **必须是同一个值**（Cookie 要覆盖整个
+        应用），所以不另设配置项让它们有机会不一致。
+        """
+        from src.api.auth import login_url
+        for cookie_path, expected in (('/', '/login'),
+                                      ('/football/', '/football/login'),
+                                      ('/football', '/football/login'),
+                                      ('/a/b/', '/a/b/login')):
+            with self.subTest(cookie_path=cookie_path):
+                self.assertEqual(login_url(AuthSettings(cookie_path=cookie_path)),
+                                 expected)
+
     def test_a_script_gets_json_not_html(self):
         with make_client() as client:
             response = client.get('/', headers={'accept': 'application/json'},
