@@ -2,13 +2,15 @@ import logging
 import pathlib
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 
 from src.api.auth import AuthSettings, build_session_manager, install_auth
 from src.api.deps import Settings, build_cache, build_database, get_executor, shutdown_executor
 from src.api.rate_limit import ClientRateLimiters, install_rate_limit
 from src.api.routers import auth as auth_routes
-from src.api.routers import health
+from src.api.routers import basketball, health
 from src.foundation.tasks import TaskScheduler
 
 log = logging.getLogger('api.app')
@@ -70,14 +72,40 @@ def create_app(settings=None, auth_settings=None):
         log.error('登录页读取失败（%s）：%s', LOGIN_PAGE, exc)
         app.state.login_page = '<!doctype html><meta charset="utf-8">登录页缺失'
     app.state.auth = auth_settings
+    install_validation_error_shape(app)
     app.include_router(health.router)
     app.include_router(auth_routes.router)
+    app.include_router(basketball.router)
 
     # 中间件按**注册的逆序**执行：后注册的先跑。限流要排在鉴权前面，
     # 否则未登录的洪水请求会先去查一遍会话（打 Redis）再被 401 挡下——
     # 那正好是最不该在被攻击时做的事。
     install_auth(app)
     install_rate_limit(app, build_rate_limiters(settings))
+    return app
+
+
+def install_validation_error_shape(app):
+    """参数校验失败时，在 FastAPI 的 `detail` 之外补一个 `error` 字段。
+
+    状态码保持 422——那是正确的语义，旧入口把参数错误伪装成 `200` 里的
+    一句 error 字符串，不该照搬。但**网页整套是按 `data.error` 判错的**
+    （`web/index.html` 里 `if (data.error)`），只给 `detail` 的话前端会
+    以为请求成功、然后拿不到数据，页面空白且没有任何提示。
+
+    两边都给：机器读 `detail`，网页读 `error`。
+    """
+
+    @app.exception_handler(RequestValidationError)
+    async def _shape(request: Request, exc: RequestValidationError):
+        first = (exc.errors() or [{}])[0]
+        field = '.'.join(str(part) for part in first.get('loc', ())[1:]) or '参数'
+        return JSONResponse(
+            {'error': f"参数 {field} 无效: {first.get('msg', '校验失败')}",
+             'detail': exc.errors()},
+            status_code=422,
+        )
+
     return app
 
 

@@ -69,7 +69,10 @@ class _Base(unittest.TestCase):
         self.addCleanup(basketball_service.reset)
 
     def _with(self, ctx):
-        patcher = mock.patch('src.webapp.basketball_api.get_context',
+        # 业务逻辑已迁至 `src.api.services.basketball`，新旧入口共用同一份
+        # （判据 11）。mock 要打在它现在住的地方——打在旧模块上不会报错，
+        # 只是**什么也没替换掉**。
+        patcher = mock.patch('src.api.services.basketball.get_context',
                              lambda: ctx)
         patcher.start()
         self.addCleanup(patcher.stop)
