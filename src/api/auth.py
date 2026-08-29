@@ -122,8 +122,27 @@ def _unauthenticated(request: Request):
     """
     accepts_html = 'text/html' in (request.headers.get('accept') or '')
     if accepts_html:
-        return RedirectResponse('/login', status_code=303)
+        settings: AuthSettings = request.app.state.auth
+        return RedirectResponse(login_url(settings), status_code=303)
     return JSONResponse({'detail': '未登录或会话已过期'}, status_code=401)
+
+
+def login_url(settings: AuthSettings) -> str:
+    """登录页的**完整路径**，带上应用在反代下的挂载前缀。
+
+    **不能写死 `/login`**：线上反代是
+    `location /football/ { proxy_pass http://127.0.0.1:9000/; }`，
+    前缀被剥掉了，应用自己看不到这一段。跳 `/login` 会把浏览器送到
+    `https://域名/login`——那条路径在反代上没有对应 location，
+    结果是一个 **openresty 的 404**，用户根本进不来。
+
+    **也不能用相对地址 `./login`**：从 `/football/api/xxx` 被拦下时，
+    相对解析的结果是 `/football/api/login`，同样不存在。
+
+    挂载前缀就是 `cookie_path`——两者在任何反代部署下都必须相同
+    （Cookie 要覆盖整个应用），所以不另设一个配置项让它们有机会不一致。
+    """
+    return settings.cookie_path.rstrip('/') + '/login'
 
 
 def _client_hint(request: Request) -> str:
