@@ -118,6 +118,61 @@ class WiredIntoTheApp(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {'result': {'p': 0.5, 'd': None}})
 
+    def test_every_business_route_survives_a_numpy_payload(self):
+        """**逐条路由**用带 numpy 与 inf 的 payload 打一遍。
+
+        这是唯一能挡住这类问题的测试。此前的路由测试全都 mock 成
+        `{'sentinel': ...}` 这种纯字面量，双跑差分比的又是服务函数的返回值
+        （在进 FastAPI 序列化之前就比完了）——**两层都绕开了真正会炸的
+        那一步**，于是测试全绿、线上每条接口 500。
+        """
+        import importlib
+        from unittest import mock
+
+        payload = {'result': {'p': np.float64(0.5), 'd': math.inf,
+                              'arr': np.array([1, 2])}}
+        checked = 0
+        for module_name, service_name in (
+                ('basketball', 'basketball_matches_payload'),
+                ('beidan', 'beidan_history_payload'),
+                ('lottery', 'lottery_cycles_payload'),
+                ('kl8', 'kl8_conflicts_payload'),
+                ('football', 'sync_status_payload')):
+            service = importlib.import_module(f'src.api.services.{module_name}')
+            path = {
+                'basketball': '/api/basketball/matches',
+                'beidan': '/api/beidan/history',
+                'lottery': '/api/lottery/cycles',
+                'kl8': '/api/kl8/conflicts',
+                'football': '/api/sync/status',
+            }[module_name]
+            with self.subTest(path=path):
+                with mock.patch.object(service, service_name, return_value=payload):
+                    with TestClient(create_app(
+                            auth_settings=AuthSettings(credentials={}))) as client:
+                        response = client.get(path)
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(response.json(),
+                                 {'result': {'p': 0.5, 'd': None, 'arr': [1, 2]}})
+                checked += 1
+        self.assertEqual(checked, 5)
+
+    def test_no_business_route_returns_a_bare_dict(self):
+        """**路由必须返回 Response，不能 `return payload`。**
+
+        `return payload` 会让 FastAPI 先跑一遍 `jsonable_encoder`——
+        `default_response_class` 挡不住那一步，它只管最后的渲染。
+        所以业务路由一律走 `json_result(...)`，漏一处就是一条会 500 的接口。
+        """
+        import ast
+        import pathlib
+
+        for module in ('basketball', 'beidan', 'lottery', 'kl8', 'football'):
+            source = pathlib.Path(f'src/api/routers/{module}.py').read_text(encoding='utf-8')
+            with self.subTest(module=module):
+                self.assertNotIn('await run_blocking(', source,
+                                 'run_blocking 的返回值是裸 dict，要用 json_result')
+
     def test_it_is_the_same_cleaning_as_the_old_entry_point(self):
         """两边共用一份清洗函数——各写一份必然会漂（判据 11）。"""
         import inspect
