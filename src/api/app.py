@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse
 from src.api.auth import AuthSettings, build_session_manager, install_auth
 from src.api.deps import Settings, build_cache, build_database, get_executor, shutdown_executor
 from src.api.rate_limit import ClientRateLimiters, install_rate_limit
+from src.api.responses import SanitizedJSONResponse
 from src.api.routers import auth as auth_routes
 from src.api.routers import basketball, beidan, football, health, kl8, lottery, pages
 from src.api import startup as startup_orchestration
@@ -71,7 +72,12 @@ def create_app(settings=None, auth_settings=None):
         app.state.db.dispose()
         log.info('API 已停止')
 
-    app = FastAPI(title='Football 预测服务', version='2.0.0', lifespan=lifespan)
+    # **默认响应类必须是自己那套**：FastAPI 的 jsonable_encoder 处理不了
+    # numpy 标量/数组与带 to_dict 的对象，遇到就 500；它也会输出浏览器
+    # 解析不了的 Infinity/NaN。设在这里比逐个路由包一层可靠——
+    # 漏包一个路由不会有任何报错，只会在那条接口返回特定数据时才炸。
+    app = FastAPI(title='Football 预测服务', version='2.0.0', lifespan=lifespan,
+                  default_response_class=SanitizedJSONResponse)
     # 登录页在建 app 时读一次。读不到不该让服务起不来——鉴权本身照常工作，
     # 只是登录页显示一句提示（`/auth/login` 仍可直接调用）。
     try:
