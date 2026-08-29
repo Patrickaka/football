@@ -166,7 +166,7 @@ class EndpointWiringTests(unittest.TestCase):
     def _with_analyzer(self, history):
         analyzer = mock.Mock()
         analyzer.history_data = history
-        return mock.patch('src.webapp.kl8_api.get_kl8_analyzer', lambda: analyzer)
+        return mock.patch('src.api.services.kl8.get_kl8_analyzer', lambda: analyzer)
 
     def test_latest_issue_comes_from_the_analyzer(self):
         with self._with_analyzer([{'issue': '2026227'}, {'issue': '2026226'}]):
@@ -178,7 +178,7 @@ class EndpointWiringTests(unittest.TestCase):
 
     def test_analyzer_failure_yields_no_issue(self):
         """取不到期号就绕过缓存，而不是让端点失败。"""
-        with mock.patch('src.webapp.kl8_api.get_kl8_analyzer',
+        with mock.patch('src.api.services.kl8.get_kl8_analyzer',
                         side_effect=RuntimeError('历史没加载')):
             self.assertEqual(self.handler._kl8_latest_issue(), '')
 
@@ -186,10 +186,10 @@ class EndpointWiringTests(unittest.TestCase):
         calls = []
         cache = Cache(l1=MemoryBackend(), l2=MemoryBackend(), default_ttl=60)
         with self._with_analyzer([{'issue': '2026227'}]), \
-             mock.patch('src.webapp.kl8_api.get_shared_cache', lambda: cache), \
-             mock.patch('src.webapp.kl8_api._current_kl8_predictor_version',
+             mock.patch('src.api.services.kl8.get_shared_cache', lambda: cache), \
+             mock.patch('src.api.services.kl8._current_kl8_predictor_version',
                         lambda: 'v9.3'), \
-             mock.patch('src.webapp.kl8_api.kl8_run_prediction',
+             mock.patch('src.api.services.kl8.kl8_run_prediction',
                         lambda force_refresh=False: calls.append(1) or {'ok': True}):
             first = self.handler._kl8_payload()
             second = self.handler._kl8_payload()
@@ -200,9 +200,9 @@ class EndpointWiringTests(unittest.TestCase):
     def test_compute_failure_is_reported_not_raised(self):
         cache = Cache(l1=MemoryBackend(), l2=MemoryBackend(), default_ttl=60)
         with self._with_analyzer([{'issue': '2026227'}]), \
-             mock.patch('src.webapp.kl8_api.get_shared_cache', lambda: cache), \
-             mock.patch('src.webapp.kl8_api._current_kl8_predictor_version',
+             mock.patch('src.api.services.kl8.get_shared_cache', lambda: cache), \
+             mock.patch('src.api.services.kl8._current_kl8_predictor_version',
                         lambda: 'v9.3'), \
-             mock.patch('src.webapp.kl8_api.kl8_run_prediction',
+             mock.patch('src.api.services.kl8.kl8_run_prediction',
                         lambda force_refresh=False: {'error': '数据不足'}):
             self.assertIn('error', self.handler._kl8_payload())
