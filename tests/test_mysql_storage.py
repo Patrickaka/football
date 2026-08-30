@@ -95,14 +95,6 @@ class MySQLStorageTest(unittest.TestCase):
         repo.dlt_save(results)
         self.assertEqual(repo.dlt_load(), results)  # 顺序与内容均一致
 
-    def test_pailie5_roundtrip(self):
-        history = [
-            {'issue': '2026145', 'numbers': [9, 9, 3, 0, 0], 'date': '2026-06-04', 'timestamp': '2026-06-05T10:45:03'},
-            {'issue': '2026146', 'numbers': [1, 2, 3, 4, 5], 'date': '2026-06-05', 'timestamp': '2026-06-06T10:45:03'},
-        ]
-        repo.pailie5_save(history)
-        self.assertEqual(repo.pailie5_load(), history)
-
     def test_elo_roundtrip(self):
         data = {
             'ratings': {'中国': 1500.0, '泰国': 1480.5},

@@ -37,16 +37,6 @@ CREATE TABLE IF NOT EXISTS dlt_history (
     INDEX idx_issue (issue)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
--- 排列5开奖历史。seq 自增主键保留原列表顺序。
-CREATE TABLE IF NOT EXISTS pailie5_history (
-    seq       BIGINT AUTO_INCREMENT PRIMARY KEY,
-    issue     VARCHAR(32),
-    numbers   JSON,
-    draw_date VARCHAR(32),
-    ts        VARCHAR(64),
-    INDEX idx_issue (issue)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-
 -- 球队 ELO 评分（当前值）
 CREATE TABLE IF NOT EXISTS elo_rating (
     team       VARCHAR(128) PRIMARY KEY,

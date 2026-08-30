@@ -60,14 +60,6 @@ def migrate_dlt():
     return len(results)
 
 
-def migrate_pailie5():
-    data = _read(DATA / 'pailie5_history.json')
-    if data is None:
-        return 0
-    repo.pailie5_save(data)
-    return len(data)
-
-
 def migrate_elo():
     data = _read(DATA / 'elo_ratings.json')
     if data is None:
@@ -115,7 +107,6 @@ def migrate_kv_items():
 _CACHE_FILES = {
     'lottery3d': DATA / 'lottery3d_cache.json',
     'lottery3d_ml': DATA / 'lottery3d_ml_cache.json',
-    'pailie5': DATA / 'pailie5_cache.json',
     'lottery': DATA / 'lottery_cache.json',
 }
 
@@ -146,7 +137,6 @@ _STEPS = [
     ('football_prediction', migrate_football_prediction),
     ('football_prediction_record', migrate_prediction_records),
     ('dlt_history', migrate_dlt),
-    ('pailie5_history', migrate_pailie5),
     ('elo', migrate_elo),
     ('similar_market', migrate_similar_market),
     ('kv_items', migrate_kv_items),
