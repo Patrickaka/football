@@ -1539,7 +1539,7 @@ async function loadMatches() {
     // 首屏走 BFF：一次拿到比赛列表、职业化状态、以及后台已经算好的预测。
     // 后端只读缓存、绝不代跑分析，所以这一次请求很快；没算好的那几场
     // 会如实列在 pending 里，由 loadAllPredictions 单独去补。
-    const data = await fetchJson('bff/football/home');
+    const data = await fetchJson('/api/bff/football/home');
     if (data.error) {
       const source = data.source_status?.source || 'unknown';
       const errorType = data.error_type ? ` (${data.error_type})` : '';
