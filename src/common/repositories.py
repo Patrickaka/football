@@ -126,34 +126,6 @@ def dlt_save(results):
     doc_store.replace_all('dlt_history', cols, rows)
 
 
-# ==================== pailie5_history（排列5） ====================
-
-def pailie5_load():
-    try:
-        rows = db.query("SELECT issue, numbers, draw_date, ts FROM pailie5_history ORDER BY seq")
-        return [
-            {'issue': r['issue'], 'numbers': json.loads(r['numbers']),
-             'date': r['draw_date'], 'timestamp': r['ts']}
-            for r in rows
-        ]
-    except Exception:
-        # MySQL 不可用时从 doc_store 文件降级加载
-        records = doc_store._fallback_load_all('pailie5_history')
-        return [
-            {'issue': r['issue'],
-             'numbers': json.loads(r['numbers']) if isinstance(r['numbers'], str) else r['numbers'],
-             'date': r.get('draw_date') or r.get('date'),
-             'timestamp': r.get('ts') or r.get('timestamp')}
-            for r in records
-        ]
-
-
-def pailie5_save(history):
-    cols = ['issue', 'numbers', 'draw_date', 'ts']
-    rows = [(h.get('issue'), _J(h.get('numbers')), h.get('date'), h.get('timestamp')) for h in history]
-    doc_store.replace_all('pailie5_history', cols, rows)
-
-
 # ==================== elo_rating + elo_history ====================
 
 def elo_load():
