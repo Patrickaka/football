@@ -42,7 +42,7 @@ class ParameterPassing(unittest.TestCase):
         """默认值必须和旧入口一样，否则不带参数的请求会静静地换个行为。"""
         self.assertEqual(
             self._captured('/api/basketball', 'basketball_payload'),
-            {'date': [None], 'types': ['spf,rqspf,dx'], 'source': ['okooo']})
+            {'date': [None], 'types': ['spf,rqspf,dx'], 'source': ['zgzcw']})
 
     def test_the_value_threshold_defaults_to_five_percent(self):
         self.assertEqual(

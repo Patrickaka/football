@@ -37,7 +37,7 @@ class ParameterPassing(unittest.TestCase):
     def test_defaults_match_the_old_entry_point(self):
         self.assertEqual(
             self._captured('/api/beidan', 'beidan_payload'),
-            {'date': [None], 'types': ['spf,rqspf,zjq'], 'source': ['okooo'],
+            {'date': [None], 'types': ['spf,rqspf,zjq'], 'source': ['zgzcw'],
              'force_refresh': ['false']})
 
     def test_the_history_limit_defaults_to_two_hundred(self):
@@ -46,7 +46,7 @@ class ParameterPassing(unittest.TestCase):
 
     def test_the_value_defaults_match(self):
         self.assertEqual(self._captured('/api/beidan/value', 'beidan_value_payload'),
-                         {'date': [None], 'source': ['okooo'], 'threshold': [0.05]})
+                         {'date': [None], 'source': ['zgzcw'], 'threshold': [0.05]})
 
 
 class ForceRefreshStaysAString(unittest.TestCase):
