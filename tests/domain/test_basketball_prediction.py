@@ -17,7 +17,7 @@ from unittest import mock
 
 from src.domain.sports.basketball.analysis import BasketballAnalyzer
 from src.domain.sports.basketball.prediction import (
-    PredictionService, find_value_bets,
+    PREDICTION_VERSION, PredictionService, find_value_bets,
 )
 from src.foundation.cache import Cache, MemoryBackend
 from tests.domain.golden import as_json, load
@@ -60,7 +60,6 @@ MOVEMENT_MAP = {
                   'kind': 'ou', 'opening_line': 210.5, 'current_line': 212.5}},
 }
 
-VERSION = '2026-08-20-water-reverse-v3'
 HISTORY_STATS = {'total': 12, 'hit': 7}
 
 
@@ -96,12 +95,22 @@ ELO = FakeElo()
 CALIBRATOR = FakeCalibrator()
 
 
+def without_version(payload):
+    """黄金比对不看 `version`——它由 `VersionIsReportedTests` 单独守。
+
+    版本串逐字参与比对的话，`PREDICTION_VERSION` 一升就是 9 条一起红，
+    而版本变化并不意味着预测变了。红得没有分辨力，人就会习惯性重新生成
+    黄金，真回归也跟着被盖掉。
+    """
+    return {key: value for key, value in payload.items() if key != 'version'}
+
+
 def _analyzer():
     return BasketballAnalyzer(elo=ELO, calibrator=CALIBRATOR)
 
 
 def _service(cache=None, matches=None, movement_map=None, recorder=None,
-             zgzcw_matches=None, delay=0.0):
+             zgzcw_matches=None, delay=0.0, version=None):
     def schedule_500(date):
         if delay:
             time.sleep(delay)
@@ -120,6 +129,7 @@ def _service(cache=None, matches=None, movement_map=None, recorder=None,
         recorder=recorder,
         cache=cache,
         today_fn=lambda: DATE,
+        **({'version': version} if version is not None else {}),
     )
 
 
@@ -139,7 +149,8 @@ class GenerateGoldenTests(unittest.TestCase):
         for i, case in enumerate(self.CASES):
             with self.subTest(**case):
                 actual = _service(recorder=RecordingRecorder()).generate(**case)
-                self.assertEqual(as_json(actual), GOLDEN[f'payload:{i}'])
+                self.assertEqual(without_version(as_json(actual)),
+                                 GOLDEN[f'payload:{i}'])
 
     def test_zgzcw_source_used_when_available(self):
         zgzcw_matches = [dict(MATCHES[0], id='ok1', source='zgzcw')]
@@ -150,7 +161,7 @@ class GenerateGoldenTests(unittest.TestCase):
     def test_empty_schedule(self):
         recorder = RecordingRecorder()
         actual = _service(matches=[], recorder=recorder).generate()
-        self.assertEqual(as_json(actual), GOLDEN['payload:empty'])
+        self.assertEqual(without_version(as_json(actual)), GOLDEN['payload:empty'])
         self.assertEqual(recorder.saved, [], '无比赛时不该写入预测记录')
 
     def test_movement_provider_failure_falls_back_to_no_movement(self):
@@ -173,6 +184,38 @@ class GenerateGoldenTests(unittest.TestCase):
         payload = service.generate()
         self.assertEqual(payload['count'], len(MATCHES))
         self.assertNotIn('history_stats', payload)
+
+
+class VersionIsReportedTests(unittest.TestCase):
+    """`version` 从黄金比对里摘出来之后，改由这里守。
+
+    要守的是三件事：字段还在、它是构造参数透传而非某处写死的字面量、
+    落库那条路径和 payload 用的是同一个版本。版本号本身写进断言就等于
+    把上面那个坑搬个地方复现。
+    """
+
+    def test_every_case_reports_the_current_version(self):
+        for case in GenerateGoldenTests.CASES:
+            with self.subTest(**case):
+                payload = _service(recorder=RecordingRecorder()).generate(**case)
+                self.assertEqual(payload['version'], PREDICTION_VERSION)
+
+    def test_the_version_is_threaded_through_rather_than_hardcoded(self):
+        """换个版本进去，输出就得跟着换——否则说明某处写死了字面量。"""
+        payload = _service(recorder=RecordingRecorder(),
+                           version='vTEST-sentinel').generate()
+        self.assertEqual(payload['version'], 'vTEST-sentinel')
+
+    def test_the_recorded_version_matches_the_payload(self):
+        """落库与接口返回必须是同一个版本。
+
+        对不上的话，回头按版本筛历史预测会漏掉或错配——而两处各自看都是对的。
+        """
+        recorder = RecordingRecorder()
+        payload = _service(recorder=recorder, version='vTEST-sentinel').generate()
+        self.assertEqual([version for _, _, version in recorder.saved],
+                         ['vTEST-sentinel'])
+        self.assertEqual(recorder.saved[0][2], payload['version'])
 
 
 class FetchScheduleTests(unittest.TestCase):
