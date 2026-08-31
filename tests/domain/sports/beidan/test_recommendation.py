@@ -104,7 +104,7 @@ class EuroOddsSourceTests(unittest.TestCase):
 
     def test_schedule_odds_are_used_when_nothing_was_fetched(self):
         result = spf(self.FALLBACK, ouzhi=None)
-        self.assertEqual(result['odds_source'], 'okooo_main')
+        self.assertEqual(result['odds_source'], 'zgzcw_main')
         self.assertEqual(result['odds']['胜'], 2.10)
 
     def test_a_partial_schedule_quote_is_refused_entirely(self):
@@ -469,7 +469,7 @@ class TrendAttachmentTests(unittest.TestCase):
     # 比分盘历史的条目是 `time` / `score` / `odds` 三个平铺字段
     # ——**第一版按命名猜成了 `{'ts', 'scores': {...}}`**，于是融合里的
     # `market_odds` 恒为空、整条路从来没跑过，而 `cs_adjusted` 照样是 True
-    # （判据 10、23）。真实形状来自 `fetch_okooo_cs_history`。
+    # （判据 10、23）。真实形状来自 `fetch_zgzcw_cs_history`。
     CS = {'history': [{'time': '09:00', 'score': '1-0', 'odds': 8.0},
                       {'time': '09:30', 'score': '1-1', 'odds': 7.5},
                       {'time': '10:00', 'score': '2-1', 'odds': 9.0}]}

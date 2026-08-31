@@ -10,7 +10,7 @@ import src.beidan.fetching as bf
 class SharedRateBudgetHostTests(unittest.TestCase):
     def test_only_the_shared_host_participates(self):
         self.assertTrue(bf._shares_football_rate_budget('https://odds.500.com/fenxi/yazhi-1.shtml'))
-        self.assertFalse(bf._shares_football_rate_budget('https://www.okooo.com/danchang/'))
+        self.assertFalse(bf._shares_football_rate_budget('https://cp.zgzcw.com/danchang/'))
         self.assertFalse(bf._shares_football_rate_budget(''))
         self.assertFalse(bf._shares_football_rate_budget(None))
 
@@ -45,8 +45,8 @@ class SharedRateBudgetFetchTests(unittest.TestCase):
         slot.assert_called_once()
 
     def test_skips_rate_limiter_for_other_hosts(self):
-        """okooo 是另一个域名，不该消耗 500.com 的配额"""
-        wait, slot, _ = self._fetch('https://www.okooo.com/danchang/', self._ok_opener)
+        """zgzcw 是另一个域名，不该消耗 500.com 的配额"""
+        wait, slot, _ = self._fetch('https://cp.zgzcw.com/danchang/', self._ok_opener)
         wait.assert_not_called()
         slot.assert_not_called()
 
@@ -57,7 +57,7 @@ class SharedRateBudgetFetchTests(unittest.TestCase):
         self.assertGreater(throttle.call_args[0][0], 0)
 
     def test_other_host_rate_limit_does_not_throttle_shared_budget(self):
-        _, _, throttle = self._fetch('https://www.okooo.com/x', self._rate_limited_opener)
+        _, _, throttle = self._fetch('https://cp.zgzcw.com/x', self._rate_limited_opener)
         throttle.assert_not_called()
 
     def test_non_rate_limit_error_does_not_throttle(self):

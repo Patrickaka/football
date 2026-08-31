@@ -154,7 +154,7 @@ class Resilience(unittest.TestCase):
         """比赛列表拿不到就没有首屏可言，必须如实报错。"""
         with mock.patch.object(football_service, 'matches_payload',
                                return_value={'error': '赛程源不可用',
-                                             'source_status': {'source': 'okooo'}}):
+                                             'source_status': {'source': 'zgzcw'}}):
             payload = service.football_home_payload()
         self.assertEqual(payload['error'], '赛程源不可用')
         self.assertNotIn('predictions', payload)

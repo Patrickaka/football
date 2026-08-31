@@ -1,10 +1,9 @@
 """basketball 抓取层接入 foundation/fetch。
 
-迁移前有两套并行的重试与熔断：okooo.py 自己维护 max_retries 循环和
-「WAF 封锁 60 秒」计时器，而 FetchClient 也有重试与熔断。合并的办法是
-让 transport 只负责领域知识（Session 预热、gb2312 编码、WAF 页面识别），
-识别到 WAF 就**抛异常**——它自然会被 FetchClient 记为一次失败并计入熔断，
-不需要再维护第二个计时器。
+抓取层只保留一套重试与熔断（FetchClient 的），transport 只负责领域知识：
+按站点定编码、识别人机验证页。识别到验证页就**抛异常**——它是
+PermanentFetchError，FetchClient 见到就单次开路，既不重试也不必攒够阈值，
+不需要 transport 自己再维护一个「封锁 N 秒」计时器。
 """
 import tempfile
 import unittest
@@ -12,9 +11,12 @@ import unittest.mock
 
 from src.domain.sports.basketball import fetching
 from src.domain.sports.basketball.fetching import (
-    OkoooTransport, WafBlocked, build_fetch_client, dispatch_transport,
+    VerificationPage, ZgzcwTransport, build_fetch_client, dispatch_transport,
 )
 from src.foundation.fetch import FetchError
+
+SCHEDULE = 'https://cp.zgzcw.com/lottery/jclq.action'
+ODDS = 'https://odds.zgzcw.com/basketball/1/'
 
 
 class _RecordingTransport:
@@ -37,34 +39,43 @@ class BuildFetchClientTests(unittest.TestCase):
         self.assertEqual(client.get('https://trade.500.com/jclq/'), '<html>ok</html>')
 
     def test_rate_limits_are_isolated_per_domain(self):
-        """两个源站的限速互不影响：okooo 被限速不该拖慢 500.com。"""
+        """两个源站的限速互不影响：zgzcw 被限速不该拖慢 500.com。"""
         transport = _RecordingTransport(['a', 'b'])
         slept = []
         client = build_fetch_client(transport=transport, sleep_fn=slept.append)
-        client.get('https://www.okooo.com/jingcailanqiu/hunhe/')
+        client.get(SCHEDULE)
         client.get('https://trade.500.com/jclq/')
         self.assertEqual(sum(1 for s in slept if s > 0), 0,
                          '不同域名的首次请求都不该等待')
 
-    def test_okooo_is_rate_limited_more_conservatively(self):
-        """okooo 有 WAF，限速须比 500.com 更保守。"""
+    def test_zgzcw_is_rate_limited_more_conservatively(self):
+        """zgzcw 会弹人机验证，限速须比 500.com 更保守。"""
         client = build_fetch_client(transport=_RecordingTransport([]),
                                     sleep_fn=lambda _: None)
-        okooo = client.limiters.for_domain('www.okooo.com').rate_per_sec
+        zgzcw = client.limiters.for_domain('cp.zgzcw.com').rate_per_sec
         wubai = client.limiters.for_domain('trade.500.com').rate_per_sec
-        self.assertLess(okooo, wubai)
+        self.assertLess(zgzcw, wubai)
 
-    def test_waf_block_counts_as_failure_and_trips_breaker(self):
-        """WAF 页面抛异常 → 计入熔断，不需要第二套 60 秒封锁计时器。"""
-        transport = _RecordingTransport([WafBlocked('waf')] * 10)
+    def test_every_zgzcw_subdomain_is_rate_limited(self):
+        """三个子域都要限速——漏掉一个就等于那条路径无限速裸奔。"""
+        client = build_fetch_client(transport=_RecordingTransport([]),
+                                    sleep_fn=lambda _: None)
+        default = client.limiters.for_domain('trade.500.com').rate_per_sec
+        for host in fetching.ZGZCW_HOSTS:
+            with self.subTest(host=host):
+                self.assertLess(client.limiters.for_domain(host).rate_per_sec,
+                                default)
+
+    def test_verification_page_counts_as_failure_and_trips_breaker(self):
+        """验证页抛异常 → 计入熔断，不需要第二套封锁计时器。"""
+        transport = _RecordingTransport([VerificationPage('captcha')] * 10)
         client = build_fetch_client(transport=transport, sleep_fn=lambda _: None,
                                     max_retries=1, failure_threshold=2)
-        for _ in range(2):
-            with self.assertRaises(FetchError):
-                client.get('https://www.okooo.com/x')
+        with self.assertRaises(FetchError):
+            client.get(SCHEDULE)
         before = len(transport.calls)
         with self.assertRaises(FetchError):
-            client.get('https://www.okooo.com/x')
+            client.get(SCHEDULE)
         self.assertEqual(len(transport.calls), before,
                          '熔断开路后不应再发出请求')
 
@@ -81,164 +92,106 @@ class BuildFetchClientTests(unittest.TestCase):
 
 
 class DispatchTransportTests(unittest.TestCase):
-    def test_okooo_url_goes_to_okooo_impl(self):
+    def _dispatch(self, url):
         picked = []
         transport = dispatch_transport(
-            okooo=lambda url, timeout: picked.append('okooo') or 'o',
-            default=lambda url, timeout: picked.append('default') or 'd',
+            zgzcw=lambda u, timeout: picked.append('zgzcw') or 'z',
+            default=lambda u, timeout: picked.append('default') or 'd',
         )
-        transport('https://www.okooo.com/basketball/match/', 10)
-        self.assertEqual(picked, ['okooo'])
+        transport(url, 10)
+        return picked
+
+    def test_zgzcw_url_goes_to_zgzcw_impl(self):
+        self.assertEqual(self._dispatch(SCHEDULE), ['zgzcw'])
+
+    def test_every_known_zgzcw_host_is_dispatched(self):
+        """三个子域都必须认得——漏一个就会被当成 500.com 用错编码和 referer。"""
+        for host in fetching.ZGZCW_HOSTS:
+            with self.subTest(host=host):
+                self.assertEqual(self._dispatch(f'https://{host}/x'), ['zgzcw'])
 
     def test_other_urls_go_to_default_impl(self):
-        picked = []
-        transport = dispatch_transport(
-            okooo=lambda url, timeout: picked.append('okooo') or 'o',
-            default=lambda url, timeout: picked.append('default') or 'd',
-        )
-        transport('https://trade.500.com/jclq/', 10)
-        self.assertEqual(picked, ['default'])
+        self.assertEqual(self._dispatch('https://trade.500.com/jclq/'), ['default'])
 
     def test_dispatch_is_by_host_not_substring(self):
-        """按主机名判断，而非 url 里出现 okooo 字样就算——
+        """按主机名判断，而非 url 里出现源站名就算——
         查询参数里带源站名的链接不该被误分派。"""
-        picked = []
-        transport = dispatch_transport(
-            okooo=lambda url, timeout: picked.append('okooo') or 'o',
-            default=lambda url, timeout: picked.append('default') or 'd',
-        )
-        transport('https://trade.500.com/jclq/?ref=okooo.com', 10)
-        self.assertEqual(picked, ['default'])
+        self.assertEqual(
+            self._dispatch('https://trade.500.com/jclq/?ref=cp.zgzcw.com'),
+            ['default'])
 
 
-class _FakeResponse:
-    def __init__(self, text, status_code=200):
-        self.text = text
-        self.status_code = status_code
-        self.encoding = None
-        self.content = text.encode('gb2312', errors='replace')
+class ZgzcwTransportTests(unittest.TestCase):
+    """transport 只做两件领域知识的事：带对 referer、认出验证页。"""
 
+    def _urlopen(self, raw):
+        import urllib.request
 
-class _FakeSession:
-    def __init__(self, responses):
-        self.responses = responses
-        self.headers = {}
-        self.verify = True
-        self.calls = []
+        captured = {}
 
-    def get(self, url, timeout=None):
-        self.calls.append(url)
-        item = self.responses.pop(0) if self.responses else _FakeResponse('ok')
-        if isinstance(item, Exception):
-            raise item
-        return item
+        class _Response:
+            def read(self):
+                return raw
 
+            def __enter__(self):
+                return self
 
-class OkoooTransportTests(unittest.TestCase):
-    def test_warms_up_session_before_first_fetch(self):
-        """首次抓取前要先访问首页与混合页建立 cookie，否则会被判为异常流量。"""
-        session = _FakeSession([_FakeResponse('home'), _FakeResponse('hunhe'),
-                                _FakeResponse('<html>data</html>')])
-        transport = OkoooTransport(session_factory=lambda: session,
-                                   sleep_fn=lambda _: None)
-        transport('https://www.okooo.com/basketball/match/', 10)
-        self.assertEqual(len(session.calls), 3)
-        self.assertIn('okooo.com/', session.calls[0])
+            def __exit__(self, *exc):
+                return False
 
-    def test_warms_up_only_once(self):
-        session = _FakeSession([_FakeResponse('home'), _FakeResponse('hunhe'),
-                                _FakeResponse('a'), _FakeResponse('b')])
-        transport = OkoooTransport(session_factory=lambda: session,
-                                   sleep_fn=lambda _: None)
-        transport('https://www.okooo.com/x', 10)
-        transport('https://www.okooo.com/y', 10)
-        self.assertEqual(len(session.calls), 4, '第二次不应重复预热')
+        def _fake(req, timeout=None):
+            captured['url'] = req.full_url
+            captured['headers'] = req.headers
+            return _Response()
 
-    def test_waf_page_raises_instead_of_returning_none(self):
-        """旧代码返回 None 并自己记 60 秒封锁；现在抛异常交给熔断处理。
+        return unittest.mock.patch.object(urllib.request, 'urlopen', _fake), captured
 
-        要连撞两次才抛：第一次只说明当前 Session 被标记了，换一个再试
-        才分得清「Session 老化」和「这个出口 IP 真的进不去」。
+    def _fetch(self, text):
+        patcher, captured = self._urlopen(text.encode('utf-8'))
+        with patcher:
+            body = ZgzcwTransport()(SCHEDULE, 10)
+        return body, captured
+
+    def test_decodes_utf8_page(self):
+        body, _ = self._fetch('周三301 美职女篮 金州女武神VS太阳')
+        self.assertEqual(body, '周三301 美职女篮 金州女武神VS太阳')
+
+    def test_sends_site_referer(self):
+        """不带 referer 直连详情页会被判为异常流量。"""
+        _, captured = self._fetch('<html>ok</html>')
+        self.assertEqual(captured['headers'].get('Referer'),
+                         'https://cp.zgzcw.com/')
+
+    def test_verification_page_raises_instead_of_returning_html(self):
+        """旧代码把验证页当正文返回，解析器匹不到东西就静静给出 0 场比赛。
+
+        抛出来才有人知道——而且它是 PermanentFetchError，熔断单次开路。
         """
-        waf = _FakeResponse('<html>aliyun_waf<title></title></html>')
-        session = _FakeSession([_FakeResponse('home'), _FakeResponse('hunhe'), waf,
-                                _FakeResponse('home'), _FakeResponse('hunhe'), waf])
-        transport = OkoooTransport(session_factory=lambda: session,
-                                   sleep_fn=lambda _: None)
-        with self.assertRaises(WafBlocked):
-            transport('https://www.okooo.com/x', 10)
+        for marker in ('captcha', '访问验证', '安全验证'):
+            with self.subTest(marker=marker):
+                patcher, _ = self._urlopen(
+                    f'<html><body>{marker}</body></html>'.encode('utf-8'))
+                with patcher, self.assertRaises(VerificationPage):
+                    ZgzcwTransport()(SCHEDULE, 10)
 
-    def test_waf_detection_resets_session(self):
-        """撞 WAF 后旧 session 已被污染，下次须换新的。"""
-        waf = _FakeResponse('<html>aliyun_waf<title></title></html>')
-        sessions = []
+    def test_marker_detection_is_case_insensitive(self):
+        patcher, _ = self._urlopen(b'<html>Please solve the CAPTCHA</html>')
+        with patcher, self.assertRaises(VerificationPage):
+            ZgzcwTransport()(SCHEDULE, 10)
 
-        def factory():
-            s = _FakeSession([_FakeResponse('home'), _FakeResponse('hunhe'), waf])
-            s.responses.append(waf)
-            sessions.append(s)
-            return s
-
-        transport = OkoooTransport(session_factory=factory, sleep_fn=lambda _: None)
-        with self.assertRaises(WafBlocked):
-            transport('https://www.okooo.com/x', 10)
-        with self.assertRaises(WafBlocked):
-            transport('https://www.okooo.com/y', 10)
-        # 每次调用内部会重建一次再试，两次调用共四个 session
-        self.assertEqual(len(sessions), 4, '撞 WAF 后应重建 session')
-
-    def test_non_200_raises(self):
-        """非 200 抛异常，让 FetchClient 的重试与熔断接管。"""
-        session = _FakeSession([_FakeResponse('home'), _FakeResponse('hunhe'),
-                                _FakeResponse('err', status_code=503)])
-        transport = OkoooTransport(session_factory=lambda: session,
-                                   sleep_fn=lambda _: None)
-        with self.assertRaises(IOError):
-            transport('https://www.okooo.com/x', 10)
-
-    def test_waf_triggers_one_session_rebuild_before_giving_up(self):
-        """WAF 拦截不完全是确定性的：Session 用久了会被标记，换一个往往就通。
-
-        端点切换当天线上就栽在这里——把 WAF 一律当确定性失败、一次都不重试，
-        等于掐掉了这条自愈路径，赛程页被拦后熔断立刻开路，接口返回 0 场比赛。
-        """
-        waf = '<html>aliyun_waf<title></title></html>'
-        session = _FakeSession([_FakeResponse('home'), _FakeResponse('hunhe'),
-                                _FakeResponse(waf),
-                                _FakeResponse('home'), _FakeResponse('hunhe'),
-                                _FakeResponse('正常内容')])
-        transport = OkoooTransport(session_factory=lambda: session,
-                                   sleep_fn=lambda _: None)
-        self.assertEqual(transport('https://www.okooo.com/x', 10), '正常内容')
-
-    def test_two_consecutive_waf_hits_are_permanent(self):
-        """换过 Session 还被拦，说明不是 Session 的问题——该让熔断接手了。"""
-        waf = '<html>aliyun_waf<title></title></html>'
-        session = _FakeSession([_FakeResponse('home'), _FakeResponse('hunhe'),
-                                _FakeResponse(waf),
-                                _FakeResponse('home'), _FakeResponse('hunhe'),
-                                _FakeResponse(waf)])
-        transport = OkoooTransport(session_factory=lambda: session,
-                                   sleep_fn=lambda _: None)
-        with self.assertRaises(WafBlocked):
-            transport('https://www.okooo.com/x', 10)
-
-    def test_decodes_as_gb2312(self):
-        session = _FakeSession([_FakeResponse('home'), _FakeResponse('hunhe'),
-                                _FakeResponse('中文内容')])
-        transport = OkoooTransport(session_factory=lambda: session,
-                                   sleep_fn=lambda _: None)
-        self.assertEqual(transport('https://www.okooo.com/x', 10), '中文内容')
+    def test_normal_page_is_not_mistaken_for_verification(self):
+        body, _ = self._fetch('<html>周三301 美职女篮</html>')
+        self.assertIn('美职女篮', body)
 
 
-class WafIsPermanentTests(unittest.TestCase):
-    """撞 WAF 不重试。
+class VerificationPageIsPermanentTests(unittest.TestCase):
+    """撞验证页不重试。
 
-    迁移时用 FetchClient 的熔断替换了旧代码手写的「撞 WAF 就跳过 60 秒」
-    开关。熔断确实能做同一件事，但它要 failure_threshold 次失败才开路，
-    而每次失败还要先重试 max_retries 遍——在 okooo 的 0.4 rps 限速下，
-    这笔账让冷启动从 0.4 秒涨到 5 秒。WAF 拦截是确定性的（同一出口 IP
-    再试还是同样结果），不该走退避重试那条路。
+    熔断能替代旧代码手写的「撞墙就跳过 N 秒」开关，但前提是把验证页归为
+    PermanentFetchError：否则它要 failure_threshold 次失败才开路，每次失败
+    还要先重试 max_retries 遍——在 zgzcw 的 0.5 rps 限速下，这笔账让冷启动
+    从 2 秒涨到十几秒。验证页是确定性的（同一出口 IP 再试还是同样结果），
+    不该走退避重试那条路。
     """
 
     def _client(self, **kwargs):
@@ -246,107 +199,71 @@ class WafIsPermanentTests(unittest.TestCase):
 
         def transport(url, timeout):
             self.calls.append(url)
-            raise WafBlocked('okooo WAF 拦截')
+            raise VerificationPage('中国足彩网返回验证页')
 
         self.slept = []
         return build_fetch_client(transport=transport, sleep_fn=self.slept.append,
                                   **kwargs)
 
-    def test_waf_page_is_fetched_once_not_three_times(self):
+    def test_verification_page_is_fetched_once_not_three_times(self):
         client = self._client(max_retries=3)
         with self.assertRaises(FetchError):
-            client.get('https://www.okooo.com/basketball/match/1/odds/')
+            client.get(SCHEDULE)
         self.assertEqual(len(self.calls), 1)
 
-    def test_waf_page_does_not_burn_backoff_sleeps(self):
+    def test_verification_page_does_not_burn_backoff_sleeps(self):
         client = self._client(max_retries=3)
         with self.assertRaises(FetchError):
-            client.get('https://www.okooo.com/basketball/match/1/odds/')
+            client.get(SCHEDULE)
         self.assertEqual([s for s in self.slept if s >= 0.5], [],
                          '为一次注定失败的请求白等了退避')
 
-    def test_breaker_still_opens_after_enough_waf_hits(self):
-        """不重试不等于不计数——连撞几次照样开路，这正是旧代码那个
-        手写 60 秒计时器要达到的效果。"""
-        client = self._client(max_retries=3, failure_threshold=2)
-        for _ in range(2):
-            with self.assertRaises(FetchError):
-                client.get('https://www.okooo.com/basketball/match/1/odds/')
-        before = len(self.calls)
+    def test_one_hit_opens_the_breaker(self):
+        """撞一次就够。攒够 failure_threshold 再开路，等于把已知必败的请求
+        重复几遍——zgzcw 限速 0.5 rps，默认阈值 5 就是十几秒的冷启动。"""
+        client = self._client(max_retries=3)
         with self.assertRaises(FetchError):
-            client.get('https://www.okooo.com/basketball/match/1/odds/')
-        self.assertEqual(len(self.calls), before, '熔断开路后仍然发了请求')
+            client.get(SCHEDULE)
+        self.assertEqual(len(self.calls), 1)
+        with self.assertRaises(FetchError):
+            client.get(SCHEDULE)
+        self.assertEqual(len(self.calls), 1, '熔断开路后仍在白跑请求')
 
 
-class BreakerGranularityTests(unittest.TestCase):
-    """详情页的熔断不能把同域名的赛程页一起打掉。
+class BreakerKeyTests(unittest.TestCase):
+    """熔断按域名隔离，一个上游不该影响另一个。
 
-    **这是线上真实发生过的故障**：端点切换后，okooo 详情页连撞 WAF 触发
-    熔断，而熔断按域名建，于是同属 www.okooo.com 的赛程页也被短路——
-    接口返回 200、比赛数 0、走势全空，没有任何报错。赛程页自带的
-    rf_trend / dx_trend 是线上唯一活着的走势来源，代价是整份推荐直接空掉。
+    **线上真实发生过的故障**：详情页连撞验证页触发熔断，而熔断当时按域名建，
+    同域名的赛程页被一起短路——接口返回 200、比赛数 0、走势全空，不报任何错。
+    换到 zgzcw 后赛程走 cp.、赔率走 odds./fenxi.，本就是不同子域，
+    netloc 天然把它们分开；**前提是 key 保留子域**，退化成注册域就又合流了。
     """
 
-    SCHEDULE = 'https://www.okooo.com/jingcailanqiu/hunhe/'
-    DETAIL = 'https://www.okooo.com/basketball/match/5381400/odds/'
+    def test_schedule_and_odds_subdomains_use_different_breakers(self):
+        self.assertNotEqual(fetching.breaker_key(SCHEDULE),
+                            fetching.breaker_key(ODDS))
 
-    def test_detail_and_schedule_use_different_breakers(self):
-        self.assertNotEqual(fetching.breaker_key(self.DETAIL),
-                            fetching.breaker_key(self.SCHEDULE))
-
-    def test_all_three_detail_kinds_share_one_breaker(self):
-        keys = {fetching.breaker_key(
-            f'https://www.okooo.com/basketball/match/5381400/{kind}/')
-            for kind in ('odds', 'ah', 'ou')}
-        self.assertEqual(len(keys), 1)
-
-    def test_other_hosts_keep_the_domain_as_key(self):
+    def test_key_keeps_the_subdomain(self):
+        self.assertEqual(fetching.breaker_key(SCHEDULE), 'cp.zgzcw.com')
         self.assertEqual(fetching.breaker_key('https://trade.500.com/jclq/'),
                          'trade.500.com')
 
-    def test_lookalike_paths_are_not_treated_as_detail_pages(self):
-        for url in ('https://www.okooo.com/basketball/match/5381400/trends/',
-                    'https://www.okooo.com/basketball/league/486/',
-                    'https://evil.com/basketball/match/1/odds/'):
-            with self.subTest(url=url):
-                self.assertNotEqual(fetching.breaker_key(url),
-                                    'www.okooo.com#detail')
-
-    def test_blocked_details_do_not_short_circuit_the_schedule(self):
+    def test_blocked_odds_do_not_short_circuit_the_schedule(self):
         calls = []
 
         def transport(url, timeout):
             calls.append(url)
-            if '/basketball/match/' in url:
-                raise WafBlocked('okooo WAF 拦截')
+            if 'odds.' in url:
+                raise VerificationPage('中国足彩网返回验证页')
             return '赛程页正文'
 
         client = build_fetch_client(transport=transport, sleep_fn=lambda _: None)
         for _ in range(4):
             with self.assertRaises(FetchError):
-                client.get(self.DETAIL)
+                client.get(ODDS)
 
-        self.assertEqual(client.get(self.SCHEDULE), '赛程页正文',
-                         '详情页的熔断把赛程页一起打掉了')
-
-    def test_one_waf_hit_opens_the_detail_breaker(self):
-        """撞一次就够。攒够 failure_threshold 再开路，等于把已知必败的请求
-        重复几遍——okooo 限速 0.4 rps，默认阈值 5 就是十几秒的冷启动。"""
-        calls = []
-
-        def transport(url, timeout):
-            calls.append(url)
-            raise WafBlocked('okooo WAF 拦截')
-
-        client = build_fetch_client(transport=transport, sleep_fn=lambda _: None)
-        with self.assertRaises(FetchError):
-            client.get(self.DETAIL)
-        self.assertEqual(len(calls), 1)
-
-        for kind in ('ah', 'ou'):
-            with self.assertRaises(FetchError):
-                client.get(f'https://www.okooo.com/basketball/match/5381400/{kind}/')
-        self.assertEqual(len(calls), 1, '熔断开路后仍在白跑请求')
+        self.assertEqual(client.get(SCHEDULE), '赛程页正文',
+                         '赔率页的熔断把赛程页一起打掉了')
 
 
 class UrllibGetEncodingTests(unittest.TestCase):

@@ -101,20 +101,20 @@ def _analyzer():
 
 
 def _service(cache=None, matches=None, movement_map=None, recorder=None,
-             okooo_matches=None, delay=0.0):
+             zgzcw_matches=None, delay=0.0):
     def schedule_500(date):
         if delay:
             time.sleep(delay)
         return list(MATCHES if matches is None else matches)
 
-    def schedule_okooo(date):
-        if okooo_matches is None:
-            raise RuntimeError('澳客不可用')
-        return list(okooo_matches)
+    def schedule_zgzcw(date):
+        if zgzcw_matches is None:
+            raise RuntimeError('中国足彩网不可用')
+        return list(zgzcw_matches)
 
     return PredictionService(
         analyzer=_analyzer(),
-        schedule_sources={'500': schedule_500, 'okooo': schedule_okooo},
+        schedule_sources={'500': schedule_500, 'zgzcw': schedule_zgzcw},
         movement_provider=(lambda ms, src, d:
                            dict(MOVEMENT_MAP if movement_map is None else movement_map)),
         recorder=recorder,
@@ -131,7 +131,7 @@ class GenerateGoldenTests(unittest.TestCase):
         {'bet_types': ['rqspf', 'dx']},
         {'bet_types': []},
         {'use_movement': False},
-        {'source': 'okooo'},
+        {'source': 'zgzcw'},
         {'source': '未知源'},
     ]
 
@@ -141,10 +141,10 @@ class GenerateGoldenTests(unittest.TestCase):
                 actual = _service(recorder=RecordingRecorder()).generate(**case)
                 self.assertEqual(as_json(actual), GOLDEN[f'payload:{i}'])
 
-    def test_okooo_source_used_when_available(self):
-        okooo_matches = [dict(MATCHES[0], id='ok1', source='okooo')]
-        actual = _service(okooo_matches=okooo_matches,
-                          recorder=RecordingRecorder()).generate(source='okooo')
+    def test_zgzcw_source_used_when_available(self):
+        zgzcw_matches = [dict(MATCHES[0], id='ok1', source='zgzcw')]
+        actual = _service(zgzcw_matches=zgzcw_matches,
+                          recorder=RecordingRecorder()).generate(source='zgzcw')
         self.assertEqual(actual['results'][0]['match']['id'], 'ok1')
 
     def test_empty_schedule(self):
@@ -205,7 +205,7 @@ class FetchScheduleTests(unittest.TestCase):
 
     def test_source_falls_back_like_generate(self):
         service = _service(recorder=RecordingRecorder())
-        self.assertEqual(service.fetch_schedule(DATE, source='okooo'), MATCHES)
+        self.assertEqual(service.fetch_schedule(DATE, source='zgzcw'), MATCHES)
 
 
 class FindValueBetsGoldenTests(unittest.TestCase):
@@ -336,10 +336,10 @@ class CacheTests(unittest.TestCase):
         service = PredictionService(
             analyzer=_analyzer(),
             schedule_sources={'500': lambda date: seen.append(date) or list(MATCHES),
-                              'okooo': lambda date: seen.append(date) or list(MATCHES)},
+                              'zgzcw': lambda date: seen.append(date) or list(MATCHES)},
             recorder=RecordingRecorder(), cache=self._cache(), today_fn=lambda: DATE)
         variants = [
-            {}, {'date': '2026-09-01'}, {'source': 'okooo'},
+            {}, {'date': '2026-09-01'}, {'source': 'zgzcw'},
             {'bet_types': ['spf']}, {'use_movement': False},
         ]
         for variant in variants:

@@ -27,7 +27,7 @@ PAYLOAD = {
     'date': '2026-08-27',
     'count': 1,
     'version': 'v-test',
-    'source': 'okooo',
+    'source': 'zgzcw',
     'movement_stats': {'with_movement': 3},
     'results': [{
         # handicap / total_line 挂在 match 上而非玩法上——解析器给的就是
@@ -86,7 +86,7 @@ class RecommendationEndpointTests(_Base):
         self.assertEqual(result['date'], '2026-08-27')
         self.assertEqual(result['total_matches'], 1)
         self.assertEqual(result['version'], 'v-test')
-        self.assertEqual(result['source'], 'okooo')
+        self.assertEqual(result['source'], 'zgzcw')
         self.assertEqual(result['movement_stats'], {'with_movement': 3})
 
     def test_每个玩法的字段都在(self):
@@ -102,13 +102,13 @@ class RecommendationEndpointTests(_Base):
     def test_defaults_match_the_previous_behaviour(self):
         self._payload()
         self.prediction.generate.assert_called_once_with(
-            date=None, bet_types=['spf', 'rqspf', 'dx'], source='okooo',
+            date=None, bet_types=['spf', 'rqspf', 'dx'], source='zgzcw',
             use_movement=True)
 
-    def test_unknown_source_falls_back_to_okooo(self):
+    def test_unknown_source_falls_back_to_zgzcw(self):
         self._payload({'source': ['随便写的']})
         self.assertEqual(self.prediction.generate.call_args.kwargs['source'],
-                         'okooo')
+                         'zgzcw')
 
     def test_bet_types_are_taken_from_the_query(self):
         self._payload({'types': ['spf,dx']})
@@ -145,7 +145,7 @@ class ScheduleEndpointTests(_Base):
         self._with(_context(prediction=prediction))
         self.assertEqual(service.basketball_matches_payload({}),
                          {'matches': SCHEDULE})
-        prediction.fetch_schedule.assert_called_once_with(date=None)
+        prediction.fetch_schedule.assert_called_once_with(date=None, source='zgzcw')
 
     def test_failure_is_reported_not_raised(self):
         prediction = mock.Mock()
@@ -345,7 +345,7 @@ class OddsTrackingSchedulerTests(unittest.TestCase):
         self.assertEqual(background.task_count(), 0)
 
     def test_interval_is_floored_at_one_minute(self):
-        """采样间隔有下限：okooo 与 500 都有限速，采太密只是挤占抓取配额。"""
+        """采样间隔有下限：zgzcw 与 500 都有限速，采太密只是挤占抓取配额。"""
         self._with_tracker(mock.Mock())
         self.assertTrue(self._call(basketball_service.register_odds_tracking,
                                    interval_minutes=0))

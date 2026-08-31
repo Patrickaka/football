@@ -2,7 +2,27 @@ import unittest
 from unittest.mock import patch
 
 import src.football as football
-from src.football.okooo_lottery import enrich_with_okooo_lottery, parse_okooo_jczq_schedule
+from src.football.zgzcw_lottery import (
+    enrich_with_zgzcw_lottery, parse_zgzcw_jczq_schedule,
+)
+
+ZGZCW_ROW = '''
+<table><tr id="tr_2041175" mn="周一001" m="芬超" rq="-1">
+ <td class="wh-1"><code>周一</code><i>001</i></td>
+ <td class="wh-2" title="芬超">芬超</td>
+ <td class="wh-3"><span title="比赛时间:2026-09-01 00:00">00:00</span></td>
+ <td class="wh-4 t-r"><a title="国际图尔">国际图尔</a></td>
+ <td class="wh-5">VS</td>
+ <td class="wh-6 t-l"><a title="库普斯">库普斯</a></td>
+ <td class="wh-8">
+  <div class="tz-area frq" pid="49"><em class="rq">0</em>
+   <a id="td_2041175_49_0">2.15</a><a id="td_2041175_49_1">3.20</a><a id="td_2041175_49_2">2.85</a></div>
+  <div class="tz-area rqq" pid="22"><em class="rq jian">-1</em>
+   <a id="td_2041175_22_0">4.60</a><a id="td_2041175_22_1">3.75</a><a id="td_2041175_22_2">1.55</a></div>
+ </td>
+ <td class="wh-10" newplayid="4468186"></td>
+</tr></table>
+'''
 
 
 class PredictionPostprocessTests(unittest.TestCase):
@@ -23,110 +43,60 @@ class PredictionPostprocessTests(unittest.TestCase):
         self.assertLess(after_draw, 0.35)
         self.assertAlmostEqual(sum(prob for _, prob in anchored), 1.0)
 
-    def test_okooo_jczq_offer_enriches_500_analysis_match(self):
-        html = '''
-        <table><tr>
-          <td><span class="xh"><i>001</i></span> 周六001</td><td>18:00</td>
-          <td><a href="/soccer/match/9988"><span class="homenameobj" title="主队">主队</span></a>
-              <span class="handicapobj">(-1)</span>
-              <span class="awaynameobj" title="客队">客队</span>
-              <em>1.80</em><em>3.40</em><em>4.10</em>
-              <em>2.60</em><em>3.50</em><em>2.20</em> 让球胜平负 比分 总进球</td>
-        </tr></table>
-        '''
-        offers = parse_okooo_jczq_schedule(html)
-        matches = enrich_with_okooo_lottery([
-            {'num': '周六001', 'home': '主队', 'away': '客队', 'time': '07-18 18:00'}
+    def test_zgzcw_jczq_offer_enriches_500_analysis_match(self):
+        offers = parse_zgzcw_jczq_schedule(ZGZCW_ROW)
+        matches = enrich_with_zgzcw_lottery([
+            {'num': '周一001', 'home': '国际图尔', 'away': '库普斯', 'time': '09-01 00:00'}
         ], lottery_matches=offers)
 
-        self.assertEqual(matches[0]['lottery_source'], 'okooo')
+        self.assertEqual(matches[0]['lottery_source'], 'zgzcw')
         self.assertEqual(matches[0]['lottery_handicap'], -1)
         self.assertEqual(matches[0]['lottery_primary_market'], 'rqspf')
-        self.assertEqual(matches[0]['lottery_rqspf_odds']['让平'], 3.5)
+        self.assertEqual(matches[0]['lottery_rqspf_odds']['让平'], 3.75)
+        self.assertEqual(matches[0]['analysis_id'], '4468186')
 
-    def test_okooo_unmatched_offer_does_not_invent_lottery_play(self):
-        matches = enrich_with_okooo_lottery([
+    def test_unmatched_offer_does_not_invent_lottery_play(self):
+        """匹配不上就如实说没有，不能顺手编一个玩法出来。"""
+        matches = enrich_with_zgzcw_lottery([
             {'num': '周六002', 'home': 'A', 'away': 'B', 'time': '18:00'}
         ], lottery_matches=[])
 
         self.assertFalse(matches[0]['lottery_offer_matched'])
         self.assertIsNone(matches[0]['lottery_primary_market'])
+        self.assertEqual(matches[0]['lottery_source'], 'unavailable')
 
-    def test_okooo_three_odds_with_handicap_means_rqspf_only(self):
-        html = '''<tr><td><span class="xh"><i>001</i></span></td><td>18:00</td><td>
-          <a href="/soccer/match/9988"><span class="homenameobj">主队</span></a>
-          <span class="handicapobj">(-1)</span><span class="awaynameobj">客队</span>
-          <em>2.60</em><em>3.50</em><em>2.20</em></td></tr>'''
+    def test_half_a_team_name_match_is_not_enough(self):
+        """只有一个队名对上（4 分）够不着 8 分阈值——同队不同对手的场次
+        会被串成一场，赔率张冠李戴还看不出来。"""
+        offers = parse_zgzcw_jczq_schedule(ZGZCW_ROW)
+        matches = enrich_with_zgzcw_lottery([
+            {'num': '周三007', 'home': '国际图尔', 'away': '另一支球队', 'time': '20:00'}
+        ], lottery_matches=offers)
 
-        offer = parse_okooo_jczq_schedule(html)[0]
-        self.assertFalse(offer['spf_available'])
-        self.assertTrue(offer['rqspf_available'])
-        self.assertIsNone(offer['spf_odds'])
-        self.assertEqual(offer['rqspf_odds']['让平'], 3.5)
+        self.assertFalse(matches[0]['lottery_offer_matched'])
+        self.assertEqual(matches[0]['lottery_unavailable_reason'],
+                         'cross_source_match_failed')
 
-    def test_okooo_current_div_page_parses_both_spf_markets(self):
-        html = '''<div class="touzhu_1" data-mid="88" data-ordercn="周六001"
-          data-rq="-1" data-hname="主队" data-aname="客队">
-          <div class="shijian" mTime="18:00"></div>
-          <div class="shenpf"><div class="zhu" data-sp="1.80" data-wf="0" data-wz="0"></div>
-          <div class="ping" data-sp="3.20" data-wf="0" data-wz="1"></div>
-          <div class="fu" data-sp="4.10" data-wf="0" data-wz="2"></div></div>
-          <a href="/soccer/match/88/odds/"></a>
-          <div class="rangqiuspf"><div class="zhu" data-sp="2.60" data-wf="1" data-wz="0"></div>
-          <div class="ping" data-sp="3.50" data-wf="1" data-wz="1"></div>
-          <div class="fu" data-sp="2.20" data-wf="1" data-wz="2"></div></div>
-        </div>'''
+    def test_zero_handicap_is_not_sold_as_rqspf(self):
+        """让球为 0 时那三个赔率就是胜平负本身，报成让球会算错结算方式。"""
+        offer = parse_zgzcw_jczq_schedule(
+            ZGZCW_ROW.replace('<em class="rq jian">-1</em>',
+                              '<em class="rq">0</em>'))[0]
 
-        offer = parse_okooo_jczq_schedule(html)[0]
-        self.assertEqual(offer['num'], '周六001')
-        self.assertEqual(offer['lottery_handicap'], -1)
-        self.assertTrue(offer['spf_available'])
-        self.assertTrue(offer['rqspf_available'])
-        self.assertEqual(offer['spf_odds']['胜'], 1.8)
-        self.assertEqual(offer['rqspf_odds']['让负'], 2.2)
+        self.assertIsNone(offer['rqspf_odds'])
+        self.assertFalse(offer['rqspf_available'])
+        self.assertNotIn('rqspf', offer['available_markets'])
 
-    def test_okooo_div_page_parses_live_choices_without_weiks_class(self):
-        html = '''<div class="touzhu_1" data-mid="1317908" data-ordercn="周五004"
-          data-rq="-1" data-hname="塞伊" data-aname="拉赫">
-          <div class="shenpf">
-            <div class="zhu " data-sp="2.50" data-wf="0" data-wz="0"></div>
-            <div class="ping " data-sp="3.15" data-wf="0" data-wz="1"></div>
-            <div class="fu " data-sp="2.45" data-wf="0" data-wz="2"></div>
-          </div>
-          <div class="rangqiuspf">
-            <div class="zhu " data-sp="5.28" data-wf="1" data-wz="0"></div>
-            <div class="ping " data-sp="4.45" data-wf="1" data-wz="1"></div>
-            <div class="fu " data-sp="1.40" data-wf="1" data-wz="2"></div>
-          </div>
-        </div>'''
-
-        offer = parse_okooo_jczq_schedule(html)[0]
-
-        self.assertTrue(offer['spf_available'])
-        self.assertTrue(offer['rqspf_available'])
-        self.assertEqual(offer['spf_odds'], {'胜': 2.5, '平': 3.15, '负': 2.45})
-        self.assertEqual(offer['rqspf_odds'], {'让胜': 5.28, '让平': 4.45, '让负': 1.4})
-
-    def test_okooo_div_page_marks_spf_unavailable_when_it_says_not_on_sale(self):
-        html = '''<div class="touzhu_1" data-mid="89" data-ordercn="周六010"
-          data-rq="-2" data-hname="阿森纳" data-aname="考文垂">
-          <div class="shijian" mTime="22:00"></div>
-          <div class="shenpf">
-            <div class="zhu weiks" data-sp="0" data-wf="0" data-wz="0"><div class="peilv">0.00</div></div>
-            <div class="ping weiks" data-sp="0" data-wf="0" data-wz="1"><div class="peilv">0.00</div></div>
-            <div class="fu weiks" data-sp="0" data-wf="0" data-wz="2"><div class="peilv">0.00</div></div>
-            <span>未开售</span>
-          </div>
-          <div class="rangqiuspf"><div class="zhu weiks" data-sp="2.23" data-wf="1" data-wz="0"></div>
-          <div class="ping weiks" data-sp="3.80" data-wf="1" data-wz="1"></div>
-          <div class="fu weiks" data-sp="2.40" data-wf="1" data-wz="2"></div></div>
-        </div>'''
-
-        offer = parse_okooo_jczq_schedule(html)[0]
+    def test_unsold_market_is_not_reported_as_available(self):
+        """未开售的盘口赔率是 0.00，不能当成一个可投注的玩法报上去。"""
+        offer = parse_zgzcw_jczq_schedule(ZGZCW_ROW.replace(
+            '<a id="td_2041175_49_0">2.15</a><a id="td_2041175_49_1">3.20</a>'
+            '<a id="td_2041175_49_2">2.85</a>',
+            '<a id="td_2041175_49_0">0.00</a><a id="td_2041175_49_1">0.00</a>'
+            '<a id="td_2041175_49_2">0.00</a>'))[0]
 
         self.assertFalse(offer['spf_available'])
         self.assertIsNone(offer['spf_odds'])
-        self.assertTrue(offer['rqspf_available'])
         self.assertNotIn('spf', offer['available_markets'])
         self.assertIn('rqspf', offer['available_markets'])
 
@@ -640,7 +610,7 @@ class PredictionPostprocessTests(unittest.TestCase):
 
         self.assertTrue(football._is_prediction_cache_current(cached))
 
-    def test_lottery_cache_invalidates_unmatched_offer_after_okooo_recovers(self):
+    def test_lottery_cache_invalidates_unmatched_offer_after_source_recovers(self):
         cached = {'lottery': {'offer_matched': False, 'primary_market': None}}
         match = {
             'lottery_offer_matched': True,

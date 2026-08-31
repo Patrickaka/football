@@ -74,7 +74,7 @@ class PredictBatchPayloadTests(unittest.TestCase):
                      lottery_handicap=-1, lottery_source='available',
                      lottery_offer_matched=True, lottery_available_markets=['spf'],
                      lottery_spf_available=True, lottery_spf_odds={'h': 1.9},
-                     okooo_id='ok9', schedule_source='500')
+                     zgzcw_id='zg9', schedule_source='500')
         with patch.object(football_api, 'analyze_match',
                           side_effect=lambda m, force_refresh=False: captured.append(m) or {}):
             service.predict_batch_payload({'matches': [raw]})
@@ -84,11 +84,13 @@ class PredictBatchPayloadTests(unittest.TestCase):
                 'lottery_handicap': ['-1'], 'lottery_source': ['available'],
                 'lottery_offer_matched': ['true'], 'lottery_available_markets': ['spf'],
                 'lottery_spf_available': ['true'], 'lottery_spf_odds': ['{"h": 1.9}'],
-                'okooo_id': ['ok9'], 'schedule_source': ['500'],
+                'zgzcw_id': ['zg9'], 'schedule_source': ['500'],
             })
 
         self.assertEqual(len(captured), 2)
         self.assertEqual(captured[0], captured[1])
+        self.assertEqual(captured[0]['zgzcw_id'], 'zg9',
+                         '源站 ID 没被带进 match——两个入口都丢了它也看不出来')
 
     def test_rejects_batch_over_limit(self):
         oversized = [_match(str(i)) for i in range(football_api.FOOTBALL_BATCH_LIMIT + 1)]

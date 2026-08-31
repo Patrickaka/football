@@ -1,24 +1,18 @@
-"""北单页面解析：三张管道赔率表与三份走势历史。
+"""北单页面解析：三张管道赔率表，以及走势历史的取数策略。
 
-参照物是从迁移前的 `fetching.py` / `schedules.py` 生成的黄金文件
-（`tests/fixtures/golden/beidan_parsing.json.gz`，80 条），**逐条相同**。
+参照物是黄金文件（`tests/fixtures/golden/beidan_parsing.json.gz`，27 条），
+**逐条相同**——只覆盖三张管道分隔的赔率表（比分/总进球/半全场）。
 
-**语料的来源要分清**（判据 10、20）：
+**走势历史那 53 条语料已经删掉**：它们编码的是旧解析器的边界（表头关键字、
+列数不足、script 回退……），换到 zgzcw 的结构化历史页后一律解析为空，
+留着是 53 条恒真断言。取数策略（公司明细页 → 汇总页两步）由下面的
+`AdapterTests` 守着，解析本身在 `tests/domain/test_zgzcw_sources.py`。
 
-- `tests/fixtures/basketball/okooo_ah.html.gz` 是真页面（2026-08-26 抓的）。
-  它是**篮球**详情页，那张表头含「盘口」的表其实是博彩公司列表而不是时间
-  序列，解析出来是 `time='序'`、`handicap='公司名'`——留着不是因为它有意义，
-  而是因为标签嵌套、空白、编码都是真的。
-- 其余 HTML 与管道表按 `fetching.py` / `schedules.py` 里**实际用的正则与下标**
-  铺出来，不是按字段名猜的。
-- **这一批有一处已知的覆盖缺口**：`ssq_match_info.jsp` 线上实测 HTTP 404
-  （2026-08-28），okooo 足球详情页对临时进程一律 WAF 拦截，所以这两类
-  拿不到真实捕获。构造语料能保证新旧两版一致，但保证不了「真页面长这样」。
+语料按 `schedules.py` 里**实际用的正则与下标**铺出来，不是按字段名猜的。
 
 **解码不在这一层**：`fetch` 拿到字节后按 utf-8 / gbk / gb2312 依次**严格**解码
 （不是 `errors='replace'`），解析层收到的已经是 str。§十一·1 记的那个
-「四个候选里第一个总是成功、gbk 页面解出整页乱码」的坑就在那里，
-所以下面留了一条用例盯着它别退回去。
+「四个候选里第一个总是成功、gbk 页面解出整页乱码」的坑就在那里。
 """
 import ast
 import gzip
@@ -480,62 +474,80 @@ class AdapterTests(unittest.TestCase):
     ASIAN_PAGE = _table(['时间', '亚盘', '主', '客'],
                         [('09:00', '-0.5', '0.95', '0.90')])
 
-    def test_asian_tries_four_paths_in_order(self):
-        """**只有亚盘有四个候选路径**，大小球与比分各一个。"""
-        with mock.patch.object(fetching_adapter, 'fetch_okooo',
-                               return_value='') as fetched:
-            fetching_adapter.fetch_okooo_asian_history('1320957')
-        suffixes = [call.args[0].rstrip('/').rsplit('/', 1)[-1]
-                    for call in fetched.call_args_list]
-        self.assertEqual(suffixes, ['ah', 'hodds', 'odds', 'history'])
+    COMPANY_PAGE = '''
+<h2>韦*指数变化</h2><table>
+<tr><th>序号</th><th>时间</th><th>更新</th><th>指数</th></tr>
+<tr><td>1</td><td>2026-08-30 01:01:05</td><td><span>赛前0分</span></td>
+ <td><span>0.81</span></td><td><span>平手</span></td><td><span>0.99</span></td>
+ <td>52.37</td><td>47.63</td><td>0.92</td><td>0.98</td><td>0.95</td></tr>
+</table>
+'''
 
-    def test_goals_and_cs_try_a_single_path(self):
-        for fn, suffix in ((fetching_adapter.fetch_okooo_goals_history, 'goals'),
-                           (fetching_adapter.fetch_okooo_cs_history, 'cs')):
-            with self.subTest(suffix=suffix):
-                with mock.patch.object(fetching_adapter, 'fetch_okooo',
-                                       return_value='') as fetched:
-                    fn('1320957')
-                self.assertEqual(len(fetched.call_args_list), 1)
-                self.assertTrue(fetched.call_args.args[0].endswith(f'/{suffix}/'))
+    SUMMARY_PAGE = '''
+<table><tr firsttime="2026-08-24 22:14:55"><td>1</td><td>平均*</td>
+ <td id="chupan-w-0" data="0.67">0.67</td><td id="chupan-s-0" data="0.25">平/半</td>
+ <td id="chupan-l-0" data="1.11">1.11</td>
+ <td cid="0" data="0.99">0.99</td><td cid="0" data="0.25">平/半</td>
+ <td cid="0" data="0.83">0.83</td></tr></table>
+'''
 
-    def test_the_first_page_with_records_wins(self):
-        pages = ['', '<html></html>', self.ASIAN_PAGE, 'unused']
-        with mock.patch.object(fetching_adapter, 'fetch_okooo',
+    def _urls(self, pages, fn=None, match_id='1320957'):
+        fn = fn or fetching_adapter.fetch_zgzcw_asian_history
+        with mock.patch.object(fetching_adapter, 'fetch_zgzcw',
                                side_effect=pages) as fetched:
-            result = fetching_adapter.fetch_okooo_asian_history('1320957')
-        self.assertEqual(len(result['history']), 1)
-        self.assertEqual(len(fetched.call_args_list), 3)
+            result = fn(match_id)
+        return result, [call.args[0] for call in fetched.call_args_list]
 
-    def test_all_pages_empty_yields_an_empty_history(self):
-        with mock.patch.object(fetching_adapter, 'fetch_okooo', return_value=None):
-            self.assertEqual(
-                fetching_adapter.fetch_okooo_asian_history('1320957'),
-                {'history': []})
+    def test_asian_asks_the_company_detail_before_the_summary(self):
+        """先要 Bet365 的完整序列，拿不到才退回初盘/即时盘那两点摘要。
 
-    def test_a_failing_page_does_not_stop_the_others(self):
-        with mock.patch.object(fetching_adapter, 'fetch_okooo',
-                               side_effect=[RuntimeError('boom'), self.ASIAN_PAGE,
-                                            '', '']):
+        **只请求一个公司明细页**，不逐公司扫十几页——那是旧实现的代价。
+        """
+        _, urls = self._urls(['', ''])
+        self.assertEqual(len(urls), 2)
+        self.assertIn('ypdb/zhishu?company_id=2', urls[0])
+        self.assertTrue(urls[1].endswith('/ypdb'), urls[1])
+
+    def test_goals_uses_its_own_path(self):
+        _, urls = self._urls(['', ''], fetching_adapter.fetch_zgzcw_goals_history)
+        self.assertIn('dxdb/zhishu?company_id=2', urls[0])
+        self.assertTrue(urls[1].endswith('/dxdb'), urls[1])
+
+    def test_cs_history_makes_no_request_at_all(self):
+        """中国足彩网不公开比分盘历史。返回空比拿欧亚盘冒充要好。"""
+        with mock.patch.object(fetching_adapter, 'fetch_zgzcw') as fetched:
+            self.assertEqual(fetching_adapter.fetch_zgzcw_cs_history('1320957'),
+                             {'history': []})
+        fetched.assert_not_called()
+
+    def test_the_company_detail_wins_and_the_summary_is_not_asked(self):
+        result, urls = self._urls([self.COMPANY_PAGE, 'unused'])
+        self.assertEqual(len(urls), 1, '明细页已经给出序列，不该再问汇总页')
+        self.assertEqual(result['history_source'], 'zgzcw_company_detail')
+        self.assertEqual(result['company_id'], '2')
+        self.assertTrue(result['history'])
+
+    def test_an_empty_detail_falls_back_to_the_summary(self):
+        """两个来源要能分辨——下游据此判断这份序列有多完整。"""
+        result, urls = self._urls(['', self.SUMMARY_PAGE])
+        self.assertEqual(len(urls), 2)
+        self.assertEqual(result['history_source'],
+                         'zgzcw_opening_current_fallback')
+        self.assertEqual(result['company'], '平均*')
+
+    def test_a_failing_detail_does_not_stop_the_summary(self):
+        with mock.patch.object(fetching_adapter, 'fetch_zgzcw',
+                               side_effect=[RuntimeError('boom'), self.SUMMARY_PAGE]):
             with mock.patch.object(fetching_adapter.log, 'warning') as warned:
-                result = fetching_adapter.fetch_okooo_asian_history('1320957')
-        self.assertEqual(len(result['history']), 1)
+                result = fetching_adapter.fetch_zgzcw_asian_history('1320957')
+        self.assertTrue(result['history'])
         warned.assert_called_once()
 
-    def test_the_log_distinguishes_table_from_script(self):
-        """两条日志不同不是装饰——脚本那条路少走几道校验。"""
-        script_page = _script_page(
-            '亚盘 ' + 'x' * MIN_SCRIPT_LENGTH + ' 09:00, -0.5, 0.95, 0.90')
-        with mock.patch.object(fetching_adapter, 'fetch_okooo',
-                               return_value=self.ASIAN_PAGE):
-            with mock.patch.object(fetching_adapter.log, 'info') as logged:
-                fetching_adapter.fetch_okooo_asian_history('1320957')
-        self.assertNotIn('通过脚本', logged.call_args.args[0])
-        with mock.patch.object(fetching_adapter, 'fetch_okooo',
-                               return_value=script_page):
-            with mock.patch.object(fetching_adapter.log, 'info') as logged:
-                fetching_adapter.fetch_okooo_asian_history('1320957')
-        self.assertIn('通过脚本', logged.call_args.args[0])
+    def test_all_pages_empty_yields_an_empty_history(self):
+        with mock.patch.object(fetching_adapter, 'fetch_zgzcw', return_value=None):
+            self.assertEqual(
+                fetching_adapter.fetch_zgzcw_asian_history('1320957'),
+                {'history': []})
 
     def test_table_adapters_return_an_empty_dict_when_nothing_was_fetched(self):
         for fn in (schedules_adapter.fetch_beidan_bifen,
