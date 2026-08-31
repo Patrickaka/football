@@ -772,7 +772,8 @@ def analyze_match(match, force_refresh=False):
             'selection': 'chronological_holdout_top3',
         }
     except Exception as e:
-        meta['dixon_coles_ensemble'] = {'applied': False, 'reason': str(e)}
+        meta['dixon_coles_ensemble'] = {'applied': False, 'reason': 'internal_error',
+                                        'error_type': type(e).__name__}
         log.warning(f"Dixon-Coles ensemble failed: {e}")
 
     # 盘口变化先验融合
@@ -859,7 +860,8 @@ def analyze_match(match, force_refresh=False):
             meta['score_total_movement'] = score_total_movement_result
     except Exception as e:
         meta['score_total_movement_adjusted'] = False
-        meta['score_total_movement'] = {'applied': False, 'reason': str(e)}
+        meta['score_total_movement'] = {'applied': False, 'reason': 'internal_error',
+                                        'error_type': type(e).__name__}
         log.warning(f"score total movement adjustment failed: {e}")
 
     # Structured H2H / motivation context participates in the same score
@@ -883,7 +885,8 @@ def analyze_match(match, force_refresh=False):
         candidates, contextual_adjustment = apply_contextual_fusion(candidates, live_context)
         meta['contextual_fusion'] = contextual_adjustment
     except Exception as e:
-        meta['contextual_fusion'] = {'applied': False, 'reason': str(e)}
+        meta['contextual_fusion'] = {'applied': False, 'reason': 'internal_error',
+                                     'error_type': type(e).__name__}
         log.warning(f"contextual fusion failed: {e}")
 
     # Exact-score calibration can change the marginal goal mean. Re-anchor the
@@ -1507,7 +1510,8 @@ def analyze_match(match, force_refresh=False):
     except Exception as e:
         log.warning(f"专业决策闸门构建失败: {e}")
         result['professional_validation'] = {
-            'available': False, 'production_ready': False, 'reason': str(e),
+            'available': False, 'production_ready': False,
+            'reason': 'internal_error', 'error_type': type(e).__name__,
         }
         result['decision_gate'] = {
             'official_bet_allowed': False,

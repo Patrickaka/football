@@ -240,4 +240,5 @@ def apply_history_calibration(candidates: List, profile: Dict) -> Tuple[List, Di
             'source': profile.get('source'),
         }
     except Exception as exc:
-        return candidates, {'applied': False, 'reason': str(exc)}
+        return candidates, {'applied': False, 'reason': 'internal_error',
+                            'error_type': type(exc).__name__}
