@@ -8,12 +8,12 @@ src/beidan/cache/beidan_{match_id}.json，再交给 src.football.bayes_report.bu
 生成深度报告，并登记进 reports/football_bayes_manifest.json（按 match_id 索引）。
 
 说明：
-- 需要网络可达 okooo（与北单模块同源）。
+- 需要网络可达 zgzcw.com（与北单模块同源）。
 - 本脚本不再是生产必需：server 的 /api/beidan 会自动持久化 rec，并在用户点击报告时按需生成。
   本脚本仅用于主动预生成 / 测试。
 
 用法：
-  python gen_beidan_reports.py [YYYY-MM-DD] [--source okooo] [--types spf,rqspf,zjq]
+  python gen_beidan_reports.py [YYYY-MM-DD] [--source zgzcw] [--types spf,rqspf,zjq]
 """
 import json
 import os
@@ -29,7 +29,7 @@ def main():
     import argparse
     ap = argparse.ArgumentParser()
     ap.add_argument("date", nargs="?", default=None, help="比赛日期 YYYY-MM-DD（默认取模块默认日期）")
-    ap.add_argument("--source", default="okooo", help="数据源 okooo/dc/jczq")
+    ap.add_argument("--source", default="zgzcw", help="数据源 zgzcw/dc/jczq")
     ap.add_argument("--types", default="spf,rqspf,zjq", help="投注类型，逗号分隔")
     args = ap.parse_args()
 

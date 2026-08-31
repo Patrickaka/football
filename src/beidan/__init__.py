@@ -3,7 +3,7 @@
 北单（北京单场）预测模块
 
 包结构（薄 facade，业务逻辑在子模块）：
-- config      常量、请求头、okooo 会话与 WAF 状态
+- config      常量、请求头、中国足彩网会话与熔断状态
 - modeling    概率建模（泊松/DC矩阵/λ推导/盘口解析）
 - fetching    数据与赛程抓取
 - markets     市场分析（亚盘/大小球/比分/进球趋势）
@@ -16,9 +16,11 @@
 
 from .config import (
     BEIDAN_VERSION, BEIDAN_HISTORY_KEY, BEIDAN_HISTORY_LIMIT, BASE_URL, SCHEDULE_URL,
-    DC_SCHEDULE_URL, MATCH_DETAIL_URL, OKOOO_BASE, OKOOO_DANCHANG_URL, OKOOO_MATCH_URL,
-    HEADERS, OKOOO_HEADERS, _okooo_session, _okooo_waf_blocked, _okooo_waf_blocked_time,
-    _mark_okooo_waf_blocked, _is_okooo_waf_blocked, _init_okooo_session, ensure_okooo_session, BET_TYPES, MAX_GOALS,
+    DC_SCHEDULE_URL, MATCH_DETAIL_URL, ZGZCW_BASE, ZGZCW_DANCHANG_URL,
+    ZGZCW_ANALYSIS_BASE, HEADERS, ZGZCW_HEADERS, _zgzcw_session,
+    _zgzcw_blocked, _zgzcw_blocked_time, _mark_zgzcw_blocked,
+    _is_zgzcw_blocked, ensure_zgzcw_session,
+    BET_TYPES, MAX_GOALS,
     SCORE_SPLIT, LEAGUE_PROFILES,
 )
 from .modeling import (
@@ -30,8 +32,10 @@ from .modeling import (
     match_target_total, match_lambdas, parse_beidan_handicap, rqspf_probs_from_score_probs,
 )
 from .fetching import (
-    fetch, fetch_json, fetch_okooo, fetch_okooo_schedule, fetch_okooo_asian_history,
-    fetch_okooo_goals_history, fetch_okooo_cs_history, fetch_beidan_schedule, fetch_jczq_schedule, fetch_zqdc_schedule,
+    fetch, fetch_json, fetch_zgzcw, fetch_zgzcw_schedule,
+    fetch_zgzcw_asian_history, fetch_zgzcw_goals_history,
+    fetch_zgzcw_cs_history, fetch_beidan_schedule, fetch_jczq_schedule,
+    fetch_zqdc_schedule,
 )
 from .markets import (
     adjust_probs_by_asian, analyze_asian_trend, build_beidan_joint_market_state, apply_beidan_joint_market_state, build_water_market_prediction,

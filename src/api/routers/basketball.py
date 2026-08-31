@@ -22,16 +22,17 @@ router = APIRouter(prefix='/api/basketball', tags=['basketball'])
 @router.get('')
 async def recommendations(date: Optional[str] = None,
                           types: str = 'spf,rqspf,dx',
-                          source: str = 'okooo'):
+                          source: str = 'zgzcw'):
     """篮球推荐预测。"""
     return await run_blocking(service.basketball_payload,
                               {'date': [date], 'types': [types], 'source': [source]})
 
 
 @router.get('/matches')
-async def matches(date: Optional[str] = None):
+async def matches(date: Optional[str] = None, source: str = 'zgzcw'):
     """比赛列表。"""
-    return await run_blocking(service.basketball_matches_payload, {'date': [date]})
+    return await run_blocking(service.basketball_matches_payload,
+                              {'date': [date], 'source': [source]})
 
 
 @router.get('/value')

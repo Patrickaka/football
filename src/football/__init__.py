@@ -42,7 +42,7 @@ from .fetching import (
     _fetch_rate_lock, _fetch_next_slot, _fetch_cache_get, _fetch_cache_set, _fetch_url_lock,
     clear_fetch_cache, _enter_fetch_throttle, _await_fetch_throttle, _await_rate_slot, fetch,
     _fetch_raw, _fetch_once, fetch_json, _fetch_match_list_remote, _save_match_list_cache,
-    _load_match_list_cache, get_match_list_status, _okooo_schedule_fallback, fetch_match_list, search_match,
+    _load_match_list_cache, get_match_list_status, _zgzcw_schedule_fallback, fetch_match_list, search_match,
 )
 from .parsing import (
     get_close_total_line, parse_handicap, parse_total_line, parse_lottery_handicap, _lottery_odds_probabilities,

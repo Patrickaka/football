@@ -60,7 +60,7 @@ class FetchClient:
         self.sleep_fn = sleep_fn
         # 熔断的粒度必须与**故障边界**一致，而限速的粒度对应的是对源站的
         # 礼貌，两者不是一回事，所以分开。默认按域名；当同一域名下既有健康
-        # 路径又有必然失败的路径时（例如 okooo 的赛程页正常、详情页被 WAF
+        # 路径又有必然失败的路径时（例如赛程页正常、详情页临时被验证页替换
         # 拦死），按域名熔断会让坏的那一半把好的一半一起打掉。
         self.breaker_key_fn = breaker_key_fn or (lambda url: urlparse(url).netloc)
         self._breakers = {}

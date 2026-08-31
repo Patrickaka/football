@@ -7,7 +7,7 @@
 
 外部数据都以端口注入，本模块只做编排：
 
-- `schedule_sources`：{源名: fn(date) -> [match]}，澳客不可用时回落 500。
+- `schedule_sources`：{源名: fn(date) -> [match]}，中国足彩网不可用时回落 500。
 - `movement_provider`：fn(matches, source, date) -> {match_id: {spf,rqspf,dx}}。
   走势的采集仍在旧模块（依赖尚未迁移的快照持久化），随赛前赔率追踪一起改造。
 - `recorder`：预测记录的落盘，缺失或抛错都不该让请求失败。
@@ -82,8 +82,9 @@ class PredictionService:
         return f'{CACHE_KEY_PREFIX}:{date}:{source}:{types}:{int(bool(use_movement))}'
 
     def _compute(self, date, bet_types, source, use_movement):
-        matches = self._fetch_matches(date, source)
-        movement_map = self._fetch_movements(matches, source, date, use_movement)
+        matches, actual_source = self._fetch_matches_with_source(date, source)
+        movement_map = self._fetch_movements(
+            matches, actual_source, date, use_movement)
         results = [self._analyze_match(match, movement_map.get(match.get('id')),
                                        bet_types)
                    for match in matches]
@@ -93,7 +94,9 @@ class PredictionService:
             'count': len(results),
             'results': results,
             'version': self._version,
-            'source': source,
+            'source': actual_source,
+            'requested_source': source,
+            'source_fallback': actual_source != source,
             'use_movement': use_movement,
             'movement_stats': _movement_stats(results),
         }
@@ -101,13 +104,20 @@ class PredictionService:
         return payload
 
     def _fetch_matches(self, date, source):
-        """澳客源不可用时回落 500：有一份稍弱的赛程，好过整天没有推荐。"""
+        matches, _ = self._fetch_matches_with_source(date, source)
+        return matches
+
+    def _fetch_matches_with_source(self, date, source):
+        """中国足彩网不可用时回落 500：有一份稍弱的赛程，好过整天没有推荐。"""
         if source in self._schedules and source != DEFAULT_SOURCE:
             try:
-                return self._schedules[source](date)
+                matches = self._schedules[source](date)
+                if matches:
+                    return matches, source
+                log.warning('%s 篮球赛程返回空列表，回退 %s', source, DEFAULT_SOURCE)
             except Exception as exc:
                 log.warning('%s 篮球赛程不可用，回退 %s: %s', source, DEFAULT_SOURCE, exc)
-        return self._schedules[DEFAULT_SOURCE](date)
+        return self._schedules[DEFAULT_SOURCE](date), DEFAULT_SOURCE
 
     def _fetch_movements(self, matches, source, date, use_movement):
         if not (use_movement and matches and self._movement_provider):

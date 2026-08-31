@@ -74,7 +74,7 @@ def _euro_odds(match, ouzhi):
         return ouzhi, None
     prices = (match.get('spf_sp'), match.get('spf_s'), match.get('spf_f'))
     if all(prices):
-        return {'home': prices[0], 'draw': prices[1], 'away': prices[2]}, 'okooo_main'
+        return {'home': prices[0], 'draw': prices[1], 'away': prices[2]}, 'zgzcw_main'
     return None, None
 
 

@@ -88,7 +88,7 @@ class OddsTracker:
     """采集一轮赔率快照。
 
     schedule_fetcher 注入而非内建：采集与「从哪儿取赛程」是两件事，
-    500 源和澳客源都能喂给它。
+    500 源和中国足彩网源都能喂给它。
     """
 
     def __init__(self, schedule_fetcher, store, now_fn=None, cap=HISTORY_CAP):

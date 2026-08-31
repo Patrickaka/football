@@ -17,7 +17,7 @@ from src.api.runtime import background
 log = logging.getLogger('api.runtime.basketball')
 
 # 赔率采样间隔。快于 15 分钟意义不大——盘口本身没那么频繁地动，
-# 而 okooo 与 500 都有限速，采太密只是白白挤占抓取配额。
+# 中国足彩网与 500 都有限速，采太密只是白白挤占抓取配额。
 ODDS_TRACKING_INTERVAL_MINUTES = 15
 
 _lock = threading.Lock()

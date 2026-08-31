@@ -22,7 +22,7 @@ router = APIRouter(prefix='/api/beidan', tags=['beidan'])
 @router.get('')
 async def recommendations(date: Optional[str] = None,
                           types: str = 'spf,rqspf,zjq',
-                          source: str = 'okooo',
+                          source: str = 'zgzcw',
                           force_refresh: str = 'false'):
     """北单推荐预测。"""
     return await run_blocking(service.beidan_payload, {
@@ -32,14 +32,14 @@ async def recommendations(date: Optional[str] = None,
 
 
 @router.get('/matches')
-async def matches(date: Optional[str] = None, source: str = 'okooo'):
+async def matches(date: Optional[str] = None, source: str = 'zgzcw'):
     """比赛列表。"""
     return await run_blocking(service.beidan_matches_payload,
                               {'date': [date], 'source': [source]})
 
 
 @router.get('/value')
-async def value_bets(date: Optional[str] = None, source: str = 'okooo',
+async def value_bets(date: Optional[str] = None, source: str = 'zgzcw',
                      threshold: float = 0.05):
     """价值投注推荐。"""
     return await run_blocking(service.beidan_value_payload,

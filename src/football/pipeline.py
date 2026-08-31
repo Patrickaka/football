@@ -74,8 +74,8 @@ def _is_prediction_cache_current(result: Dict) -> bool:
 
 
 def _is_lottery_cache_current(result: Dict, match: Dict) -> bool:
-    """Invalidate an old analysis once a verified okooo offer becomes available."""
-    # A temporary okooo failure must not discard a previously verified offer.
+    """中国足彩网核实销售玩法后，使旧的未核实分析缓存失效。"""
+    # 中国足彩网临时失败时不能丢弃此前已核实的销售玩法。
     if not match.get('lottery_offer_matched'):
         return True
     cached = result.get('lottery') or {}
@@ -453,12 +453,12 @@ def analyze_match(match, force_refresh=False):
                 log.error(f"保存缓存结果的预测记录失败: {e}")
             return cached_result
 
-    okooo_only = (
-        match.get('schedule_source') == 'okooo'
+    zgzcw_only = (
+        match.get('schedule_source') == 'zgzcw'
         and not match.get('analysis_source_id_available')
     )
-    if okooo_only:
-        # 澳客独立降级：官方胜平负决定方向；缺少连续亚盘/大小球时
+    if zgzcw_only:
+        # 中国足彩网独立降级：官方胜平负决定方向；缺少连续亚盘/大小球时
         # 使用中性盘与联赛基准，后续置为低信息完整度。
         spf = match.get('lottery_spf_odds') or {}
         home_odd = float(spf.get('胜') or 2.50)
@@ -483,7 +483,7 @@ def analyze_match(match, force_refresh=False):
         euro = analyze_euro(euro_raw)
         total = analyze_total(total_raw)
         team = None
-        log.warning('比赛 %s 使用澳客独立降级模型', mid)
+        log.warning('比赛 %s 使用中国足彩网独立降级模型', mid)
     else:
         # 五组抓取彼此独立，并发发起把单场耗时从「往返之和」降到「最慢的一次」；
         # 对源站的实际压力由 _fetching_mod.fetch() 的发号器统一控速，重复 URL 也只会打一次。
@@ -519,7 +519,7 @@ def analyze_match(match, force_refresh=False):
     
     # ========== 新增：抓取 Bet365 和 Pinnacle 独赔数据 ==========
     single_odds = None
-    if not okooo_only:
+    if not zgzcw_only:
         try:
             single_odds = single_odds_task.result()
             log.debug(
@@ -624,11 +624,11 @@ def analyze_match(match, force_refresh=False):
         euro['kelly']['trend'] = kelly_trend
 
     confidence = compute_prediction_confidence(asian, euro, total, team)
-    if okooo_only:
+    if zgzcw_only:
         confidence = {
             'score': 0.44,
             'level': 'low',
-            'label': '澳客单源·低置信',
+            'label': '中国足彩网单源·低置信',
             'notes': ['500盘口不可用', '缺少连续大小球与亚盘'],
             'recommend_count': 1,
         }
@@ -641,8 +641,8 @@ def analyze_match(match, force_refresh=False):
     ml_feature_snapshot = {}
     
     try:
-        if okooo_only:
-            raise RuntimeError('澳客单源降级不启用 ML 融合')
+        if zgzcw_only:
+            raise RuntimeError('中国足彩网单源降级不启用 ML 融合')
         # 准备特征
         ml_features = {
             'elo_home': team.get('elo_home', 1500) if team else 1500,

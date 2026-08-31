@@ -1,21 +1,13 @@
 """basketball 的抓取层，走 foundation/fetch。
 
-迁移前有两套并行的重试与熔断：okooo.py 自己维护 max_retries 循环和
-「WAF 封锁 60 秒」计时器，而 FetchClient 也有重试与熔断。职责这样切开：
+中国足彩网与 500.com 统一走 FetchClient 的限速、重试、熔断和快照机制：
 
-- **transport 只管领域知识**：Session 预热、gb2312/gbk 编码回退、WAF 页面识别
+- **transport 只管领域知识**：HTTP 与 utf-8/gbk 编码回退
 - **FetchClient 管通用策略**：按域名限速、退避重试、熔断、响应快照
 
-关键是让 WAF 识别**抛异常**而不是返回 None——它自然会被 FetchClient 记为
-一次失败并计入熔断，于是那个手写的 60 秒封锁计时器就不需要了，两套机制
-合并成一套。
-
-限速值：okooo 比 500.com 更保守，因为它有 WAF；旧代码完全没有限速，
-线上因此吃过 500.com 的大批 503。
+两个站点都使用低频限速，避免批量分析形成突发请求。
 """
 import logging
-import re
-import urllib.error
 import urllib.request
 from urllib.parse import urlparse
 
@@ -25,42 +17,33 @@ from src.foundation.fetch import (
 
 log = logging.getLogger('domain.basketball.fetching')
 
-OKOOO_HOSTS = frozenset({'www.okooo.com', 'okooo.com'})
-OKOOO_BASE = 'https://www.okooo.com'
-OKOOO_HUNHE_URL = f'{OKOOO_BASE}/jingcailanqiu/hunhe/'
+ZGZCW_HOSTS = frozenset({'cp.zgzcw.com', 'fenxi.zgzcw.com', 'odds.zgzcw.com'})
 
 # 每秒请求数。旧代码无限速，线上吃过 500.com 的大批 503。
 DEFAULT_RATE = 1.0
 RATE_OVERRIDES = {
-    'www.okooo.com': 0.4,
-    'okooo.com': 0.4,
+    'cp.zgzcw.com': 0.5,
+    'fenxi.zgzcw.com': 0.5,
+    'odds.zgzcw.com': 0.5,
 }
 
 _UA = ('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 '
        '(KHTML, like Gecko) Chrome/120.0 Safari/537.36')
 
 
-class WafBlocked(PermanentFetchError):
-    """识别到 WAF 拦截页。
-
-    抛异常而非返回 None，是为了让它计入 FetchClient 的熔断——连续撞 WAF
-    会开路，自然实现了旧代码里那个手写的「封锁 60 秒」，且不必自己维护计时器。
-
-    继承 PermanentFetchError 是因为 WAF 拦截是**确定性**的：同一个出口 IP
-    再试一次还是同样结果。当作暂时故障退避重试，只会把一次失败的代价乘以
-    重试次数——在 0.4 rps 的限速下这笔账很贵。
-    """
+class VerificationPage(PermanentFetchError):
+    """站点返回人机验证页而不是数据页。"""
 
 
-def dispatch_transport(okooo, default):
+def dispatch_transport(zgzcw, default):
     """按主机名把请求分派给对应实现。
 
-    用主机名而非子串匹配：查询参数里带源站名的链接（?ref=okooo.com）
+    用主机名而非子串匹配：查询参数里带源站名的链接
     不该被误分派。
     """
     def _transport(url, timeout):
         host = (urlparse(url).hostname or '').lower()
-        impl = okooo if host in OKOOO_HOSTS else default
+        impl = zgzcw if host in ZGZCW_HOSTS else default
         return impl(url, timeout)
 
     return _transport
@@ -128,24 +111,9 @@ def _fewest_replacements(raw, candidates):
     return best_name, best_text
 
 
-# 单场详情页：/basketball/match/<id>/odds|ah|ou/。这些页面在部分出口 IP 上
-# 被 WAF 拦死，而同域名的赛程页是通的——两者必须各用各的熔断器。
-_OKOOO_DETAIL_PATH = re.compile(r'^/basketball/match/\d+/(odds|ah|ou)/?$')
-_OKOOO_DETAIL_KEY = 'www.okooo.com#detail'
-
-
 def breaker_key(url):
-    """熔断键。默认按域名，但 okooo 的详情页单列。
-
-    澳客的赛程页正常、详情页被 WAF 拦死，两者同属 www.okooo.com。按域名
-    熔断的话，详情页连撞几次就会把赛程页一起打掉——而赛程页自带的
-    rf_trend / dx_trend 是线上唯一活着的走势来源，代价是整份推荐直接空掉。
-    这不是假设：端点切换后线上就是这么坏的，接口返回 200、比赛数 0。
-    """
+    """按域名隔离熔断，避免一个上游影响另一个。"""
     parsed = urlparse(url)
-    host = (parsed.hostname or '').lower()
-    if host in OKOOO_HOSTS and _OKOOO_DETAIL_PATH.match(parsed.path or ''):
-        return _OKOOO_DETAIL_KEY
     return parsed.netloc
 
 
@@ -178,85 +146,13 @@ def build_fetch_client(transport, snapshots_root=None, max_retries=3,
     return FetchClient(**kwargs)
 
 
-class OkoooTransport:
-    """okooo 的抓取实现。
-
-    只做领域知识三件事：Session 预热（直接请求详情页会被判为异常流量）、
-    gb2312 解码、WAF 页面识别。重试、限速、熔断一概交给 FetchClient——
-    旧实现自己维护 max_retries 循环和「WAF 封锁 60 秒」计时器，与
-    FetchClient 的同类机制重复，是三套缓存并存那类问题的又一个变种。
-    """
-
-    def __init__(self, session_factory=None, sleep_fn=None, warmup_pause=0.3):
-        self._session_factory = session_factory or self._default_session
-        self._sleep = sleep_fn if sleep_fn is not None else __import__('time').sleep
-        self._warmup_pause = warmup_pause
-        self._session = None
-
-    @staticmethod
-    def _default_session():
-        import requests
-
-        session = requests.Session()
-        session.headers.update({
-            'User-Agent': _UA,
-            'Referer': OKOOO_HUNHE_URL,
-        })
-        # 该站证书链在部分环境下校验失败，沿用迁移前的设置。
-        session.verify = False
-        return session
-
-    def _ensure_session(self):
-        if self._session is not None:
-            return self._session
-        session = self._session_factory()
-        try:
-            session.get(OKOOO_BASE + '/', timeout=10)
-            self._sleep(self._warmup_pause)
-            session.get(OKOOO_HUNHE_URL, timeout=10)
-        except Exception as exc:
-            log.warning('okooo session 预热失败，继续尝试直接抓取: %s', exc)
-        self._session = session
-        return session
+class ZgzcwTransport:
+    """中国足彩网 transport：复用统一解码并识别验证页。"""
 
     def __call__(self, url, timeout):
-        """撞到 WAF 时先换一次 Session 再试，两次都被拦才认定为永久失败。
-
-        WAF 的拦截**不完全是确定性的**：长驻进程里的 Session 用久了会被
-        标记，此时换一个干净 Session 往往立刻就通。所以「重建后再试一次」
-        与「原样重试一次」是两回事——前者是真正不同的尝试。
-
-        端点切换当天线上就栽在这里：把 WAF 一律当作确定性失败、一次都不
-        重试，等于掐掉了这条自愈路径。赛程页因为 Session 老化被拦，熔断
-        立刻开路 60 秒，接口返回 200 加 0 场比赛。
-
-        Session 的生命周期是本 transport 自己的事，不该外泄给 FetchClient
-        的重试循环——那一层管的是「对端是否暂时不可用」，管不到这里。
-        """
-        try:
-            return self._fetch_once(url, timeout)
-        except WafBlocked:
-            log.info('okooo 撞 WAF，换一个 Session 重试: %s', url)
-
-        # 上一次失败已经把 Session 丢掉了，这次会重新预热一个
-        return self._fetch_once(url, timeout)
-
-    def _fetch_once(self, url, timeout):
-        session = self._ensure_session()
-        resp = session.get(url, timeout=timeout)
-
-        if getattr(resp, 'status_code', 200) != 200:
-            raise IOError(f'okooo 返回 {resp.status_code}: {url}')
-
-        try:
-            resp.encoding = 'gb2312'
-            text = resp.text
-        except Exception:
-            text = resp.content.decode('gb2312', errors='replace')
-
-        if 'aliyun_waf' in text and '<title></title>' in text:
-            # 该 Session 已被污染，丢掉，下次调用会重建
-            self._session = None
-            raise WafBlocked(f'okooo WAF 拦截: {url}')
-
+        text = urllib_get(url, timeout, encoding='utf-8',
+                          referer='https://cp.zgzcw.com/')
+        lowered = text.lower()
+        if any(marker in lowered for marker in ('captcha', '访问验证', '安全验证')):
+            raise VerificationPage(f'中国足彩网返回验证页: {url}')
         return text

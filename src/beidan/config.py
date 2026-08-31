@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""北单常量配置、请求头、okooo 会话与 WAF 状态"""
+"""北单常量配置与中国足彩网会话。"""
 
 import sys
 import math
@@ -11,6 +11,7 @@ import urllib.request
 import urllib.error
 import random
 import requests
+import threading
 from datetime import datetime, timedelta
 from typing import Dict, List, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -31,9 +32,9 @@ SCHEDULE_URL = f'{BASE_URL}/index_jczq.shtml'
 DC_SCHEDULE_URL = f'{BASE_URL}/index_zqdc.shtml'
 MATCH_DETAIL_URL = f'{BASE_URL}/fenxi/shuju-'
 
-OKOOO_BASE = 'https://www.okooo.com'
-OKOOO_DANCHANG_URL = f'{OKOOO_BASE}/danchang/'
-OKOOO_MATCH_URL = f'{OKOOO_BASE}/soccer/match/'
+ZGZCW_BASE = 'https://cp.zgzcw.com'
+ZGZCW_DANCHANG_URL = f'{ZGZCW_BASE}/lottery/bdplayvsforJsp.action?lotteryId=210'
+ZGZCW_ANALYSIS_BASE = 'https://fenxi.zgzcw.com'
 
 HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
@@ -43,12 +44,12 @@ HEADERS = {
     'Referer': SCHEDULE_URL,
 }
 
-OKOOO_HEADERS = {
+ZGZCW_HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
                   '(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
     'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
-    'Accept-Encoding': 'gzip, deflate, br',
+    'Accept-Encoding': 'gzip, deflate',
     'Connection': 'keep-alive',
     'Cache-Control': 'max-age=0',
     'Sec-Ch-Ua': '"Not/A)Brand";v="8", "Chromium";v="126", "Google Chrome";v="126"',
@@ -60,67 +61,43 @@ OKOOO_HEADERS = {
     'Sec-Fetch-Site': 'none',
     'Sec-Fetch-User': '?1',
     'Upgrade-Insecure-Requests': '1',
-    'Referer': OKOOO_DANCHANG_URL,
-    'Host': 'www.okooo.com',
+    'Referer': ZGZCW_BASE + '/',
 }
 
-_okooo_session = requests.Session()
-_okooo_session.headers.update(OKOOO_HEADERS)
-_okooo_session.verify = False
+_zgzcw_session = requests.Session()
+_zgzcw_session.headers.update(ZGZCW_HEADERS)
 
-_okooo_waf_blocked = False
-_okooo_waf_blocked_time = 0
+_zgzcw_blocked = False
+_zgzcw_blocked_time = 0
 
-def _mark_okooo_waf_blocked():
-    global _okooo_waf_blocked, _okooo_waf_blocked_time
-    _okooo_waf_blocked = True
-    _okooo_waf_blocked_time = time.time()
+def _mark_zgzcw_blocked():
+    global _zgzcw_blocked, _zgzcw_blocked_time
+    _zgzcw_blocked = True
+    _zgzcw_blocked_time = time.time()
 
-def _is_okooo_waf_blocked():
-    global _okooo_waf_blocked, _okooo_waf_blocked_time
-    if not _okooo_waf_blocked:
+def _is_zgzcw_blocked():
+    global _zgzcw_blocked, _zgzcw_blocked_time
+    if not _zgzcw_blocked:
         return False
-    if time.time() - _okooo_waf_blocked_time > 60:
-        _okooo_waf_blocked = False
+    if time.time() - _zgzcw_blocked_time > 60:
+        _zgzcw_blocked = False
         return False
     return True
 
-def _init_okooo_session():
-    global _okooo_session
-    if _is_okooo_waf_blocked():
-        log.info("okooo WAF已拦截，跳过session初始化")
+# 会话初始化只在内存中完成，不额外请求首页；真正需要的数据页是唯一网络请求。
+_zgzcw_session_warmed = False
+_zgzcw_warm_lock = threading.Lock()
+
+
+def ensure_zgzcw_session():
+    """首次真正抓取中国足彩网时才预热 session。"""
+    global _zgzcw_session_warmed
+    if _zgzcw_session_warmed:
         return
-    try:
-        log.info("初始化okooo session...")
-        _okooo_session.get('https://www.okooo.com/', timeout=10)
-        time.sleep(0.5)
-        _okooo_session.get(OKOOO_DANCHANG_URL, timeout=10)
-        log.info("okooo session初始化完成")
-    except Exception as e:
-        log.warning(f"初始化okooo session失败: {e}")
-
-
-# 预热做没做过。**只记「试过」，不记「成功」**——失败时也置位，
-# 否则每次取数都会重来一遍，而 okooo 不可达时那是两个 10 秒超时。
-_okooo_session_warmed = False
-
-
-def ensure_okooo_session():
-    """首次真正要用 okooo 时才预热 session。
-
-    **迁移前这是模块级调用**（`_init_okooo_session()` 直接写在文件末尾），
-    于是 `import src.beidan` 就发两次 HTTP 请求加一次 `sleep(0.5)`：
-    任何 import 了 beidan 的测试都在联网，CI 随第三方站点波动，
-    okooo 不可达时导入还要等两个 10 秒超时。
-
-    初始化本身没问题，问题是它发生在 import 期——**那时候还不知道这次运行
-    要不要用 okooo**。跑一个纯计算的单元测试也得先跟人家握两次手。
-    """
-    global _okooo_session_warmed
-    if _okooo_session_warmed:
-        return
-    _okooo_session_warmed = True
-    _init_okooo_session()
+    with _zgzcw_warm_lock:
+        if _zgzcw_session_warmed:
+            return
+        _zgzcw_session_warmed = True
 
 BET_TYPES = {
     'spf': {'name': '胜平负', 'description': '预测比赛胜负平结果'},

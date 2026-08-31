@@ -107,7 +107,7 @@ def build_analysis_result(*,
             'lottery_handicap', 'lottery_primary_market', 'lottery_source',
             'lottery_offer_matched', 'lottery_available_markets',
             'lottery_spf_available', 'lottery_rqspf_available',
-            'lottery_unavailable_reason', 'okooo_id'
+            'lottery_unavailable_reason', 'zgzcw_id', 'analysis_id'
         )},
         'lottery': lottery,
         'league_profile': league_profile,

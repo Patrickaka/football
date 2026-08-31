@@ -10,7 +10,6 @@ import json
 import urllib.request
 import urllib.error
 import random
-import requests
 from datetime import datetime, timedelta
 from typing import Dict, List, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -23,7 +22,7 @@ from ..common import kv_store
 log = setup_logger('beidan')
 
 from .config import (
-    BASE_URL, BEIDAN_VERSION, BET_TYPES, LEAGUE_PROFILES, MAX_GOALS, OKOOO_HEADERS, _okooo_session,
+    BASE_URL, BEIDAN_VERSION, BET_TYPES, LEAGUE_PROFILES, MAX_GOALS,
 )
 
 # ─── 领域层适配 ───
@@ -38,7 +37,8 @@ from .modeling import (
     BEIDAN_STRONG_MIN_LEAD, BEIDAN_STRONG_MIN_PROBABILITY, aggregate_goals_from_scores, anchor_score_outcomes, build_dixon_coles_matrix, calibrate_draw_probability, match_lambdas, match_target_total, parse_beidan_handicap, predict_scores_by_poisson, rqspf_probs_from_score_probs,
 )
 from .fetching import (
-    fetch_beidan_schedule, fetch_json, fetch_okooo_asian_history, fetch_okooo_cs_history, fetch_okooo_goals_history, fetch_okooo_schedule,
+    fetch_beidan_schedule, fetch_json, fetch_zgzcw_asian_history,
+    fetch_zgzcw_cs_history, fetch_zgzcw_goals_history, fetch_zgzcw_schedule,
 )
 from .markets import (
     _beidan_market_snapshot, _latest_ou_market, adjust_zjq_by_goals, analyze_asian_trend, analyze_cs_trend, analyze_goals_trend, apply_beidan_joint_market_state, build_beidan_market_admission, build_water_market_prediction, calculate_asian_goal_factor, calculate_goals_factor, enhance_scores_with_cs,
@@ -405,14 +405,14 @@ def _candidate_beidan_dates(date, allow_fallback=True, days=2):
 
 def _fetch_beidan_matches_with_fallback(date, source, allow_date_fallback=True):
     sources = [source]
-    if source != 'okooo':
-        sources.append('okooo')
+    if source != 'zgzcw':
+        sources.append('zgzcw')
 
     attempts = []
     for candidate_source in sources:
         for candidate_date in _candidate_beidan_dates(date, allow_date_fallback):
-            if candidate_source == 'okooo':
-                matches = fetch_okooo_schedule(candidate_date)
+            if candidate_source == 'zgzcw':
+                matches = fetch_zgzcw_schedule(candidate_date)
             else:
                 matches = fetch_beidan_schedule(candidate_date, source=candidate_source)
 
@@ -432,34 +432,6 @@ def _fetch_beidan_matches_with_fallback(date, source, allow_date_fallback=True):
                     'attempts': attempts,
                 }
 
-    log.warning(f"所有数据源均返回0场比赛，尝试重置okooo session并重试")
-    _okooo_session = requests.Session()
-    _okooo_session.headers.update(OKOOO_HEADERS)
-    _okooo_session.verify = False
-    global _okooo_waf_blocked
-    _okooo_waf_blocked = False
-    
-    for candidate_date in _candidate_beidan_dates(date, allow_date_fallback):
-        matches = fetch_okooo_schedule(candidate_date)
-        attempts.append({
-            'source': 'okooo_retry',
-            'date': candidate_date,
-            'match_count': len(matches),
-            'retry': True,
-        })
-        if matches:
-            log.info(f"okooo重试成功，获取到{len(matches)}场比赛")
-            return matches, {
-                'requested_source': source,
-                'requested_date': date,
-                'source': 'okooo',
-                'date': candidate_date,
-                'source_fallback': True,
-                'date_fallback': candidate_date != date,
-                'attempts': attempts,
-                'retry_success': True,
-            }
-
     log.error(f"所有数据源均失败，返回空结果。尝试记录: {attempts}")
     return [], {
         'requested_source': source,
@@ -472,7 +444,7 @@ def _fetch_beidan_matches_with_fallback(date, source, allow_date_fallback=True):
     }
 
 
-def generate_beidan_recommendations(date=None, bet_types=None, source='okooo', save_history=True):
+def generate_beidan_recommendations(date=None, bet_types=None, source='zgzcw', save_history=True):
     if bet_types is None:
         bet_types = ['spf', 'rqspf']
     
@@ -498,11 +470,11 @@ def generate_beidan_recommendations(date=None, bet_types=None, source='okooo', s
     zjq_odds = {}
     bqc_odds = {}
     
-    if 'bifen' in bet_types and source != 'okooo':
+    if 'bifen' in bet_types and source != 'zgzcw':
         bifen_odds = fetch_beidan_bifen(date)
-    if 'zjq' in bet_types and source != 'okooo':
+    if 'zjq' in bet_types and source != 'zgzcw':
         zjq_odds = fetch_beidan_zjq(date)
-    if 'bqc' in bet_types and source != 'okooo':
+    if 'bqc' in bet_types and source != 'zgzcw':
         bqc_odds = fetch_beidan_bqc(date)
     
     _clear_ouzhi_cache()
@@ -515,16 +487,16 @@ def generate_beidan_recommendations(date=None, bet_types=None, source='okooo', s
             pass
     
     actual_source = matches[0].get('source', source) if matches else source
-    if actual_source == 'okooo' and bet_types:
+    if actual_source == 'zgzcw' and bet_types:
         with ThreadPoolExecutor(max_workers=8) as executor:
             futures = {}
             for match in matches:
                 if any(bet_type in bet_types for bet_type in ('spf', 'rqspf', 'bifen', 'zjq')):
-                    futures[executor.submit(fetch_okooo_asian_history, match['id'])] = ('asian', match['id'])
+                    futures[executor.submit(fetch_zgzcw_asian_history, match['id'])] = ('asian', match['id'])
                 if any(bet_type in bet_types for bet_type in ('spf', 'rqspf', 'bifen', 'zjq')):
-                    futures[executor.submit(fetch_okooo_goals_history, match['id'])] = ('goals', match['id'])
+                    futures[executor.submit(fetch_zgzcw_goals_history, match['id'])] = ('goals', match['id'])
                 if 'spf' in bet_types:
-                    futures[executor.submit(fetch_okooo_cs_history, match['id'])] = ('cs', match['id'])
+                    futures[executor.submit(fetch_zgzcw_cs_history, match['id'])] = ('cs', match['id'])
             
             asian_cache = {}
             goals_cache = {}
@@ -761,7 +733,7 @@ def generate_beidan_recommendations(date=None, bet_types=None, source='okooo', s
     return result
 
 
-def find_value_bets(date=None, threshold=0.05, source='okooo'):
+def find_value_bets(date=None, threshold=0.05, source='zgzcw'):
     """抓一轮推荐，再从中挑出模型概率高于市场隐含概率的注。
 
     抓取在这里，筛选在领域层——迁移前两件事写在同一个函数里，

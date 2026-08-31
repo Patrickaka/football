@@ -7,7 +7,7 @@
 
 数据源优先级：
 1. balldontlie.io (免费NBA API)
-2. 备用: 直接从 okooo/500 历史页抓取
+2. 备用: 直接从 zgzcw.com/500 历史页抓取
 
 使用方法:
     python seed_basketball_elo.py              # 默认获取最近一赛季

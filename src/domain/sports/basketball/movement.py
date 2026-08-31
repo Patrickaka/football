@@ -175,8 +175,8 @@ _DIRECTION_SIDES = {
 }
 
 
-def normalize_okooo_trend(trend, kind):
-    """把澳客的 trend 字典规范化成与快照序列同构的 movement。
+def normalize_source_trend(trend, kind):
+    """把源站 trend 字典规范化成与快照序列同构的 movement。
 
     两个来源的输出必须同构，否则下游每个消费点都要分别判断来源。
     """
@@ -200,7 +200,7 @@ def normalize_okooo_trend(trend, kind):
         'strength': round(strength, 4),
         'raw_strength': round(raw_strength, 4),
         'steam': strength >= STEAM_STRENGTH,
-        # 澳客 trend 不带时间戳，无从判断静止时长。
+        # 源站 trend 不带时间戳，无从判断静止时长。
         'stale': False,
         'samples': int(trend.get('samples', 0) or 0),
         'window_min': None,
@@ -314,16 +314,16 @@ def apply_market_inference(p_first, p_second, movement, market):
     return final_first, final_second, inference
 
 
-def build_movement_for_match(match, history=None, okooo_bundle=None, now_fn=None):
+def build_movement_for_match(match, history=None, source_bundle=None, now_fn=None):
     """为单场比赛构建 {spf, rqspf, dx} 三个玩法的 movement。
 
-    优先级：澳客赛程自带的 rf_trend / dx_trend > 澳客详情 bundle >
+    优先级：源站赛程自带的 rf_trend / dx_trend > 详情 bundle >
     500 源累积的快照序列。任意玩法无数据则为 None，调用方回退原逻辑。
     """
     out = {
-        'rqspf': _from_okooo(match, okooo_bundle, 'rf_trend', 'ah'),
-        'dx': _from_okooo(match, okooo_bundle, 'dx_trend', 'ou'),
-        'spf': _from_bundle(okooo_bundle, 'ml', 'ml'),
+        'rqspf': _from_source(match, source_bundle, 'rf_trend', 'ah'),
+        'dx': _from_source(match, source_bundle, 'dx_trend', 'ou'),
+        'spf': _from_bundle(source_bundle, 'ml', 'ml'),
     }
     if history is None:
         return _ordered(out)
@@ -348,9 +348,9 @@ def _ordered(out):
     return {'spf': out['spf'], 'rqspf': out['rqspf'], 'dx': out['dx']}
 
 
-def _from_okooo(match, bundle, trend_key, kind):
-    if match.get('source') == 'okooo' and match.get(trend_key):
-        return normalize_okooo_trend(match.get(trend_key), kind)
+def _from_source(match, bundle, trend_key, kind):
+    if match.get('source') == 'zgzcw' and match.get(trend_key):
+        return normalize_source_trend(match.get(trend_key), kind)
     return _from_bundle(bundle, _BUNDLE_KEYS[kind], kind)
 
 
@@ -358,7 +358,7 @@ def _from_bundle(bundle, bundle_key, kind):
     section = (bundle or {}).get(bundle_key) or {}
     if not section.get('available'):
         return None
-    return normalize_okooo_trend(section.get('trend'), kind)
+    return normalize_source_trend(section.get('trend'), kind)
 
 
 _TREND_DIRECTIONS = {
@@ -368,7 +368,7 @@ _TREND_DIRECTIONS = {
 
 
 def movement_to_trend(movement):
-    """把统一 movement 映射回澳客 trend 的形状，供 adjust_two_way_by_trend 复用。"""
+    """把统一 movement 映射回源站 trend 的形状，供 adjust_two_way_by_trend 复用。"""
     if not movement or not movement.get('available'):
         return None
     return {

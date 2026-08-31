@@ -14,7 +14,7 @@
 """
 import logging
 
-from src.domain.sports.basketball import fetching, okooo_parsing, parsing
+from src.domain.sports.basketball import fetching, parsing, zgzcw_parsing
 from src.domain.sports.basketball.analysis import BasketballAnalyzer
 from src.domain.sports.basketball.calibration import BasketballCalibrator
 from src.domain.sports.basketball.calibration_store import CalibrationStore
@@ -33,13 +33,12 @@ log = logging.getLogger('domain.basketball.factory')
 def build_transport(snapshots_root=None):
     """建带限速、重试、熔断的抓取通道。
 
-    两套实现按主机名分派：okooo 需要 Session 预热与 gb2312 解码，
-    500.com 用普通 urllib 即可。
+    500.com 与中国足彩网统一使用带编码回退的 HTTP transport。
     """
+    raw_transport = fetching.dispatch_transport(
+        fetching.ZgzcwTransport(), fetching.urllib_get)
     client = fetching.build_fetch_client(
-        transport=fetching.dispatch_transport(
-            okooo=fetching.OkoooTransport(),
-            default=fetching.urllib_get),
+        transport=raw_transport,
         snapshots_root=snapshots_root)
     return client.get
 
@@ -63,14 +62,14 @@ def build_schedule_sources(transport):
     """两个数据源的赛程抓取。键名与请求参数 `source` 一致。"""
     return {
         '500': parsing.ScheduleFetcher(transport=transport).fetch,
-        'okooo': okooo_parsing.OkoooScheduleFetcher(transport=transport).fetch,
+        'zgzcw': zgzcw_parsing.ZgzcwScheduleFetcher(transport=transport).fetch,
     }
 
 
 def build_movement_provider(db, transport, now_fn=None):
     """走势映射。它自己会在 500 源上先采一轮快照再算。
 
-    `db` 为 None 时快照那一路整体缺席，只剩澳客赛程页自带的盘路。
+    `db` 为 None 时快照走势缺席，但当前赔率仍可正常分析。
     """
     store = OddsHistoryStore(db) if db is not None else None
     schedules = build_schedule_sources(transport)
@@ -79,8 +78,8 @@ def build_movement_provider(db, transport, now_fn=None):
     return MovementMapBuilder(
         history_store=store,
         tracker=tracker,
-        okooo_schedule=schedules['okooo'],
-        bundle_fetcher=okooo_parsing.MarketBundleFetcher(transport=transport),
+        zgzcw_schedule=schedules['zgzcw'],
+        bundle_fetcher=zgzcw_parsing.MarketBundleFetcher(transport=transport),
         now_fn=now_fn)
 
 

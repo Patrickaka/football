@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""北单数据抓取：500.com 与 okooo 页面、赛程"""
+"""北单数据抓取：500.com 与中国足彩网页面、赛程。"""
 
 import sys
 import math
@@ -9,8 +9,10 @@ import time
 import json
 import urllib.request
 import urllib.error
+import urllib.parse
 import random
 import requests
+import threading
 
 from src.football.fetching import (
     FETCH_THROTTLE_SECONDS, RATE_LIMIT_STATUSES,
@@ -28,14 +30,21 @@ from ..common import kv_store
 log = setup_logger('beidan')
 
 from .config import (
-    DC_SCHEDULE_URL, HEADERS, OKOOO_DANCHANG_URL, OKOOO_HEADERS, OKOOO_MATCH_URL, SCHEDULE_URL, _is_okooo_waf_blocked, _mark_okooo_waf_blocked, _okooo_session, ensure_okooo_session,
+    DC_SCHEDULE_URL, HEADERS, ZGZCW_ANALYSIS_BASE, ZGZCW_DANCHANG_URL,
+    ZGZCW_HEADERS, SCHEDULE_URL, _is_zgzcw_blocked, _mark_zgzcw_blocked,
+    _zgzcw_session, ensure_zgzcw_session,
 )
 
 # 北单与足球打的是同一个 odds.500.com。两边各跑一条预热线程，若各自独立发请求，
 # 就会互相挤占源站配额、把对方推进 429。这里让 500.com 的请求共用足球那条限速
 # 令牌流：请求前领号，撞限流则写进全局冷却，足球侧也会一起退避。
-# okooo 走另一个域名和独立 session，不参与这条预算。
+# 中国足彩网走另一个域名和独立 session，不参与这条预算。
 _SHARED_RATE_LIMIT_HOST = 'odds.500.com'
+_ZGZCW_REQUEST_LOCK = threading.Lock()
+_ZGZCW_MIN_INTERVAL = 0.5
+_zgzcw_last_request = 0.0
+ZGZCW_PRIMARY_COMPANY_ID = '2'
+ZGZCW_PRIMARY_COMPANY = '36*'
 
 
 # ─── 领域层适配（页面解析）───
@@ -47,30 +56,55 @@ _SHARED_RATE_LIMIT_HOST = 'odds.500.com'
 from src.domain.sports.beidan import parsing as _parsing
 
 
-def _fetch_history(match_id, spec, what, unit, path_suffixes):
-    """按顺序试几个页面，第一个解析出记录的就用它。
+def _fetch_history(match_id, detail_parser, summary_parser, what, unit, path,
+                   company_id=ZGZCW_PRIMARY_COMPANY_ID,
+                   company=ZGZCW_PRIMARY_COMPANY):
+    """优先取公司明细页的完整序列，失败才退回初盘/即时盘两点摘要。
 
-    **日志要分清是从表格还是从脚本刮出来的**：脚本那条路不走表格的
-    时间长度、让球值长度、比分格式那几道校验，同样一条记录的可信度不同。
+    默认选择 company_id=2 的 Bet365 完整序列；每个市场只请求一个明细页，
+    不逐公司扫描十几页。调用方也可以显式指定其他公司。
     """
-    urls = [f'{OKOOO_MATCH_URL}{match_id}/{suffix}/' for suffix in path_suffixes]
-    log.debug(f"抓取okooo{what}: match_id={match_id}")
+    company_id = str(company_id or ZGZCW_PRIMARY_COMPANY_ID)
+    company = str(company or ZGZCW_PRIMARY_COMPANY)
+    if not company_id.isdigit():
+        company_id, company = ZGZCW_PRIMARY_COMPANY_ID, ZGZCW_PRIMARY_COMPANY
+    summary_url = f'{ZGZCW_ANALYSIS_BASE}/{match_id}/{path}'
+    detail_url = (
+        f'{summary_url}/zhishu?company_id={company_id}&company='
+        f'{urllib.parse.quote(company, safe="*")}'
+    )
+    log.debug(f"抓取中国足彩网{what}: match_id={match_id}")
+    try:
+        html = fetch_zgzcw(detail_url, referer=summary_url)
+        records = detail_parser(html) if html else []
+        if records:
+            for record in records:
+                record.update({'company_id': company_id, 'company': company})
+            log.info(f"从 {detail_url} 获取到 {len(records)} 条{unit}记录")
+            return {
+                'history': records,
+                'history_source': 'zgzcw_company_detail',
+                'company_id': company_id,
+                'company': company,
+                'samples': len(records),
+            }
+    except Exception as e:
+        log.warning(f"抓取中国足彩网{what}明细失败({detail_url}): {e}")
 
-    for url in urls:
-        try:
-            html = fetch_okooo(url, referer=OKOOO_DANCHANG_URL)
-            # 空页面直接换下一个。改成 `is None` 在输出上等价（空串解析出来
-            # 也是空记录），留短路是为了不在空串上白跑一遍正则。
-            if not html:
-                continue
-            records, source = _parsing.parse_history(html, spec)
-            if records:
-                via = '通过脚本' if source == _parsing.FROM_SCRIPT else ''
-                log.info(f"从 {url} {via}获取到 {len(records)} 条{unit}记录")
-                return {'history': records}
-        except Exception as e:
-            log.warning(f"抓取okooo{what}失败({url}): {e}")
-            continue
+    try:
+        html = fetch_zgzcw(summary_url, referer=ZGZCW_DANCHANG_URL)
+        records = summary_parser(html) if html else []
+        if records:
+            log.info(f"从 {summary_url} 获取到 {len(records)} 条{unit}摘要")
+            return {
+                'history': records,
+                'history_source': 'zgzcw_opening_current_fallback',
+                'company_id': '0',
+                'company': '平均*',
+                'samples': len(records),
+            }
+    except Exception as e:
+        log.warning(f"抓取中国足彩网{what}摘要失败({summary_url}): {e}")
 
     log.debug(f"未获取到{what}数据")
     return {'history': []}
@@ -119,17 +153,17 @@ def fetch_json(url, referer=None):
     return None
 
 
-def fetch_okooo(url, encoding='utf-8', referer=None, max_retries=2):
-    global _okooo_session
+def fetch_zgzcw(url, encoding='utf-8', referer=None, max_retries=2):
+    global _zgzcw_session, _zgzcw_last_request
     
-    if _is_okooo_waf_blocked():
-        log.debug(f"okooo WAF已拦截，跳过请求: {url}")
+    if _is_zgzcw_blocked():
+        log.debug(f"中国足彩网处于短时熔断，跳过请求: {url}")
         return None
 
     # 预热 session（拿 cookie）。**迁移前这发生在 import 期**，于是任何
     # import beidan 的测试都在联网；现在推迟到真正要发请求的这一刻。
     # 幂等，只有第一次会真的握手。
-    ensure_okooo_session()
+    ensure_zgzcw_session()
     
     for attempt in range(max_retries):
         try:
@@ -137,15 +171,20 @@ def fetch_okooo(url, encoding='utf-8', referer=None, max_retries=2):
             if referer:
                 headers['Referer'] = referer
             
-            # 快速失败后走现有备用数据源，避免单个站点拖住整批预测。
-            resp = _okooo_session.get(url, headers=headers, timeout=(5, 12))
+            # 同一会话串行且限制到每秒最多两次，避免并行走势抓取形成突发流量。
+            with _ZGZCW_REQUEST_LOCK:
+                wait = _ZGZCW_MIN_INTERVAL - (time.monotonic() - _zgzcw_last_request)
+                if wait > 0:
+                    time.sleep(wait)
+                _zgzcw_last_request = time.monotonic()
+                # 快速失败后走现有备用数据源，避免单个站点拖住整批预测。
+                resp = _zgzcw_session.get(url, headers=headers, timeout=(5, 12))
             
             if resp.status_code == 403 or resp.status_code == 503:
-                log.warning(f"WAF拦截 {resp.status_code} for {url}, marking as blocked")
-                _mark_okooo_waf_blocked()
-                _okooo_session = requests.Session()
-                _okooo_session.headers.update(OKOOO_HEADERS)
-                _okooo_session.verify = False
+                log.warning(f"中国足彩网返回 {resp.status_code}: {url}")
+                _mark_zgzcw_blocked()
+                _zgzcw_session = requests.Session()
+                _zgzcw_session.headers.update(ZGZCW_HEADERS)
                 return None
             
             if resp.status_code != 200:
@@ -156,17 +195,15 @@ def fetch_okooo(url, encoding='utf-8', referer=None, max_retries=2):
                 return None
             
             try:
-                resp.encoding = 'gb2312'
-                result = resp.text
+                result = resp.content.decode('utf-8')
             except:
-                result = resp.content.decode('gb2312', errors='replace')
+                result = resp.content.decode('gb18030', errors='replace')
             
-            if 'aliyun_waf' in result and '<title></title>' in result:
-                log.warning(f"WAF拦截 detected for {url}, marking as blocked")
-                _mark_okooo_waf_blocked()
-                _okooo_session = requests.Session()
-                _okooo_session.headers.update(OKOOO_HEADERS)
-                _okooo_session.verify = False
+            if any(marker in result.lower() for marker in ('captcha', '访问验证', '安全验证')):
+                log.warning(f"中国足彩网返回验证页: {url}")
+                _mark_zgzcw_blocked()
+                _zgzcw_session = requests.Session()
+                _zgzcw_session.headers.update(ZGZCW_HEADERS)
                 return None
             
             return result
@@ -180,8 +217,8 @@ def fetch_okooo(url, encoding='utf-8', referer=None, max_retries=2):
     return None
 
 
-def fetch_okooo_schedule(date=None):
-    """okooo 的赛程，取不到就回退到 500.com。
+def fetch_zgzcw_schedule(date=None):
+    """中国足彩网北单赛程，取不到就回退到 500.com。
 
     **三种回退的日志要分开**：页面为空（多半是 WAF）、页面结构不对
     （表格数不够）、解析出来一场未完结的都没有。§十一·3 那类
@@ -190,30 +227,25 @@ def fetch_okooo_schedule(date=None):
     if date is None:
         date = time.strftime('%Y-%m-%d')
 
-    url = f'{OKOOO_DANCHANG_URL}?date={date}'
-    log.info(f"抓取okooo北单赛程: {date}")
+    url = ZGZCW_DANCHANG_URL
+    log.info(f"抓取中国足彩网北单赛程: {date}")
 
     try:
-        html = fetch_okooo(url, referer=OKOOO_DANCHANG_URL)
+        html = fetch_zgzcw(url, referer=ZGZCW_DANCHANG_URL)
         if not html:
-            log.warning("okooo页面返回为空(WAF拦截或网络错误)，尝试500.com备用数据源")
+            log.warning("中国足彩网页面返回为空，尝试500.com备用数据源")
             return _fallback_schedule(date, try_dc_first=True)
 
-        log.debug(f"okooo页面HTML长度: {len(html)}")
-        matches, table_count = _parsing.parse_okooo_schedule(html, date)
-        log.debug(f"okooo页面找到 {table_count} 个table标签")
-        if matches is None:
-            log.warning(f"okooo页面未找到比赛表格，找到 {table_count} 个table标签，"
-                        "尝试500.com备用数据源")
-            return fetch_beidan_schedule(date)
+        log.debug(f"中国足彩网页面HTML长度: {len(html)}")
+        matches = _parsing.parse_zgzcw_schedule(html, date)
         if not matches:
-            log.warning("okooo未找到未完结比赛，尝试500.com备用数据源")
+            log.warning("中国足彩网未找到指定日期的未完结比赛，尝试500.com备用数据源")
             return fetch_beidan_schedule(date)
 
-        log.info(f"okooo获取到 {len(matches)} 场未完结北单比赛")
+        log.info(f"中国足彩网获取到 {len(matches)} 场未完结北单比赛")
         return matches
     except Exception as e:
-        log.error(f"抓取okooo北单赛程失败: {e}，尝试500.com备用数据源")
+        log.error(f"抓取中国足彩网北单赛程失败: {e}，尝试500.com备用数据源")
         return _fallback_schedule(date)
 
 
@@ -227,23 +259,29 @@ def _fallback_schedule(date, try_dc_first=False):
     return matches
 
 
-def fetch_okooo_asian_history(match_id):
-    """亚盘水位变化。**四个候选路径依次试**，第一个解析出记录的就返回。"""
+def fetch_zgzcw_asian_history(
+        match_id, company_id=ZGZCW_PRIMARY_COMPANY_ID,
+        company=ZGZCW_PRIMARY_COMPANY):
+    """完整亚盘变化序列；默认使用 Bet365。"""
     return _fetch_history(
-        match_id, _parsing.ASIAN, '亚盘赔率变化', '亚盘赔率',
-        ('ah', 'hodds', 'odds', 'history'))
+        match_id, _parsing.parse_zgzcw_asian_company_history,
+        _parsing.parse_zgzcw_asian_history,
+        '亚盘赔率变化', '亚盘赔率', 'ypdb', company_id, company)
 
 
-def fetch_okooo_goals_history(match_id):
-    """大小球水位变化。只有一个路径——与亚盘的四个不同，原样保留。"""
+def fetch_zgzcw_goals_history(
+        match_id, company_id=ZGZCW_PRIMARY_COMPANY_ID,
+        company=ZGZCW_PRIMARY_COMPANY):
+    """完整大小球变化序列；默认使用 Bet365。"""
     return _fetch_history(
-        match_id, _parsing.GOALS, '总进球赔率变化', '总进球赔率', ('goals',))
+        match_id, _parsing.parse_zgzcw_goals_company_history,
+        _parsing.parse_zgzcw_goals_history,
+        '总进球赔率变化', '总进球赔率', 'dxdb', company_id, company)
 
 
-def fetch_okooo_cs_history(match_id):
-    """比分盘赔率变化。同样只有一个路径。"""
-    return _fetch_history(
-        match_id, _parsing.CORRECT_SCORE, '比分赔率变化', '比分赔率', ('cs',))
+def fetch_zgzcw_cs_history(match_id):
+    """中国足彩网不公开比分盘历史；明确返回空，避免把欧亚盘误当比分。"""
+    return {'history': []}
 
 
 def fetch_beidan_schedule(date=None, source='jczq'):

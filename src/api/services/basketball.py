@@ -24,9 +24,9 @@ def basketball_payload(params):
     try:
         date = params.get('date', [None])[0]
         bet_types = params.get('types', ['spf,rqspf,dx'])[0].split(',')
-        source = params.get('source', ['okooo'])[0]
-        if source not in ('okooo', '500'):
-            source = 'okooo'
+        source = params.get('source', ['zgzcw'])[0]
+        if source not in ('zgzcw', '500'):
+            source = 'zgzcw'
         
         log.info(f'篮球推荐请求: date={date}, types={bet_types}, source={source}')
         
@@ -133,7 +133,8 @@ def basketball_matches_payload(params):
     """获取篮球比赛列表"""
     try:
         date = params.get('date', [None])[0]
-        matches = get_context().prediction.fetch_schedule(date=date)
+        source = params.get('source', ['zgzcw'])[0]
+        matches = get_context().prediction.fetch_schedule(date=date, source=source)
         return {'matches': matches}
     except Exception as e:
         log.error('篮球比赛列表获取失败', exc_info=True)

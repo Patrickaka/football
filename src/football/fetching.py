@@ -376,13 +376,13 @@ def _fetch_match_list_remote():
             if 'time' not in match and i < len(times):
                 match['time'] = times[i]
 
-    # 500.com only supplies analysis markets.  JCZQ offer/handicap comes from
-    # okooo and is matched onto the 500 schedule without blocking on failure.
+    # 500.com only supplies analysis markets. JCZQ offer/handicap comes from
+    # 中国足彩网 and is matched onto the 500 schedule without blocking on failure.
     try:
-        from .okooo_lottery import enrich_with_okooo_lottery
-        matches = enrich_with_okooo_lottery(matches)
+        from .zgzcw_lottery import enrich_with_zgzcw_lottery
+        matches = enrich_with_zgzcw_lottery(matches)
     except Exception as exc:
-        log.warning('澳客体彩玩法综合失败，返回纯500分析赛程: %s', exc)
+        log.warning('中国足彩网体彩玩法综合失败，返回纯500分析赛程: %s', exc)
 
     log.info('获取到 %d 场比赛', len(matches))
     return matches
@@ -417,15 +417,15 @@ def get_match_list_status():
     return dict(_MATCH_LIST_STATUS)
 
 
-def _okooo_schedule_fallback(cached_matches=None):
-    """将澳客竞彩赛程转换为足球主列表结构。
+def _zgzcw_schedule_fallback(cached_matches=None):
+    """将中国足彩网竞彩足球赛程转换为足球主列表结构。
 
     若上次 500 快照中存在同一竞彩编号，沿用其 match_id，
     这样比分分析仍可使用原有的 500 盘口链路。
     """
-    from .okooo_lottery import fetch_okooo_jczq_schedule
+    from .zgzcw_lottery import fetch_zgzcw_jczq_schedule
 
-    offers = fetch_okooo_jczq_schedule(force_refresh=True)
+    offers = fetch_zgzcw_jczq_schedule(force_refresh=True)
     if not offers:
         return []
     cached_matches = cached_matches or []
@@ -443,14 +443,16 @@ def _okooo_schedule_fallback(cached_matches=None):
         converted.append({
             'home': offer.get('home') or previous.get('home') or '',
             'away': offer.get('away') or previous.get('away') or '',
-            'match_id': str(previous.get('match_id') or offer.get('okooo_id') or ''),
+            'match_id': str(previous.get('match_id') or offer.get('analysis_id')
+                            or offer.get('zgzcw_id') or ''),
             'time': previous.get('time') or offer.get('time') or '',
             'league': previous.get('league') or offer.get('league') or '',
             'num': num,
-            'schedule_source': 'okooo',
+            'schedule_source': 'zgzcw',
             'analysis_source_id_available': bool(previous.get('match_id')),
-            'okooo_id': offer.get('okooo_id'),
-            'lottery_source': 'okooo',
+            'zgzcw_id': offer.get('zgzcw_id'),
+            'analysis_id': offer.get('analysis_id'),
+            'lottery_source': 'zgzcw',
             'lottery_offer_matched': True,
             'lottery_unavailable_reason': None,
             'lottery_handicap': handicap,
@@ -483,17 +485,17 @@ def fetch_match_list():
     except Exception as exc:
         cached = _load_match_list_cache()
         try:
-            okooo_matches = _okooo_schedule_fallback(cached)
-        except Exception as okooo_exc:
-            okooo_matches = []
-            log.warning('澳客备用赛程也失败: %s', okooo_exc)
-        if okooo_matches:
+            zgzcw_matches = _zgzcw_schedule_fallback(cached)
+        except Exception as zgzcw_exc:
+            zgzcw_matches = []
+            log.warning('中国足彩网备用赛程也失败: %s', zgzcw_exc)
+        if zgzcw_matches:
             _MATCH_LIST_STATUS.update({
-                'source': 'okooo', 'stale': False,
+                'source': 'zgzcw', 'stale': False,
                 'error': f'500 upstream: {type(exc).__name__}: {str(exc)[:140]}',
             })
-            log.warning('500赛程源失败，已切换澳客赛程 %d 场', len(okooo_matches))
-            return okooo_matches
+            log.warning('500赛程源失败，已切换中国足彩网赛程 %d 场', len(zgzcw_matches))
+            return zgzcw_matches
         if cached:
             _MATCH_LIST_STATUS.update({
                 'source': 'disk_cache', 'stale': True,

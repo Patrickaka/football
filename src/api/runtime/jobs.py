@@ -162,7 +162,7 @@ def _warm_football_caches():
 
 
 BEIDAN_WARM_INTERVAL = int(os.getenv('BEIDAN_WARM_INTERVAL', '1800'))
-BEIDAN_WARM_SOURCE = os.getenv('BEIDAN_WARM_SOURCE', 'okooo')
+BEIDAN_WARM_SOURCE = os.getenv('BEIDAN_WARM_SOURCE', 'zgzcw')
 BEIDAN_WARM_TYPES = os.getenv('BEIDAN_WARM_TYPES', 'spf,rqspf,zjq')
 # 北单与足球预热打的是同一个 odds.500.com。两者共用限速令牌流后不会再互相推进 429，
 # 但同时起跑仍会从第一秒起互抢配额、把两边都拖慢。错开启动让足球那轮先跑完。

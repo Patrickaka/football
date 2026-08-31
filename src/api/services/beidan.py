@@ -23,7 +23,7 @@ def beidan_payload(params):
     """获取北单推荐预测"""
     try:
         date = params.get('date', [None])[0]
-        source = params.get('source', ['okooo'])[0]
+        source = params.get('source', ['zgzcw'])[0]
         bet_types = params.get('types', ['spf,rqspf,zjq'])[0].split(',')
         
         force_refresh = params.get('force_refresh', ['false'])[0].lower() == 'true'
@@ -85,11 +85,11 @@ def beidan_matches_payload(params):
     """获取北单比赛列表"""
     try:
         date = params.get('date', [None])[0]
-        source = params.get('source', ['okooo'])[0]
+        source = params.get('source', ['zgzcw'])[0]
         
-        if source == 'okooo':
-            from src.beidan import fetch_okooo_schedule
-            matches = fetch_okooo_schedule(date=date)
+        if source == 'zgzcw':
+            from src.beidan import fetch_zgzcw_schedule
+            matches = fetch_zgzcw_schedule(date=date)
         else:
             from src.beidan import fetch_beidan_schedule
             matches = fetch_beidan_schedule(date=date, source=source)
@@ -104,7 +104,7 @@ def beidan_value_payload(params):
     """获取北单价值投注推荐"""
     try:
         date = params.get('date', [None])[0]
-        source = params.get('source', ['okooo'])[0]
+        source = params.get('source', ['zgzcw'])[0]
         threshold = float(params.get('threshold', [0.05])[0])
         
         _, find_value_bets, _ = _load_beidan_helpers()

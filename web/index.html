@@ -1172,7 +1172,7 @@
 <div class="wrap">
   <header>
     <h1 id="page-title">⚽ 足球比分预测</h1>
-    <p id="page-desc">赛程源：澳客主备切换 · 盘口源：500/Bet365/Pinnacle · 多模型融合</p>
+    <p id="page-desc">赛程源：中国足彩网主备切换 · 盘口源：500/Bet365/Pinnacle · 多模型融合</p>
   </header>
   <div class="tabs" role="tablist">
     <button type="button" class="tab active" data-tab="football" role="tab">⚽ 足球预测</button>
@@ -1269,7 +1269,7 @@ let beidanMatches = [];
 const TAB_META = {
   football: {
     title: '⚽ 足球比分预测',
-    desc: '赛程源：澳客主备切换 · 盘口源：500/Bet365/Pinnacle · 多模型融合',
+    desc: '赛程源：中国足彩网主备切换 · 盘口源：500/Bet365/Pinnacle · 多模型融合',
     disclaimer: '⚠ 以上分析仅为概率统计参考，体育赛事结果受多种不确定因素影响，不构成任何投注建议。请理性对待！',
   },
   beidan: {
@@ -1965,7 +1965,8 @@ function buildPredictQuery(m) {
     lottery_rqspf_available: String(Boolean(m.lottery_rqspf_available)),
     lottery_spf_odds: m.lottery_spf_odds ? JSON.stringify(m.lottery_spf_odds) : '',
     lottery_rqspf_odds: m.lottery_rqspf_odds ? JSON.stringify(m.lottery_rqspf_odds) : '',
-    okooo_id: m.okooo_id || '',
+    zgzcw_id: m.zgzcw_id || '',
+    analysis_id: m.analysis_id || '',
     schedule_source: m.schedule_source || '',
     analysis_source_id_available: String(m.analysis_source_id_available !== false)
   });
@@ -1984,7 +1985,8 @@ function buildBatchMatch(m) {
     lottery_rqspf_available: Boolean(m.lottery_rqspf_available),
     lottery_spf_odds: m.lottery_spf_odds || null,
     lottery_rqspf_odds: m.lottery_rqspf_odds || null,
-    okooo_id: m.okooo_id || '',
+    zgzcw_id: m.zgzcw_id || '',
+    analysis_id: m.analysis_id || '',
     schedule_source: m.schedule_source || '',
     analysis_source_id_available: m.analysis_source_id_available !== false
   };
@@ -2287,10 +2289,10 @@ function getLotteryHandicapExplanation(lottery) {
   const handicap = Number(lottery?.handicap?.handicap);
   if (!Number.isInteger(handicap) || handicap === 0) return '';
   if (handicap === -1) {
-    return '结算映射：净胜2球以上=让胜，净胜1球=让平，原平/负=让负。最终让球概率已独立融合澳客让球赔率，并非直接用本栏平+负作为预测值。';
+    return '结算映射：净胜2球以上=让胜，净胜1球=让平，原平/负=让负。最终让球概率已独立融合中国足彩网让球赔率，并非直接用本栏平+负作为预测值。';
   }
   if (handicap === 1) {
-    return '结算映射：原胜/平=让胜，仅负1球=让平，负2球以上=让负。最终让球概率已独立融合澳客让球赔率。';
+    return '结算映射：原胜/平=让胜，仅负1球=让平，负2球以上=让负。最终让球概率已独立融合中国足彩网让球赔率。';
   }
   if (handicap < 0) {
     const depth = Math.abs(handicap);
@@ -2698,7 +2700,7 @@ function renderFootballPredictions(results) {
           itemHtml += `<div style="flex:1;text-align:center;padding:6px;border-radius:6px${isPred ? `;background:${colors[key]}20;color:${colors[key]};font-weight:bold` : ''}">
             <div>${key}</div>
             <div style="font-size:11px;color:var(--muted)">${probabilityAvailable ? `${(prob * 100).toFixed(0)}%` : '—'}</div>
-            ${odd ? `<div style="font-size:10px;color:#3b82f6">澳客 ${Number(odd).toFixed(2)}</div>` : ''}
+            ${odd ? `<div style="font-size:10px;color:#3b82f6">中国足彩网 ${Number(odd).toFixed(2)}</div>` : ''}
           </div>`;
         });
         itemHtml += '</div>';
@@ -2711,10 +2713,10 @@ function renderFootballPredictions(results) {
           const marketWeight = Math.round(Number(card.prediction.marketWeight || 0) * 100);
           itemHtml += card.prediction.conditional
             ? `<div style="font-size:10px;color:#93c5fd;margin-top:6px">
-                ${esc(sourceKey)}：在“不让球${esc(linkedSelections?.primaryPrediction || '')}”条件下 ${(fusedValue * 100).toFixed(0)}% · 独立让球综合概率 ${(marginalValue * 100).toFixed(0)}%（比分模型 ${(modelValue * 100).toFixed(0)}% / 澳客去水 ${(marketValue * 100).toFixed(0)}%）
+                ${esc(sourceKey)}：在“不让球${esc(linkedSelections?.primaryPrediction || '')}”条件下 ${(fusedValue * 100).toFixed(0)}% · 独立让球综合概率 ${(marginalValue * 100).toFixed(0)}%（比分模型 ${(modelValue * 100).toFixed(0)}% / 中国足彩网去水 ${(marketValue * 100).toFixed(0)}%）
               </div>`
             : `<div style="font-size:10px;color:#93c5fd;margin-top:6px">
-                ${esc(sourceKey)}：比分模型 ${(modelValue * 100).toFixed(0)}% · 澳客赔率去水 ${(marketValue * 100).toFixed(0)}% · 综合 ${(fusedValue * 100).toFixed(0)}%（赔率权重 ${marketWeight}%）
+                ${esc(sourceKey)}：比分模型 ${(modelValue * 100).toFixed(0)}% · 中国足彩网赔率去水 ${(marketValue * 100).toFixed(0)}% · 综合 ${(fusedValue * 100).toFixed(0)}%（赔率权重 ${marketWeight}%）
               </div>`;
         }
         itemHtml += '</div>';
@@ -3044,7 +3046,7 @@ function getGoalsPrediction(topScores) {
   return top3.length ? { top3 } : null;
 }
 
-let beidanSource = 'okooo';
+let beidanSource = 'zgzcw';
 let beidanDate = '';
 let beidanQualityFilter = 'selected';
 let beidanSearchFilter = '';
@@ -3384,7 +3386,7 @@ function renderBeidan(result) {
         <div class="toolbar-buttons">
           <button onclick="switchBeidanSource('dc')" class="tb-btn ${beidanSource === 'dc' ? 'tb-active' : ''}">竞彩单场</button>
           <button onclick="switchBeidanSource('jczq')" class="tb-btn ${beidanSource === 'jczq' ? 'tb-active' : ''}">竞彩足球</button>
-          <button onclick="switchBeidanSource('okooo')" class="tb-btn ${beidanSource === 'okooo' ? 'tb-active' : ''}">okooo</button>
+          <button onclick="switchBeidanSource('zgzcw')" class="tb-btn ${beidanSource === 'zgzcw' ? 'tb-active' : ''}">中国足彩网</button>
         </div>
       </div>
       <div class="toolbar-divider"></div>
@@ -7424,10 +7426,10 @@ let basketballLastResult = null;
 let basketballPage = 1;
 let basketballPageSize = 12;
 let basketballSearchFilter = '';
-let basketballSource = 'okooo';
+let basketballSource = 'zgzcw';
 
 function switchBasketballSource(source) {
-  basketballSource = source || 'okooo';
+  basketballSource = source || 'zgzcw';
   basketballLoaded = false;
   basketballLastResult = null;
   loadBasketball(true);
@@ -7442,7 +7444,7 @@ async function loadBasketball(force) {
   try {
     const qs = new URLSearchParams({
       _: Date.now().toString(),
-      source: basketballSource || 'okooo',
+      source: basketballSource || 'zgzcw',
     });
     const data = await fetchJson('/api/basketball?' + qs.toString());
     if (data.error) {
@@ -7522,7 +7524,7 @@ function renderBasketball(result) {
       </div>
       <div class="toolbar-group">
         <span class="toolbar-label">数据源</span>
-        <button onclick="switchBasketballSource('okooo')" class="tb-btn ${basketballSource === 'okooo' ? 'tb-active' : ''}">澳客</button>
+        <button onclick="switchBasketballSource('zgzcw')" class="tb-btn ${basketballSource === 'zgzcw' ? 'tb-active' : ''}">中国足彩网</button>
         <button onclick="switchBasketballSource('500')" class="tb-btn ${basketballSource === '500' ? 'tb-active' : ''}">500</button>
       </div>
       <button onclick="loadBasketball(true)" class="tb-refresh">🔄 刷新</button>
@@ -7541,7 +7543,7 @@ function renderBasketball(result) {
   if (basketballPage > totalPages) basketballPage = totalPages;
   const pageStart = (basketballPage - 1) * basketballPageSize;
   const visibleMatches = filteredMatches.slice(pageStart, pageStart + basketballPageSize);
-  const srcLabel = result.source === 'okooo' ? '澳客' : (result.source || basketballSource || 'okooo');
+  const srcLabel = result.source === 'zgzcw' ? '中国足彩网' : (result.source || basketballSource || 'zgzcw');
   
   html += `<div class="status" style="padding:4px 0 12px;font-size:13px">数据源 ${esc(srcLabel)}${result.version ? ' · ' + esc(result.version) : ''} · 共 ${result.total_matches || filteredMatches.length} 场，筛选后 ${filteredMatches.length} 场，第 ${basketballPage}/${totalPages} 页</div>`;
   
