@@ -243,7 +243,8 @@ def build_professional_monitoring(
         rqspf_independent = evaluate_rqspf_records(ordered, min_probability=0.65, min_edge=0.03)
     except Exception as exc:
         rqspf_independent = {
-            "market": "rqspf", "n": 0, "production_ready": False, "reason": str(exc),
+            "market": "rqspf", "n": 0, "production_ready": False,
+            "reason": "internal_error", "error_type": type(exc).__name__,
         }
     try:
         league_spf_validation = build_production_league_spf_policies(ordered)

@@ -734,7 +734,8 @@ def apply_market_change_prior(score_probs: Dict[str, float], asian: Dict, total:
 
     except Exception as e:
         log.debug(f"盘口变化先验融合失败: {e}")
-        return score_probs, {'available': False, 'reason': str(e)}
+        return score_probs, {'available': False, 'reason': 'internal_error',
+                             'error_type': type(e).__name__}
 
 
 def predict_scores(asian, euro, total, team_strength=None, league_profile=None, 

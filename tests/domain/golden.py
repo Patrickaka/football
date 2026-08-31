@@ -13,6 +13,7 @@
 """
 import gzip
 import json
+import linecache
 import pathlib
 
 GOLDEN_DIR = pathlib.Path(__file__).resolve().parents[1] / 'fixtures' / 'golden'
@@ -68,3 +69,32 @@ def as_comparable(value, ndigits=10):
     if isinstance(value, float):
         return round(value, ndigits)
     return value
+
+
+def describe_exception(exc):
+    """把异常规范化成能写进黄金文件的字符串。
+
+    **只有项目自己 `raise` 的消息才留原文。**解释器与标准库的措辞随 CPython
+    版本改：3.14 把 `math domain error` 换成了 `expected a nonnegative input,
+    got ...`、`float division by zero` 换成了 `division by zero`、
+    `is not iterable` 换成了 `is not a container or iterable`。把这些写进黄金
+    等于让黄金绑死解释器版本——换个 Python 跑 regen 就整片红，**而红的原因
+    与被测代码毫无关系**。2026-08-31 就是这么红的：有人用 homebrew 的 3.14
+    重新生成，CI 的 3.13 对不上。
+
+    项目自己 raise 的消息则相反：它是代码里的字符串字面量，不随解释器变，
+    而且是真正的契约——`赔率值解析失败: f = '' (match_id=m1)` 指明了哪个字段、
+    哪场比赛，收敛成 `ValueError` 就什么都不剩了。
+
+    判据是**最内层栈帧那一行是不是 `raise`**：项目显式抛出的（含跨行写法与
+    包装再抛）落在 raise 语句上，解释器抛出的落在触发它的表达式上。
+    """
+    tb = exc.__traceback__
+    while tb is not None and tb.tb_next is not None:
+        tb = tb.tb_next
+    if tb is not None:
+        line = linecache.getline(tb.tb_frame.f_code.co_filename,
+                                 tb.tb_lineno).strip()
+        if line.startswith('raise '):
+            return f'{type(exc).__name__}: {exc}'
+    return type(exc).__name__

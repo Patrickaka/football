@@ -146,7 +146,8 @@ def load_professional_validation_summary() -> dict:
         })
         return dict(value)
     except Exception as exc:
-        return {"available": False, "production_ready": False, "reason": str(exc)}
+        return {"available": False, "production_ready": False, "reason": "internal_error",
+                "error_type": type(exc).__name__}
 
 
 

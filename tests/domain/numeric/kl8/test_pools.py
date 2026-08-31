@@ -57,6 +57,9 @@ def real_candidates():
     return vote['candidates'], set(analyzer.statistics.get('last_numbers', set()))
 
 
+POOL_NAMES = ('real', 'even', 'tied', 'short', 'empty')
+
+
 class GoldenTests(unittest.TestCase):
     """迁移前后逐条比对。任何一条对不上，都意味着推荐的号变了。"""
 
@@ -100,30 +103,30 @@ class GoldenTests(unittest.TestCase):
                     self._check(f'adaptive_target:{hname}:{size}:{minimum}',
                                 pools.adaptive_repeat_target(hist, size, minimum))
 
-    def test_builders_match_golden(self):
-        for pname, pool in self.pools.items():
-            for size in SIZES:
-                self._check(f'zone_spread:{pname}:{size}', pools.zone_spread(pool, size))
-                for lname, last in self.lasts.items():
-                    for cap in CAPS:
-                        for label, fn in (('diversify', pools.diversify),
-                                          ('prize_floor', pools.prize_floor),
-                                          ('high_tier', pools.high_tier_chase),
-                                          ('shape_balanced', pools.shape_balanced)):
-                            self._check(f'{label}:{pname}:{size}:{lname}:{cap}',
-                                        fn(pool, size, last, max_last_numbers=cap))
+    def _builders_for(self, pname):
+        pool = self.pools[pname]
+        for size in SIZES:
+            self._check(f'zone_spread:{pname}:{size}', pools.zone_spread(pool, size))
+            for lname, last in self.lasts.items():
+                for cap in CAPS:
+                    for label, fn in (('diversify', pools.diversify),
+                                      ('prize_floor', pools.prize_floor),
+                                      ('high_tier', pools.high_tier_chase),
+                                      ('shape_balanced', pools.shape_balanced)):
+                        self._check(f'{label}:{pname}:{size}:{lname}:{cap}',
+                                    fn(pool, size, last, max_last_numbers=cap))
 
-    def test_select_final_matches_golden(self):
-        for pname, pool in self.pools.items():
-            for size in SIZES:
-                for lname, last in self.lasts.items():
-                    for cap in CAPS:
-                        for mode in MODES:
-                            self._check(
-                                f'select_final:{pname}:{size}:{lname}:{cap}:{mode}',
-                                pools.select_final(pool, size, last,
-                                                   max_last_numbers=cap,
-                                                   selection_mode=mode))
+    def _select_final_for(self, pname):
+        pool = self.pools[pname]
+        for size in SIZES:
+            for lname, last in self.lasts.items():
+                for cap in CAPS:
+                    for mode in MODES:
+                        self._check(
+                            f'select_final:{pname}:{size}:{lname}:{cap}:{mode}',
+                            pools.select_final(pool, size, last,
+                                               max_last_numbers=cap,
+                                               selection_mode=mode))
 
     def test_scoring_and_minimum_repeats_match_golden(self):
         for pname, pool in self.pools.items():
@@ -147,6 +150,26 @@ class GoldenTests(unittest.TestCase):
                             portfolio.simulate_coverage(group, simulations=2000, seed_key=seed))
             self._check(f'coverage_zero:{name}',
                         portfolio.simulate_coverage(group, simulations=0))
+
+
+# 这两族原本各是**一个**测试方法，内部把 5 个候选池 × 10 个尺寸 × 若干上次
+# 开奖 × 7 个上限 × 13 种模式全跑一遍——select_final 那条单独 20 秒，占全量
+# 总时长四分之一强。pytest 的调度粒度是测试方法，**一个方法无论多慢都只能
+# 待在一个进程里**，所以它同时也是并行化的天花板。
+#
+# 按候选池拆成每池一个方法：覆盖一条不少（黄金键名完全没变），但最慢的单条
+# 从 20 秒降到 4 秒上下，并行时能摊到不同 worker 上。
+def _bind_per_pool(stem, impl):
+    for name in POOL_NAMES:
+        def method(self, _pool_name=name, _impl=impl):
+            _impl(self, _pool_name)
+        method.__name__ = f'{stem}_{name}'
+        method.__doc__ = f'候选池 {name!r} 的黄金比对。'
+        setattr(GoldenTests, method.__name__, method)
+
+
+_bind_per_pool('test_builders', GoldenTests._builders_for)
+_bind_per_pool('test_select_final', GoldenTests._select_final_for)
 
 
 class ModeRegistryTests(unittest.TestCase):

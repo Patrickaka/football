@@ -127,6 +127,20 @@ class WarmupThreads(unittest.TestCase):
 
 
 class AppLifespan(unittest.TestCase):
+    """生命周期：scheduler 起得来、停得掉、且健康检查看的是同一个。
+
+    **预热线程在这里关掉**：它们会真的去抓 500.com（跑这一族时日志里能看到
+    `odds.500.com` 被 429 限流、退避重试），三条用例合计 18 秒，还让结果随
+    第三方站点的可用性漂。而这一族要验的是 scheduler 的生命周期，与预热
+    无关；「编排有没有启动预热」由 `Orchestration.test_run_all_does_every_step`
+    盯着，不会因此漏掉。
+    """
+
+    def setUp(self):
+        patcher = mock.patch.object(startup, 'WARMUP_THREADS', ())
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
 
     def setUp(self):
         self.addCleanup(background.reset)

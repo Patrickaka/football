@@ -9,6 +9,7 @@ import re as _re
 from datetime import datetime, timedelta
 
 from src.domain.sports.football import settlement as new
+from tests.domain.golden import describe_exception
 
 NOW = datetime(2026, 8, 28, 12, 0, 0)
 
@@ -63,7 +64,7 @@ def _y(fn, label, *a, **kw):
     try:
         yield _key(fn, label), _nan_safe(func(*a, **kw))
     except Exception as exc:
-        yield _key(fn, label), f'{type(exc).__name__}: {exc}'
+        yield _key(fn, label), describe_exception(exc)
 
 
 def _yc(fn, label, args_old, args_new):
@@ -73,7 +74,7 @@ def _yc(fn, label, args_old, args_new):
     try:
         yield _key(fn, label), _nan_safe(func(*fixed, **_clock_kwargs(func, {})))
     except Exception as exc:
-        yield _key(fn, label), f'{type(exc).__name__}: {exc}'
+        yield _key(fn, label), describe_exception(exc)
 
 
 def entries():
@@ -103,7 +104,7 @@ def entries():
         '''注入型函数：旧的不带 now、新的带——两边喂同一个真实时钟'''
         def call(m, args):
             try: return ('ok', _norm(getattr(m,fn)(*args)), 1)
-            except Exception as e: return ('exc', f'{type(e).__name__}: {e}', None)
+            except Exception as e: return ('exc', describe_exception(e), None)
         o, n = call(old, args_old), call(new, args_new)
         c = cov[fn]; c['n'] += 1; c['exc' if n[0]=='exc' else 'ok'] += 1
         if o[:2] != n[:2]: diffs.append((f'{fn}:{label}', o[1], n[1]))

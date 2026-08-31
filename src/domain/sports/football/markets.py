@@ -562,7 +562,11 @@ def poisson_tail_over(lam_total, line, max_goals=POISSON_TAIL_MAX_GOALS):
     if frac in (1, 3):
         return 0.5 * poisson_tail_over(lam_total, line - 0.25, max_goals) \
              + 0.5 * poisson_tail_over(lam_total, line + 0.25, max_goals)
-    k_min = math.floor(line + 0.501)
+    # 盘口线为负时这一项恒为 1——进球数不可能是负的。不夹这一下，k_min 会是
+    # 负数，range 的第一个 k 就让 math.factorial 抛
+    # 「factorial() not defined for negative values」，整条大小球链路挂掉。
+    # 线上一直有这个坑，只是 test_score_prediction 那族把它 skip 掉了。
+    k_min = max(0, math.floor(line + 0.501))
     return min(1.0, sum(poisson_pmf(k, lam_total) for k in range(k_min, max_goals)))
 
 

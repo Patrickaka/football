@@ -13,6 +13,7 @@ import random
 
 from src.domain.sports.football import backtest, calibration_history, policy
 from src.domain.sports.football import quality, weights
+from tests.domain.golden import describe_exception
 
 MODULES = {'sample_quality': quality, 'prediction_policy': policy,
            'history_calibration': calibration_history,
@@ -37,7 +38,7 @@ def _y(mod, fn, label, *args, **kwargs):
     try:
         yield _key(name, label), getattr(MODULES[mod], fn)(*args, **kwargs)
     except Exception as exc:
-        yield _key(name, label), f'{type(exc).__name__}: {exc}'
+        yield _key(name, label), describe_exception(exc)
 
 
 def entries():

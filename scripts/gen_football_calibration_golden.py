@@ -14,6 +14,7 @@ import pathlib
 from src.domain.sports.football import calibration as cal
 from src.domain.sports.football import calibration_buckets as cb
 from src.domain.sports.football import scoring_model as sm
+from tests.domain.golden import describe_exception
 
 PROB_PAIRS = [
     [(0.1, 0), (0.3, 0), (0.5, 1), (0.7, 1), (0.9, 1)] * 4,
@@ -74,20 +75,20 @@ def entries():
             try:
                 yield f'draw_factor:{ci}/{p_draw}', cal._get_draw_calibration_factor(data, p_draw)
             except Exception as exc:
-                yield f'draw_factor:{ci}/{p_draw}', f'{type(exc).__name__}: {exc}'
+                yield f'draw_factor:{ci}/{p_draw}', describe_exception(exc)
         for total_goals in (0, 1, 2, 3, 5):
             try:
                 yield (f'goal_factor:{ci}/{total_goals}',
                        cal._get_goal_calibration_factor(data, total_goals,
                                                         {0: 0.2, 1: 0.3, 2: 0.3, 3: 0.2}))
             except Exception as exc:
-                yield f'goal_factor:{ci}/{total_goals}', f'{type(exc).__name__}: {exc}'
+                yield f'goal_factor:{ci}/{total_goals}', describe_exception(exc)
         for h, a in ((0, 0), (1, 0), (1, 1), (2, 1), (3, 3)):
             try:
                 yield (f'score_factor:{ci}/{h}{a}',
                        cal._get_score_calibration_factor(data, h, a, 0.1))
             except Exception as exc:
-                yield f'score_factor:{ci}/{h}{a}', f'{type(exc).__name__}: {exc}'
+                yield f'score_factor:{ci}/{h}{a}', describe_exception(exc)
 
     for name in TEAM_NAMES:
         yield f'alias:{name!r}', cal.resolve_team_alias(name, ALIAS_MAP)

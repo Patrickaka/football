@@ -260,7 +260,8 @@ def summarize_beidan_history(limit=200):
         )
     except Exception as exc:
         rqspf_professional = {
-            'market': 'rqspf', 'n': 0, 'production_ready': False, 'reason': str(exc),
+            'market': 'rqspf', 'n': 0, 'production_ready': False,
+            'reason': 'internal_error', 'error_type': type(exc).__name__,
         }
     return {
         'total_records': len(records),
@@ -719,7 +720,8 @@ def generate_beidan_recommendations(date=None, bet_types=None, source='zgzcw', s
         result['decision_gate']['mode'] = 'research_only'
     except Exception as e:
         result['professional_validation'] = {
-            'available': False, 'production_ready': False, 'reason': str(e),
+            'available': False, 'production_ready': False,
+            'reason': 'internal_error', 'error_type': type(e).__name__,
         }
         result['decision_gate'] = {
             'official_bet_allowed': False,

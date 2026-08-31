@@ -53,6 +53,12 @@ def test_retry_then_success():
 
 def test_always_fail_fallback_direct_write():
     _reset()
+    # `kv.os` 与 `os` 是同一个模块对象，赋值会改掉**全局**的 os.replace，
+    # 所以真函数必须先存下来——写成 `kv.os.replace = os.replace` 等于拿
+    # 打过桩的自己还原自己，os.replace 会永久停在"总是失败"上：后面
+    # test_concurrent_writes 的 100 次写入每次跑满 6 轮重试与退避，
+    # 单这一条就要 100 秒，而且整个进程里所有 os.replace 都被带偏。
+    orig = os.replace
 
     def always_fail(src, dst):
         raise PermissionError("[WinError 5] 拒绝访问。")
@@ -69,7 +75,7 @@ def test_always_fail_fallback_direct_write():
         # 通过正常接口也能读回
         assert kv._fallback_load("k2") == {"b": 2}
     finally:
-        kv.os.replace = os.replace
+        kv.os.replace = orig
     print("[OK] test_always_fail_fallback_direct_write: 兜底写入保证不丢数据")
 
 

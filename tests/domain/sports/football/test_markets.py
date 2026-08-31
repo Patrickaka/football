@@ -392,5 +392,40 @@ class JointAnomaly(unittest.TestCase):
         self.assertFalse(only_total['hint_big_win'])
 
 
+class PoissonTailHandlesNegativeLines(unittest.TestCase):
+    """盘口线为负时不该炸。
+
+    `poisson_tail_over` 原先直接 `k_min = math.floor(line + 0.501)`，负的线
+    会让 `range` 从负数起步，第一个 k 就把 `math.factorial` 打成
+    「factorial() not defined for negative values」，整条大小球链路挂掉。
+
+    **这个坑在线上活了很久**：`tests/test_score_prediction.py` 那一族用
+    `except Exception: skipTest` 把它吞成了一行 skip，CI 从来没红过。
+    """
+
+    def test_a_negative_line_is_certain_to_go_over(self):
+        """进球数非负，所以 P(总进球 > 负数) 恒为 1。"""
+        for line in (-3.0, -2.5, -1.0, -0.5, -0.25):
+            with self.subTest(line=line):
+                self.assertAlmostEqual(markets.poisson_tail_over(2.5, line), 1.0,
+                                       places=6)
+
+    def test_zero_line_is_still_certain(self):
+        """线为 0 时同样恒为 1：只有 0 球才不算大，而 P(X>0) 用的是 k>=1。"""
+        self.assertAlmostEqual(markets.poisson_tail_over(2.5, 0.0), 1.0, places=6)
+
+    def test_positive_lines_are_unaffected(self):
+        """夹住负数不能顺手改动正常盘口的结果。"""
+        self.assertAlmostEqual(markets.poisson_tail_over(2.5, 0.5), 0.917915, places=5)
+        self.assertAlmostEqual(markets.poisson_tail_over(2.5, 2.5), 0.456187, places=5)
+
+    def test_the_tail_is_monotonic_in_the_line(self):
+        """线越高越难打出大球——单调性坏了说明 k_min 又算错了。"""
+        probs = [markets.poisson_tail_over(2.5, line)
+                 for line in (-1.0, 0.5, 1.5, 2.5, 3.5, 4.5)]
+        for higher, lower in zip(probs, probs[1:]):
+            self.assertGreaterEqual(higher, lower)
+
+
 if __name__ == '__main__':
     unittest.main()

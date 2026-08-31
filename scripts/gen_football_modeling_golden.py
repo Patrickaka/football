@@ -13,6 +13,7 @@ import pathlib
 import random
 
 from src.domain.sports.football import bayes, lambdas, markets, risk, scoring_model
+from tests.domain.golden import describe_exception
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 MK = json.loads((ROOT / 'tests/fixtures/football_markets_corpus.json').read_text(encoding='utf-8'))
@@ -112,7 +113,7 @@ def entries():
         try:
             yield f'nb_params:{mean}/{var}', scoring_model._nb_params_from_mean_var(mean, var)
         except Exception as exc:
-            yield f'nb_params:{mean}/{var}', f'{type(exc).__name__}: {exc}'
+            yield f'nb_params:{mean}/{var}', describe_exception(exc)
     for lp in PROFILES:
         yield f'nb_overdisp:{lp}', scoring_model._estimate_nb_overdispersion(lp)
     for h, a in itertools.product(range(4), range(4)):
@@ -191,7 +192,7 @@ def entries():
     try:
         yield 'team_lams:empty', lambdas.team_poisson_lambdas({}, 2.6, None)
     except Exception as exc:   # 空 strength 会抛——把异常型态也钉住
-        yield 'team_lams:empty', f'{type(exc).__name__}: {exc}'
+        yield 'team_lams:empty', describe_exception(exc)
 
     # ---- risk ----
     for lh, la in LAMS:

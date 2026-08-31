@@ -1,4 +1,5 @@
 # 测试与开发依赖。不进 requirements.txt——那是生产部署依赖，
 # deploy.yml 会在服务器上安装它，pytest 不是运行时所需。
 pytest>=8.0.0
+pytest-xdist>=3.5.0  # -n auto 并行；串行/并行结果一致是前提，见 test.yml 注释
 httpx2>=2.12.0  # starlette.testclient.TestClient 运行时依赖（本环境 starlette 要求此包，非社区版 httpx）
