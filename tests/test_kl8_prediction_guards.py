@@ -1482,15 +1482,10 @@ class KL8PredictionGuardTests(unittest.TestCase):
         self.assertEqual(select5['profit_roi'], 1.5)
         fushi7 = window['play_stats']['fu_shi_7']
         self.assertEqual(fushi7['avg_hits'], 3.0)
-<<<<<<< HEAD
-        # 7码池的随机命中期望为 7 × 20/80 = 1.75；旧8码测试值2.0不能沿用。
-        self.assertEqual(fushi7['random_expected_hits'], 1.75)
-=======
         # 期望命中 = 号码个数 x 20/80。fu_shi_7 是选5复式 7 码 → 7*0.25=1.75
         # （1b57890 之前配的是 8 码，名字与配置对不上，那时这里是 2.0）
         self.assertEqual(fushi7['random_expected_hits'], 1.75)
         self.assertEqual(fushi7['hit_delta_vs_random'], 1.25)
->>>>>>> a4fa5ebfb4ea1fe114e3635811bfcc4e6cea57aa
 
     def test_strategy_health_combines_validation_and_recent_settlements(self):
         original_strategies = kl8_config.ACTIVE_STRATEGIES
