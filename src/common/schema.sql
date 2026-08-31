@@ -27,16 +27,6 @@ CREATE TABLE IF NOT EXISTS football_prediction_record (
     INDEX idx_version (model_version)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
--- 大乐透开奖历史。seq 自增主键保留原列表顺序（业务依赖 index 0 为最新）。
-CREATE TABLE IF NOT EXISTS dlt_history (
-    seq       BIGINT AUTO_INCREMENT PRIMARY KEY,
-    issue     VARCHAR(32),
-    front     JSON,
-    back      JSON,
-    draw_date VARCHAR(32),
-    INDEX idx_issue (issue)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-
 -- 球队 ELO 评分（当前值）
 CREATE TABLE IF NOT EXISTS elo_rating (
     team       VARCHAR(128) PRIMARY KEY,

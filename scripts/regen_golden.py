@@ -117,9 +117,10 @@ from src.domain.sports.basketball.prediction import find_value_bets
 golden = {}
 for i, case in enumerate(tpr.GenerateGoldenTests.CASES):
     service = tpr._service(recorder=tpr.RecordingRecorder())
-    golden[f'payload:{i}'] = service.generate(**case)
+    golden[f'payload:{i}'] = tpr.without_version(service.generate(**case))
 golden['payload:empty'] = tpr._service(
     matches=[], recorder=tpr.RecordingRecorder()).generate()
+golden['payload:empty'] = tpr.without_version(golden['payload:empty'])
 results = tpr._service(recorder=tpr.RecordingRecorder()).generate()['results']
 for threshold in (-1.0, 0.0, 0.01, 0.05, 0.2, 0.9):
     golden[f'value:{threshold}'] = find_value_bets(results, threshold)
@@ -149,55 +150,7 @@ dump('odds_history', golden)
 print('全部生成完成')
 
 
-# ---- lottery3d 特征层 ----
-from tests.domain.numeric.lottery3d.test_features import golden_entries as l3d_entries
 from tests.domain.golden import as_comparable
-
-dump('lottery3d_features', {k: as_comparable(v) for k, v in l3d_entries()})
-
-
-# ---- lottery3d 评分与排名 ----
-from tests.domain.numeric.lottery3d.test_scoring import golden_entries as l3d_scoring_entries
-
-dump('lottery3d_scoring', {k: as_comparable(v) for k, v in l3d_scoring_entries()})
-
-
-# ---- lottery3d 选号 ----
-from tests.domain.numeric.lottery3d.test_selection import golden_entries as l3d_sel_entries
-
-dump('lottery3d_selection', {k: as_comparable(v) for k, v in l3d_sel_entries()})
-
-
-# ---- lottery3d 窗口权重与记录 ----
-from tests.domain.numeric.lottery3d.test_records import golden_entries as l3d_rec_entries
-
-dump('lottery3d_records', {k: as_comparable(v) for k, v in l3d_rec_entries()})
-
-
-# ---- lottery3d 融合与策略 ----
-from tests.domain.numeric.lottery3d.test_fusion import golden_entries as l3d_fus_entries
-
-dump('lottery3d_fusion', {k: as_comparable(v) for k, v in l3d_fus_entries()})
-
-
-# ---- lottery3d 展示层与可用性判断 ----
-from tests.domain.numeric.lottery3d.test_presentation import golden_entries as l3d_pred_entries
-
-dump('lottery3d_prediction', {k: as_comparable(v) for k, v in l3d_pred_entries()})
-
-
-# ---- lottery3d 回测与权重搜索 ----
-from tests.domain.numeric.lottery3d.test_backtest import golden_entries as l3d_bt_entries
-
-dump('lottery3d_backtest', {k: as_comparable(v) for k, v in l3d_bt_entries()})
-
-
-# ---- lottery3d ML 层 ----
-from tests.domain.numeric.lottery3d.test_ml import golden_entries as l3d_ml_entries
-
-dump('lottery3d_ml', {k: as_comparable(v) for k, v in l3d_ml_entries()})
-
-
 # ---- beidan 概率建模 ----
 from scripts.gen_beidan_modeling_golden import entries as beidan_modeling_entries
 

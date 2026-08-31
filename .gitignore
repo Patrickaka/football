@@ -21,8 +21,6 @@ data/backtest_data/
 data/dynamic_threshold_config.json
 
 # 运行时动态写入的历史缓存（可从网络重抓）
-data/lottery_history.json
-data/pailie5_history.json
 data/doc_store_*.json
 # 写入过程中的半成品。原本只忽略了 .json，.tmp 变体一直是「未忽略的
 # 未跟踪文件」，一次 `git add -A` 就会把 60 万行临时数据提进来。
@@ -39,8 +37,6 @@ src/beidan/cache/
 data/kl8_history.json
 data/kl8_recalculations/
 data/kl8_snapshots/
-data/ssq_history.json
-data/ssq_history_full.json
 
 # 运行时生成的分析报告
 reports/
@@ -50,8 +46,6 @@ src/football/data/prediction_history.json
 data/calibration_db.json
 data/market_score_db.json
 data/market_cluster_db.json
-data/lottery3d_online_predictions.json
-data/lottery3d_recent_recommend.json
 
 # 快乐8策略持久化（测试/线上运行时写入）
 data/kl8_active_strategies.json

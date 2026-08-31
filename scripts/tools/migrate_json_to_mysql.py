@@ -12,7 +12,6 @@
 """
 import json
 import sys
-from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -51,15 +50,6 @@ def migrate_prediction_records():
     return len(data)
 
 
-def migrate_dlt():
-    data = _read(DATA / 'lottery_history.json')
-    if data is None:
-        return 0
-    results = data.get('results', [])
-    repo.dlt_save(results)
-    return len(results)
-
-
 def migrate_elo():
     data = _read(DATA / 'elo_ratings.json')
     if data is None:
@@ -86,8 +76,6 @@ _KV_ITEMS = {
     'ml_metadata': DATA / 'ml_metadata.json',
     'backtest_config': DATA / 'backtest_config.json',
     'team_alias': FB_DATA.parent / 'team_alias.json',
-    'lottery3d_recent_recommend': DATA / 'lottery3d_recent_recommend.json',
-    'lottery3d_online_predictions': DATA / 'lottery3d_online_predictions.json',
 }
 
 
@@ -102,45 +90,12 @@ def migrate_kv_items():
     return n
 
 
-# ---------- kv_store 缓存项（保留原 date） ----------
-
-_CACHE_FILES = {
-    'lottery3d': DATA / 'lottery3d_cache.json',
-    'lottery3d_ml': DATA / 'lottery3d_ml_cache.json',
-    'lottery': DATA / 'lottery_cache.json',
-}
-
-_CACHE_UPSERT = (
-    "INSERT INTO kv_store (k, json_value, cache_date, updated_at) VALUES (%s,%s,%s,%s) "
-    "ON DUPLICATE KEY UPDATE json_value=VALUES(json_value), "
-    "cache_date=VALUES(cache_date), updated_at=VALUES(updated_at)"
-)
-
-
-def migrate_caches():
-    n = 0
-    for key, path in _CACHE_FILES.items():
-        wrapped = _read(path)
-        if wrapped is None:
-            continue
-        db.execute(_CACHE_UPSERT, (
-            key,
-            json.dumps(wrapped.get('data'), ensure_ascii=False),
-            wrapped.get('date'),
-            datetime.now().isoformat(),
-        ))
-        n += 1
-    return n
-
-
 _STEPS = [
     ('football_prediction', migrate_football_prediction),
     ('football_prediction_record', migrate_prediction_records),
-    ('dlt_history', migrate_dlt),
     ('elo', migrate_elo),
     ('similar_market', migrate_similar_market),
     ('kv_items', migrate_kv_items),
-    ('caches', migrate_caches),
 ]
 
 

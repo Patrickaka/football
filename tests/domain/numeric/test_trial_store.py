@@ -174,7 +174,7 @@ class QueryTests(_Base):
 
 class GameIsolationTests(_Base):
     def test_games_do_not_see_each_other(self):
-        other = TrialStore(self.db, game='lottery3d')
+        other = TrialStore(self.db, game='other-game')
         self.store.append(_trial())
         self.assertEqual(other.load(), [])
         self.assertEqual(other.count(), 0)

@@ -148,7 +148,9 @@ class NoFallbackInTheResponseLayer(unittest.TestCase):
 
     def test_routes_use_the_native_style(self):
         import pathlib
-        for module in ('basketball', 'beidan', 'lottery', 'kl8', 'football'):
+        # lottery 路由已随大乐透、双色球、福彩 3D 和排列五功能一起下线；
+        # 这里只检查仍在提供服务的业务路由。
+        for module in ('basketball', 'beidan', 'kl8', 'football'):
             source = pathlib.Path(f'src/api/routers/{module}.py').read_text(encoding='utf-8')
             with self.subTest(module=module):
                 self.assertNotIn('json_result', source)

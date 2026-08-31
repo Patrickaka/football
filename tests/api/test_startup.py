@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""进程启动的编排：磁盘清理、缓存恢复、后台任务、预热、周期维护。
+"""进程启动的编排：磁盘清理、后台任务、预热、周期维护。
 
 **新旧两个入口共用同一份**（判据 11）——旧 `server.py` 的 `main()` 与
 `_start_background_sync()` 都改成调这里，从 185 行缩到 125 行。
@@ -30,8 +30,7 @@ def app_with_orchestration():
 
 class Orchestration(unittest.TestCase):
 
-    STEPS = ('run_startup_maintenance', 'restore_persisted_caches',
-             'register_background_tasks', 'start_cache_warmups',
+    STEPS = ('run_startup_maintenance', 'register_background_tasks', 'start_cache_warmups',
              'start_maintenance_schedule')
 
     def test_run_all_does_every_step(self):
@@ -53,7 +52,7 @@ class Orchestration(unittest.TestCase):
                 spies[name].side_effect = lambda n=name: order.append(n)
             startup.run_all()
         self.assertEqual(order[0], 'run_startup_maintenance')
-        self.assertLess(order.index('restore_persisted_caches'),
+        self.assertLess(order.index('register_background_tasks'),
                         order.index('start_cache_warmups'))
 
 
@@ -99,7 +98,7 @@ class BackgroundTasks(unittest.TestCase):
 
 class WarmupThreads(unittest.TestCase):
 
-    def test_all_four_warmups_point_at_real_functions(self):
+    def test_all_three_warmups_point_at_real_functions(self):
         """**按名字反射调用最容易写错模块路径**，而错了只会被 except
         吞成一条警告——预热静静地不再发生。
         """
@@ -115,14 +114,13 @@ class WarmupThreads(unittest.TestCase):
         with mock.patch('threading.Thread') as thread_class:
             thread_class.side_effect = lambda **kwargs: started.append(kwargs) or mock.MagicMock()
             startup.start_cache_warmups()
-        self.assertEqual(len(started), 4)
+        self.assertEqual(len(started), 3)
         for kwargs in started:
             with self.subTest(name=kwargs.get('name')):
                 self.assertTrue(kwargs['daemon'])
 
     def test_a_broken_warmup_does_not_stop_the_rest(self):
         with mock.patch('threading.Thread', side_effect=[RuntimeError('起不来'),
-                                                         mock.MagicMock(),
                                                          mock.MagicMock(),
                                                          mock.MagicMock()]):
             startup.start_cache_warmups()
@@ -177,8 +175,8 @@ class TheOldEntryPointIsGone(unittest.TestCase):
 
     def test_the_orchestration_survived_the_deletion(self):
         """删旧入口时最容易连坐的就是它——那会让后台任务静静地不再登记。"""
-        for step in ('run_startup_maintenance', 'restore_persisted_caches',
-                     'register_background_tasks', 'start_cache_warmups',
+        for step in ('run_startup_maintenance', 'register_background_tasks',
+                     'start_cache_warmups',
                      'start_maintenance_schedule', 'run_all'):
             with self.subTest(step=step):
                 self.assertTrue(callable(getattr(startup, step, None)))

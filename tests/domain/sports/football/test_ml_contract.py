@@ -8,7 +8,7 @@
 
 黄金里**只有「我们自己算的」**。带 numpy / catboost / xgboost / sklearn 的
 函数一个都没搬——它们留在 `src/football/ml.py`。
-3-17b 在 lottery3d 上把库算出来的数钉进黄金，本地全绿、**CI 直接红 5 条**，
+曾有数字模型把库算出来的数钉进黄金，本地全绿、**CI 直接红 5 条**，
 因为 `requirements.txt` 用 `>=`、CI 装的版本比本地新。
 
 判断方法：问「换一个版本的 catboost，这个值还一样吗」。

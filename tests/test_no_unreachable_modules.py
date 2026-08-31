@@ -5,9 +5,8 @@
 （`foundation/ml` 就是这样：建了 `TrainValidSplit` 这类抽象，
 看着像底座提供了 ML 能力，实际没有任何业务走它）。
 
-**必须把动态导入算进去。** 第一版只看 `ast.Import`，结论是 38 个模块
-不可达——其中 33 个是 `importlib.import_module('src.lottery3d')` 这类
-拉起来的活代码（3D tab 的整个后端）。**照那个结论删就是删活的。**
+**必须把动态导入算进去。** 有些可选后端会通过
+`importlib.import_module(...)` 拉起，只看 `ast.Import` 会把活代码误判为孤儿。
 
 已知的、有意保留的不可达项列在 `ENTRY_SCRIPTS` 里：它们是手动执行的
 离线工具，入口是命令行而不是 import。
@@ -37,7 +36,7 @@ def _modules():
     for path in SRC.rglob('*.py'):
         if '__pycache__' in str(path):
             continue
-        module = str(path.with_suffix('')).replace('/', '.')
+        module = str(path.with_suffix('')).replace('\\', '.').replace('/', '.')
         if module.endswith('.__init__'):
             module = module[:-len('.__init__')]
         found[module] = path
@@ -51,7 +50,7 @@ def _imports_of(path):
         tree = ast.parse(path.read_text(encoding='utf-8'))
     except SyntaxError:
         return out
-    package = str(path.parent).replace('/', '.')
+    package = str(path.parent).replace('\\', '.').replace('/', '.')
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             out.update(a.name for a in node.names)
@@ -111,17 +110,6 @@ class Reachability(unittest.TestCase):
         self.assertEqual(orphans, [],
                          f'这些模块从任何入口都到不了：{orphans}\n'
                          f'要么接上，要么删掉，要么加进 ENTRY_SCRIPTS 并说明理由')
-
-    def test_dynamic_imports_are_counted(self):
-        """**守卫的守卫**：漏掉动态导入，上一条会把活代码报成孤儿。
-
-        `src.lottery3d` 是 3D tab 的整个后端，只被
-        `importlib.import_module('src.lottery3d')` 拉起来。
-        """
-        _, seen = reachable_modules()
-        self.assertIn('src.lottery3d', seen,
-                      '动态导入没被算进去——这个分析会把活代码判成死的')
-        self.assertIn('src.lottery3d.ml', seen)
 
     def test_the_entry_script_list_is_not_a_dumping_ground(self):
         """豁免清单是给命令行工具的，**它们必须真的有 `__main__` 入口**。

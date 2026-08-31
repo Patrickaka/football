@@ -5,8 +5,7 @@
 它是纯计算，也是唯一真正属于基座的部分：区间分布、012 路、奇偶、大小、
 遗漏、冷热趋势、共现，换一种数字彩票也是同一批概念，变的只是号码空间。
 
-所以这里按 `NumberSpace` 参数化。kl8 是 1~80 取 20 个，lottery3d 是三位
-0~9——同一套统计，不同的空间。
+所以这里按 `NumberSpace` 参数化，让同一套统计支持不同的号码空间。
 
 **正确性由差分测试保证**：旧实现仍在线（要到端点切换才删），对同一份真实
 历史同时跑新旧两份、断言输出逐字相等。
@@ -320,7 +319,7 @@ class AdjacentFrequencyTests(unittest.TestCase):
 
 
 class NumberSpaceTests(unittest.TestCase):
-    """号码空间。写死 1~80 的话，lottery3d 一行都用不上这些统计。"""
+    """号码空间不应在统计函数内部写死为 1~80。"""
 
     def test_numbers_covers_the_range(self):
         self.assertEqual(list(NumberSpace(1, 3).numbers()), [1, 2, 3])

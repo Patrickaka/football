@@ -24,7 +24,7 @@ from src.api.runtime.lazy_modules import (
 from src.api.runtime import kl8_cache
 from src.api.runtime.shared_cache import get_cache as get_shared_cache
 from src.api.runtime.caching import (
-    _CACHE, _current_kl8_predictor_version, _serve_cached,
+    _CACHE, _current_kl8_predictor_version,
 )
 from src.api.runtime.jobs import (
     _get_kl8_parameter_search_job, _run_kl8_parameter_search_job,

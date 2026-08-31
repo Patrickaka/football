@@ -211,7 +211,7 @@ class FootballTaskRegistrationTests(_Base):
         靠环境碰巧装着——那种依赖消失时不会报错，只会悄悄换一条行为不同的路。"""
         import src.football.result_sync as module
 
-        source = pathlib.Path(module.__file__).read_text()
+        source = pathlib.Path(module.__file__).read_text(encoding='utf-8')
         self.assertNotIn('apscheduler.schedulers', source)
         self.assertFalse(hasattr(module, 'start_background_sync'))
 

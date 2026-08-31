@@ -2,7 +2,7 @@
 """ML 层的纯计算：特征契约、动态 rho、进球数推荐、按时间切分。
 
 纯计算——**模型训练与推断留在适配层**。判据 20b 是这一批的硬约束：
-黄金**不得**放 catboost/xgboost/sklearn 算出来的数（3-17b 在 lottery3d 上
+黄金**不得**放 catboost/xgboost/sklearn 算出来的数（曾有数字模型
 因为 `requirements.txt` 用 `>=`、CI 装的版本比本地新，直接红了 5 条）。
 所以带 numpy/模型的函数一个都没搬——它们留在 `src/football/ml.py`。
 

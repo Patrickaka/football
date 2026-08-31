@@ -76,14 +76,14 @@ class GameIsolationTests(_Base):
     """
 
     def test_games_do_not_see_each_other(self):
-        other = DrawStore(self.db, game='dlt')
+        other = DrawStore(self.db, game='other-game')
         self.store.save([_draw('2026227')])
         self.assertEqual(other.load(), [])
         self.assertEqual(len(self.store.load()), 1)
 
     def test_same_issue_in_two_games_both_survive(self):
         """不同彩种的期号会撞——它们各自编号，2026227 两边都可能有。"""
-        other = DrawStore(self.db, game='dlt')
+        other = DrawStore(self.db, game='other-game')
         self.store.save([_draw('2026227')])
         other.save([_draw('2026227')])
         self.assertEqual(self.store.count(), 1)

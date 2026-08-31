@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""网页入口：单页应用本体与它的历史锚点入口。"""
+"""网页入口：单页应用本体。"""
 import pathlib
 import unittest
 from unittest import mock
@@ -51,26 +51,6 @@ class IndexPage(unittest.TestCase):
                                   follow_redirects=False)
             self.assertEqual(response.status_code, 303)
             self.assertEqual(response.headers['location'], '/login')
-
-
-class SsqRedirect(unittest.TestCase):
-
-    def test_it_redirects_to_the_anchor(self):
-        with make_client() as client:
-            response = client.get('/ssq', follow_redirects=False)
-            self.assertEqual(response.status_code, 302)
-            self.assertEqual(response.headers['location'], './#ssq')
-
-    def test_the_target_is_relative(self):
-        """**线上反代把服务挂在 `/football/` 下并剥掉了前缀**，应用自己
-        看不到这一段。写死 `/#ssq` 会把访问者甩到站点根目录。
-
-        旧入口靠嗅探 `route.path` 是否以 `/football/` 开头来补前缀——
-        那在剥了前缀的新入口下永远为假，等于没有。
-        """
-        with make_client() as client:
-            location = client.get('/ssq', follow_redirects=False).headers['location']
-            self.assertFalse(location.startswith('/'))
 
 
 if __name__ == '__main__':

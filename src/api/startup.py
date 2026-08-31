@@ -8,8 +8,7 @@
 顺序是有讲究的：
 1. **磁盘清理必须最先**，且是同步的。生产盘长期在 91%，先回收可再生的
    日志/报告与过期 binlog，否则后面的预热与落盘只会继续放大压力。
-2. 缓存恢复要早于预热——恢复得到的当天结果能让预热直接跳过。
-3. 周期任务**全部登记完再统一启动**：调度器一旦 start()，submit() 就会
+2. 周期任务**全部登记完再统一启动**：调度器一旦 start()，submit() 就会
    RuntimeError。
 """
 
@@ -21,7 +20,6 @@ log = logging.getLogger('api.startup')
 
 #: 预热是纯粹的"提前算好"，失败了只影响首次访问的延迟，不该拖垮启动。
 WARMUP_THREADS = (
-    ('Warm3DThread', 'src.api.runtime.caching', '_warm_3d_caches', '3D'),
     ('WarmKL8Thread', 'src.api.services.kl8', 'kl8_payload', '快乐8'),
     ('WarmFootballThread', 'src.api.runtime.jobs', '_warm_football_caches', '足球'),
     ('WarmBeidanThread', 'src.api.runtime.jobs', '_warm_beidan_caches', '北单'),
@@ -42,16 +40,6 @@ def run_startup_maintenance():
         run_maintenance(force_emergency=emergency)
     except Exception as exc:
         log.warning('启动前磁盘清理失败: %s', exc)
-
-
-def restore_persisted_caches():
-    """恢复当天有效的落盘结果，重启后无需冷计算。"""
-    try:
-        from src.api.runtime.caching import _load_persisted_caches
-
-        _load_persisted_caches()
-    except Exception as exc:
-        log.warning('恢复落盘缓存失败: %s', exc)
 
 
 def register_background_tasks():
@@ -127,9 +115,8 @@ def start_maintenance_schedule():
 
 
 def run_all():
-    """按顺序做完全部七件事。顺序见模块说明，别调换。"""
+    """按顺序完成启动编排。顺序见模块说明，别调换。"""
     run_startup_maintenance()
-    restore_persisted_caches()
     register_background_tasks()
     start_cache_warmups()
     start_maintenance_schedule()

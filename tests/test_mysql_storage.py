@@ -86,15 +86,6 @@ class MySQLStorageTest(unittest.TestCase):
         self.assertEqual(got['m1'], records[0])  # 开放式键完整保留
         self.assertEqual(got['m2'], records[1])
 
-    def test_dlt_order_preserved(self):
-        results = [
-            {'issue': '2026061', 'front': [10, 12, 26, 31, 35], 'back': [2, 12], 'date': '2026-06-03'},
-            {'issue': '2026060', 'front': [1, 2, 3, 4, 5], 'back': [6, 7], 'date': '2026-06-01'},
-            {'issue': '2025100', 'front': [9, 8, 7, 6, 5], 'back': [1, 2], 'date': '2025-12-01'},
-        ]
-        repo.dlt_save(results)
-        self.assertEqual(repo.dlt_load(), results)  # 顺序与内容均一致
-
     def test_elo_roundtrip(self):
         data = {
             'ratings': {'中国': 1500.0, '泰国': 1480.5},

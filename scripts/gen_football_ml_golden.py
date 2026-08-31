@@ -4,7 +4,7 @@
 **判据 20b 是这一批的硬约束**：黄金里**只有「我们自己算的」**——
 动态 rho、泊松、DC 的 τ 因子、特征契约、按时间切分。
 带 numpy/catboost/xgboost/sklearn 的函数一个都没进来
-（3-17b 在 lottery3d 上因为 `requirements.txt` 用 `>=`、CI 装的版本比本地新，
+（曾有数字模型因为 `requirements.txt` 用 `>=`、CI 装的版本比本地新，
 把库算出来的数钉进黄金直接红了 5 条）。
 
 判断方法：问「换一个版本的 catboost，这个值还一样吗」。

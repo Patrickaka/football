@@ -157,7 +157,7 @@ class VotingGoldenTests(unittest.TestCase):
                 golden_key = f'vote:{slice_name}:{key}'
                 with self.subTest(case=golden_key):
                     self.assertEqual(without_version(as_json(run_case(analyzer, config))),
-                                     GOLDEN[golden_key])
+                                     without_version(GOLDEN[golden_key]))
 
 
 class VersionIsReportedTests(unittest.TestCase):

@@ -109,17 +109,5 @@ class WebProfessionalModalTests(unittest.TestCase):
         self.assertIn('if (!compactFootballView && top.length)', html)
         self.assertIn('if (!compactFootballView && htfProbs.length)', html)
 
-    def test_lottery3d_uses_single_compact_primary_view(self):
-        path = os.path.join(ROOT, 'web', 'index.html')
-        with open(path, encoding='utf-8') as handle:
-            html = handle.read()
-
-        self.assertIn('function renderLottery3dCompact(r)', html)
-        self.assertIn('renderLottery3dCompact(data.result);', html)
-        self.assertIn('lottery3d-compact-primary', html)
-        self.assertIn('组六主推 · 四码', html)
-        self.assertIn('最近25期数字出现频率', html)
-
-
 if __name__ == '__main__':
     unittest.main()

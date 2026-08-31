@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""业务模块访问层：足球/3D/报告模块懒加载与各彩种入口导入"""
+"""业务模块访问层：足球、快乐8与报告模块懒加载。"""
 
 import os
 import sys
@@ -23,9 +23,6 @@ from src.common.paths import data_path
 
 log = setup_logger('server')
 
-from src.ssq import run_prediction as ssq_run_prediction, clear_cache as ssq_clear_cache
-from src.lottery import get_lottery_analyzer, run_prediction as lottery_run_prediction
-from src.lottery.ml import predict_with_ml, clear_ml_cache
 from src.kl8 import (
     get_kl8_analyzer, run_prediction as kl8_run_prediction,
     clear_cache as kl8_clear_cache, list_prediction_snapshots as kl8_list_snapshots,
@@ -49,16 +46,7 @@ _FOOTBALL_MODULE = None
 _BAYES_REPORT_MODULE = None
 
 
-_LOTTERY3D_MODULE = None
-
-
-_LOTTERY3D_ML_MODULE = None
-
-
 _FOOTBALL_IMPORT_LOCK = threading.Lock()
-
-
-_LOTTERY3D_IMPORT_LOCK = threading.Lock()
 
 
 _BAYES_REPORT_AVAILABLE = True
@@ -122,36 +110,6 @@ def sync_beidan_reports(*args, **kwargs):
 
 def refresh_football_cache_index(*args, **kwargs):
     return _get_bayes_report_module().refresh_football_cache_index(*args, **kwargs)
-
-
-def _get_lottery3d_module():
-    global _LOTTERY3D_MODULE
-    if _LOTTERY3D_MODULE is None:
-        with _LOTTERY3D_IMPORT_LOCK:
-            if _LOTTERY3D_MODULE is None:
-                _LOTTERY3D_MODULE = importlib.import_module('src.lottery3d')
-    return _LOTTERY3D_MODULE
-
-
-def _get_lottery3d_ml_module():
-    global _LOTTERY3D_ML_MODULE
-    if _LOTTERY3D_ML_MODULE is None:
-        with _LOTTERY3D_IMPORT_LOCK:
-            if _LOTTERY3D_ML_MODULE is None:
-                _LOTTERY3D_ML_MODULE = importlib.import_module('src.lottery3d.ml')
-    return _LOTTERY3D_ML_MODULE
-
-
-def run_prediction(*args, **kwargs):
-    return _get_lottery3d_module().run_prediction(*args, **kwargs)
-
-
-def fetch_data(*args, **kwargs):
-    return _get_lottery3d_ml_module().fetch_data(*args, **kwargs)
-
-
-def predict_current(*args, **kwargs):
-    return _get_lottery3d_ml_module().predict_current(*args, **kwargs)
 
 
 def _load_beidan_helpers():

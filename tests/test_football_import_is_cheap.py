@@ -22,12 +22,15 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 def _run(code, extra_env=None):
     """在干净子进程里跑一段代码，返回 stdout"""
-    env = {
-        'PATH': os.environ.get('PATH', '/usr/bin:/bin'),
+    # 保留系统环境（Windows 加载 xgboost 等原生 DLL 依赖 SYSTEMROOT 等
+    # 变量），只覆盖测试需要固定的项目变量。隔离 Python 模块状态靠全新
+    # 子进程完成，不应通过删除操作系统环境变量来实现。
+    env = os.environ.copy()
+    env.update({
         'PYTHONPATH': str(REPO_ROOT),
         'PYTHONDONTWRITEBYTECODE': '1',
-        'HOME': os.environ.get('HOME', '/tmp'),
-    }
+        'HOME': os.environ.get('HOME', str(REPO_ROOT)),
+    })
     if extra_env:
         env.update(extra_env)
     result = subprocess.run(

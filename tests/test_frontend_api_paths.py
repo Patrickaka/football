@@ -52,7 +52,7 @@ class FrontendPaths(unittest.TestCase):
                                 f'{path} 是相对地址，子路径部署下会解析错')
 
     def test_every_call_hits_a_real_route(self):
-        """前端调的每条都得在后端存在——pailie5 就是这么坏了好几个月的。
+        """前端调用的每条路径都必须在后端存在，避免留下失效入口。
 
         通配路由（`/reports/{name}`）按前缀匹配：具体文件在不在是运行时的事，
         路由存在就够。`loadProfessionalBacktestFallback` 取那份静态回测报告

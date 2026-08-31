@@ -1,13 +1,10 @@
 # -*- coding: utf-8 -*-
-"""网页入口。
-
-`/` 是单页应用本体，`/ssq` 是它的一个锚点的历史入口。
-"""
+"""网页入口。"""
 
 import pathlib
 
 from fastapi import APIRouter
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse
 
 router = APIRouter(tags=['pages'], include_in_schema=False)
 
@@ -31,14 +28,3 @@ async def index():
         return HTMLResponse('index.html 缺失', status_code=500,
                             media_type='text/plain; charset=utf-8')
     return HTMLResponse(body, headers=NO_CACHE)
-
-
-@router.get('/ssq')
-async def ssq_redirect():
-    """双色球的历史入口，跳到单页应用的对应锚点。
-
-    **用相对地址 `./#ssq`**：线上反代把服务挂在 `/football/` 下并剥掉了
-    前缀，应用自己看不到这一段。写死 `/#ssq` 会把访问者甩到站点根目录。
-    旧入口靠嗅探 `route.path` 前缀来补，那在剥了前缀的新入口下永远为假。
-    """
-    return RedirectResponse('./#ssq', status_code=302)

@@ -15,6 +15,13 @@ class SnapshotStore:
     def __init__(self, root):
         self.root = root
         os.makedirs(self.root, exist_ok=True)
+        self._locks_guard = threading.Lock()
+        self._path_locks = {}
+
+    def _lock_for(self, path):
+        """同一路径的替换串行化；不同 URL 的快照仍可并行写入。"""
+        with self._locks_guard:
+            return self._path_locks.setdefault(path, threading.Lock())
 
     def save(self, url, body):
         path = self._path(url)
@@ -24,10 +31,17 @@ class SnapshotStore:
         # 已被 A 搬走"这类内容错乱/FileNotFoundError。各写各的 tmp 后，
         # os.replace 本身的原子性才能真正生效：最终落地的是最后一次 replace
         # 的完整内容，不会是两次写入交织出的半成品。
-        tmp = f'{path}.{os.getpid()}.{threading.get_ident()}.tmp'
-        with open(tmp, 'w', encoding='utf-8') as handle:
-            handle.write(body)
-        os.replace(tmp, path)
+        with self._lock_for(path):
+            tmp = f'{path}.{os.getpid()}.{threading.get_ident()}.tmp'
+            try:
+                with open(tmp, 'w', encoding='utf-8') as handle:
+                    handle.write(body)
+                os.replace(tmp, path)
+            finally:
+                # Windows 下 replace 失败时临时文件仍可能存在；下次测试或
+                # 清理目录前必须主动移除，不能让失败变成长期磁盘垃圾。
+                if os.path.exists(tmp):
+                    os.unlink(tmp)
 
     def load(self, url):
         path = self._path(url)
