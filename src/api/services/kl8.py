@@ -13,6 +13,9 @@ import uuid
 import re
 import json
 import time
+from pathlib import Path
+
+from src.common.paths import data_path
 from src.api.runtime.lazy_modules import (
     KL8RollingBacktest, get_kl8_analyzer, kl8_check_data_integrity,
     kl8_clear_cache, kl8_list_conflict_queue, kl8_list_recalculations,
@@ -60,16 +63,37 @@ def kl8_payload():
 
 
 def kl8_latest_issue():
-    """最新一期期号。取不到就返回空字符串——调用方据此绕过缓存。
+    """最新一期期号。优先轻量读取历史文件，避免仅为缓存 key 初始化分析器。
 
-    分析器是进程级单例，这里只是读它已经加载好的第一条，不触发任何抓取。
+    取不到就返回空字符串——调用方据此绕过缓存。历史文件异常时才回退到
+    分析器，以兼容只写入 store/doc_store 的旧部署。
     """
+    issue = _latest_issue_from_history_file()
+    if issue:
+        return issue
     try:
         analyzer = get_kl8_analyzer()
         history = getattr(analyzer, 'history_data', None) or []
         return history[0].get('issue', '') if history else ''
     except Exception as exc:
         log.warning('读取 kl8 最新期号失败，本次绕过缓存: %s', exc)
+        return ''
+
+
+def _latest_issue_from_history_file():
+    """不创建 KL8Analyzer，直接从可重建的本地历史缓存读取最新期号。"""
+    try:
+        raw = json.loads(Path(data_path('kl8_history.json')).read_text(encoding='utf-8'))
+        records = raw.get('results', raw.get('data', [])) if isinstance(raw, dict) else raw
+        if not isinstance(records, list):
+            return ''
+        issues = [
+            str(record.get('issue') or '')
+            for record in records
+            if isinstance(record, dict) and record.get('issue')
+        ]
+        return max(issues) if issues else ''
+    except (OSError, ValueError, TypeError):
         return ''
 
 

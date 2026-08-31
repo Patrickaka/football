@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 
 from src.api.app import create_app
 from src.api.deps import Settings, get_executor, shutdown_executor
+from src.api.runtime import shared_cache
 
 
 class ExecutorWorkersWiringTests(unittest.TestCase):
@@ -38,6 +39,15 @@ class ExecutorWorkersWiringTests(unittest.TestCase):
         with TestClient(app):
             executor = get_executor()
             self.assertEqual(executor._max_workers, 7)
+
+    def test_lifespan_shares_app_cache_with_service_layer(self):
+        settings = Settings(
+            redis_url=None,
+            mysql_url='sqlite+pysqlite:///:memory:',
+        )
+        app = create_app(settings)
+        with TestClient(app):
+            self.assertIs(shared_cache.get_cache(), app.state.cache)
 
 
 class LifespanShutdownOrderTests(unittest.TestCase):

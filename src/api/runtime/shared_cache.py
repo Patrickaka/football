@@ -35,6 +35,13 @@ def get_cache():
     return _cache
 
 
+def set_cache(cache):
+    """安装应用启动时已经创建的缓存，避免业务层重复连接 Redis。"""
+    global _cache
+    with _lock:
+        _cache = cache
+
+
 def reset():
     """测试用。"""
     global _cache

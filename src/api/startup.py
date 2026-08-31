@@ -22,6 +22,7 @@ log = logging.getLogger('api.startup')
 #: 预热是纯粹的"提前算好"，失败了只影响首次访问的延迟，不该拖垮启动。
 WARMUP_THREADS = (
     ('Warm3DThread', 'src.api.runtime.caching', '_warm_3d_caches', '3D'),
+    ('WarmKL8Thread', 'src.api.services.kl8', 'kl8_payload', '快乐8'),
     ('WarmFootballThread', 'src.api.runtime.jobs', '_warm_football_caches', '足球'),
     ('WarmBeidanThread', 'src.api.runtime.jobs', '_warm_beidan_caches', '北单'),
 )

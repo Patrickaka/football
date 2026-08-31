@@ -548,6 +548,42 @@ class KL8PredictionGuardTests(unittest.TestCase):
         self.assertEqual(stored[0]['numbers'], result['top7_numbers'])
         self.assertEqual(stored[0]['source_snapshot_id'], 'fushi7-snapshot')
 
+    def test_fushi7_recalculation_chain_runs_until_candidates_are_exhausted(self):
+        analyzer = KL8Analyzer.__new__(KL8Analyzer)
+        analyzer.history_data = [_record(i) for i in range(80, 0, -1)]
+        analyzer.using_simulated_data = False
+        analyzer.statistics = {'last_numbers': set()}
+
+        original_build = KL8Analyzer.build_pool_by_strategy
+        original_verify_only = kl8_config.VERIFY_ONLY_MODE
+        try:
+            kl8_config.VERIFY_ONLY_MODE = False
+            KL8Analyzer.build_pool_by_strategy = lambda self, strategy, pool_size=20: {
+                'selected': list(range(1, 22)),
+                'candidates': [(n, float(100 - n)) for n in range(1, 22)],
+                'votes': {},
+            }
+            chain = analyzer.generate_exclude_recalculation_chain(
+                'fu_shi_7',
+                [1, 2, 3, 4, 5, 6, 7],
+                source_snapshot_id='fushi7-auto-snapshot',
+            )
+            stored = kl8_module.list_exclude_recalculations()
+        finally:
+            KL8Analyzer.build_pool_by_strategy = original_build
+            kl8_config.VERIFY_ONLY_MODE = original_verify_only
+
+        self.assertEqual(chain['generated_rounds'], 2)
+        self.assertTrue(chain['exhausted'])
+        self.assertEqual(chain['terminal']['remaining_count'], 0)
+        self.assertEqual(len(stored), 3)
+        self.assertTrue(all(row['play_type'] == 'fu_shi_7' for row in stored))
+        self.assertTrue(all(
+            len(row['numbers']) == 7
+            for row in stored
+            if row['status'] == 'generated'
+        ))
+
     def test_recalculation_identity_is_scoped_to_source_snapshot(self):
         analyzer = KL8Analyzer.__new__(KL8Analyzer)
         analyzer.history_data = [_record(i) for i in range(80, 0, -1)]
@@ -865,7 +901,7 @@ class KL8PredictionGuardTests(unittest.TestCase):
         self.assertEqual(result['fu_shi_10_11']['pool_size'], 11)
         self.assertEqual(result['fu_shi_10_11']['total_combinations'], 11)
 
-    def test_predict_all_automatically_generates_and_returns_select6_chain(self):
+    def test_predict_all_automatically_generates_select6_and_fushi7_chains(self):
         analyzer = KL8Analyzer.__new__(KL8Analyzer)
         analyzer.history_data = [_record(i) for i in range(80, 0, -1)]
         analyzer.using_simulated_data = False
@@ -873,7 +909,7 @@ class KL8PredictionGuardTests(unittest.TestCase):
         analyzer._data_mtime = 0
         analyzer.statistics = {}
         analyzer.update_statistics()
-        captured = {}
+        captured = []
 
         original_save = KL8Analyzer._save_prediction_snapshot
         original_chain = KL8Analyzer.generate_exclude_recalculation_chain
@@ -885,9 +921,11 @@ class KL8PredictionGuardTests(unittest.TestCase):
             )
 
             def fake_chain(self, play_type, initial_numbers, **kwargs):
-                captured['play_type'] = play_type
-                captured['initial_numbers'] = list(initial_numbers)
-                captured.update(kwargs)
+                captured.append({
+                    'play_type': play_type,
+                    'initial_numbers': list(initial_numbers),
+                    **kwargs,
+                })
                 return {
                     'play_type': play_type,
                     'generation_mode': 'automatic',
@@ -901,12 +939,23 @@ class KL8PredictionGuardTests(unittest.TestCase):
             KL8Analyzer.generate_exclude_recalculation_chain = original_chain
             kl8_config.VERIFY_ONLY_MODE = original_verify_only
 
-        self.assertEqual(captured['play_type'], 'select_6')
-        self.assertEqual(captured['initial_numbers'], result['select_6']['numbers'])
-        self.assertEqual(captured['source_snapshot_id'], 'auto-chain-id')
-        self.assertEqual(captured['source_version'], kl8_module.KL8_PREDICTOR_VERSION)
+        self.assertEqual([item['play_type'] for item in captured], ['select_6', 'fu_shi_7'])
+        self.assertEqual(captured[0]['initial_numbers'], result['select_6']['numbers'])
+        self.assertEqual(captured[1]['initial_numbers'], result['fu_shi_7']['top7_numbers'])
+        self.assertTrue(all(
+            item['source_snapshot_id'] == 'auto-chain-id'
+            for item in captured
+        ))
+        self.assertTrue(all(
+            item['source_version'] == kl8_module.KL8_PREDICTOR_VERSION
+            for item in captured
+        ))
         self.assertEqual(
             result['select_6_recalculation_chain']['generation_mode'],
+            'automatic',
+        )
+        self.assertEqual(
+            result['fu_shi_7_recalculation_chain']['generation_mode'],
             'automatic',
         )
 
@@ -1433,7 +1482,8 @@ class KL8PredictionGuardTests(unittest.TestCase):
         self.assertEqual(select5['profit_roi'], 1.5)
         fushi7 = window['play_stats']['fu_shi_7']
         self.assertEqual(fushi7['avg_hits'], 3.0)
-        self.assertEqual(fushi7['random_expected_hits'], 2.0)
+        # 7码池的随机命中期望为 7 × 20/80 = 1.75；旧8码测试值2.0不能沿用。
+        self.assertEqual(fushi7['random_expected_hits'], 1.75)
 
     def test_strategy_health_combines_validation_and_recent_settlements(self):
         original_strategies = kl8_config.ACTIVE_STRATEGIES

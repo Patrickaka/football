@@ -1593,12 +1593,28 @@ class KL8Analyzer:
         snapshot_name = self._save_prediction_snapshot(results)
         if snapshot_name:
             results['snapshot_file'] = snapshot_name
+            source_snapshot_id = Path(snapshot_name).stem.replace('snapshot_', '', 1)
             select6_numbers = results.get('select_6', {}).get('numbers', [])
             if len(select6_numbers) == 6:
                 results['select_6_recalculation_chain'] = self.generate_exclude_recalculation_chain(
                     'select_6',
                     select6_numbers,
-                    source_snapshot_id=Path(snapshot_name).stem.replace('snapshot_', '', 1),
+                    source_snapshot_id=source_snapshot_id,
+                    source_version=KL8_PREDICTOR_VERSION,
+                )
+
+            # 选5复式7码与选6使用相同的“第0轮主推 → 累计杀号重算”记录模式。
+            # 重算记录绑定本次正式快照，预测记录接口会按 source_snapshot_id
+            # 自动归入对应期次，不混入同一期其他模型版本的轨迹。
+            fushi7_numbers = (
+                results.get('fu_shi_7', {}).get('top7_numbers')
+                or results.get('fu_shi_7', {}).get('core_numbers', [])
+            )
+            if len(fushi7_numbers) == FUSHI_CONFIG['fu_shi_7']['pool_size']:
+                results['fu_shi_7_recalculation_chain'] = self.generate_exclude_recalculation_chain(
+                    'fu_shi_7',
+                    fushi7_numbers,
+                    source_snapshot_id=source_snapshot_id,
                     source_version=KL8_PREDICTOR_VERSION,
                 )
 

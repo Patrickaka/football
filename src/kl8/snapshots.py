@@ -3,8 +3,10 @@
 
 import math
 import json
+import os
 import time
 import hashlib
+import threading
 import uuid
 from collections import defaultdict, Counter
 from typing import List, Dict, Optional, Tuple
@@ -27,6 +29,86 @@ from .records import (
 from .analyzer import (
     get_kl8_analyzer,
 )
+
+
+_PREDICTION_CACHE_FILE = Path(data_path('kl8_prediction_cache.json'))
+_PREDICTION_CACHE_SCHEMA = 1
+_prediction_cache_lock = threading.Lock()
+
+
+def _strategy_config_fingerprint() -> str:
+    """返回会改变推荐号码的完整策略指纹。"""
+    return hashlib.sha256(
+        json.dumps(
+            {
+                'active_strategies': _cfg.ACTIVE_STRATEGIES,
+                'reference_strategy': REFERENCE_STRATEGY,
+                'candidate_strategies': CANDIDATE_STRATEGIES,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(',', ':'),
+        ).encode()
+    ).hexdigest()[:16]
+
+
+def _history_signature():
+    """用便宜的文件元数据判断开奖历史是否变化，不初始化完整分析器。"""
+    path = Path(data_path('kl8_history.json'))
+    try:
+        stat = path.stat()
+        return [stat.st_mtime_ns, stat.st_size]
+    except OSError:
+        return None
+
+
+def _load_persisted_prediction(history_signature, config_fingerprint):
+    """读取跨进程缓存；任一失效条件不同都视为未命中。"""
+    if history_signature is None:
+        return None
+    try:
+        payload = json.loads(_PREDICTION_CACHE_FILE.read_text(encoding='utf-8'))
+    except (OSError, ValueError, TypeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    if payload.get('schema') != _PREDICTION_CACHE_SCHEMA:
+        return None
+    if payload.get('version') != KL8_PREDICTOR_VERSION:
+        return None
+    if payload.get('config_fingerprint') != config_fingerprint:
+        return None
+    if payload.get('history_signature') != history_signature:
+        return None
+    result = payload.get('result')
+    return result if isinstance(result, dict) and 'error' not in result else None
+
+
+def _persist_prediction(result, history_signature, config_fingerprint):
+    """原子落盘完整预测结果，供服务重启后的首个请求直接读取。"""
+    if history_signature is None or not isinstance(result, dict) or 'error' in result:
+        return
+    payload = {
+        'schema': _PREDICTION_CACHE_SCHEMA,
+        'version': KL8_PREDICTOR_VERSION,
+        'config_fingerprint': config_fingerprint,
+        'history_signature': history_signature,
+        'stored_at': time.time(),
+        'result': result,
+    }
+    path = _PREDICTION_CACHE_FILE
+    temporary = path.with_name(f'.{path.name}.{uuid.uuid4().hex}.tmp')
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary.write_text(json.dumps(payload, ensure_ascii=False), encoding='utf-8')
+        os.replace(temporary, path)
+    except (OSError, TypeError, ValueError) as exc:
+        log.warning(f'快乐8: 预测磁盘缓存写入失败: {exc}')
+    finally:
+        try:
+            temporary.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 def activate_verified_strategy(play_type: str, strategy: Dict, report: Dict):
     """统一激活已验证策略 — 所有验证流程通过后走此方法写入ACTIVE_STRATEGIES
@@ -65,6 +147,29 @@ _prediction_cache = {'data': None, 'timestamp': 0, 'cache_key': None}
 
 def run_prediction(force_refresh: bool = False) -> Dict:
     """快乐8预测入口（v8: 缓存指纹包含所有策略配置）"""
+    config_fingerprint = _strategy_config_fingerprint()
+    history_signature = _history_signature()
+    fast_cache_key = (
+        tuple(history_signature) if history_signature else None,
+        KL8_PREDICTOR_VERSION,
+        config_fingerprint,
+    )
+
+    if not force_refresh:
+        with _prediction_cache_lock:
+            cache = _prediction_cache
+            if cache['data'] is not None and cache.get('cache_key') == fast_cache_key:
+                return cache['data']
+            persisted = _load_persisted_prediction(
+                history_signature,
+                config_fingerprint,
+            )
+            if persisted is not None:
+                cache['data'] = persisted
+                cache['cache_key'] = fast_cache_key
+                cache['timestamp'] = time.time()
+                return persisted
+
     analyzer = get_kl8_analyzer()
 
     if not force_refresh:
@@ -77,24 +182,13 @@ def run_prediction(force_refresh: bool = False) -> Dict:
             'using_simulated_data': True,
         }
 
-    # v8: 缓存指纹包含 _cfg.ACTIVE_STRATEGIES + REFERENCE_STRATEGY + CANDIDATE_STRATEGIES
-    config_fingerprint = hashlib.sha256(
-        json.dumps(
-            {
-                'active_strategies': _cfg.ACTIVE_STRATEGIES,
-                'reference_strategy': REFERENCE_STRATEGY,
-                'candidate_strategies': CANDIDATE_STRATEGIES,
-            },
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(',', ':'),
-        ).encode()
-    ).hexdigest()[:16]
-
+    history_signature = _history_signature()
     cache_key = (
-        analyzer.history_data[0]['issue'],
-        _checksum_numbers(analyzer.history_data[0]['numbers']),
-        len(analyzer.history_data),
+        tuple(history_signature) if history_signature else (
+            analyzer.history_data[0]['issue'],
+            _checksum_numbers(analyzer.history_data[0]['numbers']),
+            len(analyzer.history_data),
+        ),
         KL8_PREDICTOR_VERSION,
         config_fingerprint,
     )
@@ -108,6 +202,7 @@ def run_prediction(force_refresh: bool = False) -> Dict:
     cache['data'] = result
     cache['cache_key'] = cache_key
     cache['timestamp'] = time.time()
+    _persist_prediction(result, history_signature, config_fingerprint)
 
     return result
 
@@ -117,6 +212,10 @@ def clear_cache():
     from . import analyzer as _analyzer_mod
     _analyzer_mod._analyzer_instance = None
     _prediction_cache = {'data': None, 'timestamp': 0, 'cache_key': None}
+    try:
+        _PREDICTION_CACHE_FILE.unlink(missing_ok=True)
+    except OSError as exc:
+        log.warning(f'快乐8: 清理预测磁盘缓存失败: {exc}')
 
 
 def list_prediction_snapshots() -> List[Dict]:

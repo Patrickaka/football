@@ -9,6 +9,10 @@
 逐字段校验版本，不符就丢掉」少一整条容易出错的路径。
 """
 from src.api.services import kl8 as service
+from src.kl8 import snapshots as prediction_snapshots
+import json
+from pathlib import Path
+import tempfile
 import unittest
 from unittest import mock
 
@@ -138,12 +142,104 @@ class SharedCacheTests(unittest.TestCase):
 
         self.assertIs(shared_cache.get_cache(), shared_cache.get_cache())
 
+    def test_app_can_install_its_existing_cache(self):
+        from src.api.runtime import shared_cache
+
+        cache = Cache(l1=MemoryBackend(), l2=MemoryBackend(), default_ttl=60)
+        shared_cache.set_cache(cache)
+        self.assertIs(shared_cache.get_cache(), cache)
+
     def test_failure_degrades_to_none(self):
         from src.api.runtime import shared_cache
 
         with mock.patch('src.api.deps.build_cache', side_effect=RuntimeError('炸了')):
             shared_cache.reset()
             self.assertIsNone(shared_cache.get_cache())
+
+
+class PredictionDiskCacheTests(unittest.TestCase):
+    """Redis 不可用时，预测结果也要跨服务重启复用。"""
+
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.original_cache_file = prediction_snapshots._PREDICTION_CACHE_FILE
+        self.original_memory_cache = prediction_snapshots._prediction_cache
+        prediction_snapshots._PREDICTION_CACHE_FILE = (
+            Path(self.temp_dir.name) / 'kl8_prediction_cache.json'
+        )
+        prediction_snapshots._prediction_cache = {
+            'data': None, 'timestamp': 0, 'cache_key': None,
+        }
+
+    def tearDown(self):
+        prediction_snapshots._PREDICTION_CACHE_FILE = self.original_cache_file
+        prediction_snapshots._prediction_cache = self.original_memory_cache
+        self.temp_dir.cleanup()
+
+    @staticmethod
+    def _analyzer(issue, result):
+        analyzer = mock.Mock()
+        analyzer.history_data = [{
+            'issue': issue,
+            'numbers': list(range(1, 21)),
+        }]
+        analyzer.reload_if_needed.return_value = False
+        analyzer.predict_all.return_value = result
+        return analyzer
+
+    def test_process_restart_reads_disk_without_initializing_analyzer(self):
+        result = {
+            'based_on_issue': '2026227',
+            'statistics': {'version': prediction_snapshots.KL8_PREDICTOR_VERSION},
+        }
+        analyzer = self._analyzer('2026227', result)
+        with mock.patch.object(prediction_snapshots, '_history_signature',
+                               return_value=[123, 456]), \
+             mock.patch.object(prediction_snapshots, 'get_kl8_analyzer',
+                               return_value=analyzer):
+            first = prediction_snapshots.run_prediction(force_refresh=True)
+
+        # 模拟服务重启：进程内对象全部丢失，只保留 data 下的磁盘缓存。
+        prediction_snapshots._prediction_cache = {
+            'data': None, 'timestamp': 0, 'cache_key': None,
+        }
+        with mock.patch.object(prediction_snapshots, '_history_signature',
+                               return_value=[123, 456]), \
+             mock.patch.object(prediction_snapshots, 'get_kl8_analyzer',
+                               side_effect=AssertionError('不应初始化分析器')):
+            second = prediction_snapshots.run_prediction()
+
+        self.assertEqual(second, first)
+        analyzer.predict_all.assert_called_once_with()
+
+    def test_history_change_invalidates_disk_cache(self):
+        first_result = {'based_on_issue': '2026227'}
+        first_analyzer = self._analyzer('2026227', first_result)
+        with mock.patch.object(prediction_snapshots, '_history_signature',
+                               return_value=[123, 456]), \
+             mock.patch.object(prediction_snapshots, 'get_kl8_analyzer',
+                               return_value=first_analyzer):
+            prediction_snapshots.run_prediction(force_refresh=True)
+
+        prediction_snapshots._prediction_cache = {
+            'data': None, 'timestamp': 0, 'cache_key': None,
+        }
+        second_result = {'based_on_issue': '2026228'}
+        second_analyzer = self._analyzer('2026228', second_result)
+        with mock.patch.object(prediction_snapshots, '_history_signature',
+                               return_value=[124, 500]), \
+             mock.patch.object(prediction_snapshots, 'get_kl8_analyzer',
+                               return_value=second_analyzer):
+            actual = prediction_snapshots.run_prediction()
+
+        self.assertEqual(actual, second_result)
+        second_analyzer.predict_all.assert_called_once_with()
+
+    def test_clear_cache_removes_disk_copy(self):
+        prediction_snapshots._PREDICTION_CACHE_FILE.write_text(
+            json.dumps({'result': {'ok': True}}), encoding='utf-8')
+        prediction_snapshots.clear_cache()
+        self.assertFalse(prediction_snapshots._PREDICTION_CACHE_FILE.exists())
 
 
 if __name__ == '__main__':
@@ -160,18 +256,41 @@ class EndpointWiringTests(unittest.TestCase):
         return mock.patch('src.api.services.kl8.get_kl8_analyzer', lambda: analyzer)
 
     def test_latest_issue_comes_from_the_analyzer(self):
-        with self._with_analyzer([{'issue': '2026227'}, {'issue': '2026226'}]):
+        with mock.patch.object(service, '_latest_issue_from_history_file',
+                               return_value=''), \
+             self._with_analyzer([{'issue': '2026227'}, {'issue': '2026226'}]):
             self.assertEqual(service.kl8_latest_issue(), '2026227')
 
     def test_empty_history_yields_no_issue(self):
-        with self._with_analyzer([]):
+        with mock.patch.object(service, '_latest_issue_from_history_file',
+                               return_value=''), self._with_analyzer([]):
             self.assertEqual(service.kl8_latest_issue(), '')
 
     def test_analyzer_failure_yields_no_issue(self):
         """取不到期号就绕过缓存，而不是让端点失败。"""
-        with mock.patch('src.api.services.kl8.get_kl8_analyzer',
+        with mock.patch.object(service, '_latest_issue_from_history_file',
+                               return_value=''), \
+             mock.patch('src.api.services.kl8.get_kl8_analyzer',
                         side_effect=RuntimeError('历史没加载')):
             self.assertEqual(service.kl8_latest_issue(), '')
+
+    def test_history_file_fast_path_skips_analyzer(self):
+        with mock.patch.object(service, '_latest_issue_from_history_file',
+                               return_value='2026228'), \
+             mock.patch('src.api.services.kl8.get_kl8_analyzer',
+                        side_effect=AssertionError('不应初始化分析器')):
+            self.assertEqual(service.kl8_latest_issue(), '2026228')
+
+    def test_history_file_reader_does_not_depend_on_record_order(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            history_file = Path(temp_dir) / 'kl8_history.json'
+            history_file.write_text(json.dumps({'results': [
+                {'issue': '2026226'},
+                {'issue': '2026228'},
+                {'issue': '2026227'},
+            ]}), encoding='utf-8')
+            with mock.patch.object(service, 'data_path', return_value=str(history_file)):
+                self.assertEqual(service._latest_issue_from_history_file(), '2026228')
 
     def test_payload_caches_by_issue(self):
         calls = []

@@ -13,7 +13,7 @@ from src.api.rate_limit import ClientRateLimiters, install_rate_limit
 from src.api.routers import auth as auth_routes
 from src.api.routers import basketball, beidan, bff, football, health, kl8, lottery, pages
 from src.api import startup as startup_orchestration
-from src.api.runtime import background
+from src.api.runtime import background, shared_cache
 
 log = logging.getLogger('api.app')
 
@@ -29,6 +29,9 @@ def create_app(settings=None, auth_settings=None):
     async def lifespan(app: FastAPI):
         app.state.settings = settings
         app.state.cache = build_cache(settings)
+        # 服务层与 FastAPI 共用同一份 L1/L2。否则快乐8首次加载还会再次 ping
+        # Redis；Redis 未启动时，这个重复失败会白白阻塞请求数秒。
+        shared_cache.set_cache(app.state.cache)
         # 会话存 L2：生产态是 Redis，跨进程重启保留，撤销也是真的撤销。
         # 降级为内存时重启即全员登出——是预期行为，不是故障。
         app.state.auth = auth_settings
@@ -48,7 +51,7 @@ def create_app(settings=None, auth_settings=None):
         # 完成首次初始化，否则该字段会因为“从未被首次调用消费”而形同虚设。
         get_executor(settings.executor_workers)
 
-        # 磁盘清理、缓存恢复、三族后台任务、三个预热线程、周期维护。
+        # 磁盘清理、缓存恢复、三族后台任务、四个预热线程、周期维护。
         # **漏掉任何一件都不会让服务起不来**，只会安静地少干活——
         # 后台不再回填赛果、缓存不再跨重启保留、用户重新承担冷计算。
         if settings.run_startup_tasks:
@@ -69,6 +72,7 @@ def create_app(settings=None, auth_settings=None):
         app.state.cache.wait_for_refreshes(timeout=app.state.cache.lock_timeout)
         background.shutdown(wait=True)
         shutdown_executor()
+        shared_cache.reset()
         app.state.db.dispose()
         log.info('API 已停止')
 

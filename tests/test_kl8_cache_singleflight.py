@@ -50,8 +50,7 @@ class _Base(unittest.TestCase):
     def _patches(self, predict, issue, version='v-test'):
         return (
             patch('src.api.services.kl8.kl8_run_prediction', predict),
-            patch('src.api.services.kl8.get_kl8_analyzer',
-                  return_value=_StubAnalyzer(issue)),
+            patch('src.api.services.kl8.kl8_latest_issue', return_value=issue),
             patch('src.api.services.kl8._current_kl8_predictor_version',
                   return_value=version),
             patch('src.api.services.kl8.get_shared_cache', lambda: self.cache),
