@@ -7065,19 +7065,25 @@ function renderKL8RecordCard(rec) {
   }
 
   const recalculations = Array.isArray(rec.exclude_recalculations) ? rec.exclude_recalculations : [];
-  const select6Rounds = recalculations.filter(row => row.play_type === 'select_6');
-  if (select6Rounds.length) {
-    html += `<div style="font-size:12px;color:#d29922;margin:10px 0 4px">选6 · 主推为第0轮 → 累计排除后自动重算并保存</div>`;
-    for (const row of select6Rounds) {
-      const exhausted = row.status === 'exhausted';
-      const hitText = row.hits === null || row.hits === undefined ? '' : ` · 命中 <b style="color:${row.hits >= 3 ? '#2ea043' : '#f85149'}">${esc(row.hits)}</b> 个`;
-      const numsText = exhausted
-        ? `候选剩余 ${esc(row.remaining_count ?? 0)} 个，不足 ${esc(row.required_count ?? 6)} 个，重算终止`
-        : (row.numbers || []).map(p2).join(' ');
-      html += `<div style="font-size:12px;line-height:1.7;margin-top:3px">
-        <span style="color:var(--muted);display:inline-block;min-width:52px">第 ${esc(row.round)} 轮</span>
-        <span style="${exhausted ? 'color:var(--warn)' : ''}">${numsText}</span>${hitText}
-      </div>`;
+  const recalculationGroups = [
+    { key: 'select_6', label: '选6', required: 6 },
+    { key: 'fu_shi_7', label: '选5复式7码', required: 7 },
+  ];
+  for (const group of recalculationGroups) {
+    const rounds = recalculations.filter(row => row.play_type === group.key);
+    if (rounds.length) {
+      html += `<div style="font-size:12px;color:#d29922;margin:10px 0 4px">${group.label} · 主推为第0轮 → 累计删除后重新计算并保存</div>`;
+      for (const row of rounds) {
+        const exhausted = row.status === 'exhausted';
+        const hitText = row.hits === null || row.hits === undefined ? '' : ` · 命中 <b style="color:${row.hits >= 3 ? '#2ea043' : '#f85149'}">${esc(row.hits)}</b> 个`;
+        const numsText = exhausted
+          ? `候选剩余 ${esc(row.remaining_count ?? 0)} 个，不足 ${esc(row.required_count ?? group.required)} 个，重算终止`
+          : (row.numbers || []).map(p2).join(' ');
+        html += `<div style="font-size:12px;line-height:1.7;margin-top:3px">
+          <span style="color:var(--muted);display:inline-block;min-width:52px">第 ${esc(row.round)} 轮</span>
+          <span style="${exhausted ? 'color:var(--warn)' : ''}">${numsText}</span>${hitText}
+        </div>`;
+      }
     }
   }
 

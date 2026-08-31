@@ -22,7 +22,7 @@ async def kl8():
     return await run_blocking(service.kl8_payload)
 
 
-@router.get('/api/kl8-refresh')
+@router.api_route('/api/kl8-refresh', methods=['GET', 'POST'])
 async def refresh():
     return await run_blocking(service.kl8_refresh_payload)
 

@@ -18,7 +18,7 @@ from src.common.logger import setup_logger
 log = setup_logger('kl8')
 
 
-KL8_PREDICTOR_VERSION = "kl8-v10.10-select6-primary-accuracy"
+KL8_PREDICTOR_VERSION = "kl8-v10.11-fushi7-exact"
 
 # ─── v9.2: 只显示已验证策略模式 ───
 # 正式策略优先；尚未通过验证时继续输出玩法专属的动态参考策略，供持续
@@ -65,12 +65,12 @@ FUSHI_CONFIG = {
         'prize_key': 'select_4',
     },
     'fu_shi_7': {
-        'desc': '选5复式8码',
+        'desc': '选5复式7码',
         'base_pick': 5,
-        'pool_size': 8,
-        'numbers_field': 'top8_numbers',
-        'scores_field': 'top8_scores',
-        'pool_label': '8个核心号码',
+        'pool_size': 7,
+        'numbers_field': 'top7_numbers',
+        'scores_field': 'top7_scores',
+        'pool_label': '7个核心号码',
         'prize_key': 'fu_shi_7',
     },
     'fu_shi_10_11': {

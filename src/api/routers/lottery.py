@@ -25,7 +25,7 @@ async def lottery_3d_ml():
     return await run_blocking(service.lottery_3d_ml_payload)
 
 
-@router.get('/api/3d-refresh')
+@router.api_route('/api/3d-refresh', methods=['GET', 'POST'])
 async def lottery_3d_refresh(backtest: str = '0'):
     """**`backtest` 收成字符串**：服务层认的是 `1/true/yes/on` 四个字面量。
     换成 FastAPI 的 `bool` 会连 `y`、`t` 一起认，那是悄悄放宽。
@@ -49,7 +49,7 @@ async def lottery():
     return await run_blocking(service.lottery_payload)
 
 
-@router.get('/api/lottery-refresh')
+@router.api_route('/api/lottery-refresh', methods=['GET', 'POST'])
 async def lottery_refresh():
     return await run_blocking(service.lottery_refresh_payload)
 

@@ -441,9 +441,15 @@ class KL8Analyzer:
             if multi:
                 snapshot[f'{key}_multi_slips'] = multi
         for fushi_key, fushi_cfg in FUSHI_CONFIG.items():
-            snapshot[fushi_key] = prediction_result.get(fushi_key, {}).get(
+            raw_numbers = prediction_result.get(fushi_key, {}).get(
                 fushi_cfg['numbers_field'],
                 prediction_result.get(fushi_key, {}).get('core_numbers', []),
+            )
+            # 预测记录必须保存真实、完整的一组复式号码。数量错误时宁可记为空，
+            # 也不能把 8 码误标成“7码复式”进入后续命中率和奖金统计。
+            snapshot[fushi_key] = _clean_pick_numbers(
+                raw_numbers,
+                fushi_cfg['pool_size'],
             )
 
         snapshot_file = snapshot_dir / f'snapshot_{snapshot_id}.json'

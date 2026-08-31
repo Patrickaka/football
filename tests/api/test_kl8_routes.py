@@ -137,6 +137,15 @@ class SlowRoutesStillWired(unittest.TestCase):
                 if expected is not None:
                     self.assertEqual(spy.call_args[0][0], expected)
 
+    def test_refresh_accepts_the_web_pages_post(self):
+        with mock.patch.object(service, 'kl8_refresh_payload',
+                               return_value={'success': True}) as spy:
+            with make_client() as client:
+                response = client.post('/api/kl8-refresh')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {'success': True})
+        spy.assert_called_once_with()
+
 
 class SharedImplementation(unittest.TestCase):
 

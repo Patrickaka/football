@@ -507,6 +507,47 @@ class KL8PredictionGuardTests(unittest.TestCase):
         self.assertEqual(len(stored), 1)
         self.assertEqual(stored[0]['generation_mode'], 'automatic')
 
+    def test_fushi7_exclude_recalculation_is_saved_with_seven_numbers(self):
+        analyzer = KL8Analyzer.__new__(KL8Analyzer)
+        analyzer.history_data = [_record(i) for i in range(80, 0, -1)]
+        analyzer.using_simulated_data = False
+        analyzer.statistics = {'last_numbers': set()}
+        candidates = [(n, float(100 - n)) for n in range(1, 41)]
+
+        original_build = KL8Analyzer.build_pool_by_strategy
+        original_dir = kl8_config.KL8_RECALCULATION_DIR
+        original_verify_only = kl8_config.VERIFY_ONLY_MODE
+        try:
+            with tempfile.TemporaryDirectory() as temp_dir:
+                kl8_config.KL8_RECALCULATION_DIR = temp_dir
+                kl8_config.VERIFY_ONLY_MODE = False
+                KL8Analyzer.build_pool_by_strategy = lambda self, strategy, pool_size=20: {
+                    'selected': [n for n, _ in candidates],
+                    'candidates': candidates,
+                    'votes': {},
+                }
+                result = analyzer.recalculate_play_excluding(
+                    'fu_shi_7',
+                    [1, 2, 3],
+                    record_context={
+                        'source_snapshot_id': 'fushi7-snapshot',
+                        'generation_mode': 'manual',
+                        'initial_numbers': [1, 2, 3, 4, 5, 6, 7],
+                    },
+                )
+                stored = kl8_module.list_exclude_recalculations()
+        finally:
+            KL8Analyzer.build_pool_by_strategy = original_build
+            kl8_config.KL8_RECALCULATION_DIR = original_dir
+            kl8_config.VERIFY_ONLY_MODE = original_verify_only
+
+        self.assertEqual(len(result['top7_numbers']), 7)
+        self.assertEqual(result['total_combinations'], 21)
+        self.assertEqual(len(stored), 1)
+        self.assertEqual(stored[0]['play_type'], 'fu_shi_7')
+        self.assertEqual(stored[0]['numbers'], result['top7_numbers'])
+        self.assertEqual(stored[0]['source_snapshot_id'], 'fushi7-snapshot')
+
     def test_recalculation_identity_is_scoped_to_source_snapshot(self):
         analyzer = KL8Analyzer.__new__(KL8Analyzer)
         analyzer.history_data = [_record(i) for i in range(80, 0, -1)]
@@ -804,7 +845,10 @@ class KL8PredictionGuardTests(unittest.TestCase):
             'concentrated',
         )
         self.assertNotIn('variants', result['fu_shi_7'])
-        self.assertEqual(result['fu_shi_7']['prize_hit_thresholds'], ['>=4', '>=5'])
+        self.assertEqual(len(result['fu_shi_7']['top7_numbers']), 7)
+        self.assertEqual(result['fu_shi_7']['pool_size'], 7)
+        self.assertEqual(result['fu_shi_7']['total_combinations'], 21)
+        self.assertEqual(result['fu_shi_7']['prize_hit_thresholds'], ['>=3'])
         self.assertEqual(result['resolved_strategies']['fu_shi_7']['pool_max_last_numbers'], 4)
 
         self.assertIn('fu_shi_10_11', result)
@@ -865,6 +909,31 @@ class KL8PredictionGuardTests(unittest.TestCase):
             result['select_6_recalculation_chain']['generation_mode'],
             'automatic',
         )
+
+    def test_snapshot_records_select6_and_exactly_seven_fushi_numbers(self):
+        analyzer = KL8Analyzer.__new__(KL8Analyzer)
+        analyzer.history_data = [_record(i) for i in range(80, 0, -1)]
+        select6 = [1, 2, 3, 4, 5, 6]
+        fushi7 = [11, 12, 13, 14, 15, 16, 17]
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            original_snapshot_dir = kl8_config.KL8_SNAPSHOT_DIR
+            try:
+                kl8_config.KL8_SNAPSHOT_DIR = temp_dir
+                filename = analyzer._save_prediction_snapshot({
+                    'resolved_strategies': {},
+                    'select_6': {'numbers': select6},
+                    'fu_shi_7': {'top7_numbers': fushi7},
+                })
+                saved = json.loads(
+                    (Path(temp_dir) / filename).read_text(encoding='utf-8')
+                )
+            finally:
+                kl8_config.KL8_SNAPSHOT_DIR = original_snapshot_dir
+
+        self.assertEqual(saved['select_6'], select6)
+        self.assertEqual(saved['fu_shi_7'], fushi7)
+        self.assertEqual(len(saved['fu_shi_7']), 7)
 
     def test_backtest_passes_repeat_configuration_to_voting(self):
         analyzer = KL8Analyzer.__new__(KL8Analyzer)

@@ -113,6 +113,28 @@ class BacktestFlagStaysAString(unittest.TestCase):
         source = inspect.getsource(service.lottery_3d_refresh_payload)
         self.assertIn("('1', 'true', 'yes', 'on')", source)
 
+    def test_the_web_pages_post_method_is_supported(self):
+        """网页刷新按钮使用 POST；GET 仅为兼容旧调用保留。"""
+        with mock.patch.object(service, 'lottery_3d_refresh_payload',
+                               return_value={'processing': True}) as spy:
+            with make_client() as client:
+                response = client.post('/api/3d-refresh?backtest=1')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {'processing': True})
+        self.assertEqual(spy.call_args[0][0], {'backtest': ['1']})
+
+
+class RefreshRequestMethods(unittest.TestCase):
+
+    def test_lottery_refresh_accepts_the_web_pages_post(self):
+        with mock.patch.object(service, 'lottery_refresh_payload',
+                               return_value={'processing': True}) as spy:
+            with make_client() as client:
+                response = client.post('/api/lottery-refresh')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {'processing': True})
+        spy.assert_called_once_with()
+
 
 class NoArgumentRoutes(unittest.TestCase):
     """十一条不收参数的路由——**转发时漏传或多传都不会有编译期错误**。"""

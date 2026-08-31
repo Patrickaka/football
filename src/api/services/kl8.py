@@ -152,6 +152,8 @@ def kl8_exclude_recalculate_payload(params):
         initial_numbers = (
             current_play.get('numbers')
             or current_play.get('core_numbers')
+            or current_play.get('top7_numbers')
+            # 兼容升级前已经落盘的 8 码缓存；新预测只会生成 top7_numbers。
             or current_play.get('top8_numbers')
             or current_play.get('top11_numbers')
             or []
@@ -189,7 +191,10 @@ def kl8_records_payload():
     前端用模态弹窗 + 分页展示，避免在当页面内联无限输出。
     """
     try:
-        from src.kl8 import KL8_SETTLEMENT_DIR, KL8_SNAPSHOT_DIR
+        from src.kl8 import (
+            FUSHI_CONFIG, KL8_SETTLEMENT_DIR, KL8_SNAPSHOT_DIR,
+            _clean_pick_numbers,
+        )
         from pathlib import Path
         import json as _json
 
@@ -228,6 +233,12 @@ def kl8_records_payload():
                         core = raw.get(k)
                         if isinstance(core, dict):
                             predicted[k] = core.get('core_numbers') or core.get('top7_numbers') or []
+                    # 与选6一样进入 predicted 记录，但复式玩法额外强制校验池大小。
+                    # 这样旧 8 码快照不会再冒充新的“选5复式7码”记录。
+                    predicted[k] = _clean_pick_numbers(
+                        predicted.get(k, []),
+                        FUSHI_CONFIG[k]['pool_size'],
+                    )
             except Exception:
                 predicted = {}
                 main_pool = {}
