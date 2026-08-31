@@ -34,16 +34,17 @@ class FootballMatchListFallbackTests(unittest.TestCase):
              patch.object(fb_config, 'MATCH_LIST_CACHE_PATH', os.path.join(folder, 'matches.json')):
             football._save_match_list_cache(cached)
             with patch.object(fb_fetching, '_fetch_match_list_remote', side_effect=OSError('TLS failed')), \
-                 patch.object(fb_fetching, '_okooo_schedule_fallback', return_value=[]):
+                 patch.object(fb_fetching, '_zgzcw_schedule_fallback', return_value=[]):
                 self.assertEqual(football.fetch_match_list(), cached)
             status = football.get_match_list_status()
             self.assertEqual(status['source'], 'disk_cache')
             self.assertTrue(status['stale'])
             self.assertIn('TLS failed', status['error'])
 
-    def test_500_failure_switches_to_okooo_before_disk_cache(self):
+    def test_500_failure_switches_to_zgzcw_before_disk_cache(self):
         offer = {
-            'okooo_id': '9001', 'num': '周五001', 'home': '主队', 'away': '客队',
+            'zgzcw_id': '9001', 'analysis_id': '8001',
+            'num': '周五001', 'home': '主队', 'away': '客队',
             'time': '20:00', 'lottery_handicap': -1,
             'spf_available': True, 'rqspf_available': True,
             'available_markets': ['spf', 'rqspf'],
@@ -51,10 +52,10 @@ class FootballMatchListFallbackTests(unittest.TestCase):
             'rqspf_odds': {'让胜': 3.8, '让平': 3.6, '让负': 1.7},
         }
         cached = [{'match_id': '5001', 'num': '周五001', 'league': '测试联赛', 'time': '08-08 20:00'}]
-        with patch('src.football.okooo_lottery.fetch_okooo_jczq_schedule', return_value=[offer]):
-            result = football._okooo_schedule_fallback(cached)
+        with patch('src.football.zgzcw_lottery.fetch_zgzcw_jczq_schedule', return_value=[offer]):
+            result = football._zgzcw_schedule_fallback(cached)
         self.assertEqual(result[0]['match_id'], '5001')
-        self.assertEqual(result[0]['schedule_source'], 'okooo')
+        self.assertEqual(result[0]['schedule_source'], 'zgzcw')
         self.assertTrue(result[0]['analysis_source_id_available'])
 
 

@@ -29,19 +29,19 @@ def _rec(offset_minutes):
 
 class BeidanCacheKeyTests(unittest.TestCase):
     def test_key_is_stable_regardless_of_bet_type_order(self):
-        self.assertEqual(beidan_cache_key('2026-08-21', 'okooo', ['zjq', 'spf', 'rqspf']),
-                         beidan_cache_key('2026-08-21', 'okooo', ['spf', 'rqspf', 'zjq']))
+        self.assertEqual(beidan_cache_key('2026-08-21', 'zgzcw', ['zjq', 'spf', 'rqspf']),
+                         beidan_cache_key('2026-08-21', 'zgzcw', ['spf', 'rqspf', 'zjq']))
 
     def test_blank_date_and_none_share_the_today_key(self):
         """预热用 None、接口层用 ''，必须落在同一个键上，否则预热热不到点上"""
-        self.assertEqual(beidan_cache_key(None, 'okooo', ['spf']),
-                         beidan_cache_key('', 'okooo', ['spf']))
+        self.assertEqual(beidan_cache_key(None, 'zgzcw', ['spf']),
+                         beidan_cache_key('', 'zgzcw', ['spf']))
 
     def test_source_and_date_separate_keys(self):
-        self.assertNotEqual(beidan_cache_key('2026-08-21', 'okooo', ['spf']),
+        self.assertNotEqual(beidan_cache_key('2026-08-21', 'zgzcw', ['spf']),
                             beidan_cache_key('2026-08-21', 'jczq', ['spf']))
-        self.assertNotEqual(beidan_cache_key('2026-08-21', 'okooo', ['spf']),
-                            beidan_cache_key('2026-08-22', 'okooo', ['spf']))
+        self.assertNotEqual(beidan_cache_key('2026-08-21', 'zgzcw', ['spf']),
+                            beidan_cache_key('2026-08-22', 'zgzcw', ['spf']))
 
 
 class BeidanEarliestKickoffTests(unittest.TestCase):
@@ -178,7 +178,7 @@ class BeidanSingleFlightTests(unittest.TestCase):
 
 class BeidanPayloadNeverBlocksTests(unittest.TestCase):
     def setUp(self):
-        self.params = {'source': ['okooo'], 'types': ['spf,rqspf,zjq']}
+        self.params = {'source': ['zgzcw'], 'types': ['spf,rqspf,zjq']}
 
     def _run(self, cached, fresh, force_refresh=False):
         params = dict(self.params)
@@ -266,7 +266,7 @@ class BeidanPayloadNeverBlocksTests(unittest.TestCase):
     def test_cold_start_response_carries_query_context(self):
         """计算中的占位结果也要带上 date/source，前端才能正确显示上下文"""
         payload, _, _ = self._run(cached=None, fresh=False)
-        self.assertEqual(payload['result']['source'], 'okooo')
+        self.assertEqual(payload['result']['source'], 'zgzcw')
         self.assertIn('date', payload['result'])
 
     def test_no_request_path_ever_computes_synchronously(self):

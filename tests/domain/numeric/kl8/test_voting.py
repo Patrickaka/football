@@ -16,9 +16,12 @@ import gzip
 import json
 import pathlib
 import unittest
+import unittest.mock
 
 from src.domain.numeric.kl8 import voting
+from src.kl8 import analyzer as analyzer_module
 from src.kl8.analyzer import KL8Analyzer
+from src.kl8.config import KL8_PREDICTOR_VERSION
 from tests.domain.golden import as_json
 
 FIXTURES = pathlib.Path(__file__).resolve().parents[3] / 'fixtures'
@@ -134,6 +137,16 @@ def run_case(analyzer, config):
     return analyzer.multi_model_voting(**kwargs)
 
 
+def without_version(payload):
+    """黄金比对不看 `version`——它由 `VersionIsReportedTests` 单独守。
+
+    版本串曾经在这份黄金里逐字参与比对，于是 `KL8_PREDICTOR_VERSION` 一升
+    就是 153 条一起红，而版本变化**并不意味着选号变了**。红得没有分辨力，
+    人就会习惯性重新生成黄金——那才是真正的风险：真回归也会被一起盖掉。
+    """
+    return {key: value for key, value in payload.items() if key != 'version'}
+
+
 class VotingGoldenTests(unittest.TestCase):
     """迁移前后逐条比对。任何一条对不上，都意味着选号变了。"""
 
@@ -143,8 +156,31 @@ class VotingGoldenTests(unittest.TestCase):
             for key, config in CASES.items():
                 golden_key = f'vote:{slice_name}:{key}'
                 with self.subTest(case=golden_key):
-                    self.assertEqual(as_json(run_case(analyzer, config)),
+                    self.assertEqual(without_version(as_json(run_case(analyzer, config))),
                                      GOLDEN[golden_key])
+
+
+class VersionIsReportedTests(unittest.TestCase):
+    """`version` 从黄金比对里摘出来之后，改由这里守。
+
+    要守的是两件事：字段还在，且它是**常量透传**而不是某处写死的字面量。
+    版本号本身写进断言就等于把上面那个坑搬个地方复现。
+    """
+
+    def test_every_case_reports_the_current_version(self):
+        for slice_name, records in SLICES.items():
+            analyzer = build_analyzer(records)
+            for key, config in CASES.items():
+                with self.subTest(case=f'vote:{slice_name}:{key}'):
+                    result = run_case(analyzer, config)
+                    self.assertEqual(result.get('version'), KL8_PREDICTOR_VERSION)
+
+    def test_the_version_is_threaded_through_rather_than_hardcoded(self):
+        """把常量换掉，输出就得跟着换——否则说明某处写死了字面量。"""
+        with unittest.mock.patch.object(analyzer_module, 'KL8_PREDICTOR_VERSION',
+                                        'kl8-vTEST-sentinel'):
+            result = run_case(build_analyzer(SLICES['full']), dict(BASE))
+        self.assertEqual(result['version'], 'kl8-vTEST-sentinel')
 
 
 class ModelWeightTests(unittest.TestCase):

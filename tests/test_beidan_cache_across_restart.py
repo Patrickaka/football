@@ -31,7 +31,7 @@ TTL_SECONDS = 86400
 PREFIX = 'beidan:pred'
 REDIS_STALE_GRACE_FACTOR = 10
 # `RedisBackend` 自己会在键前面加 `fb:v:`（前缀加一位 schema 版本），
-# 线上真实的键长这样：`fb:v:basketball:pred:2026-08-28:okooo:dx,rqspf,spf:1`
+# 线上真实的键长这样：`fb:v:basketball:pred:2026-08-28:zgzcw:dx,rqspf,spf:1`
 REDIS_KEY_PREFIX = 'fb:v:'
 
 
@@ -65,7 +65,7 @@ class _FakeRedis:
 def _payload(matches=1):
     """一份形状与线上一致的响应：三个玩法各带概率、赔率、质量分档。"""
     return {
-        'date': '2026-08-28', 'source': 'okooo', 'total_matches': matches,
+        'date': '2026-08-28', 'source': 'zgzcw', 'total_matches': matches,
         'recommendations': [{
             'num': str(index), 'home': '安山小绿人', 'away': '大邱FC',
             'league': 'K2联赛', 'handicap': '(-1)',
@@ -95,10 +95,10 @@ class AcrossRestartTests(unittest.TestCase):
     def test_a_written_payload_survives_losing_l1(self):
         cache, _ = _cache_with_redis()
         with patch.object(beidan_cache, 'get_shared_cache', return_value=cache):
-            beidan_cache.write_beidan_cache('okooo_today_spf', _payload())
+            beidan_cache.write_beidan_cache('zgzcw_today_spf', _payload())
             # 重启 = L1 连同进程一起没了，L2 还在
             cache.l1 = MemoryBackend()
-            payload, _ = beidan_cache.read_beidan_cache('okooo_today_spf')
+            payload, _ = beidan_cache.read_beidan_cache('zgzcw_today_spf')
         self.assertIsNotNone(payload, 'L1 没了就读不到，等于没接 L2')
         self.assertEqual(payload['total_matches'], 1)
         self.assertEqual(len(payload['recommendations']), 1)
@@ -127,8 +127,8 @@ class SerialisableTests(unittest.TestCase):
         """不是「写入没抛异常」，是**去 Redis 里把它读出来**（判据 27）。"""
         cache, fake = _cache_with_redis()
         with patch.object(beidan_cache, 'get_shared_cache', return_value=cache):
-            beidan_cache.write_beidan_cache('okooo_today_spf', _payload(matches=3))
-        stored = fake.data.get(REDIS_KEY_PREFIX + PREFIX + ':okooo_today_spf')
+            beidan_cache.write_beidan_cache('zgzcw_today_spf', _payload(matches=3))
+        stored = fake.data.get(REDIS_KEY_PREFIX + PREFIX + ':zgzcw_today_spf')
         self.assertIsNotNone(stored, 'Redis 里没有这个键——写入被静默吞掉了')
         decoded = json.loads(stored)
         self.assertEqual(decoded['value']['total_matches'], 3)
@@ -148,13 +148,13 @@ class SerialisableTests(unittest.TestCase):
             'probabilities': {(1, 0): 0.12, (1, 1): 0.11}}
         cache, fake = _cache_with_redis()
         with patch.object(beidan_cache, 'get_shared_cache', return_value=cache):
-            beidan_cache.write_beidan_cache('okooo_today_bifen', payload)
+            beidan_cache.write_beidan_cache('zgzcw_today_bifen', payload)
             # L1 里有——所以同一个进程内还是命中的
-            self.assertIsNotNone(beidan_cache.read_beidan_cache('okooo_today_bifen')[0])
+            self.assertIsNotNone(beidan_cache.read_beidan_cache('zgzcw_today_bifen')[0])
             # 但 Redis 里没有，重启就没了
-            self.assertIsNone(fake.data.get(REDIS_KEY_PREFIX + PREFIX + ':okooo_today_bifen'))
+            self.assertIsNone(fake.data.get(REDIS_KEY_PREFIX + PREFIX + ':zgzcw_today_bifen'))
             cache.l1 = MemoryBackend()
-            self.assertEqual(beidan_cache.read_beidan_cache('okooo_today_bifen'),
+            self.assertEqual(beidan_cache.read_beidan_cache('zgzcw_today_bifen'),
                              (None, False))
 
 
@@ -182,7 +182,7 @@ class TtlTests(unittest.TestCase):
     def test_an_entry_older_than_the_ttl_is_still_served(self):
         """**跨天的第一个请求靠的就是这条。**
 
-        `beidan_cache_key(None, ...)` 生成的是 `okooo_today_spf`——**这个键
+        `beidan_cache_key(None, ...)` 生成的是 `zgzcw_today_spf`——**这个键
         不含日期，跨天会复用**。前一天写下的条目按一天的 TTL 已经过期，
         而 Redis 按十倍存物理过期，所以它还在。这时必须照样把它返回出去
         （随后后台刷新），否则跨零点后的第一个请求要同步等 25 分钟。
@@ -194,12 +194,12 @@ class TtlTests(unittest.TestCase):
         payload = _payload()
         payload['_cached_at'] = time.time() - 25 * 3600
         stored_at = time.time() - 25 * 3600
-        cache.l2.set(beidan_cache._shared_key('okooo_today_spf'), payload,
+        cache.l2.set(beidan_cache._shared_key('zgzcw_today_spf'), payload,
                      ttl=TTL_SECONDS, now=stored_at)
         with patch.object(beidan_cache, 'get_shared_cache', return_value=cache):
-            entry = cache.peek(beidan_cache._shared_key('okooo_today_spf'))
+            entry = cache.peek(beidan_cache._shared_key('zgzcw_today_spf'))
             self.assertFalse(entry.is_fresh(), '语料本身要真的越过 TTL')
-            stale, fresh = beidan_cache.read_beidan_cache('okooo_today_spf')
+            stale, fresh = beidan_cache.read_beidan_cache('zgzcw_today_spf')
         self.assertIsNotNone(stale, '按 TTL 过期就不返回的话，跨天必然 504')
         self.assertFalse(fresh)
 

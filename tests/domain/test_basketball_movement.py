@@ -154,7 +154,7 @@ class NormalizeTrendGoldenTests(unittest.TestCase):
         for i, trend in enumerate(TRENDS):
             for kind in KINDS:
                 with self.subTest(direction=(trend or {}).get('direction'), kind=kind):
-                    self.assertEqual(as_json(new.normalize_okooo_trend(trend, kind)),
+                    self.assertEqual(as_json(new.normalize_source_trend(trend, kind)),
                                      GOLDEN[f'trend:{i}:{kind}'])
 
 
@@ -162,7 +162,7 @@ def _movements():
     out = [None, {}, {'available': False}]
     for trend in TRENDS:
         for kind in KINDS:
-            movement = new.normalize_okooo_trend(trend, kind)
+            movement = new.normalize_source_trend(trend, kind)
             if movement:
                 out.append(movement)
     out.append({'available': True, 'side': 'home', 'strength': 0.9,
@@ -258,8 +258,8 @@ class BuildMovementForMatchGoldenTests(unittest.TestCase):
         {'id': 'm1', 'source': '500'},
         {'id': 'm2', 'source': '500'},
         {'id': 'm3', 'source': '500'},
-        {'id': 'm1', 'source': 'okooo', 'rf_trend': TRENDS[4], 'dx_trend': TRENDS[7]},
-        {'id': 'm9', 'source': 'okooo', 'rf_trend': None, 'dx_trend': None},
+        {'id': 'm1', 'source': 'zgzcw', 'rf_trend': TRENDS[4], 'dx_trend': TRENDS[7]},
+        {'id': 'm9', 'source': 'zgzcw', 'rf_trend': None, 'dx_trend': None},
     ]
 
     BUNDLES = [
@@ -278,7 +278,7 @@ class BuildMovementForMatchGoldenTests(unittest.TestCase):
                                       bundle=bool(bundle), hist=bool(history)):
                         self.assertEqual(
                             as_json(new.build_movement_for_match(
-                                match, history=history, okooo_bundle=bundle,
+                                match, history=history, source_bundle=bundle,
                                 now_fn=lambda: NOW)),
                             GOLDEN[f'build:{mi}:{bi}:{hi}'])
 

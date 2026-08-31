@@ -1,11 +1,11 @@
 """为一天的比赛构建走势映射——2-5 里 `movement_provider` 注入点的真实实现。
 
-它要在三个来源之间做取舍：澳客赛程自带的 rf_trend / dx_trend、澳客详情页的
-各家共识、以及自己攒的 500 源快照序列。取舍规则本身是领域知识，采集与抓取
+它要在三个来源之间做取舍：中国足彩网赛程自带的 rf_trend / dx_trend、
+源站详情页的各家共识、以及自己攒的 500 源快照序列。取舍规则本身是领域知识，采集与抓取
 则一律注入。
 
-500 源那条路上还夹着一次「按队名跨源匹配」：500 与澳客对同一场比赛用不同的
-主键，只能靠队名对上，而两边的队名写法不同（澳客带 `[西2]` 这类排名标记）。
+500 源那条路上还夹着一次「按队名跨源匹配」：两边对同一场比赛用不同的主键，
+只能靠队名对上，而队名写法不同（源站带 `[西2]` 这类排名标记）。
 """
 import unittest
 from datetime import datetime
@@ -27,15 +27,15 @@ FIVE_HUNDRED_MATCHES = [
      'league': 'CBA', 'source': '500'},
 ]
 
-OKOOO_MATCHES = [
-    {'id': '5381400', 'home': '金州女武神[西2]', 'away': '太阳', 'source': 'okooo',
+ZGZCW_MATCHES = [
+    {'id': '5381400', 'home': '金州女武神[西2]', 'away': '太阳', 'source': 'zgzcw',
      'rf_trend': {'direction': 'home_backing', 'strength': 0.12,
                   'home_move': -0.08, 'away_move': 0.05, 'line_move': 0.0,
                   'samples': 4},
      'dx_trend': {'direction': 'over_backing', 'strength': 0.3,
                   'home_move': -0.06, 'away_move': 0.04, 'line_move': 1.0,
                   'samples': 5}},
-    {'id': '5381881', 'home': '多伦多节奏', 'away': '风暴[东1]', 'source': 'okooo',
+    {'id': '5381881', 'home': '多伦多节奏', 'away': '风暴[东1]', 'source': 'zgzcw',
      'rf_trend': None, 'dx_trend': None},
 ]
 
@@ -78,20 +78,20 @@ class _FrozenDatetime(datetime):
 class _Deps:
     """把新旧两侧要用到的外部依赖收在一处，保证两边喂的完全一样。"""
 
-    def __init__(self, okooo_matches=None, bundles=None, snapshots=None,
-                 okooo_raises=False, bundle_raises=False, track_raises=False):
-        self.okooo_matches = OKOOO_MATCHES if okooo_matches is None else okooo_matches
+    def __init__(self, zgzcw_matches=None, bundles=None, snapshots=None,
+                 zgzcw_raises=False, bundle_raises=False, track_raises=False):
+        self.zgzcw_matches = ZGZCW_MATCHES if zgzcw_matches is None else zgzcw_matches
         self.bundles = BUNDLES if bundles is None else bundles
         self.snapshots = SNAPSHOTS if snapshots is None else snapshots
-        self.okooo_raises = okooo_raises
+        self.zgzcw_raises = zgzcw_raises
         self.bundle_raises = bundle_raises
         self.track_raises = track_raises
         self.tracked = []
 
-    def okooo_schedule(self, date=None):
-        if self.okooo_raises:
-            raise IOError('澳客不可用')
-        return [dict(m) for m in self.okooo_matches]
+    def zgzcw_schedule(self, date=None):
+        if self.zgzcw_raises:
+            raise IOError('中国足彩网不可用')
+        return [dict(m) for m in self.zgzcw_matches]
 
     def fetch_bundles(self, ids):
         if self.bundle_raises:
@@ -113,7 +113,7 @@ class _Deps:
         return MovementMapBuilder(
             history_store=store,
             tracker=mock.Mock(track=self.track),
-            okooo_schedule=self.okooo_schedule,
+            zgzcw_schedule=self.zgzcw_schedule,
             bundle_fetcher=mock.Mock(fetch_many=self.fetch_bundles),
             now_fn=lambda: NOW)
 
@@ -121,14 +121,14 @@ class GoldenTests(unittest.TestCase):
     DATE = '2026-08-27'
     # (黄金键, 比赛列表, 数据源, 依赖配置)
     CASES = [
-        ('okooo', OKOOO_MATCHES, 'okooo', {}),
+        ('zgzcw', ZGZCW_MATCHES, 'zgzcw', {}),
         ('500', FIVE_HUNDRED_MATCHES, '500', {}),
-        ('500_no_okooo', FIVE_HUNDRED_MATCHES, '500', {'okooo_raises': True}),
+        ('500_no_zgzcw', FIVE_HUNDRED_MATCHES, '500', {'zgzcw_raises': True}),
         ('500_no_snapshots', FIVE_HUNDRED_MATCHES, '500', {'snapshots': {}}),
-        ('okooo_blocked_details', OKOOO_MATCHES, 'okooo', {'bundle_raises': True}),
+        ('zgzcw_blocked_details', ZGZCW_MATCHES, 'zgzcw', {'bundle_raises': True}),
         ('500_track_failed', FIVE_HUNDRED_MATCHES, '500', {'track_raises': True}),
         ('empty_500', [], '500', {}),
-        ('empty_okooo', [], 'okooo', {}),
+        ('empty_zgzcw', [], 'zgzcw', {}),
     ]
 
     def test_every_source_combination(self):
@@ -148,32 +148,32 @@ class BehaviourTests(unittest.TestCase):
         deps.builder()(FIVE_HUNDRED_MATCHES, '500', self.DATE)
         self.assertEqual(deps.tracked, [self.DATE])
 
-    def test_okooo_source_does_not_capture(self):
-        """澳客源自带盘路历史，不需要我们自己攒。"""
+    def test_zgzcw_source_does_not_capture(self):
+        """源站自带盘路历史，不需要我们自己攒。"""
         deps = _Deps()
-        deps.builder()(OKOOO_MATCHES, 'okooo', self.DATE)
+        deps.builder()(ZGZCW_MATCHES, 'zgzcw', self.DATE)
         self.assertEqual(deps.tracked, [])
 
     def test_cross_source_matching_ignores_ranking_tags(self):
-        """澳客队名带 `[西2]` 这类排名标记，500 源没有。不剥掉就一场也对不上。"""
+        """源站队名带 `[西2]` 这类排名标记，500 源没有。不剥掉就一场也对不上。"""
         self.assertEqual(normalize_team('金州女武神[西2]'), '金州女武神')
         self.assertEqual(normalize_team('  风暴 '), '风暴')
         self.assertEqual(normalize_team(None), '')
 
-    def test_okooo_enrichment_reaches_the_500_match(self):
+    def test_zgzcw_enrichment_reaches_the_500_match(self):
         result = _Deps().builder()(FIVE_HUNDRED_MATCHES, '500', self.DATE)
         enriched = result['2026-08-27_金州女武神_太阳']
         self.assertTrue(enriched['rqspf']['available'],
-                        '按队名匹配到的澳客走势没有落到 500 场次上')
+                        '按队名匹配到的源站走势没有落到 500 场次上')
 
     def test_unmatched_500_match_falls_back_to_snapshots(self):
-        """澳客没有的场次，退回自己攒的快照序列。"""
+        """源站没有的场次，退回自己攒的快照序列。"""
         result = _Deps().builder()(FIVE_HUNDRED_MATCHES, '500', self.DATE)
         fallback = result['2026-08-27_无对应_球队']
         self.assertTrue(fallback['spf']['available'])
         self.assertEqual(fallback['spf']['side'], 'home')
 
-    def test_snapshots_fill_gaps_left_by_okooo(self):
+    def test_snapshots_fill_gaps_left_by_zgzcw(self):
         """澳客给不出胜负那一路时，用自己的快照补上。
 
         详情页被 WAF 拦是线上常态，所以这条补齐路径才是线上真正在走的那条
@@ -193,16 +193,16 @@ class BehaviourTests(unittest.TestCase):
         并不罕见（分区赛会、连续两日同一主场）。"""
         # 目标场次的对手是风暴。把它放在前面、另一场放后面：只比主队时
         # 两场会落到同一个键上，后写的那场覆盖前一场，于是拿到错的那份走势。
-        okooo = [
-            dict(OKOOO_MATCHES[0], id='B', home='金州女武神[西2]', away='风暴',
+        zgzcw = [
+            dict(ZGZCW_MATCHES[0], id='B', home='金州女武神[西2]', away='风暴',
                  rf_trend={'direction': 'away_backing', 'strength': 0.9,
                            'home_move': 0.2, 'away_move': -0.2,
                            'line_move': 0.0, 'samples': 9}),
-            dict(OKOOO_MATCHES[0], id='A', home='金州女武神[西2]', away='太阳'),
+            dict(ZGZCW_MATCHES[0], id='A', home='金州女武神[西2]', away='太阳'),
         ]
         matches = [dict(FIVE_HUNDRED_MATCHES[0], home='金州女武神', away='风暴',
                         id='2026-08-27_金州女武神_风暴')]
-        result = _Deps(okooo_matches=okooo).builder()(matches, '500', self.DATE)
+        result = _Deps(zgzcw_matches=zgzcw).builder()(matches, '500', self.DATE)
         movement = result['2026-08-27_金州女武神_风暴']
         self.assertEqual(movement['rqspf']['side'], 'away',
                          '匹配到了同一主队的另一场比赛')
@@ -229,7 +229,7 @@ class BehaviourTests(unittest.TestCase):
     def test_missing_dependencies_degrade_to_empty(self):
         """三个依赖都不给时不该报错——走势是增强项。"""
         builder = MovementMapBuilder(history_store=None, tracker=None,
-                                     okooo_schedule=None, bundle_fetcher=None,
+                                     zgzcw_schedule=None, bundle_fetcher=None,
                                      now_fn=lambda: NOW)
         result = builder(FIVE_HUNDRED_MATCHES, '500', self.DATE)
         self.assertEqual(set(result), {m['id'] for m in FIVE_HUNDRED_MATCHES})

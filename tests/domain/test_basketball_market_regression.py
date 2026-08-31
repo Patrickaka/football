@@ -10,7 +10,7 @@ from datetime import datetime
 
 from src.domain.sports.basketball.movement import (
     apply_market_inference, describe_market_movement,
-    infer_market_from_movement, movement_from_snapshots, normalize_okooo_trend,
+    infer_market_from_movement, movement_from_snapshots, normalize_source_trend,
 )
 from src.domain.sports.basketball.odds_history import (
     OddsHistoryStore, OddsTracker,
@@ -23,7 +23,7 @@ NOW = datetime(2026, 8, 20, 12, 0, 0)
 
 class TrendNormalisationTests(unittest.TestCase):
     def test_total_market_uses_over_under_sides_and_keeps_line_move(self):
-        movement = normalize_okooo_trend({
+        movement = normalize_source_trend({
             'direction': 'over_backing', 'strength': .12,
             'home_move': -.08, 'away_move': .06, 'line_move': 2.5,
             'samples': 5,

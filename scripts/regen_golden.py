@@ -38,7 +38,7 @@ for i, seq in enumerate(tm.TOTAL_SEQS):
         seq, 'dx_over', 'dx_under', 'total_line', 'ou', now_fn=lambda: tm.NOW)
 for i, trend in enumerate(tm.TRENDS):
     for kind in tm.KINDS:
-        golden[f'trend:{i}:{kind}'] = mv.normalize_okooo_trend(trend, kind)
+        golden[f'trend:{i}:{kind}'] = mv.normalize_source_trend(trend, kind)
 movements = tm._movements()
 for i, m in enumerate(movements):
     for market in ('rqspf', 'dx', 'spf'):
@@ -62,7 +62,7 @@ for mi, match in enumerate(BM.MATCHES):
     for bi, bundle in enumerate(BM.BUNDLES):
         for hi, history in enumerate((None, {}, BM.HISTORY)):
             golden[f'build:{mi}:{bi}:{hi}'] = mv.build_movement_for_match(
-                match, history=history, okooo_bundle=bundle, now_fn=lambda: tm.NOW)
+                match, history=history, source_bundle=bundle, now_fn=lambda: tm.NOW)
 for ci, (movements, bets) in enumerate(tm.DescribeMarketMovementGoldenTests.cases()):
     golden[f'describe:{ci}'] = mv.describe_market_movement(movements, bets)
 dump('movement', golden)
@@ -82,27 +82,9 @@ for ei, elo in enumerate(ta.ELO_SETUPS):
                         analyzer, name)(match, movement)
 dump('analysis', golden)
 
-# ---- okooo parsing ----
-from tests.domain import test_basketball_okooo_parsing as to
-from src.domain.sports.basketball import okooo_parsing as op
-
-golden = {}
-for i, rf in enumerate(to.RFLISTS):
-    golden[f'rflist:{i}'] = op.parse_rflist(rf)
-for i, hist in enumerate(to.HISTORIES):
-    for kind in ('ah', 'ou', 'ml'):
-        golden[f'trend:{i}:{kind}'] = op.analyze_line_trend(hist, kind)
-for date in to.ScheduleGoldenTests.DATES:
-    golden[f'schedule:{date}'] = op.parse_schedule(to.HUNHE_HTML, date)
-for kind, html in to.DETAIL_PAGES.items():
-    golden[f'books:{kind}'] = op.parse_book_rows(html, kind)
-    golden[f'avg:{kind}'] = op.parse_average_row(html, kind)
-    golden[f'consensus:{kind}'] = op.consensus_from_books(
-        op.parse_book_rows(html, kind), kind)
-for kind in ('ml', 'ah', 'ou'):
-    golden[f'consensus_empty:{kind}'] = op.consensus_from_books([], kind)
-golden['bundle'] = op.build_bundle(to.SAMPLE_MATCH_ID, to.DETAIL_PAGES)
-dump('okooo_parsing', golden)
+# ---- 澳客解析的黄金文件已随模块一起删除 ----
+# `okooo_parsing` 与其 4 份页面夹具在换源到中国足彩网时删掉了。
+# 对应的解析覆盖在 `tests/domain/test_zgzcw_sources.py`。
 
 # ---- 500 parsing ----
 from tests.domain import test_basketball_parsing as tp

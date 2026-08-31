@@ -52,7 +52,7 @@ def _record(**fields):
     """按线上真实顶层字段拼一条记录，只覆盖测试关心的那几个。"""
     base = {
         'key': '2026-08-28|1|安山小绿人|大邱FC',
-        'source': 'okooo', 'match_id': '1320957',
+        'source': 'zgzcw', 'match_id': '1320957',
         'date': '2026-08-28', 'num': '1', 'time': '18:30',
         'league': 'K2联赛', 'home': '安山小绿人', 'away': '大邱FC',
         'handicap': None,

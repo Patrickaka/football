@@ -1,10 +1,11 @@
-"""北单赛程解析：okooo 的表格页与 500.com 的即时赔率页。
+"""北单赛程解析：中国足彩网的单场页与 500.com 的即时赔率页。
 
-参照物是从迁移前的 `fetching.py` 生成的黄金文件
-（`tests/fixtures/golden/beidan_schedule.json.gz`，67 条），**逐条相同**。
+参照物是黄金文件（`tests/fixtures/golden/beidan_schedule.json.gz`，48 条），
+**逐条相同**——只覆盖 500.com 那条路。
 
 `tests/fixtures/index_jczq.html` 是 500.com 的真实快照（4 场比赛、16 处联赛块），
-正是这一层要解析的东西。okooo 那张表只能构造——线上抓不到真页面（WAF）。
+正是这一层要解析的东西。中国足彩网那张表只能构造——线上抓不到真页面，
+所以它不进黄金文件，改由 `ZgzcwScheduleTests` 直接对着解析器的分支写。
 
 **时钟钉死在四个时刻上**，不跟着今天跑：500 那条路要按开赛时刻判断比赛
 是否已结束，语料里写一个「未来的日期」就是一颗定时炸弹（判据 24）。
@@ -213,7 +214,7 @@ class MatchStatusTests(unittest.TestCase):
         「抓取失败」记一条日志、返回空列表，于是**一场没解析到时间的比赛
         足以让当天所有比赛都消失**（§十一·3 那类「200 加 0 场比赛」）。
 
-        这条路只在 okooo 挂掉、回退到 500.com 时才走——线上 7 天内一次
+        这条路只在中国足彩网挂掉、回退到 500.com 时才走——线上 7 天内一次
         都没走过，所以迁移期没有动它。修它会改变回退路径的返回值。
         """
         timeless = _link('999001', '甲队', '乙队')
@@ -230,156 +231,121 @@ class MatchStatusTests(unittest.TestCase):
         self.assertEqual(matches[0]['status'], 'not_started')
 
 
-class OkoooScheduleTests(unittest.TestCase):
+class ZgzcwScheduleTests(unittest.TestCase):
+    """中国足彩网单场页 → 未完结比赛。
+
+    行的形状取自真实页面：`tr_<id>` 行、`wh-N` 列、队名在 `tn` 属性上、
+    `newplayid` 是赔率详情的稳定 ID、比分格是 `VS` 表示还没踢。
+    """
 
     @staticmethod
-    def _row(num='001', league='英超', match_id='1320957',
-             time_cell='08-28 19:30', mtime=None, score='-',
-             home='安山小绿人', away='大邱FC', handicap='(-1)',
-             odds=('1.80', '3.60', '4.20', '2.20', '3.40', '3.10')):
-        first = (f'<span class="xh"><i>{num}</i></span>'
-                 f'<a href="//www.okooo.com/soccer/league/100/">{league}</a>')
-        time_attr = f' mTime="{mtime}"' if mtime else ''
-        teams = (f'<span class="homenameobj" title="{home}">{home}</span>'
-                 f'<span class="awaynameobj" title="{away}">{away}</span>')
-        if handicap is not None:
-            teams += f'<span class="handicapobj">{handicap}</span>'
-        teams += ''.join(f'<em>{value}</em>' for value in odds)
-        cells = [first, f'<span{time_attr}>{time_cell}</span>', teams,
-                 '', '', score]
-        return ('<tr>' + f'<a href="/soccer/match/{match_id}/"></a>'
-                + ''.join(f'<td>{c}</td>' for c in cells) + '</tr>')
+    def _row(row_id='371', league='墨西超', num='371', analysis_id='4553848',
+             kickoff='2026-08-28 19:30', t_attr='2026-08-28 06:00:00',
+             score='VS', home='蒙特雷', away='圣路易斯',
+             prices=('1.83', '3.74', '3.82'), league_cell='墨西超'):
+        title = (f'<span title="比赛时间:{kickoff}">{kickoff[-5:]}</span>'
+                 if kickoff else '<span>待定</span>')
+        newplay = f' newplayid="{analysis_id}"' if analysis_id else ''
+        home_cell = f'<td class="wh-4 t-r" tn="{home}"><a>{home}</a></td>' if home \
+            else '<td class="wh-4 t-r"></td>'
+        away_cell = f'<td class="wh-6 t-l" tn="{away}"><a>{away}</a></td>' if away \
+            else '<td class="wh-6 t-l"></td>'
+        return (
+            f'<tr id="tr_{row_id}" m="{league}" t="{t_attr}">'
+            f'<td class="wh-1"><a>{num}</a></td>'
+            f'<td class="wh-2">{league_cell}</td>'
+            f'<td class="wh-3">{title}</td>'
+            f'{home_cell}<td class="wh-5">{score}</td>{away_cell}'
+            f'<td class="wh-8"{newplay}></td>'
+            f'<td class="wh-9"><div>'
+            + ''.join(f'<span>{value}</span>' for value in prices)
+            + '</div></td></tr>')
 
-    @staticmethod
-    def _page(*rows, tables=OKOOO_MINIMUM_TABLES):
-        filler = '<table><tr><td>目录</td></tr></table>'
-        return ('<html><body>' + filler * (tables - 1)
-                + '<table>' + ''.join(rows) + '</table></body></html>')
-
-    def _parse(self, html):
-        return parsing.parse_okooo_schedule(html, DATE)
+    def _parse(self, *rows, date=DATE):
+        return parsing.parse_zgzcw_schedule(f'<table>{"".join(rows)}</table>', date)
 
     def test_parses_a_row(self):
-        matches, tables = self._parse(self._page(self._row()))
-        self.assertEqual(tables, OKOOO_MINIMUM_TABLES)
-        match = matches[0]
-        self.assertEqual((match['id'], match['home'], match['away']),
-                         ('1320957', '安山小绿人', '大邱FC'))
+        match = self._parse(self._row())[0]
+        self.assertEqual((match['id'], match['zgzcw_id'], match['analysis_id']),
+                         ('4553848', '371', '4553848'))
+        self.assertEqual((match['home'], match['away']), ('蒙特雷', '圣路易斯'))
         self.assertEqual((match['num'], match['league'], match['time']),
-                         ('001', '英超', '19:30'))
-        self.assertEqual(match['handicap'], '(-1)')
-        self.assertEqual(match['source'], 'okooo')
+                         ('371', '墨西超', '19:30'))
+        self.assertEqual(match['date'], DATE)
+        self.assertEqual((match['spf_sp'], match['spf_s'], match['spf_f']),
+                         (1.83, 3.74, 3.82))
+        self.assertEqual((match['status'], match['source']), ('not_started', 'zgzcw'))
 
-    def test_too_few_tables_is_reported_separately_from_no_matches(self):
-        """**「页面不对」与「今天没有未完结比赛」不是一回事。**
+    def test_the_analysis_id_is_preferred_over_the_row_id(self):
+        """`newplayid` 才是赔率详情能用的 ID，行号只是页面自己的编号。"""
+        match = self._parse(self._row(row_id='999', analysis_id='4553848'))[0]
+        self.assertEqual(match['id'], '4553848')
+        self.assertEqual(match['zgzcw_id'], '999')
 
-        两者都会让调用方去找备用数据源，但日志要能说清是哪一种——
-        §十一·3 那类故障里最难查的正是分不清这两者。
-        """
-        broken, tables = self._parse('<html><table><tr><td>x</td></tr></table></html>')
-        self.assertIsNone(broken)
-        self.assertLess(tables, OKOOO_MINIMUM_TABLES)
-        empty, tables = self._parse(self._page(self._row(score='2:1')))
-        self.assertEqual(empty, [])
-        self.assertEqual(tables, OKOOO_MINIMUM_TABLES)
+    def test_a_missing_analysis_id_is_synthesised_from_the_date_and_number(self):
+        match = self._parse(self._row(analysis_id=None))[0]
+        self.assertIsNone(match['analysis_id'])
+        self.assertEqual(match['id'], f'zgzcw_{DATE}_371')
 
-    def test_status_comes_from_the_score_column_not_the_clock(self):
-        """**页面自己说的比我们算的准**——有比分就是踢完了。"""
-        finished, _ = self._parse(self._page(self._row(score='2:1')))
-        self.assertEqual(finished, [])
-        pending, _ = self._parse(self._page(self._row(score='-')))
-        self.assertEqual(pending[0]['status'], 'not_started')
-
-    def test_a_dash_score_means_not_started(self):
-        for score in ('-', ''):
-            with self.subTest(score=score):
-                matches, _ = self._parse(self._page(self._row(score=score)))
-                self.assertEqual(len(matches), 1)
-
-    def test_the_cell_count_threshold_is_tested_on_both_sides(self):
-        """**差一格就不是比赛行**，而且要用「五格但队名齐全」的行来测。
-
-        随便五个 `<td>x</td>` 是分不出门槛的：门槛放宽之后那一行照样会在
-        「找不到队名」那步被跳过，结果一样（判据 23）。要让它一路走下去，
-        队名得是全的——那时门槛放宽会在读比分栏（第六格）时越界。
-        """
-        teams = ('<span class="homenameobj" title="甲">甲</span>'
-                 '<span class="awaynameobj" title="乙">乙</span>')
-        five_cells = ('<tr><td>a</td><td>b</td>' + f'<td>{teams}</td>'
-                      + '<td>d</td><td>e</td></tr>')
-        matches, _ = self._parse(self._page(five_cells, self._row()))
-        self.assertEqual([m['id'] for m in matches], ['1320957'])
-
-    def test_rows_with_too_few_cells_carry_the_section_date(self):
-        """短行不是比赛，是日期分隔行——**它决定后面几场归哪一天**。"""
-        matches, _ = self._parse(self._page(
-            '<tr><td>2026-08-29</td></tr>',
-            self._row(time_cell='稍后')))
-        self.assertEqual(matches[0]['date'], '2026-08-29')
-
-    def test_mtime_wins_over_the_cell_text(self):
-        matches, _ = self._parse(self._page(
-            self._row(time_cell='稍后', mtime='08-29 02:00')))
-        self.assertEqual((matches[0]['date'], matches[0]['time']),
-                         ('2026-08-29', '02:00'))
-
-    def test_an_unparsable_kickoff_is_kept_verbatim(self):
-        """两个来源在这一点上处置相同：认不出格式就原样留着那段文本。"""
-        from_mtime, _ = self._parse(self._page(
-            self._row(time_cell='x', mtime='稍后')))
-        from_cell, _ = self._parse(self._page(self._row(time_cell='稍后')))
-        self.assertEqual(from_mtime[0]['time'], '稍后')
-        self.assertEqual(from_cell[0]['time'], '稍后')
-
-    def test_the_handicap_odds_need_all_six_prices(self):
-        """**让球那三个价要六个都在才算数**：只报了前三个时后三个是别的
-        东西，取来会得到一组假赔率。"""
-        full, _ = self._parse(self._page(self._row()))
-        self.assertEqual(full[0]['rqspf_sp'], 2.20)
-        for count in range(OKOOO_FULL_ODDS):
-            with self.subTest(count=count):
-                partial, _ = self._parse(self._page(
-                    self._row(odds=tuple('1.80' for _ in range(count)))))
-                self.assertIsNone(partial[0]['rqspf_sp'])
-
-    def test_the_win_draw_lose_prices_fill_in_one_at_a_time(self):
-        """胜平负那三个与让球那三个**门槛不同**：前者有几个算几个。"""
-        one, _ = self._parse(self._page(self._row(odds=('1.80',))))
-        self.assertEqual(one[0]['spf_sp'], 1.80)
-        self.assertIsNone(one[0]['spf_s'])
-
-    def test_the_handicap_odds_bundle_needs_every_price_above_one(self):
-        """赔率不可能不到 1——**整组都不给**，不是只丢那一个。
-        门槛是严格大于：恰好 1.00 也不认（赢了不赚不亏不是一个真实报价）。"""
-        matches, _ = self._parse(self._page(self._row(
-            odds=('1.80', '3.60', '4.20', '2.20', '0.95', '3.10'))))
-        self.assertIsNone(matches[0]['rqspf_odds'])
-        self.assertEqual(matches[0]['rqspf_s'], 0.95)
-        exactly_one, _ = self._parse(self._page(self._row(
-            odds=('1.80', '3.60', '4.20', '2.20', '1.00', '3.10'))))
-        self.assertIsNone(exactly_one[0]['rqspf_odds'])
-        above, _ = self._parse(self._page(self._row(
-            odds=('1.80', '3.60', '4.20', '2.20', '1.01', '3.10'))))
-        self.assertIsNotNone(above[0]['rqspf_odds'])
-
-    def test_a_missing_match_id_is_synthesised_from_the_date_and_number(self):
-        html = self._page(self._row().replace(
-            '<a href="/soccer/match/1320957/"></a>', ''))
-        matches, _ = self._parse(html)
-        self.assertEqual(matches[0]['id'], '20260828_001')
+    def test_rows_that_are_not_match_rows_are_skipped(self):
+        """页面里还有表头、分组行——只有 `tr_` 开头的才是比赛。"""
+        self.assertEqual(
+            self._parse('<tr id="thead"><td class="wh-4" tn="甲"><a>甲</a></td>'
+                        '<td class="wh-6" tn="乙"><a>乙</a></td></tr>'),
+            [])
 
     def test_a_row_without_both_team_names_is_skipped(self):
-        for broken in ('homenameobj', 'awaynameobj'):
-            with self.subTest(missing=broken):
-                html = self._page(self._row().replace(broken, 'xx'))
-                self.assertEqual(self._parse(html)[0], [])
+        for missing in ({'home': ''}, {'away': ''}):
+            with self.subTest(**missing):
+                self.assertEqual(self._parse(self._row(**missing)), [])
 
-    def test_missing_optional_fields_become_empty_not_absent(self):
-        html = self._page(self._row(handicap=None).replace(
-            '<span class="xh"><i>001</i></span>', ''))
-        match = self._parse(html)[0][0]
-        self.assertEqual(match['num'], '')
-        self.assertIsNone(match['handicap'])
+    def test_a_finished_score_is_filtered_out(self):
+        """比分格有真实比分就是踢完了。北单只推还能买的场次。"""
+        for score in ('2:1', '0-0', '2 : 1'):
+            with self.subTest(score=score):
+                self.assertEqual(self._parse(self._row(score=score)), [])
+
+    def test_vs_in_the_score_cell_means_it_has_not_started(self):
+        self.assertEqual(len(self._parse(self._row(score='VS'))), 1)
+
+    def test_another_days_match_is_filtered_out(self):
+        self.assertEqual(self._parse(self._row(kickoff='2026-08-29 19:30')), [])
+
+    def test_no_date_filter_keeps_every_day(self):
+        matches = self._parse(self._row(kickoff='2026-08-29 19:30'), date=None)
+        self.assertEqual(matches[0]['date'], '2026-08-29')
+
+    def test_the_kickoff_title_wins_over_the_row_attribute(self):
+        """两个时间都在行上，标题里那个才是开赛时刻；`t` 是销售截止之类。"""
+        match = self._parse(self._row(kickoff='2026-08-28 19:30',
+                                      t_attr='2026-08-28 06:00:00'))[0]
+        self.assertEqual(match['time'], '19:30')
+
+    def test_the_row_attribute_fills_in_when_the_title_is_missing(self):
+        match = self._parse(self._row(kickoff='', t_attr='2026-08-28 06:00:00'))[0]
+        self.assertEqual((match['date'], match['time']), (DATE, '06:00'))
+
+    def test_incomplete_prices_become_none_rather_than_a_short_list(self):
+        """缺价就三个都置空，绝不能让下游按位置取到错位的赔率。"""
+        match = self._parse(self._row(prices=('1.83', '3.74')))[0]
+        self.assertEqual((match['spf_sp'], match['spf_s'], match['spf_f']),
+                         (None, None, None))
+
+    def test_the_league_falls_back_to_its_cell(self):
+        match = self._parse(self._row(league='', league_cell='<b>西甲</b>'))[0]
+        self.assertEqual(match['league'], '西甲')
+
+    def test_the_handicap_fields_are_present_but_empty(self):
+        """单场页不带让球盘。字段要在、值为空——缺字段会让下游 KeyError。"""
+        match = self._parse(self._row())[0]
+        for field in ('rqspf_sp', 'rqspf_s', 'rqspf_f', 'rqspf_odds', 'handicap'):
+            with self.subTest(field=field):
+                self.assertIsNone(match[field])
+
+    def test_an_empty_page_yields_nothing(self):
+        for html in ('', None, '<html><body>什么也没有</body></html>'):
+            with self.subTest(html=html):
+                self.assertEqual(parsing.parse_zgzcw_schedule(html, DATE), [])
 
 
 class AdapterTests(unittest.TestCase):
@@ -419,29 +385,32 @@ class AdapterTests(unittest.TestCase):
                 self.assertEqual(fetched.call_args.args[0],
                                  getattr(adapter, attribute))
 
-    def test_okooo_falls_back_and_marks_the_source(self):
-        with mock.patch.object(adapter, 'fetch_okooo', return_value=''):
+    def test_zgzcw_falls_back_and_marks_the_source(self):
+        with mock.patch.object(adapter, 'fetch_zgzcw', return_value=''):
             with mock.patch.object(adapter, 'fetch_beidan_schedule',
                                    return_value=[{'id': 'x'}]) as fallback:
-                result = adapter.fetch_okooo_schedule(DATE)
+                result = adapter.fetch_zgzcw_schedule(DATE)
         self.assertEqual(result[0]['source'], '500.com')
         self.assertEqual(fallback.call_args_list[0].kwargs.get('source'), 'dc')
 
-    def test_the_three_fallback_reasons_are_logged_apart(self):
-        """页面为空、结构不对、没有未完结比赛——三种都回退，日志要分得开。"""
+    def test_the_two_fallback_reasons_are_logged_apart(self):
+        """页面为空、没有未完结比赛——两种都回退，日志要分得开。
+
+        §十一·3 那类「接口返回 200 加 0 场比赛」的故障里，最难查的正是
+        分不清「压根没抓到」和「抓到了但今天没球」。
+        """
         cases = {
-            '': 'WAF拦截',
-            '<html><table><tr><td>x</td></tr></table></html>': '未找到比赛表格',
-            OkoooScheduleTests._page(
-                OkoooScheduleTests._row(score='2:1')): '未找到未完结比赛',
+            '': '返回为空',
+            f'<table>{ZgzcwScheduleTests._row(score="2:1")}</table>':
+                '未找到指定日期的未完结比赛',
         }
         for html, expected in cases.items():
             with self.subTest(expected=expected):
-                with mock.patch.object(adapter, 'fetch_okooo', return_value=html):
+                with mock.patch.object(adapter, 'fetch_zgzcw', return_value=html):
                     with mock.patch.object(adapter, 'fetch_beidan_schedule',
                                            return_value=[]):
                         with mock.patch.object(adapter.log, 'warning') as warned:
-                            adapter.fetch_okooo_schedule(DATE)
+                            adapter.fetch_zgzcw_schedule(DATE)
                 self.assertIn(expected, warned.call_args.args[0])
 
 

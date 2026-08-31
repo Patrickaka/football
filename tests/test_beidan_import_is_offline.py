@@ -66,35 +66,61 @@ class ImportIsOfflineTests(unittest.TestCase):
 
 
 class SessionStillWorksTests(unittest.TestCase):
-    """惰性化不能把初始化弄丢——只是推迟。"""
+    """惰性化不能把初始化弄丢——只是推迟。
 
-    def test_ensure_initialises_on_first_call(self):
+    预热本身后来又缩掉了：会话初始化只在内存里完成，一次握手都不发，
+    真正要的数据页才是唯一那次请求。所以这里守的不再是「推迟到首次调用
+    才发那两次请求」，而是「一次都不发」以及「重复调用只做一次」。
+    """
+
+    def test_ensure_makes_no_network_call(self):
         config = _reimport('src.beidan.config')
         with mock.patch('requests.Session.get') as get, \
              mock.patch('time.sleep'):
-            config.ensure_okooo_session()
-        self.assertEqual(get.call_count, 2, '预热要访问首页与单场页各一次')
+            config.ensure_zgzcw_session()
+        get.assert_not_called()
 
     def test_ensure_is_idempotent(self):
-        """**第二次调用不该再发请求。** 每次取数都重新握手的话，
+        """重复调用只做一次实际工作。每次取数都重新初始化的话，
         惰性化就从「省掉一次」变成「每次都来一遍」。"""
         config = _reimport('src.beidan.config')
+        self.assertFalse(config._zgzcw_session_warmed)
         with mock.patch('requests.Session.get') as get, \
              mock.patch('time.sleep'):
-            config.ensure_okooo_session()
-            config.ensure_okooo_session()
-            config.ensure_okooo_session()
-        self.assertEqual(get.call_count, 2)
+            config.ensure_zgzcw_session()
+            self.assertTrue(config._zgzcw_session_warmed)
+            config.ensure_zgzcw_session()
+            config.ensure_zgzcw_session()
+        get.assert_not_called()
 
-    def test_waf_block_skips_initialisation(self):
-        """撞了 WAF 就别再去敲门——这是迁移前 `_init_okooo_session` 开头
-        那道判断，惰性化之后要仍然生效。"""
-        config = _reimport('src.beidan.config')
-        with mock.patch.object(config, '_is_okooo_waf_blocked', return_value=True), \
+
+class BlockedSourceSkipsRequestTests(unittest.TestCase):
+    """撞了验证页就别再去敲门。
+
+    这道判断原本在 `_init_okooo_session` 开头，现在住在 `fetch_zgzcw` 里
+    ——预热不发请求了，熔断自然要守在真正发请求的那一层。
+    """
+
+    def test_blocked_source_returns_none_without_requesting(self):
+        fetching = _reimport('src.beidan.fetching')
+        with mock.patch.object(fetching, '_is_zgzcw_blocked', return_value=True), \
              mock.patch('requests.Session.get') as get, \
              mock.patch('time.sleep'):
-            config.ensure_okooo_session()
+            self.assertIsNone(fetching.fetch_zgzcw('https://cp.zgzcw.com/x'))
         get.assert_not_called()
+
+    def test_unblocked_source_does_request(self):
+        """反向也要成立，否则上一条用「永远不发请求」也能过。"""
+        fetching = _reimport('src.beidan.fetching')
+        response = mock.Mock(status_code=200)
+        response.content = '<html>正文</html>'.encode('utf-8')
+        with mock.patch.object(fetching, '_is_zgzcw_blocked', return_value=False), \
+             mock.patch.object(fetching._zgzcw_session, 'get',
+                               return_value=response) as get, \
+             mock.patch('time.sleep'):
+            self.assertEqual(fetching.fetch_zgzcw('https://cp.zgzcw.com/x'),
+                             '<html>正文</html>')
+        self.assertEqual(get.call_count, 1)
 
 
 if __name__ == '__main__':

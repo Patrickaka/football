@@ -23,7 +23,7 @@ from tests.domain.golden import as_comparable
 import src.beidan.recommending as rec_mod
 
 # ── 比赛 ─────────────────────────────────────────────────────────
-# 字段名来自线上真实赛程（`fetch_okooo_schedule` 的产出）
+# 字段名来自线上真实赛程（`fetch_zgzcw_schedule` 的产出）
 BASE_MATCH = {
     'id': '1320957', 'num': '1', 'home': '安山小绿人', 'away': '大邱FC',
     'league': '英超', 'time': '18:30', 'handicap': '(-1)',
@@ -38,8 +38,8 @@ MATCHES = {
     'no_handicap': dict(BASE_MATCH, handicap=None),
     'unparsable_handicap': dict(BASE_MATCH, handicap='公司'),
     # 赛程自带的欧赔：三个都在 / 缺一个
-    'with_okooo_main': dict(BASE_MATCH, spf_sp=2.10, spf_s=3.30, spf_f=3.60),
-    'partial_okooo_main': dict(BASE_MATCH, spf_sp=2.10, spf_s=3.30),
+    'with_zgzcw_main': dict(BASE_MATCH, spf_sp=2.10, spf_s=3.30, spf_f=3.60),
+    'partial_zgzcw_main': dict(BASE_MATCH, spf_sp=2.10, spf_s=3.30),
     # 官方让球赔率的两种来源与拼装
     'official_rqspf': dict(BASE_MATCH,
                            rqspf_odds={'让胜': 2.20, '让平': 3.40, '让负': 3.10}),
@@ -110,7 +110,7 @@ GOALS = {
 # 比分盘历史。**条目的键是 `time` / `score` / `odds` 三个平铺字段**，
 # 不是一个 `scores` 字典——第一版按命名猜成了后者，于是 `market_odds` 恒为空、
 # 整条融合从来没跑过，而 `cs_adjusted` 照样是 True（判据 10、23）。
-# 真实形状来自 `fetch_okooo_cs_history`（`fetching.py:513`）。
+# 真实形状来自 `fetch_zgzcw_cs_history`（`fetching.py:513`）。
 CS = {
     'none': None,
     'empty': {'history': []},
@@ -189,7 +189,7 @@ def _run(fn, ouzhi, calibrator, *args, **kwargs):
 
 def entries():
     # 胜平负：欧赔来源 × 三份走势
-    for match_name in ('plain', 'with_okooo_main', 'partial_okooo_main',
+    for match_name in ('plain', 'with_zgzcw_main', 'partial_zgzcw_main',
                        'unknown_league', 'low_scoring_league'):
         for odds_name, ouzhi in OUZHI.items():
             for cal_name, calibrator in CALIBRATORS.items():
@@ -213,7 +213,7 @@ def entries():
                        'handicap_zero', 'no_handicap', 'unparsable_handicap',
                        'official_rqspf', 'lottery_rqspf', 'rqspf_prices',
                        'rqspf_prices_below_one', 'rqspf_prices_dirty',
-                       'with_okooo_main', 'partial_okooo_main'):
+                       'with_zgzcw_main', 'partial_zgzcw_main'):
         for odds_name, ouzhi in OUZHI.items():
             for cal_name, calibrator in CALIBRATORS.items():
                 yield (f'rqspf:{match_name}:{odds_name}:{cal_name}',
@@ -227,8 +227,8 @@ def entries():
                         asian_data=asian, goals_data=goals))
 
     # 比分：市场报价的有无是这一路最重要的分叉（两套键在那里并列）
-    for match_name in ('plain', 'unknown_league', 'with_okooo_main',
-                       'partial_okooo_main'):
+    for match_name in ('plain', 'unknown_league', 'with_zgzcw_main',
+                       'partial_zgzcw_main'):
         for odds_name, ouzhi in OUZHI.items():
             for market_name, market in BIFEN_ODDS.items():
                 for cal_name, calibrator in CALIBRATORS.items():
@@ -243,8 +243,8 @@ def entries():
                         BIFEN_ODDS['present'], asian, goals))
 
     # 总进球
-    for match_name in ('plain', 'unknown_league', 'with_okooo_main',
-                       'partial_okooo_main'):
+    for match_name in ('plain', 'unknown_league', 'with_zgzcw_main',
+                       'partial_zgzcw_main'):
         for odds_name, ouzhi in OUZHI.items():
             for market_name, market in ZJQ_ODDS.items():
                 for cal_name, calibrator in CALIBRATORS.items():

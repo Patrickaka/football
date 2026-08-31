@@ -49,7 +49,7 @@ class AnalyzerWiringTests(_Base):
 class ScheduleSourceWiringTests(_Base):
     def test_source_names_match_the_request_parameter(self):
         sources = factory.build_schedule_sources(self.transport)
-        self.assertEqual(set(sources), {'500', 'okooo'})
+        self.assertEqual(set(sources), {'500', 'zgzcw'})
 
     def test_each_source_hits_its_own_site(self):
         """两个源接反了不会报错，只会安静地拿另一家的数据。"""
@@ -58,8 +58,8 @@ class ScheduleSourceWiringTests(_Base):
         self.assertTrue(any('500.com' in u for u in self.requested), self.requested)
 
         self.requested.clear()
-        sources['okooo']('2026-08-27')
-        self.assertTrue(any('okooo.com' in u for u in self.requested), self.requested)
+        sources['zgzcw']('2026-08-27')
+        self.assertTrue(any('zgzcw.com' in u for u in self.requested), self.requested)
 
 
 class PredictionServiceWiringTests(_Base):
@@ -69,7 +69,7 @@ class PredictionServiceWiringTests(_Base):
             transport=self.transport, recorder=mock.Mock())
         self.assertIsInstance(service, PredictionService)
         self.assertIsInstance(service._movement_provider, MovementMapBuilder)
-        self.assertEqual(set(service._schedules), {'500', 'okooo'})
+        self.assertEqual(set(service._schedules), {'500', 'zgzcw'})
         self.assertIsNotNone(service._cache)
 
     def test_ttl_defaults_to_the_service_default(self):
@@ -212,40 +212,40 @@ class DatabaseUnavailableTests(_Base):
 
 class TransportWiringTests(unittest.TestCase):
     def test_dispatches_by_hostname(self):
-        okooo_calls, default_calls = [], []
+        zgzcw_calls, default_calls = [], []
         transport = __import__(
             'src.domain.sports.basketball.fetching', fromlist=['x']
         ).dispatch_transport(
-            okooo=lambda url, timeout: okooo_calls.append(url) or 'ok',
+            zgzcw=lambda url, timeout: zgzcw_calls.append(url) or 'ok',
             default=lambda url, timeout: default_calls.append(url) or 'default')
-        transport('https://www.okooo.com/a', 5)
+        transport('https://cp.zgzcw.com/a', 5)
         transport('https://trade.500.com/b', 5)
-        self.assertEqual(len(okooo_calls), 1)
+        self.assertEqual(len(zgzcw_calls), 1)
         self.assertEqual(len(default_calls), 1)
 
     def test_build_transport_returns_a_callable_get(self):
         self.assertTrue(callable(factory.build_transport()))
 
-    def test_build_transport_dispatches_okooo_to_its_own_implementation(self):
-        """okooo 要 Session 预热与 gb2312 解码，用普通 urllib 打过去只会
-        拿到 WAF 页或乱码——而且不会报错。"""
+    def test_build_transport_dispatches_zgzcw_to_its_own_implementation(self):
+        """zgzcw 要带站内 referer 并认出验证页，用普通 urllib 打过去只会
+        拿到验证页当正文——而且不会报错。"""
         from src.domain.sports.basketball import fetching
 
-        okooo_urls, default_urls = [], []
+        zgzcw_urls, default_urls = [], []
 
-        class _FakeOkoooTransport:
+        class _FakeZgzcwTransport:
             def __call__(self, url, timeout):
-                okooo_urls.append(url)
-                return 'okooo'
+                zgzcw_urls.append(url)
+                return 'zgzcw'
 
-        with mock.patch.object(fetching, 'OkoooTransport', _FakeOkoooTransport), \
+        with mock.patch.object(fetching, 'ZgzcwTransport', _FakeZgzcwTransport), \
              mock.patch.object(fetching, 'urllib_get',
                                lambda url, timeout: default_urls.append(url) or 'd'):
             get = factory.build_transport()
-            get('https://www.okooo.com/jingcailanqiu/hunhe/')
+            get('https://cp.zgzcw.com/lottery/jclq.action')
             get('https://trade.500.com/jclq/')
 
-        self.assertEqual(len(okooo_urls), 1, '澳客的请求没走专用实现')
+        self.assertEqual(len(zgzcw_urls), 1, '中国足彩网的请求没走专用实现')
         self.assertEqual(len(default_urls), 1)
 
 
