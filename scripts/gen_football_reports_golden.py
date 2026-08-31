@@ -13,6 +13,7 @@ from datetime import datetime, timedelta, timezone
 from src.domain.sports.football import accuracy_gate, context, league_gate
 from src.domain.sports.football import monitoring, readiness, reporting
 from src.domain.sports.football import stats, validation
+from tests.domain.golden import describe_exception
 
 NOW = datetime(2026, 8, 29, 12, 0, 0, tzinfo=timezone.utc)
 
@@ -58,7 +59,7 @@ def _y(mod, fn, label, *args, **kwargs):
     try:
         yield _key(name, label), _serialisable(_resolve(mod, fn)(*args, **kwargs))
     except Exception as exc:
-        yield _key(name, label), f'{type(exc).__name__}: {exc}'
+        yield _key(name, label), describe_exception(exc)
 
 
 def entries():

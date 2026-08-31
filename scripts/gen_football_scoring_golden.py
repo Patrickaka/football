@@ -8,6 +8,7 @@ import itertools
 
 from src.domain.sports.football import scoring as new
 from src.domain.sports.football import scoring_model as sm
+from tests.domain.golden import describe_exception
 from scripts.gen_football_modeling_golden import REAL, STRENGTH
 
 
@@ -15,7 +16,7 @@ def _y(fn, label, *a, **kw):
     try:
         yield f'{fn}:{label}', getattr(new, fn)(*a, **kw)
     except Exception as exc:
-        yield f'{fn}:{label}', f'{type(exc).__name__}: {exc}'
+        yield f'{fn}:{label}', describe_exception(exc)
 
 
 def entries():

@@ -8,6 +8,7 @@ from copy import deepcopy
 
 from src.domain.sports.football.analysis_result import build_analysis_result
 from src.domain.sports.football.market_anchoring import anchor_candidates_to_market
+from tests.domain.golden import describe_exception
 from tests.domain.sports.football._pipeline_corpus import (
     ASIANS, BASE_PARTS, CANDIDATES, EUROS, PROFILES, TOTALS,
 )
@@ -25,7 +26,7 @@ def _y(label, call):
     try:
         yield _key(label), call()
     except Exception as exc:
-        yield _key(label), f'{type(exc).__name__}: {exc}'
+        yield _key(label), describe_exception(exc)
 
 
 def entries():

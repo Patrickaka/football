@@ -7,6 +7,7 @@ import itertools
 import pathlib
 
 from src.domain.sports.football import elo, scoring_model as sm, upset
+from tests.domain.golden import describe_exception
 from scripts.gen_football_modeling_golden import REAL, STRENGTH
 
 TEAM_NAMES = ['曼联', '  曼联 FC ', 'Manchester United', '曼联(英)', '', '   ', None,
@@ -39,11 +40,11 @@ def entries():
         try:
             yield f'k_factor:{league_type!r}', elo.k_factor(league_type)
         except Exception as exc:
-            yield f'k_factor:{league_type!r}', f'{type(exc).__name__}: {exc}'
+            yield f'k_factor:{league_type!r}', describe_exception(exc)
         try:
             yield f'league_weight:{league_type!r}', elo.league_weight(league_type)
         except Exception as exc:
-            yield f'league_weight:{league_type!r}', f'{type(exc).__name__}: {exc}'
+            yield f'league_weight:{league_type!r}', describe_exception(exc)
 
     # 爆冷：真实三件套 × 五组球队近况 × 五种异常 × 五种资金流
     for i, (asian, euro, total) in enumerate(REAL[:12]):

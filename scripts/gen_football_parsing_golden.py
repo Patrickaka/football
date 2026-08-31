@@ -22,6 +22,7 @@ import pathlib
 
 from src.domain.sports.football import lottery as lot
 from src.domain.sports.football import parsing as p
+from tests.domain.golden import describe_exception
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 PAGES = json.loads(gzip.decompress((ROOT / 'tests/fixtures/football_odds_pages.json.gz').read_bytes()))
@@ -105,7 +106,7 @@ def entries():
         try:
             yield f'avg:{key}', p.extract_avg_numbers(html)[:20]
         except ValueError as e:
-            yield f'avg:{key}', f'ValueError: {e}'
+            yield f'avg:{key}', describe_exception(e)
         for company in ('Bet365', 'Pinnacle'):
             for is_total in (False, True):
                 yield (f'company:{key}:{company}:{is_total}',
@@ -211,7 +212,7 @@ def entries():
         try:
             yield f'odds_value:{v!r}', p.parse_odds_value(v, 'f', 'm1')
         except ValueError as e:
-            yield f'odds_value:{v!r}', f'ValueError: {e}'
+            yield f'odds_value:{v!r}', describe_exception(e)
     series = [[2.0, 3.4, 3.8, 93.1], [2.1, 3.3, 3.7, 93.0], [2.2, 3.2, 3.6, 92.9]]
     for name, s in (('ok', series), ('empty', []), ('notlist', {'a': 1}),
                     ('short_close', [[2.0, 3.0]] + series),
@@ -222,7 +223,7 @@ def entries():
         try:
             yield f'ouzhi:{name}', p.ouzhi_from_series(s, 'm1')
         except ValueError as e:
-            yield f'ouzhi:{name}', f'ValueError: {e}'
+            yield f'ouzhi:{name}', describe_exception(e)
 
     # --- 单家公司行 → 市场结构 ---
     asian_row = [0.95, 0.5, 0.85, 0.90, 0.75, 0.90, '08-28 10:00', '08-27 10:00']
