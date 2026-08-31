@@ -52,7 +52,11 @@ def anchor_candidates_to_market(candidates: List,
                 score_goal_anchor['target'],
             )
     except Exception as e:
-        meta['score_goal_anchor'] = {'applied': False, 'reason': str(e)}
+        meta['score_goal_anchor'] = {
+            'applied': False,
+            'reason': 'internal_error',
+            'error_type': type(e).__name__,
+        }
         log.warning(f"score goal mean anchor failed: {e}")
 
     # Production-history correction runs after the market anchor.  It is
@@ -71,7 +75,11 @@ def anchor_candidates_to_market(candidates: List,
                 history_adjustment.get('expected_goals_after', 0.0),
             )
     except Exception as e:
-        meta['production_history_calibration'] = {'applied': False, 'reason': str(e)}
+        meta['production_history_calibration'] = {
+            'applied': False,
+            'reason': 'internal_error',
+            'error_type': type(e).__name__,
+        }
         log.warning(f"production history calibration failed: {e}")
 
     # Multi-stage score corrections can unintentionally move aggregate H/D/A
@@ -83,7 +91,11 @@ def anchor_candidates_to_market(candidates: List,
         )
         meta['outcome_market_anchor'] = outcome_market_anchor
     except Exception as e:
-        meta['outcome_market_anchor'] = {'applied': False, 'reason': str(e)}
+        meta['outcome_market_anchor'] = {
+            'applied': False,
+            'reason': 'internal_error',
+            'error_type': type(e).__name__,
+        }
         log.warning(f"score 1X2 market anchor failed: {e}")
 
     # History calibration is useful for residual bias, but it must not undo the
@@ -102,7 +114,11 @@ def anchor_candidates_to_market(candidates: List,
                 final_score_goal_anchor['target'],
             )
     except Exception as e:
-        meta['final_score_goal_anchor'] = {'applied': False, 'reason': str(e)}
+        meta['final_score_goal_anchor'] = {
+            'applied': False,
+            'reason': 'internal_error',
+            'error_type': type(e).__name__,
+        }
         log.warning(f"final score goal mean anchor failed: {e}")
 
     # The final distribution is a single market-consistent state: closing 1X2
@@ -115,7 +131,11 @@ def anchor_candidates_to_market(candidates: List,
         )
         meta['joint_market_state'] = joint_market_adjustment
     except Exception as e:
-        meta['joint_market_state'] = {'applied': False, 'reason': str(e)}
+        meta['joint_market_state'] = {
+            'applied': False,
+            'reason': 'internal_error',
+            'error_type': type(e).__name__,
+        }
         log.warning(f"joint market constraint failed: {e}")
 
     dixon_coles_result = None
