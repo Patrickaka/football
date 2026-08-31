@@ -2,6 +2,7 @@
 """快乐8预测入口 run_prediction、缓存、策略激活与快照列表"""
 
 import math
+import copy
 import json
 import os
 import time
@@ -34,6 +35,18 @@ from .analyzer import (
 _PREDICTION_CACHE_FILE = Path(data_path('kl8_prediction_cache.json'))
 _PREDICTION_CACHE_SCHEMA = 1
 _prediction_cache_lock = threading.Lock()
+_record_index_lock = threading.Lock()
+_snapshot_index_cache = {'signature': None, 'records': []}
+_recalculation_index_cache = {'signature': None, 'records': []}
+
+
+def _directory_signature(directory: Path):
+    """不可变记录目录的轻量版本号；新增/删除文件时目录 mtime 会变化。"""
+    try:
+        stat = directory.stat()
+        return str(directory.resolve()), stat.st_mtime_ns
+    except OSError:
+        return str(directory), None
 
 
 def _strategy_config_fingerprint() -> str:
@@ -223,6 +236,15 @@ def list_prediction_snapshots() -> List[Dict]:
     if not snapshot_dir.exists():
         return []
 
+    settlement_dir = Path(_cfg.KL8_SETTLEMENT_DIR)
+    signature = (
+        _directory_signature(snapshot_dir),
+        _directory_signature(settlement_dir),
+    )
+    with _record_index_lock:
+        if _snapshot_index_cache['signature'] == signature:
+            return copy.deepcopy(_snapshot_index_cache['records'])
+
     snapshots = []
     for f in sorted(snapshot_dir.glob('snapshot_*.json')):
         try:
@@ -243,13 +265,20 @@ def list_prediction_snapshots() -> List[Dict]:
         except Exception:
             continue
 
-    return snapshots
+    with _record_index_lock:
+        _snapshot_index_cache['signature'] = signature
+        _snapshot_index_cache['records'] = snapshots
+    return copy.deepcopy(snapshots)
 
 
 def list_exclude_recalculations() -> List[Dict]:
     directory = Path(_cfg.KL8_RECALCULATION_DIR)
     if not directory.exists():
         return []
+    signature = _directory_signature(directory)
+    with _record_index_lock:
+        if _recalculation_index_cache['signature'] == signature:
+            return copy.deepcopy(_recalculation_index_cache['records'])
     records = []
     for path in directory.glob('recalculation_*.json'):
         try:
@@ -263,7 +292,10 @@ def list_exclude_recalculations() -> List[Dict]:
         str(item.get('play_type') or ''),
         int(item.get('round', 0)),
     ), reverse=True)
-    return records
+    with _record_index_lock:
+        _recalculation_index_cache['signature'] = signature
+        _recalculation_index_cache['records'] = records
+    return copy.deepcopy(records)
 
 
 def _check_settlement_exists(snapshot_id: str) -> bool:

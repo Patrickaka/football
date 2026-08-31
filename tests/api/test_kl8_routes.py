@@ -75,6 +75,15 @@ class QueryPassThrough(unittest.TestCase):
             self._captured('/api/kl8/settle?issue=2026001', 'kl8_settle_payload'),
             {'issue': ['2026001']})
 
+    def test_records_pagination_reaches_the_service(self):
+        self.assertEqual(
+            self._captured(
+                '/api/kl8/records?page=2&page_size=8',
+                'kl8_records_payload',
+            ),
+            {'page': ['2'], 'page_size': ['8']},
+        )
+
     def test_repeated_keys_keep_every_value(self):
         """`?x=1&x=2` 在 `parse_qs` 下是 `{'x': ['1', '2']}`——
         用 `dict(request.query_params)` 会**只留最后一个**，静静丢数据。

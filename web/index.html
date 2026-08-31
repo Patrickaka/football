@@ -4359,6 +4359,7 @@ async function refreshKL8() {
   appKL8.innerHTML = `<div class="status"><span class="spinner"></span>正在刷新快乐8数据…</div>`;
   try {
     await fetchJsonPost('/api/kl8-refresh');
+    invalidateKL8RecordsCache();
     kl8Loaded = false;
     await loadKL8();
   } catch (e) {
@@ -5073,7 +5074,18 @@ function closeKL8KillModal() {
 // ── 快乐8 预测记录模态弹窗（参考足球 /api/predictions，弹窗+分页，不在当页内联输出）──
 let kl8RecordsPage = 1;
 let kl8RecordsCache = [];
+let kl8RecordsMeta = { count: 0, settled_count: 0, pending_count: 0, total_pages: 1 };
 const KL8_RECORDS_PAGE_SIZE = 8;
+const KL8_RECORDS_CACHE_TTL = 30000;
+const kl8RecordsPageCache = new Map();
+let kl8RecordsRequest = null;
+let kl8RecordsMaintenanceTimer = null;
+
+function invalidateKL8RecordsCache() {
+  kl8RecordsPageCache.clear();
+  kl8RecordsCache = [];
+  kl8RecordsMeta = { count: 0, settled_count: 0, pending_count: 0, total_pages: 1 };
+}
 
 async function openKL8RecordsModal() {
   const target = document.getElementById('kl8-records-modal');
@@ -5084,7 +5096,11 @@ async function openKL8RecordsModal() {
         <div class="section-title" style="font-size:16px;margin:0">📋 快乐8预测记录</div>
         <button class="kl8-refresh-btn" style="padding:6px 10px;background:#30363d" onclick="closeKL8RecordsModal()">关闭</button>
       </div>
-      <div id="kl8-records-body" style="flex:1;overflow:auto;padding:16px"><div class="status"><span class="spinner"></span>加载中…</div></div>
+      <div id="kl8-records-body" style="flex:1;overflow:auto;padding:16px">
+        <div id="kl8-records-summary" style="font-size:12px;color:var(--muted);margin-bottom:12px"></div>
+        <div id="kl8-records-list"><div class="status"><span class="spinner"></span>加载中…</div></div>
+        <div id="kl8-records-pager"></div>
+      </div>
     </div></div>`;
 
   // 点击遮罩空白处关闭
@@ -5092,35 +5108,83 @@ async function openKL8RecordsModal() {
     if (e.target === e.currentTarget) closeKL8RecordsModal();
   });
 
-  try {
-    const data = await fetchJson('/api/kl8/records');
-    const result = data.result || {};
-    kl8RecordsCache = result.records || [];
-    const body = document.getElementById('kl8-records-body');
-    if (!body) return;
-    if (!kl8RecordsCache.length) {
-      body.innerHTML = `<div class="note">暂无预测记录。每期开奖后系统会自动生成预测快照并结算，记录会自动累积在这里。</div>`;
-      return;
-    }
-    const summary = `共 ${result.count || 0} 条 · 已结算 ${result.settled_count || 0} · 待开奖 ${result.pending_count || 0}`;
-    body.innerHTML = `<div style="font-size:12px;color:var(--muted);margin-bottom:12px">${esc(summary)}</div>
-      <div id="kl8-records-list"></div>
-      <div id="kl8-records-pager"></div>`;
-    renderKL8RecordsPage();
-  } catch (e) {
-    const body = document.getElementById('kl8-records-body');
-    if (body) body.innerHTML = `<div class="status error">加载失败: ${esc(e.message || e)}</div>`;
-  }
+  kl8RecordsPage = 1;
+  await loadKL8RecordsPage(1);
 }
 
 function closeKL8RecordsModal() {
+  if (kl8RecordsMaintenanceTimer) clearTimeout(kl8RecordsMaintenanceTimer);
+  kl8RecordsMaintenanceTimer = null;
   const target = document.getElementById('kl8-records-modal');
   if (target) target.innerHTML = '';
 }
 
-function setKL8RecordsPage(p) {
-  kl8RecordsPage = Math.max(1, Number(p) || 1);
-  renderKL8RecordsPage();
+async function loadKL8RecordsPage(page, options = {}) {
+  const force = Boolean(options.force);
+  const maintenanceRetry = Number(options.maintenanceRetry || 0);
+  const requestedPage = Math.max(1, Number(page) || 1);
+  const cacheKey = String(requestedPage);
+  const cached = kl8RecordsPageCache.get(cacheKey);
+  if (!force && cached && Date.now() - cached.loadedAt < KL8_RECORDS_CACHE_TTL) {
+    kl8RecordsPage = requestedPage;
+    kl8RecordsCache = cached.result.records || [];
+    kl8RecordsMeta = cached.result;
+    renderKL8RecordsPage();
+    return;
+  }
+
+  kl8RecordsPage = requestedPage;
+  const list = document.getElementById('kl8-records-list');
+  if (list && !options.silent) {
+    list.innerHTML = `<div class="status"><span class="spinner"></span>正在加载第 ${requestedPage} 页…</div>`;
+  }
+
+  let promise;
+  if (kl8RecordsRequest && kl8RecordsRequest.key === cacheKey) {
+    promise = kl8RecordsRequest.promise;
+  } else {
+    promise = fetchJson('/api/kl8/records?page=' + requestedPage
+      + '&page_size=' + KL8_RECORDS_PAGE_SIZE);
+    kl8RecordsRequest = { key: cacheKey, promise };
+  }
+
+  try {
+    const data = await promise;
+    if (data.error) throw new Error(data.error);
+    const result = data.result || {};
+    kl8RecordsPageCache.set(cacheKey, { loadedAt: Date.now(), result });
+    if (kl8RecordsPage !== requestedPage || !document.getElementById('kl8-records-list')) return;
+    kl8RecordsCache = result.records || [];
+    kl8RecordsMeta = result;
+    renderKL8RecordsPage();
+
+    // 首屏不等待遗漏结算/旧奖金修复；后台完成后静默刷新当前页，最多重试两次。
+    if (result.maintenance_running && maintenanceRetry < 2) {
+      if (kl8RecordsMaintenanceTimer) clearTimeout(kl8RecordsMaintenanceTimer);
+      kl8RecordsMaintenanceTimer = setTimeout(() => {
+        if (document.getElementById('kl8-records-list') && kl8RecordsPage === requestedPage) {
+          loadKL8RecordsPage(requestedPage, {
+            force: true,
+            silent: true,
+            maintenanceRetry: maintenanceRetry + 1,
+          });
+        }
+      }, 1800 * (maintenanceRetry + 1));
+    }
+  } catch (e) {
+    if (kl8RecordsPage === requestedPage) {
+      const currentList = document.getElementById('kl8-records-list');
+      if (currentList) currentList.innerHTML = `<div class="status error">加载失败: ${esc(e.message || e)}</div>`;
+    }
+  } finally {
+    if (kl8RecordsRequest && kl8RecordsRequest.promise === promise) kl8RecordsRequest = null;
+  }
+}
+
+async function setKL8RecordsPage(p) {
+  const totalPages = Math.max(1, Number(kl8RecordsMeta.total_pages) || 1);
+  kl8RecordsPage = Math.max(1, Math.min(Number(p) || 1, totalPages));
+  await loadKL8RecordsPage(kl8RecordsPage);
   const body = document.getElementById('kl8-records-body');
   if (body) body.scrollTop = 0;
 }
@@ -5128,16 +5192,23 @@ function setKL8RecordsPage(p) {
 function renderKL8RecordsPage() {
   const list = document.getElementById('kl8-records-list');
   const pager = document.getElementById('kl8-records-pager');
+  const summaryNode = document.getElementById('kl8-records-summary');
   if (!list) return;
-  const records = kl8RecordsCache;
-  const totalPages = Math.max(1, Math.ceil(records.length / KL8_RECORDS_PAGE_SIZE));
+  const pageRecords = kl8RecordsCache;
+  const total = Number(kl8RecordsMeta.count) || 0;
+  const totalPages = Math.max(1, Number(kl8RecordsMeta.total_pages) || 1);
   kl8RecordsPage = Math.max(1, Math.min(kl8RecordsPage, totalPages));
   const start = (kl8RecordsPage - 1) * KL8_RECORDS_PAGE_SIZE;
-  const pageRecords = records.slice(start, start + KL8_RECORDS_PAGE_SIZE);
 
-  list.innerHTML = pageRecords.map(renderKL8RecordCard).join('');
+  if (summaryNode) {
+    const summary = `共 ${total} 条 · 已结算 ${Number(kl8RecordsMeta.settled_count) || 0} · 待开奖 ${Number(kl8RecordsMeta.pending_count) || 0}`;
+    summaryNode.innerHTML = `${esc(summary)}${kl8RecordsMeta.maintenance_running ? ' · <span style="color:var(--accent2)">后台同步结算中</span>' : ''}`;
+  }
+  list.innerHTML = pageRecords.length
+    ? pageRecords.map(renderKL8RecordCard).join('')
+    : `<div class="note">暂无预测记录。每期开奖后系统会自动生成预测快照并结算，记录会自动累积在这里。</div>`;
 
-  if (records.length > KL8_RECORDS_PAGE_SIZE) {
+  if (totalPages > 1) {
     const prevDisabled = kl8RecordsPage <= 1;
     const nextDisabled = kl8RecordsPage >= totalPages;
     let btns = '';
@@ -5148,7 +5219,7 @@ function renderKL8RecordsPage() {
       btns += `<button type="button" onclick="setKL8RecordsPage(${p})" style="padding:5px 9px;border:1px solid ${active ? '#2ea043' : 'var(--line)'};background:${active ? '#2ea043' : 'var(--card2)'};color:${active ? '#fff' : 'var(--text)'};border-radius:6px;cursor:pointer">${p}</button>`;
     }
     pager.innerHTML = `<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-top:14px">
-      <div style="font-size:12px;color:var(--muted)">显示 ${start + 1}-${start + pageRecords.length} / ${records.length} 条 · 第 ${kl8RecordsPage}/${totalPages} 页</div>
+      <div style="font-size:12px;color:var(--muted)">显示 ${pageRecords.length ? start + 1 : 0}-${start + pageRecords.length} / ${total} 条 · 第 ${kl8RecordsPage}/${totalPages} 页</div>
       <div style="display:flex;gap:6px;flex-wrap:wrap">
         <button type="button" onclick="setKL8RecordsPage(${kl8RecordsPage - 1})" ${prevDisabled ? 'disabled' : ''} style="padding:5px 9px;border:1px solid var(--line);background:var(--card2);color:var(--text);border-radius:6px;cursor:${prevDisabled ? 'not-allowed' : 'pointer'};opacity:${prevDisabled ? '.5' : '1'}">上一页</button>
         ${btns}
@@ -5288,6 +5359,7 @@ async function runKL8KillRecalculate() {
     if (data.error) throw new Error(data.error);
     const result = data.result || {};
     if (result.error) throw new Error(result.error);
+    invalidateKL8RecordsCache();
     const newNumbers = result.numbers || result.top7_numbers || result.core_numbers || [];
     const quality = result.quality || {};
     if (!newNumbers.length || newNumbers.length < option.requiredPick) {
@@ -5357,6 +5429,7 @@ async function runKL8ExcludeRecalculate() {
     if (data.error) throw new Error(data.error);
     const result = data.result || {};
     if (result.error) throw new Error(result.error);
+    invalidateKL8RecordsCache();
     const newNumbers = result.numbers || result.top7_numbers || result.core_numbers || [];
     const quality = result.quality || {};
     if (!newNumbers.length || newNumbers.length < option.requiredPick) {
@@ -5533,6 +5606,7 @@ async function fetchKL8Data() {
       appKL8.innerHTML = `<div class="status error">✗ ${esc(data.error)}</div>`;
       return;
     }
+    invalidateKL8RecordsCache();
 
     const success = data.success || false;
     const message = data.message || '';

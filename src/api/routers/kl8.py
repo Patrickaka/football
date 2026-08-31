@@ -43,8 +43,8 @@ async def snapshots():
 
 
 @router.get('/api/kl8/records')
-async def records():
-    return await run_blocking(service.kl8_records_payload)
+async def records(params: dict = Depends(query_params)):
+    return await run_blocking(service.kl8_records_payload, params)
 
 
 @router.get('/api/kl8/settle')

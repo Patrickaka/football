@@ -33,6 +33,13 @@ from src.api.runtime.jobs import (
 
 log = logging.getLogger('api.services.kl8')
 
+_KL8_RECORDS_DEFAULT_PAGE_SIZE = 8
+_KL8_RECORDS_MAX_PAGE_SIZE = 50
+_KL8_RECORDS_MAINTENANCE_INTERVAL = 300.0
+_kl8_records_maintenance_lock = threading.Lock()
+_kl8_records_maintenance_running = False
+_kl8_records_maintenance_last_finished = 0.0
+
 
 def kl8_payload():
     """获取快乐8预测结果。
@@ -95,6 +102,22 @@ def _latest_issue_from_history_file():
         return max(issues) if issues else ''
     except (OSError, ValueError, TypeError):
         return ''
+
+
+def _kl8_draw_map_from_history_file():
+    """轻量读取已开奖期号；读取失败返回 None，让调用方走兼容回退。"""
+    try:
+        raw = json.loads(Path(data_path('kl8_history.json')).read_text(encoding='utf-8'))
+        records = raw.get('results', raw.get('data', [])) if isinstance(raw, dict) else raw
+        if not isinstance(records, list):
+            return None
+        return {
+            str(record.get('issue')): record.get('numbers')
+            for record in records
+            if isinstance(record, dict) and record.get('issue')
+        }
+    except (OSError, ValueError, TypeError):
+        return None
 
 
 def kl8_refresh_payload():
@@ -208,100 +231,203 @@ def kl8_snapshots_payload():
         return {'error': '快乐8快照列表失败'}
 
 
-def kl8_records_payload():
-    """快乐8预测记录 + 中奖情况（快照元数据 + 结算详情合并）
+def _kl8_records_page_options(params, total):
+    """解析记录分页；旧调用不传分页参数时仍返回全部，保持接口兼容。"""
+    params = params or {}
+    paginated = 'page' in params or 'page_size' in params
+    if not paginated:
+        return 1, max(total, 1), 1, False
 
-    参考足球 /api/predictions：一次返回全部记录（含中奖结算），
-    前端用模态弹窗 + 分页展示，避免在当页面内联无限输出。
-    """
+    def _positive_int(name, default):
+        raw = (params.get(name) or [str(default)])[0]
+        try:
+            return max(1, int(raw))
+        except (TypeError, ValueError):
+            return default
+
+    page_size = min(
+        _positive_int('page_size', _KL8_RECORDS_DEFAULT_PAGE_SIZE),
+        _KL8_RECORDS_MAX_PAGE_SIZE,
+    )
+    total_pages = max(1, (total + page_size - 1) // page_size)
+    page = min(_positive_int('page', 1), total_pages)
+    return page, page_size, total_pages, True
+
+
+def _dedupe_kl8_snapshots(snapshots):
+    """同一目标期只留最新快照，并在读取大块预测内容之前完成去重。"""
+    ordered = sorted(
+        snapshots,
+        key=lambda item: (
+            str(item.get('target_issue') or ''),
+            str(item.get('predicted_at') or ''),
+        ),
+        reverse=True,
+    )
+    seen = set()
+    result = []
+    for snapshot in ordered:
+        issue = str(snapshot.get('target_issue') or '')
+        if not issue or issue in seen:
+            continue
+        seen.add(issue)
+        result.append(snapshot)
+    return result
+
+
+def _load_kl8_record(snapshot, snapshot_dir, settlement_dir, fushi_config,
+                     clean_pick_numbers):
+    """只读取一个可见页所需的完整预测和结算。"""
+    predicted = {}
+    main_pool = {}
+    try:
+        raw = json.loads(
+            (snapshot_dir / snapshot['file']).read_text(encoding='utf-8')
+        )
+        for key, block in raw.items():
+            if not (key.startswith('select_') or key.startswith('fu_shi')):
+                continue
+            if isinstance(block, dict):
+                if block.get('main_pool'):
+                    main_pool[key] = block['main_pool']
+                elif block.get('numbers'):
+                    predicted[key] = block['numbers']
+            elif isinstance(block, list):
+                predicted[key] = block
+
+        block = raw.get('fu_shi_7')
+        if not predicted.get('fu_shi_7') and isinstance(block, dict):
+            predicted['fu_shi_7'] = (
+                block.get('core_numbers') or block.get('top7_numbers') or []
+            )
+        predicted['fu_shi_7'] = clean_pick_numbers(
+            predicted.get('fu_shi_7', []),
+            fushi_config['fu_shi_7']['pool_size'],
+        )
+    except Exception:
+        predicted = {}
+        main_pool = {}
+
+    record = {
+        'snapshot_id': snapshot.get('snapshot_id'),
+        'file': snapshot.get('file'),
+        'target_issue': snapshot.get('target_issue'),
+        'based_on_issue': snapshot.get('based_on_issue'),
+        'predicted_at': snapshot.get('predicted_at'),
+        'version': snapshot.get('version'),
+        'is_experiment': snapshot.get('is_experiment', False),
+        'has_settlement': snapshot.get('has_settlement', False),
+        'predicted': predicted,
+        'main_pool': main_pool,
+        'settlement': None,
+    }
+    snapshot_id = snapshot.get('snapshot_id')
+    if snapshot.get('has_settlement') and snapshot_id:
+        settlement_path = settlement_dir / f'settlement_{snapshot_id}.json'
+        if settlement_path.exists():
+            try:
+                record['settlement'] = json.loads(
+                    settlement_path.read_text(encoding='utf-8')
+                )
+            except Exception:
+                record['settlement'] = None
+    return record
+
+
+def _kl8_records_maintenance_worker(snapshots):
+    """在展示请求之外补结算并校验旧奖金，避免 GET 被分析器冷启动阻塞。"""
+    global _kl8_records_maintenance_running
+    global _kl8_records_maintenance_last_finished
+    try:
+        from src.kl8 import KL8_SETTLEMENT_DIR
+
+        settlement_dir = Path(KL8_SETTLEMENT_DIR)
+        records = []
+        for snapshot in snapshots:
+            snapshot_id = snapshot.get('snapshot_id')
+            settlement = None
+            if snapshot.get('has_settlement') and snapshot_id:
+                path = settlement_dir / f'settlement_{snapshot_id}.json'
+                if path.exists():
+                    try:
+                        settlement = json.loads(path.read_text(encoding='utf-8'))
+                    except Exception:
+                        settlement = None
+            records.append({
+                'snapshot_id': snapshot_id,
+                'file': snapshot.get('file'),
+                'target_issue': snapshot.get('target_issue'),
+                'has_settlement': bool(settlement),
+                'settlement': settlement,
+            })
+        kl8_backfill_settlements(records)
+        kl8_rebuild_stale_settlements(records)
+    except Exception:
+        log.warning('快乐8记录后台维护失败', exc_info=True)
+    finally:
+        with _kl8_records_maintenance_lock:
+            _kl8_records_maintenance_running = False
+            _kl8_records_maintenance_last_finished = time.monotonic()
+
+
+def _schedule_kl8_records_maintenance(snapshots):
+    """至多启动一个低频后台维护任务；返回当前是否仍在维护。"""
+    global _kl8_records_maintenance_running
+    now = time.monotonic()
+    with _kl8_records_maintenance_lock:
+        if _kl8_records_maintenance_running:
+            return True
+        if (_kl8_records_maintenance_last_finished and
+                now - _kl8_records_maintenance_last_finished <
+                _KL8_RECORDS_MAINTENANCE_INTERVAL):
+            return False
+        _kl8_records_maintenance_running = True
+    threading.Thread(
+        target=_kl8_records_maintenance_worker,
+        args=(list(snapshots),),
+        daemon=True,
+        name='KL8RecordsMaintenance',
+    ).start()
+    return True
+
+
+def kl8_records_payload(params=None):
+    """快乐8预测记录；分页读取，结算修复在后台执行。"""
     try:
         from src.kl8 import (
             FUSHI_CONFIG, KL8_SETTLEMENT_DIR, KL8_SNAPSHOT_DIR,
             _clean_pick_numbers,
         )
-        from pathlib import Path
-        import json as _json
 
-        snapshots = kl8_list_snapshots()
-        # 按目标期号降序（最新一期在前）
-        snapshots.sort(
-            key=lambda s: (
-                str(s.get('target_issue') or ''),
-                str(s.get('predicted_at') or ''),
-            ),
-            reverse=True,
+        snapshots = _dedupe_kl8_snapshots(kl8_list_snapshots())
+        total = len(snapshots)
+        page, page_size, total_pages, paginated = _kl8_records_page_options(
+            params, total,
         )
+        if paginated:
+            start = (page - 1) * page_size
+            visible_snapshots = snapshots[start:start + page_size]
+        else:
+            visible_snapshots = snapshots
 
         settlement_dir = Path(KL8_SETTLEMENT_DIR)
         snapshot_dir = Path(KL8_SNAPSHOT_DIR)
-        records = []
-        for snap in snapshots:
-            # 读取完整快照以提取预测号码（用于"历史记录"展示）
-            predicted = {}
-            main_pool = {}
-            try:
-                raw = _json.loads((snapshot_dir / snap['file']).read_text(encoding='utf-8'))
-                for k in raw:
-                    if k.startswith('select_') or k.startswith('fu_shi'):
-                        blk = raw.get(k)
-                        if isinstance(blk, dict):
-                            if blk.get('main_pool'):
-                                main_pool[k] = blk['main_pool']
-                            elif blk.get('numbers'):
-                                predicted[k] = blk['numbers']
-                        elif isinstance(blk, list):
-                            predicted[k] = blk
-                # 复式核心号码（旧字段名兼容）
-                for k in ('fu_shi_7',):
-                    if not predicted.get(k):
-                        core = raw.get(k)
-                        if isinstance(core, dict):
-                            predicted[k] = core.get('core_numbers') or core.get('top7_numbers') or []
-                    # 与选6一样进入 predicted 记录，但复式玩法额外强制校验池大小。
-                    # 这样旧 8 码快照不会再冒充新的“选5复式7码”记录。
-                    predicted[k] = _clean_pick_numbers(
-                        predicted.get(k, []),
-                        FUSHI_CONFIG[k]['pool_size'],
-                    )
-            except Exception:
-                predicted = {}
-                main_pool = {}
-
-            rec = {
-                'snapshot_id': snap.get('snapshot_id'),
-                'file': snap.get('file'),
-                'target_issue': snap.get('target_issue'),
-                'based_on_issue': snap.get('based_on_issue'),
-                'predicted_at': snap.get('predicted_at'),
-                'version': snap.get('version'),
-                'is_experiment': snap.get('is_experiment', False),
-                'has_settlement': snap.get('has_settlement', False),
-                'predicted': predicted,
-                'main_pool': main_pool,
-                'settlement': None,
-            }
-            if snap.get('has_settlement') and snap.get('snapshot_id'):
-                sp = settlement_dir / f'settlement_{snap["snapshot_id"]}.json'
-                if sp.exists():
-                    try:
-                        rec['settlement'] = _json.loads(sp.read_text(encoding='utf-8'))
-                    except Exception:
-                        rec['settlement'] = None
-            records.append(rec)
-
-        # 结算回填：对已开奖但缺少结算文件的快照当场结算（幂等），
-        # 修复"某一期因服务停机/漏检未被调度器结算 → 预测记录永久卡在待开奖"的问题。
-        kl8_backfill_settlements(records)
-
-        # 奖金表更新重算：旧版默认奖金表错误（如选5中2=5元、选6中3=10元），
-        # 已生成的结算文件不会自动更新。读记录时校验并删除重算，确保金额正确。
-        kl8_rebuild_stale_settlements(records)
+        records = [
+            _load_kl8_record(
+                snapshot, snapshot_dir, settlement_dir,
+                FUSHI_CONFIG, _clean_pick_numbers,
+            )
+            for snapshot in visible_snapshots
+        ]
 
         # 删号重算必须绑定来源快照，不能把同一期不同模型版本的轨迹串在一起。
+        visible_ids = {
+            str(record.get('snapshot_id') or '') for record in records
+        }
         recalculations_by_snapshot = {}
         for item in kl8_list_recalculations():
             source_id = str(item.get('source_snapshot_id') or '')
-            if source_id:
+            if source_id and source_id in visible_ids:
                 recalculations_by_snapshot.setdefault(source_id, []).append(item)
         for rec in records:
             rounds = recalculations_by_snapshot.get(str(rec.get('snapshot_id') or ''), [])
@@ -315,21 +441,19 @@ def kl8_records_payload():
             enriched.sort(key=lambda row: (str(row.get('play_type') or ''), int(row.get('round', 0))))
             rec['exclude_recalculations'] = enriched
 
-        # 去重：同一目标期只保留最新一条（调度器每轮可能对同期生成多次快照）
-        seen_issues = {}
-        for rec in records:
-            issue = rec.get('target_issue')
-            if issue and issue not in seen_issues:
-                seen_issues[issue] = rec
-        records = list(seen_issues.values())
-
-        settled = sum(1 for r in records if r['has_settlement'])
+        settled = sum(1 for snapshot in snapshots if snapshot.get('has_settlement'))
+        maintenance_running = _schedule_kl8_records_maintenance(snapshots)
         return {
             'result': {
                 'records': records,
-                'count': len(records),
+                'count': total,
                 'settled_count': settled,
-                'pending_count': len(records) - settled,
+                'pending_count': total - settled,
+                'page': page,
+                'page_size': page_size,
+                'total_pages': total_pages,
+                'has_more': page < total_pages,
+                'maintenance_running': maintenance_running,
             }
         }
     except Exception as e:
@@ -342,23 +466,36 @@ def kl8_backfill_settlements(records):
 
     原因：调度器仅在「发现新期号」时结算上一期（settle_previous_period）。
     若某一期因服务停机/漏检未被结算，其预测记录会永久卡在「待开奖」。
-    读记录时回填，保证历史已开奖记录正确展示命中/奖金。
+    记录接口在后台触发回填，保证历史已开奖记录最终正确展示命中/奖金，
+    同时不阻塞首屏。
 
     仅对 target_issue 已在历史开奖数据中出现的快照结算；未开奖的（最新一期）
     保持待开奖。settle_prediction 内部按 snapshot_id 落盘且幂等（已存在则跳过）。
     """
     try:
+        pending = [
+            rec for rec in records
+            if not rec.get('has_settlement') and not rec.get('settlement')
+            and rec.get('target_issue')
+        ]
+        if not pending:
+            return
+
+        # 绝大多数请求只有尚未开奖的最新一期。先查轻量历史文件，确认确有
+        # 已开奖但漏结算的目标期后才初始化分析器（冷启动会尝试数据库并做统计）。
+        file_drawn = _kl8_draw_map_from_history_file()
+        if file_drawn is not None and not any(
+            str(rec.get('target_issue')) in file_drawn for rec in pending
+        ):
+            return
+
         analyzer = get_kl8_analyzer()
         history = getattr(analyzer, 'history_data', None) or []
         if not history:
             return
         drawn = {str(r.get('issue')): r.get('numbers') for r in history}
-        for rec in records:
-            if rec.get('has_settlement') or rec.get('settlement'):
-                continue
+        for rec in pending:
             ti = rec.get('target_issue')
-            if not ti:
-                continue
             ti = str(ti)
             if ti not in drawn:
                 continue  # 目标期尚未开奖，保持待开奖
@@ -378,29 +515,21 @@ def kl8_rebuild_stale_settlements(records):
     """奖金表更新后，强制覆盖重算奖金不一致的历史结算。
 
     背景：2026-07-22 前默认奖金表有误（选5中2=5、选6中3=10 等），导致已结算
-    历史记录的金额错误。此函数在读 /api/kl8/records 时触发，用当前官方奖金表
-    重新校验每条 settlement；只要任一玩法的单注奖金与当前表不符，就以 force=True
-    重新结算并覆盖旧结算文件。
+    历史记录的金额错误。后台维护任务用当前官方奖金表重新校验每条
+    settlement；只要任一玩法的单注奖金与当前表不符，就以 force=True 重新结算
+    并覆盖旧结算文件。
     """
     try:
         from src.kl8 import load_prize_table, SELECT_TYPES
 
-        analyzer = get_kl8_analyzer()
-        history = getattr(analyzer, 'history_data', None) or []
-        if not history:
-            return
-        drawn = {str(r.get('issue')): r.get('numbers') for r in history}
         prize_table = load_prize_table()
-
+        stale_records = []
         for rec in records:
             st = rec.get('settlement')
             if not st:
                 continue
             ti = rec.get('target_issue')
             if not ti:
-                continue
-            ti = str(ti)
-            if ti not in drawn:
                 continue
 
             # 校验各单式玩法的奖金是否与当前奖金表一致
@@ -416,9 +545,23 @@ def kl8_rebuild_stale_settlements(records):
                     needs_rebuild = True
                     break
 
-            if not needs_rebuild:
-                continue
+            if needs_rebuild:
+                stale_records.append(rec)
 
+        # 正常记录是绝大多数；没有过期奖金时不要为了“确认没事”初始化分析器。
+        if not stale_records:
+            return
+
+        analyzer = get_kl8_analyzer()
+        history = getattr(analyzer, 'history_data', None) or []
+        if not history:
+            return
+        drawn = {str(r.get('issue')): r.get('numbers') for r in history}
+
+        for rec in stale_records:
+            ti = str(rec.get('target_issue') or '')
+            if ti not in drawn:
+                continue
             # 强制覆盖重新结算（不删除文件，避免 safe-delete 拦截）
             try:
                 result = analyzer.settle_prediction(rec.get('file'), ti, drawn[ti], force=True)
