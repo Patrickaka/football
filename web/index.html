@@ -1687,6 +1687,611 @@
     .kl8-record-play { grid-template-columns: 1fr; gap: 3px; }
     .kl8-record-play > span { margin-top: 3px; }
   }
+
+  /* ──────────────────────────────────────────────────────────────
+     足球 / 北单 / 篮球 · 专业赛事工作台
+     仅作用于三个赛事页，快乐8、预测记录及所有业务行为保持原样。
+     ────────────────────────────────────────────────────────────── */
+  body:has(#panel-football.active),
+  body:has(#panel-beidan.active),
+  body:has(#panel-basketball.active) {
+    --sport-accent: #46d989;
+    --sport-accent-rgb: 70, 217, 137;
+    --sport-secondary: #65adff;
+    --sport-secondary-rgb: 101, 173, 255;
+    --sport-surface: rgba(20, 29, 42, .88);
+    --sport-surface-soft: rgba(28, 39, 55, .68);
+    --sport-line: rgba(125, 147, 177, .18);
+    --sport-line-strong: rgba(125, 147, 177, .28);
+    --sport-shadow: 0 18px 55px rgba(0, 0, 0, .22);
+    min-height: 100vh;
+    background:
+      radial-gradient(circle at 8% -8%, rgba(var(--sport-accent-rgb), .12), transparent 31rem),
+      radial-gradient(circle at 92% 6%, rgba(var(--sport-secondary-rgb), .10), transparent 32rem),
+      linear-gradient(180deg, #0c1219 0%, #0e151e 44%, #0b1118 100%);
+  }
+  body:has(#panel-football.active) {
+    --sport-accent: #46d989;
+    --sport-accent-rgb: 70, 217, 137;
+    --sport-secondary: #61b5ff;
+    --sport-secondary-rgb: 97, 181, 255;
+  }
+  body:has(#panel-beidan.active) {
+    --sport-accent: #f4bd62;
+    --sport-accent-rgb: 244, 189, 98;
+    --sport-secondary: #ff7d62;
+    --sport-secondary-rgb: 255, 125, 98;
+  }
+  body:has(#panel-basketball.active) {
+    --sport-accent: #ff9257;
+    --sport-accent-rgb: 255, 146, 87;
+    --sport-secondary: #7ba8ff;
+    --sport-secondary-rgb: 123, 168, 255;
+  }
+  body:has(#panel-football.active) .wrap,
+  body:has(#panel-beidan.active) .wrap,
+  body:has(#panel-basketball.active) .wrap {
+    max-width: 1160px;
+  }
+  body:has(#panel-football.active) header,
+  body:has(#panel-beidan.active) header,
+  body:has(#panel-basketball.active) header {
+    position: relative;
+    overflow: hidden;
+    min-height: 130px;
+    margin-bottom: 14px;
+    padding: 28px 30px 24px;
+    text-align: left;
+    border: 1px solid var(--sport-line);
+    border-radius: 22px;
+    background:
+      linear-gradient(115deg, rgba(var(--sport-accent-rgb), .105), transparent 46%),
+      linear-gradient(150deg, rgba(28, 40, 57, .96), rgba(16, 24, 35, .92));
+    box-shadow: var(--sport-shadow), inset 0 1px rgba(255, 255, 255, .035);
+  }
+  body:has(#panel-football.active) header::before,
+  body:has(#panel-beidan.active) header::before,
+  body:has(#panel-basketball.active) header::before {
+    content: 'MATCH INTELLIGENCE';
+    display: block;
+    margin-bottom: 7px;
+    color: var(--sport-accent);
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: .22em;
+  }
+  body:has(#panel-football.active) header::after,
+  body:has(#panel-beidan.active) header::after,
+  body:has(#panel-basketball.active) header::after {
+    content: '';
+    position: absolute;
+    top: -72px;
+    right: -48px;
+    width: 250px;
+    height: 250px;
+    border: 1px solid rgba(var(--sport-accent-rgb), .11);
+    border-radius: 50%;
+    box-shadow:
+      0 0 0 28px rgba(var(--sport-accent-rgb), .025),
+      0 0 0 60px rgba(var(--sport-accent-rgb), .018);
+    pointer-events: none;
+  }
+  body:has(#panel-football.active) header h1,
+  body:has(#panel-beidan.active) header h1,
+  body:has(#panel-basketball.active) header h1 {
+    position: relative;
+    z-index: 1;
+    font-size: clamp(24px, 3vw, 32px);
+    font-weight: 780;
+    letter-spacing: -.035em;
+  }
+  body:has(#panel-football.active) header p,
+  body:has(#panel-beidan.active) header p,
+  body:has(#panel-basketball.active) header p {
+    position: relative;
+    z-index: 1;
+    max-width: 760px;
+    margin-top: 7px;
+    color: #94a2b5;
+    font-size: 12px;
+    letter-spacing: .025em;
+  }
+  body:has(#panel-football.active) .tabs,
+  body:has(#panel-beidan.active) .tabs,
+  body:has(#panel-basketball.active) .tabs {
+    gap: 6px;
+    margin-bottom: 18px;
+    padding: 6px;
+    overflow: visible;
+    border: 1px solid var(--sport-line);
+    border-radius: 16px;
+    background: rgba(16, 24, 35, .82);
+    box-shadow: 0 10px 28px rgba(0, 0, 0, .17), inset 0 1px rgba(255, 255, 255, .025);
+    backdrop-filter: blur(16px);
+  }
+  body:has(#panel-football.active) .tab,
+  body:has(#panel-beidan.active) .tab,
+  body:has(#panel-basketball.active) .tab {
+    min-height: 46px;
+    padding: 11px 10px;
+    border: 0;
+    border-radius: 11px;
+    color: #7f8da1;
+    font-size: 13px;
+    letter-spacing: .01em;
+  }
+  body:has(#panel-football.active) .tab::before,
+  body:has(#panel-beidan.active) .tab::before,
+  body:has(#panel-basketball.active) .tab::before {
+    right: 16px;
+    bottom: 4px;
+    left: 16px;
+    width: auto;
+    height: 2px;
+    border-radius: 999px;
+    background: var(--sport-accent);
+  }
+  body:has(#panel-football.active) .tab:hover,
+  body:has(#panel-beidan.active) .tab:hover,
+  body:has(#panel-basketball.active) .tab:hover {
+    color: #dce4ee;
+    background: rgba(255, 255, 255, .035);
+  }
+  body:has(#panel-football.active) .tab.active,
+  body:has(#panel-beidan.active) .tab.active,
+  body:has(#panel-basketball.active) .tab.active {
+    color: var(--sport-accent);
+    background: linear-gradient(145deg, rgba(var(--sport-accent-rgb), .13), rgba(var(--sport-accent-rgb), .055));
+    box-shadow: inset 0 0 0 1px rgba(var(--sport-accent-rgb), .11);
+  }
+
+  .sport-panel {
+    --bg2: rgba(9, 15, 22, .48);
+    --border: rgba(125, 147, 177, .17);
+    animation: sportPanelIn .28s ease both;
+  }
+  @keyframes sportPanelIn {
+    from { opacity: 0; transform: translateY(7px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .sport-dashboard { min-width: 0; }
+  .sport-panel .sport-toolbar {
+    position: relative;
+    margin-bottom: 18px;
+    padding: 16px;
+    overflow: hidden;
+    border: 1px solid var(--sport-line);
+    border-radius: 18px;
+    background:
+      linear-gradient(135deg, rgba(var(--sport-accent-rgb), .045), transparent 48%),
+      rgba(20, 29, 42, .86);
+    box-shadow: 0 12px 32px rgba(0, 0, 0, .18), inset 0 1px rgba(255, 255, 255, .03);
+    backdrop-filter: blur(14px);
+  }
+  .sport-panel .sport-toolbar::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    right: 0;
+    width: 120px;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, var(--sport-accent));
+    opacity: .65;
+  }
+  .sport-panel .toolbar-row { gap: 12px; }
+  .sport-panel .toolbar-row + .toolbar-row {
+    margin-top: 13px;
+    padding-top: 13px;
+    border-top-color: rgba(125, 147, 177, .12);
+  }
+  .sport-panel .toolbar-group { min-width: 0; gap: 8px; }
+  .sport-panel .toolbar-label {
+    flex: 0 0 auto;
+    color: #748397;
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: .16em;
+  }
+  .sport-panel .toolbar-divider { background: rgba(125, 147, 177, .15); }
+  .sport-panel .toolbar-buttons {
+    gap: 3px;
+    padding: 3px;
+    border-color: rgba(125, 147, 177, .11);
+    background: rgba(5, 10, 16, .35);
+  }
+  .sport-panel .tb-btn {
+    min-height: 36px;
+    padding: 7px 12px;
+    border-radius: 8px;
+    color: #8492a5;
+    font-size: 12px;
+  }
+  .sport-panel .tb-btn:hover {
+    color: #e5ebf3;
+    background: rgba(255, 255, 255, .045);
+  }
+  .sport-panel .tb-btn.tb-active {
+    color: var(--sport-accent);
+    background: rgba(var(--sport-accent-rgb), .13);
+    box-shadow: inset 0 0 0 1px rgba(var(--sport-accent-rgb), .14), 0 4px 13px rgba(0, 0, 0, .13);
+  }
+  #panel-basketball .basketball-toolbar .toolbar-group:nth-child(2) > .tb-btn {
+    border: 1px solid rgba(125, 147, 177, .12);
+    background: rgba(5, 10, 16, .24);
+  }
+  #panel-basketball .basketball-toolbar .toolbar-group:nth-child(2) > .tb-btn.tb-active {
+    border-color: rgba(var(--sport-accent-rgb), .22);
+    background: rgba(var(--sport-accent-rgb), .13);
+  }
+  .sport-panel .search {
+    min-height: 42px;
+    margin-bottom: 0;
+    padding: 9px 12px !important;
+    border: 1px solid rgba(125, 147, 177, .18) !important;
+    border-radius: 11px !important;
+    background: rgba(5, 10, 16, .38) !important;
+    color: #e7edf5 !important;
+    font-size: 14px !important;
+    box-shadow: inset 0 1px 5px rgba(0, 0, 0, .16);
+  }
+  .sport-panel .search::placeholder { color: #5f6e82; }
+  .sport-panel .search:focus {
+    border-color: rgba(var(--sport-accent-rgb), .58) !important;
+    box-shadow: 0 0 0 3px rgba(var(--sport-accent-rgb), .10), inset 0 1px 5px rgba(0, 0, 0, .16);
+  }
+  .sport-panel .date-value {
+    min-height: 36px;
+    padding: 6px 11px;
+    border-color: rgba(var(--sport-accent-rgb), .16);
+    background: rgba(var(--sport-accent-rgb), .075);
+    color: #dfe7f0;
+  }
+  .sport-panel .tb-refresh {
+    min-height: 40px;
+    margin-left: 0;
+    padding: 8px 13px;
+    border: 1px solid rgba(var(--sport-secondary-rgb), .28);
+    border-radius: 10px;
+    background: rgba(var(--sport-secondary-rgb), .08);
+    color: var(--sport-secondary);
+    font-size: 12px;
+    font-weight: 700;
+    box-shadow: none;
+  }
+  .sport-panel .toolbar-row > .tb-refresh:first-of-type { margin-left: auto; }
+  .sport-panel .tb-refresh:hover {
+    border-color: rgba(var(--sport-secondary-rgb), .48);
+    background: rgba(var(--sport-secondary-rgb), .14);
+    box-shadow: 0 8px 20px rgba(var(--sport-secondary-rgb), .10);
+  }
+  .sport-panel .status {
+    color: #8391a5;
+    font-variant-numeric: tabular-nums;
+  }
+  .sport-panel .sport-toolbar + .status,
+  .sport-panel .status[style*="padding:4px 0 12px"] {
+    margin: -2px 0 14px;
+    padding: 9px 12px !important;
+    border: 1px solid rgba(125, 147, 177, .12);
+    border-radius: 11px;
+    background: rgba(19, 28, 40, .48);
+    text-align: left;
+  }
+  .sport-panel .league-group {
+    margin: 0 0 22px;
+    padding: 0;
+  }
+  .sport-panel .league-title {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    margin: 0 2px 10px;
+    color: #bac5d3;
+    font-size: 12px;
+    font-weight: 760;
+    letter-spacing: .065em;
+  }
+  .sport-panel .league-title::before {
+    content: '';
+    width: 7px;
+    height: 7px;
+    border-radius: 2px;
+    background: var(--sport-accent);
+    box-shadow: 0 0 12px rgba(var(--sport-accent-rgb), .46);
+  }
+  .sport-panel .league-title::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: linear-gradient(90deg, rgba(var(--sport-accent-rgb), .22), transparent);
+  }
+  .sport-panel .sport-match-card {
+    position: relative;
+    margin-bottom: 11px;
+    padding: 17px 18px !important;
+    overflow: hidden;
+    cursor: default;
+    border: 1px solid var(--sport-line) !important;
+    border-radius: 17px;
+    background:
+      linear-gradient(145deg, rgba(var(--sport-accent-rgb), .028), transparent 44%),
+      var(--sport-surface);
+    box-shadow: 0 9px 28px rgba(0, 0, 0, .15), inset 0 1px rgba(255, 255, 255, .025);
+    transition: border-color .2s ease, background .2s ease, transform .2s ease, box-shadow .2s ease;
+  }
+  .sport-panel .sport-match-card::before {
+    content: '';
+    position: absolute;
+    top: 17px;
+    bottom: 17px;
+    left: 0;
+    width: 2px;
+    border-radius: 0 999px 999px 0;
+    background: linear-gradient(180deg, var(--sport-accent), transparent 90%);
+    opacity: .75;
+  }
+  .sport-panel .sport-match-card:hover {
+    border-color: rgba(var(--sport-accent-rgb), .26) !important;
+    background:
+      linear-gradient(145deg, rgba(var(--sport-accent-rgb), .047), transparent 47%),
+      rgba(23, 33, 47, .94);
+    box-shadow: 0 15px 38px rgba(0, 0, 0, .20), inset 0 1px rgba(255, 255, 255, .035);
+    transform: translateY(-1px);
+  }
+  .sport-panel .sport-match-card > div:first-child {
+    gap: 14px;
+    padding: 1px 2px 10px;
+    border-bottom: 1px solid rgba(125, 147, 177, .10);
+  }
+  .sport-panel .sport-match-card > div:not(:first-child) {
+    border: 1px solid rgba(125, 147, 177, .105);
+    box-shadow: inset 0 1px rgba(255, 255, 255, .018);
+  }
+  .sport-panel .bayes-report-btn {
+    min-height: 34px;
+    padding: 6px 10px;
+    border-color: rgba(var(--sport-secondary-rgb), .25);
+    border-radius: 9px;
+    background: rgba(var(--sport-secondary-rgb), .075);
+    color: #9fc4ff;
+    box-shadow: none;
+  }
+  .sport-panel .bayes-report-btn:hover {
+    border-color: rgba(var(--sport-secondary-rgb), .48);
+    background: rgba(var(--sport-secondary-rgb), .14);
+    color: #c7ddff;
+    box-shadow: 0 7px 18px rgba(var(--sport-secondary-rgb), .11);
+  }
+  #panel-football .football-compact-summary {
+    padding: 13px 14px !important;
+    border: 1px solid rgba(63, 190, 211, .20) !important;
+    border-radius: 13px !important;
+    background:
+      linear-gradient(135deg, rgba(35, 178, 196, .085), rgba(9, 15, 22, .28)) !important;
+    box-shadow: inset 3px 0 rgba(76, 208, 220, .55), inset 0 1px rgba(255, 255, 255, .02);
+  }
+  #panel-football .football-score-reference > div:last-child > div {
+    border: 1px solid rgba(125, 147, 177, .12);
+    min-height: 55px;
+  }
+  #panel-beidan .sport-match-card > div[style*="background:var(--bg2)"],
+  #panel-basketball .sport-match-card > div[style*="background:var(--bg2)"] {
+    padding: 10px 11px !important;
+    border-radius: 11px !important;
+    background: rgba(8, 14, 21, .35) !important;
+  }
+  #panel-beidan .sport-match-card > div[style*="max-height:150px"],
+  #panel-basketball .sport-match-card > div[style*="max-height:150px"] {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(var(--sport-accent-rgb), .25) transparent;
+  }
+  .sport-panel .sport-analysis-card {
+    padding: 11px 12px !important;
+    border: 1px solid rgba(var(--sport-accent-rgb), .14) !important;
+    border-left: 3px solid var(--sport-accent) !important;
+    border-radius: 11px !important;
+    background: linear-gradient(135deg, rgba(var(--sport-accent-rgb), .065), rgba(8, 14, 21, .32)) !important;
+  }
+  .sport-panel .pager {
+    gap: 6px;
+    margin: 16px 0 20px;
+    padding: 9px;
+    border: 1px solid rgba(125, 147, 177, .12);
+    border-radius: 13px;
+    background: rgba(17, 25, 36, .60);
+  }
+  .sport-panel .pager button,
+  .sport-panel .pager select {
+    min-height: 36px;
+    border-color: rgba(125, 147, 177, .17);
+    background: rgba(8, 14, 21, .42);
+    color: #cbd4df;
+  }
+  .sport-panel .pager button:not(:disabled):hover {
+    border-color: rgba(var(--sport-accent-rgb), .38);
+    color: var(--sport-accent);
+    background: rgba(var(--sport-accent-rgb), .08);
+  }
+  body:has(#panel-football.active) #disclaimer,
+  body:has(#panel-beidan.active) #disclaimer,
+  body:has(#panel-basketball.active) #disclaimer {
+    margin-top: 18px;
+    padding: 12px 14px;
+    border-top: 1px solid rgba(125, 147, 177, .09);
+    color: #617084;
+    font-size: 10px;
+  }
+  body:has(#panel-football.active) .bottom-nav,
+  body:has(#panel-beidan.active) .bottom-nav,
+  body:has(#panel-basketball.active) .bottom-nav {
+    border-top-color: rgba(var(--sport-accent-rgb), .15);
+    background: rgba(13, 20, 29, .94);
+    backdrop-filter: blur(18px);
+  }
+  body:has(#panel-football.active) .bottom-nav-item.active,
+  body:has(#panel-beidan.active) .bottom-nav-item.active,
+  body:has(#panel-basketball.active) .bottom-nav-item.active { color: var(--sport-accent); }
+  .sport-panel :is(button, input, select):focus-visible {
+    outline: 2px solid rgba(var(--sport-accent-rgb), .72);
+    outline-offset: 2px;
+  }
+
+  @media (max-width: 900px) {
+    .sport-panel .sport-toolbar .toolbar-row {
+      align-items: stretch;
+    }
+    .sport-panel .sport-toolbar .toolbar-divider { display: none; }
+    #panel-football .sport-toolbar .toolbar-row:first-child > .toolbar-group:first-child,
+    #panel-beidan .sport-toolbar .toolbar-row:nth-child(2) > .toolbar-group:first-child,
+    #panel-basketball .sport-toolbar .toolbar-row > .toolbar-group:first-child {
+      flex-basis: 100% !important;
+    }
+  }
+  @media (max-width: 768px) {
+    body:has(#panel-football.active) header,
+    body:has(#panel-beidan.active) header,
+    body:has(#panel-basketball.active) header {
+      min-height: 0;
+      margin-bottom: 13px;
+      padding: 18px 17px 16px;
+      border-radius: 17px;
+    }
+    body:has(#panel-football.active) header::before,
+    body:has(#panel-beidan.active) header::before,
+    body:has(#panel-basketball.active) header::before {
+      margin-bottom: 5px;
+      font-size: 8px;
+    }
+    body:has(#panel-football.active) header::after,
+    body:has(#panel-beidan.active) header::after,
+    body:has(#panel-basketball.active) header::after {
+      top: -82px;
+      right: -94px;
+    }
+    body:has(#panel-football.active) header h1,
+    body:has(#panel-beidan.active) header h1,
+    body:has(#panel-basketball.active) header h1 { font-size: 21px; }
+    body:has(#panel-football.active) header p,
+    body:has(#panel-beidan.active) header p,
+    body:has(#panel-basketball.active) header p {
+      max-width: 92%;
+      margin-top: 4px;
+      font-size: 10px;
+      line-height: 1.55;
+    }
+    .sport-panel .sport-toolbar {
+      padding: 12px;
+      border-radius: 15px;
+    }
+    .sport-panel .sport-toolbar .toolbar-row,
+    .sport-panel .sport-toolbar .toolbar-group {
+      width: 100%;
+      min-width: 0 !important;
+    }
+    .sport-panel .sport-toolbar .toolbar-row {
+      flex-direction: column;
+      gap: 10px;
+    }
+    .sport-panel .sport-toolbar .toolbar-group {
+      align-items: stretch;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .sport-panel .sport-toolbar .toolbar-buttons {
+      width: 100%;
+      overflow-x: auto;
+      scrollbar-width: none;
+    }
+    .sport-panel .sport-toolbar .toolbar-buttons::-webkit-scrollbar { display: none; }
+    .sport-panel .sport-toolbar .tb-btn {
+      flex: 1 0 auto;
+      min-height: 42px;
+      white-space: nowrap;
+    }
+    .sport-panel .sport-toolbar .tb-refresh,
+    .sport-panel .toolbar-row > .tb-refresh:first-of-type {
+      width: 100%;
+      min-height: 44px;
+      margin-left: 0;
+    }
+    .sport-panel .sport-toolbar .search {
+      width: 100% !important;
+      min-height: 44px;
+      font-size: 16px !important;
+    }
+    .sport-panel .toolbar-date {
+      align-items: center;
+      flex-direction: row;
+    }
+    #panel-basketball .basketball-toolbar .toolbar-group:nth-child(2) {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 6px;
+    }
+    #panel-basketball .basketball-toolbar .toolbar-group:nth-child(2) > .toolbar-label {
+      grid-column: 1 / -1;
+    }
+    #panel-basketball .basketball-toolbar .toolbar-group:nth-child(2) > .tb-btn {
+      width: 100%;
+      min-height: 44px;
+    }
+    .sport-panel .sport-match-card {
+      padding: 14px 13px !important;
+      border-radius: 14px;
+    }
+    .sport-panel .sport-match-card:hover { transform: none; }
+    .sport-panel .sport-match-card > div:first-child {
+      align-items: stretch !important;
+      flex-direction: column;
+      padding-bottom: 10px;
+    }
+    .sport-panel .sport-match-card > div:first-child > div:last-child {
+      width: 100%;
+      margin-left: 0 !important;
+      justify-content: flex-start !important;
+    }
+    .sport-panel .bayes-report-btn {
+      flex: 1;
+      min-height: 42px;
+    }
+    .sport-panel .pager {
+      justify-content: stretch;
+      padding: 8px;
+    }
+    .sport-panel .pager button,
+    .sport-panel .pager select {
+      flex: 1 1 auto;
+      min-height: 44px;
+    }
+    .sport-panel .pager .page-info {
+      flex: 0 0 100%;
+      order: -1;
+      text-align: center;
+    }
+    #panel-football .football-compact-summary {
+      padding: 11px !important;
+    }
+  }
+  @media (max-width: 480px) {
+    .sport-panel .sport-toolbar { padding: 10px; }
+    .sport-panel .sport-match-card { padding: 12px 10px !important; }
+    .sport-panel .sport-match-card::before { top: 13px; bottom: 13px; }
+    .sport-panel .league-title { margin-left: 1px; font-size: 11px; }
+    .sport-panel .pager { gap: 5px; }
+    .sport-panel .pager button,
+    .sport-panel .pager select { padding: 7px 8px; font-size: 12px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .sport-panel,
+    .sport-panel *,
+    body:has(#panel-football.active) .tab,
+    body:has(#panel-beidan.active) .tab,
+    body:has(#panel-basketball.active) .tab {
+      animation-duration: .01ms !important;
+      transition-duration: .01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
 </style>
 </head>
 <body>
@@ -1701,15 +2306,15 @@
     <button type="button" class="tab" data-tab="basketball" role="tab">🏀 篮球</button>
     <button type="button" class="tab" data-tab="kl8" role="tab">🎱 快乐8</button>
   </div>
-  <div id="panel-football" class="tab-panel active">
+  <div id="panel-football" class="tab-panel sport-panel football-panel active">
     <div id="search-wrap" style="display:none"></div>
-    <div id="app"></div>
+    <div id="app" class="sport-dashboard football-dashboard"></div>
   </div>
-  <div id="panel-beidan" class="tab-panel">
-    <div id="app-beidan"></div>
+  <div id="panel-beidan" class="tab-panel sport-panel beidan-panel">
+    <div id="app-beidan" class="sport-dashboard beidan-dashboard"></div>
   </div>
-  <div id="panel-basketball" class="tab-panel">
-    <div id="app-basketball"></div>
+  <div id="panel-basketball" class="tab-panel sport-panel basketball-panel">
+    <div id="app-basketball" class="sport-dashboard basketball-dashboard"></div>
   </div>
   <div id="panel-kl8" class="tab-panel">
     <div id="app-kl8"></div>
@@ -2899,7 +3504,7 @@ function renderFootballPredictions(results) {
   searchWrap.innerHTML = '';
   searchWrap.style.display = '';
   
-  html += `<div class="beidan-toolbar">
+  html += `<div class="beidan-toolbar sport-toolbar football-toolbar">
     <div class="toolbar-row">
       <div class="toolbar-group" style="flex:1;min-width:200px">
         <span class="toolbar-label">搜索</span>
@@ -3001,7 +3606,7 @@ function renderFootballPredictions(results) {
     const tierColor = { selected: '#22c55e', watch: '#f59e0b', abstain: '#94a3b8' }[resultTier.tier];
     const reportUrl = m.bayes_report_url ? apiPrefix() + m.bayes_report_url : '';
 
-    let itemHtml = `<div class="match" style="display:block;padding:12px">
+    let itemHtml = `<div class="match sport-match-card football-match-card" style="display:block;padding:12px">
       <div style="display:flex;justify-content:space-between;align-items:flex-start">
         <div style="flex:1">
           <div style="font-weight:bold;font-size:15px;margin-bottom:4px">
@@ -3729,7 +4334,7 @@ function renderAnalysisCard(a, kind) {
     比分策略：<b>${esc(scoreStrategy.action)}</b>
     <span style="color:var(--muted)"> · ${esc(scoreStrategy.reason || '')}</span>
   </div>` : '';
-  return `<div style="margin-top:8px;padding:9px;background:var(--bg2);border-left:3px solid var(--accent);border-radius:8px">
+  return `<div class="sport-analysis-card" style="margin-top:8px;padding:9px;background:var(--bg2);border-left:3px solid var(--accent);border-radius:8px">
     <div style="font-size:13px;font-weight:bold;margin-bottom:5px">🧠 赛果分析</div>
     <div style="font-size:13px">${esc(a.verdict || '')}</div>
     <div style="margin-top:6px">${scores}</div>
@@ -3878,7 +4483,7 @@ function renderBeidan(result) {
   beidanLastResult = result;
   let html = '';
   
-  html += `<div class="beidan-toolbar">
+  html += `<div class="beidan-toolbar sport-toolbar beidan-command-bar">
     <div class="toolbar-row">
       <div class="toolbar-group">
         <span class="toolbar-label">数据源</span>
@@ -3986,7 +4591,7 @@ function renderBeidan(result) {
     html += `<div class="league-group"><div class="league-title">${esc(league)}</div>`;
       matches.forEach(m => {
       const bReportUrl = m.bayes_report_url ? apiPrefix() + m.bayes_report_url : '';
-      html += `<div class="match" style="display:block;padding:12px">
+      html += `<div class="match sport-match-card beidan-match-card" style="display:block;padding:12px">
         <div style="display:flex;justify-content:space-between;align-items:flex-start">
           <div style="flex:1">
             <div style="font-weight:bold;font-size:15px;margin-bottom:4px">
@@ -6472,7 +7077,7 @@ function renderBasketball(result) {
   basketballLastResult = result;
   let html = '';
   
-  html += `<div class="beidan-toolbar">
+  html += `<div class="beidan-toolbar sport-toolbar basketball-toolbar">
     <div class="toolbar-row">
       <div class="toolbar-group" style="flex:1;min-width:220px">
         <span class="toolbar-label">搜索</span>
@@ -6538,7 +7143,7 @@ function renderBasketball(result) {
   for (const [league, matches] of Object.entries(groups)) {
     html += `<div class="league-group"><div class="league-title">${esc(league)}</div>`;
     matches.forEach(m => {
-      html += `<div class="match" style="display:block;padding:12px">
+      html += `<div class="match sport-match-card basketball-match-card" style="display:block;padding:12px">
         <div style="display:flex;justify-content:space-between;align-items:flex-start">
           <div style="flex:1">
             <div style="font-weight:bold;font-size:15px;margin-bottom:4px">
