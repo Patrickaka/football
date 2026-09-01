@@ -25,8 +25,13 @@ class DeployWorkflowTests(unittest.TestCase):
 
     def test_runtime_health_must_report_the_same_sha(self):
         self.assertIn('deployed_revision', WORKFLOW)
-        self.assertIn('http://127.0.0.1:9004/healthz', WORKFLOW)
         self.assertIn('"revision\\\":\\\"${DEPLOY_SHA}', WORKFLOW)
+
+    def test_health_check_uses_the_port_the_service_actually_listens_on(self):
+        """端口写死过一次 9004，而服务跑在 9000，部署每次都以健康检查失败收场。"""
+        self.assertNotIn('127.0.0.1:9004', WORKFLOW)
+        self.assertIn('FOOTBALL_PORT=', WORKFLOW)
+        self.assertIn('http://127.0.0.1:${health_port}/healthz', WORKFLOW)
 
     def test_remote_failures_are_captured_with_their_stage(self):
         self.assertIn('capture_stdout: true', WORKFLOW)

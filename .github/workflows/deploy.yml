@@ -65,8 +65,14 @@ jobs:
               systemctl show football -p MainPID -p ExecStart -p WorkingDirectory
 
               echo '__DEPLOY_STAGE__=health'
+              # 端口以 service 里的 FOOTBALL_PORT 为准（未配置时服务默认 9000）。
+              # 写死端口曾让部署每次都停在健康检查上，而服务其实已经起好了。
+              health_port="$(systemctl show football -p Environment --value \
+                | tr ' ' '\n' | sed -n 's/^FOOTBALL_PORT=//p' | tail -1)"
+              health_port="${health_port:-9000}"
+              echo "健康检查端口 ${health_port}"
               for attempt in $(seq 1 30); do
-                health_json="$(curl -fsS http://127.0.0.1:9004/healthz || true)"
+                health_json="$(curl -fsS "http://127.0.0.1:${health_port}/healthz" || true)"
                 if printf '%s' "${health_json}" | grep -Fq "\"revision\":\"${DEPLOY_SHA}\""; then
                   echo "部署完成，运行版本 ${DEPLOY_SHA}"
                   exit 0
