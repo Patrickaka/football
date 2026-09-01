@@ -130,6 +130,24 @@ class StaleCacheCountsAsMissing(unittest.TestCase):
 
 class Resilience(unittest.TestCase):
 
+    def test_an_empty_schedule_is_a_successful_empty_screen(self):
+        """确认当天无可展示比赛不是接口故障，前端仍可进入历史记录。"""
+        with mock.patch.object(
+                football_service, 'matches_payload', return_value={'matches': []},
+        ), mock.patch.object(
+                service, '_professional_status', return_value={},
+        ), mock.patch('src.football.config.get_cache') as cache:
+            payload = service.football_home_payload()
+
+        self.assertEqual(payload['matches'], [])
+        self.assertEqual(payload['predictions'], {'ready': [], 'pending': []})
+        self.assertEqual(
+            payload['coverage'],
+            {'total': 0, 'ready': 0, 'pending': 0},
+        )
+        self.assertNotIn('error', payload)
+        cache.assert_not_called()
+
     def test_a_broken_professional_status_does_not_sink_the_screen(self):
         """它只是个角标，取不到不该让整个首屏失败。"""
         with mock.patch.object(football_service, 'matches_payload',

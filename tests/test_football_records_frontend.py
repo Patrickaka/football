@@ -1,0 +1,63 @@
+# -*- coding: utf-8 -*-
+"""足球赛程为空时，历史预测记录入口与加载链路仍须可用。"""
+
+import unittest
+from pathlib import Path
+
+
+HTML = Path('web/index.html').read_text(encoding='utf-8')
+
+
+class FootballRecordsWithoutMatches(unittest.TestCase):
+
+    def test_empty_schedule_uses_the_existing_record_toolbar(self):
+        load_matches = HTML.split('async function loadMatches()', 1)[1].split(
+            'let footballProfessionalStatus', 1,
+        )[0]
+        self.assertNotIn(
+            "if (!allMatches.length) return showError(",
+            load_matches,
+        )
+        self.assertIn('await loadAllPredictions(data.predictions);', load_matches)
+
+        renderer = HTML.split('function renderFootballPredictions(results)', 1)[1].split(
+            'function setFootballQualityFilter', 1,
+        )[0]
+        self.assertIn("onclick=\"switchTab('predictions')\"", renderer)
+        self.assertIn('未找到任何比赛数据，请稍后重试', renderer)
+        self.assertIn('历史预测记录仍可通过上方按钮查看', renderer)
+
+    def test_fetch_failure_still_offers_the_record_view(self):
+        self.assertIn('function showFootballLoadError(text)', HTML)
+        error_view = HTML.split('function showFootballLoadError(text)', 1)[1].split(
+            'async function loadMatches()', 1,
+        )[0]
+        self.assertIn('onclick="loadMatches()"', error_view)
+        self.assertIn('onclick="switchTab(\'predictions\')"', error_view)
+        self.assertIn('历史预测记录独立保存', error_view)
+
+        load_matches = HTML.split('async function loadMatches()', 1)[1].split(
+            'let footballProfessionalStatus', 1,
+        )[0]
+        self.assertIn('return showFootballLoadError(`${data.error}', load_matches)
+        self.assertIn("showFootballLoadError('网络请求失败：'", load_matches)
+
+    def test_auxiliary_failures_do_not_hide_saved_records(self):
+        loader = HTML.split('async function loadPredictions()', 1)[1].split(
+            'async function exportPredictionRecords()', 1,
+        )[0]
+        self.assertIn("fetchJson('/api/predictions')", loader)
+        self.assertIn(
+            "optionalResult(fetchJsonWithTimeout('/api/sync/status', 5000))",
+            loader,
+        )
+        self.assertIn(
+            "optionalResult(fetchJsonWithTimeout('/api/football/diagnostics', 5000))",
+            loader,
+        )
+        self.assertIn('if (recordsData.error) throw new Error(recordsData.error);', loader)
+        self.assertIn('以下预测记录仍可正常查看', loader)
+
+
+if __name__ == '__main__':
+    unittest.main()

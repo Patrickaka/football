@@ -5,6 +5,9 @@ import unittest
 from src.foundation.tasks.scheduler import TaskScheduler
 
 
+ASYNC_TEST_TIMEOUT_SECONDS = 5
+
+
 class TaskSchedulerTests(unittest.TestCase):
     def test_runs_submitted_task(self):
         done = []
@@ -28,12 +31,16 @@ class TaskSchedulerTests(unittest.TestCase):
         concurrent = []
         peak = [0]
         guard = threading.Lock()
+        two_started = threading.Event()
+        release = threading.Event()
 
         def work():
             with guard:
                 concurrent.append(1)
                 peak[0] = max(peak[0], len(concurrent))
-            time.sleep(0.05)
+                if len(concurrent) == 2:
+                    two_started.set()
+            release.wait()
             with guard:
                 concurrent.pop()
 
@@ -41,7 +48,15 @@ class TaskSchedulerTests(unittest.TestCase):
         for i in range(6):
             scheduler.submit(f't{i}', work)
         scheduler.start()
-        scheduler.shutdown(wait=True)
+        try:
+            self.assertTrue(
+                two_started.wait(timeout=ASYNC_TEST_TIMEOUT_SECONDS),
+                '两个 worker 未能同时启动',
+            )
+            self.assertEqual(peak[0], 2)
+        finally:
+            release.set()
+            scheduler.shutdown(wait=True)
         self.assertLessEqual(peak[0], 2)
 
     def test_higher_priority_runs_first(self):
@@ -151,44 +166,72 @@ class TaskCountTests(unittest.TestCase):
         self.assertEqual(scheduler.task_count(), 1)
 
 
-if __name__ == '__main__':
-    unittest.main()
-
-
 class PeriodicTaskTests(unittest.TestCase):
     def test_periodic_task_runs_repeatedly(self):
         runs = []
+        third_run = threading.Event()
+
+        def tick():
+            runs.append(1)
+            if len(runs) >= 3:
+                third_run.set()
+
         scheduler = TaskScheduler(max_workers=2)
-        scheduler.submit_periodic('tick', lambda: runs.append(1), interval_seconds=0.05)
+        scheduler.submit_periodic('tick', tick, interval_seconds=0.05)
         scheduler.start()
-        time.sleep(0.28)
-        scheduler.shutdown(wait=True)
-        self.assertGreaterEqual(len(runs), 3, f'0.28s 内至少应跑 3 次，实际 {len(runs)}')
+        try:
+            self.assertTrue(
+                third_run.wait(timeout=ASYNC_TEST_TIMEOUT_SECONDS),
+                f'{ASYNC_TEST_TIMEOUT_SECONDS}s 内至少应跑 3 次，实际 {len(runs)}',
+            )
+        finally:
+            scheduler.shutdown(wait=True)
+        self.assertGreaterEqual(len(runs), 3)
 
     def test_periodic_task_stops_after_shutdown(self):
         runs = []
+        first_run = threading.Event()
+
+        def tick():
+            runs.append(1)
+            first_run.set()
+
         scheduler = TaskScheduler(max_workers=2)
-        scheduler.submit_periodic('tick', lambda: runs.append(1), interval_seconds=0.05)
+        scheduler.submit_periodic('tick', tick, interval_seconds=0.05)
         scheduler.start()
-        time.sleep(0.15)
-        scheduler.shutdown(wait=True)
+        try:
+            self.assertTrue(
+                first_run.wait(timeout=ASYNC_TEST_TIMEOUT_SECONDS),
+                f'周期任务在 {ASYNC_TEST_TIMEOUT_SECONDS}s 内未启动',
+            )
+        finally:
+            scheduler.shutdown(wait=True)
         settled = len(runs)
-        time.sleep(0.2)
+        time.sleep(0.1)
         self.assertEqual(len(runs), settled, 'shutdown 后不得继续执行')
 
     def test_periodic_failure_does_not_stop_subsequent_runs(self):
         runs = []
+        third_run = threading.Event()
 
         def flaky():
             runs.append(1)
+            if len(runs) >= 3:
+                third_run.set()
             if len(runs) == 1:
                 raise RuntimeError('first run fails')
 
         scheduler = TaskScheduler(max_workers=2)
         scheduler.submit_periodic('flaky', flaky, interval_seconds=0.05)
         scheduler.start()
-        time.sleep(0.28)
-        scheduler.shutdown(wait=True)
+        try:
+            self.assertTrue(
+                third_run.wait(timeout=ASYNC_TEST_TIMEOUT_SECONDS),
+                f'首次失败后 {ASYNC_TEST_TIMEOUT_SECONDS}s 内至少应跑 3 次，'
+                f'实际 {len(runs)}',
+            )
+        finally:
+            scheduler.shutdown(wait=True)
         self.assertGreaterEqual(len(runs), 3, '单次失败不得终止后续周期')
         self.assertEqual(scheduler.results()['flaky']['status'], 'ok',
                          '最近一次成功后状态应为 ok')
@@ -206,12 +249,27 @@ class PeriodicTaskTests(unittest.TestCase):
             scheduler.submit_periodic('dup', lambda: None, interval_seconds=1)
 
     def test_results_records_run_count(self):
+        second_run = threading.Event()
+        calls = []
+
+        def tick():
+            calls.append(1)
+            if len(calls) >= 2:
+                second_run.set()
+
         scheduler = TaskScheduler(max_workers=2)
-        scheduler.submit_periodic('tick', lambda: None, interval_seconds=0.05)
+        scheduler.submit_periodic('tick', tick, interval_seconds=0.05)
         scheduler.start()
-        time.sleep(0.18)
-        scheduler.shutdown(wait=True)
+        try:
+            self.assertTrue(
+                second_run.wait(timeout=ASYNC_TEST_TIMEOUT_SECONDS),
+                f'周期任务在 {ASYNC_TEST_TIMEOUT_SECONDS}s 内只执行了 '
+                f'{len(calls)} 次',
+            )
+        finally:
+            scheduler.shutdown(wait=True)
         self.assertGreaterEqual(scheduler.results()['tick']['runs'], 2)
+
 
 class StartupStaggerTests(unittest.TestCase):
     """周期任务首轮错开。
@@ -250,14 +308,23 @@ class StartupStaggerTests(unittest.TestCase):
     def test_the_delay_only_postpones_the_first_round(self):
         """错开只推迟第一轮，之后的间隔不受影响——否则周期就被改掉了。"""
         runs = []
+        third_run = threading.Event()
+
+        def tick():
+            runs.append(1)
+            if len(runs) >= 3:
+                third_run.set()
+
         scheduler = TaskScheduler(max_workers=2, startup_stagger_seconds=0)
-        scheduler.submit_periodic('t', lambda: runs.append(1),
-                                  interval_seconds=0.01)
+        scheduler.submit_periodic('t', tick, interval_seconds=0.01)
         scheduler.start()
-        deadline = time.time() + 2
-        while len(runs) < 3 and time.time() < deadline:
-            time.sleep(0.01)
-        scheduler.shutdown()
+        try:
+            self.assertTrue(
+                third_run.wait(timeout=ASYNC_TEST_TIMEOUT_SECONDS),
+                f'周期任务只执行了 {len(runs)} 次',
+            )
+        finally:
+            scheduler.shutdown()
         self.assertGreaterEqual(len(runs), 3)
 
     def test_shutdown_interrupts_the_stagger_wait(self):
@@ -272,23 +339,40 @@ class StartupStaggerTests(unittest.TestCase):
         scheduler.submit_periodic('slow', lambda: started.set(),
                                   interval_seconds=60)
         scheduler.start()
-        began = time.time()
-        scheduler.shutdown()
-        self.assertLess(time.time() - began, 5, '停机被错开的等待拖住了')
+        shutdown_done = threading.Event()
+
+        def stop():
+            scheduler.shutdown()
+            shutdown_done.set()
+
+        stopper = threading.Thread(target=stop, daemon=True)
+        stopper.start()
+        self.assertTrue(
+            shutdown_done.wait(timeout=ASYNC_TEST_TIMEOUT_SECONDS),
+            '停机被错开的等待拖住了',
+        )
+        stopper.join()
         self.assertFalse(started.is_set(), '错开期间不该已经跑过一轮')
 
     def test_a_staggered_task_has_not_run_yet(self):
         """错开生效的正面证据：等一小会儿，第二个任务还没动。"""
-        ran = set()
+        first_ran = threading.Event()
+        second_ran = threading.Event()
         scheduler = TaskScheduler(max_workers=4, startup_stagger_seconds=30)
-        scheduler.submit_periodic('first', lambda: ran.add('first'),
+        scheduler.submit_periodic('first', first_ran.set,
                                   interval_seconds=60)
-        scheduler.submit_periodic('second', lambda: ran.add('second'),
+        scheduler.submit_periodic('second', second_ran.set,
                                   interval_seconds=60)
         scheduler.start()
-        deadline = time.time() + 2
-        while 'first' not in ran and time.time() < deadline:
-            time.sleep(0.01)
-        scheduler.shutdown()
-        self.assertIn('first', ran, '第一个任务不该被错开')
-        self.assertNotIn('second', ran, '第二个任务应当还在等')
+        try:
+            self.assertTrue(
+                first_ran.wait(timeout=ASYNC_TEST_TIMEOUT_SECONDS),
+                '第一个任务不该被错开',
+            )
+        finally:
+            scheduler.shutdown()
+        self.assertFalse(second_ran.is_set(), '第二个任务应当还在等')
+
+
+if __name__ == '__main__':
+    unittest.main()

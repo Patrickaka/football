@@ -4,8 +4,8 @@
 快乐8定时调度模块
 ================
 
-每小时自动抓取最新开奖数据，仅当发现新期号时才重新预测并保存快照。
-同一期号不会重复生成快照，避免浪费存储。
+每小时自动抓取最新开奖数据。发现新期号时生成预测；若代码模型版本已
+升级但当前期还没有该版本的正式快照，也会补生成一次，确保记录跟随版本。
 
 调度策略:
 - 服务启动时立即执行一次
@@ -27,13 +27,59 @@ from src.kl8.fetch import (
     fetch_kl8_history_backfill,        # v9.2: 保留给人工全量补数
     count_valid_history_periods,       # v9.2: 期数统计
 )
-from src.kl8 import get_kl8_analyzer, run_prediction, clear_cache
+from src.kl8 import (
+    ACTIVE_STRATEGIES,
+    KL8_PREDICTOR_VERSION,
+    _prediction_config_fingerprint,
+    clear_cache,
+    get_kl8_analyzer,
+    hypergeom_expected,
+    list_prediction_snapshots,
+    mark_strategy_degradation,
+    run_prediction,
+)
+from src.common.paths import data_path
 from src.common.logger import setup_logger
 
 log = setup_logger('kl8_scheduler')
 
 # 记录最近已处理的期号，防止同一期内因缓存失效重复触发
 _last_processed_issue = ''
+
+
+def _publish_runtime_prediction(result):
+    """把调度器生成的结果同步到 API 两级缓存和兼容上下文。"""
+    if not isinstance(result, dict) or result.get('error'):
+        return
+    try:
+        # 延迟导入避免 scheduler 与 API 启动模块形成导入环；独立脚本运行时
+        # 发布失败也不能影响已完成的开奖抓取和本地快照保存。
+        from src.api.services.kl8 import _publish_kl8_prediction
+
+        _publish_kl8_prediction(result)
+    except Exception:
+        log.warning('快乐8调度预测已生成，但同步运行时缓存失败', exc_info=True)
+
+
+def _has_current_formal_prediction(based_on_issue: str) -> bool:
+    """当前已开奖期是否已有本代码版本的正式预测记录。"""
+    if not based_on_issue:
+        return False
+    try:
+        current_config_fingerprint = _prediction_config_fingerprint()
+        return any(
+            str(item.get('based_on_issue') or '') == str(based_on_issue)
+            and str(item.get('version') or '') == KL8_PREDICTOR_VERSION
+            and str(item.get('strategy_config_fingerprint') or '')
+            == current_config_fingerprint
+            and not item.get('is_experiment', False)
+            for item in list_prediction_snapshots()
+        )
+    except Exception:
+        # 记录目录暂时不可读时宁可补算；analyzer 内部的精确 fingerprint
+        # 判重会防止真正相同的正式快照重复写入。
+        log.warning('快乐8检查当前版本预测记录失败，将尝试补生成', exc_info=True)
+        return False
 
 
 def settle_previous_period(old_latest_issue: str):
@@ -48,10 +94,6 @@ def settle_previous_period(old_latest_issue: str):
     参数:
         old_latest_issue: 上一期期号（即需要结算的目标期号）
     """
-    from src.kl8 import list_prediction_snapshots, KL8Analyzer
-    from pathlib import Path
-    from src.kl8 import data_path
-
     snapshots = list_prediction_snapshots()
 
     # v9: 只结算 target_issue == old_latest_issue 的快照（不再按 based_on_issue < actual_issue 宽泛匹配）
@@ -129,8 +171,6 @@ def _check_strategy_degradation():
     - 使用置信区间而非"低于随机80%"硬阈值
     - 降级改为: 黄色观察 → 降低推荐等级 → 人工确认后停用（不再自动清空）
     """
-    from src.kl8 import list_prediction_snapshots, data_path, hypergeom_expected, ACTIVE_STRATEGIES
-    from src.kl8 import _strategy_fingerprint, REFERENCE_STRATEGY
     from pathlib import Path
     import math
 
@@ -217,13 +257,17 @@ def _check_strategy_degradation():
                     f'95%CI下界={ci_lower:.2f}, '
                     f'标记为黄色观察(需人工确认是否停用)'
                 )
-                # v9: 不自动清空策略，只标记观察状态
-                ACTIVE_STRATEGIES[play_type]['degradation_status'] = 'yellow_watch'
-                ACTIVE_STRATEGIES[play_type]['degradation_deviation'] = round(deviation, 4)
-                ACTIVE_STRATEGIES[play_type]['degradation_ci_lower'] = round(ci_lower, 4)
-                # 持久化
-                from src.kl8 import _persist_active_strategies
-                _persist_active_strategies()
+                # v9: 不自动清空策略，只标记观察状态。写入必须与预测共用
+                # 同一把锁，否则 predict_all 可能保存出前后玩法配置混合的快照。
+                if not mark_strategy_degradation(
+                    play_type,
+                    strategy_id,
+                    deviation,
+                    ci_lower,
+                ):
+                    log.info(
+                        f'快乐8: {play_type}策略已在评估期间更新，跳过旧策略降级标记'
+                    )
             else:
                 # 轻微低于随机 → 继续观察
                 log.info(
@@ -246,7 +290,8 @@ def refresh_kl8_and_predict():
     2. 强制抓取最近2页数据
     3. 比对新旧期号
     4. 有新期号 → 结算上一期 → 清缓存 + 重新预测
-    5. 无新期号 → 仅记录日志
+    5. 无新期号但模型版本升级 → 补生成当前版本正式快照
+    6. 无新期号且当前版本已有记录 → 仅记录日志
     """
     global _last_processed_issue
 
@@ -261,6 +306,7 @@ def refresh_kl8_and_predict():
             _last_processed_issue = new_issue
             clear_cache()
             result = run_prediction(force_refresh=True)
+            _publish_runtime_prediction(result)
             log.info(
                 f'快乐8首次数据加载完成，最新期号={new_issue}，'
                 f'模式={result.get("statistics", {}).get("signal_status", "unknown")}'
@@ -287,13 +333,28 @@ def refresh_kl8_and_predict():
 
         clear_cache()
         result = run_prediction(force_refresh=True)
+        _publish_runtime_prediction(result)
         _last_processed_issue = new_issue
         log.info(
             f'快乐8发现新期开奖：{old_issue} -> {new_issue}，已自动生成新预测，'
             f'模式={result.get("statistics", {}).get("signal_status", "unknown")}'
         )
     elif new_issue == old_issue:
-        log.info(f'快乐8暂无新期开奖，当前最新期号={new_issue}')
+        if not _has_current_formal_prediction(new_issue):
+            clear_cache()
+            result = run_prediction(force_refresh=True)
+            _publish_runtime_prediction(result)
+            _last_processed_issue = new_issue
+            log.info(
+                f'快乐8模型版本已更新，已为最新期号={new_issue}补生成预测，'
+                f'版本={KL8_PREDICTOR_VERSION}，'
+                f'模式={result.get("statistics", {}).get("signal_status", "unknown")}'
+            )
+        else:
+            log.info(
+                f'快乐8暂无新期开奖，当前最新期号={new_issue}，'
+                f'版本={KL8_PREDICTOR_VERSION}的预测记录已存在'
+            )
     else:
         log.info(f'快乐8期号{new_issue}已处理过，跳过重复预测')
 

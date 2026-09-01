@@ -3,12 +3,14 @@
 
 import json
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest import mock
 
 import src.kl8 as kl8_module
 from src.api.services import kl8 as service
+from src.kl8 import fetch as kl8_fetch
 
 
 class RecordsPagination(unittest.TestCase):
@@ -103,19 +105,50 @@ class RecordsPagination(unittest.TestCase):
 class ManualRecalculationContext(unittest.TestCase):
 
     def test_cached_payload_supplies_snapshot_context_for_both_recorded_plays(self):
+        current_version = service._current_kl8_predictor_version()
+        current_config = service._current_kl8_config_fingerprint()
+        based_on_issue = '2026232'
+        target_issue = '2026233'
         prediction = {
             'snapshot_file': 'snapshot_context-id.json',
-            'statistics': {'version': 'kl8-test-version'},
+            'based_on_issue': based_on_issue,
+            'target_issue': target_issue,
+            'strategy_config_fingerprint': current_config,
+            'statistics': {
+                'version': current_version,
+                'based_on_issue': based_on_issue,
+                'target_issue': target_issue,
+            },
             'select_6': {'numbers': [1, 2, 3, 4, 5, 6]},
             'fu_shi_7': {'top7_numbers': [1, 2, 3, 4, 5, 6, 7]},
         }
         analyzer = mock.Mock()
+        analyzer.history_data = [{'issue': based_on_issue}]
         analyzer.recalculate_play_excluding.return_value = {'ok': True}
+        source_params = {
+            'source_snapshot_id': ['context-id'],
+            'source_version': [current_version],
+            'source_target_issue': [target_issue],
+            'source_based_on_issue': [based_on_issue],
+            'source_config_fingerprint': [current_config],
+        }
+        snapshots = [{
+            'snapshot_id': 'context-id',
+            'target_issue': target_issue,
+            'based_on_issue': based_on_issue,
+            'version': current_version,
+            'strategy_config_fingerprint': current_config,
+            'predicted_at_ns': 100,
+        }]
 
         with mock.patch.dict(
                 service._CACHE['kl8'], {'data': None, 'timestamp': 0}), \
                 mock.patch.object(service.kl8_cache, 'predict',
                                   return_value=prediction), \
+                mock.patch.object(service, 'kl8_latest_issue',
+                                  return_value=based_on_issue), \
+                mock.patch.object(service, 'kl8_list_snapshots',
+                                  return_value=snapshots), \
                 mock.patch.object(service, 'kl8_run_prediction') as calculate:
             self.assertEqual(service.kl8_payload(), {'result': prediction})
             calculate.assert_not_called()
@@ -125,9 +158,11 @@ class ManualRecalculationContext(unittest.TestCase):
             with mock.patch.object(service, 'get_kl8_analyzer',
                                    return_value=analyzer):
                 service.kl8_exclude_recalculate_payload({
+                    **source_params,
                     'play_type': ['select_6'], 'numbers': ['20'],
                 })
                 service.kl8_exclude_recalculate_payload({
+                    **source_params,
                     'play_type': ['fu_shi_7'], 'numbers': ['21'],
                 })
 
@@ -136,16 +171,248 @@ class ManualRecalculationContext(unittest.TestCase):
         self.assertEqual(fushi7_call.args[:2], ('fu_shi_7', [21]))
         self.assertEqual(select6_call.kwargs['record_context'], {
             'source_snapshot_id': 'context-id',
-            'source_version': 'kl8-test-version',
+            'source_version': current_version,
             'generation_mode': 'manual',
             'initial_numbers': [1, 2, 3, 4, 5, 6],
         })
         self.assertEqual(fushi7_call.kwargs['record_context'], {
             'source_snapshot_id': 'context-id',
-            'source_version': 'kl8-test-version',
+            'source_version': current_version,
             'generation_mode': 'manual',
             'initial_numbers': [1, 2, 3, 4, 5, 6, 7],
         })
+
+    def test_manual_recalculation_rejects_stale_snapshot_context(self):
+        current_version = service._current_kl8_predictor_version()
+        current_config = service._current_kl8_config_fingerprint()
+        prediction = {
+            'snapshot_file': 'snapshot_cached-experiment.json',
+            'based_on_issue': '2026232',
+            'target_issue': '2026233',
+            'strategy_config_fingerprint': current_config,
+            'statistics': {
+                'version': current_version,
+                'based_on_issue': '2026232',
+                'target_issue': '2026233',
+            },
+            'select_6': {'numbers': [1, 2, 3, 4, 5, 6]},
+        }
+        analyzer = mock.Mock()
+        analyzer.history_data = [{'issue': '2026232'}]
+        analyzer.recalculate_play_excluding.return_value = {'ok': True}
+        snapshots = [
+            {
+                'snapshot_id': 'cached-experiment',
+                'target_issue': '2026233',
+                'based_on_issue': '2026232',
+                'version': current_version,
+                'strategy_config_fingerprint': current_config,
+                'predicted_at': '2026-09-01T10:00:00',
+            },
+            {
+                'snapshot_id': 'scheduler-formal',
+                'target_issue': '2026233',
+                'based_on_issue': '2026232',
+                'version': current_version,
+                'strategy_config_fingerprint': current_config,
+                'predicted_at': '2026-09-01T11:00:00',
+            },
+        ]
+
+        with mock.patch.dict(
+                service._CACHE['kl8'],
+                {'data': prediction, 'timestamp': 1},
+                clear=True,
+        ), mock.patch.object(
+                service, 'get_kl8_analyzer', return_value=analyzer,
+        ), mock.patch.object(
+                service, 'kl8_list_snapshots', return_value=snapshots,
+        ), mock.patch.object(
+                service, 'kl8_latest_issue', return_value='2026232',
+        ):
+            payload = service.kl8_exclude_recalculate_payload({
+                'play_type': ['select_6'],
+                'numbers': ['20'],
+                'source_snapshot_id': ['cached-experiment'],
+                'source_version': [current_version],
+                'source_target_issue': ['2026233'],
+                'source_based_on_issue': ['2026232'],
+                'source_config_fingerprint': [current_config],
+            })
+
+        self.assertIn('预测记录已更新', payload['error'])
+        analyzer.recalculate_play_excluding.assert_not_called()
+
+    def test_manual_recalculation_fails_closed_without_page_context(self):
+        payload = service.kl8_exclude_recalculate_payload({
+            'play_type': ['select_6'], 'numbers': ['20'],
+        })
+        self.assertIn('页面预测上下文不完整', payload['error'])
+
+    def test_manual_recalculation_fails_closed_when_snapshot_index_is_empty(self):
+        current_version = service._current_kl8_predictor_version()
+        current_config = service._current_kl8_config_fingerprint()
+        prediction = {
+            'snapshot_file': 'snapshot_context-id.json',
+            'based_on_issue': '2026232',
+            'target_issue': '2026233',
+            'strategy_config_fingerprint': current_config,
+            'statistics': {
+                'version': current_version,
+                'based_on_issue': '2026232',
+                'target_issue': '2026233',
+            },
+            'select_6': {'numbers': [1, 2, 3, 4, 5, 6]},
+        }
+        analyzer = mock.Mock()
+        with mock.patch.dict(
+                service._CACHE['kl8'], {'data': prediction, 'timestamp': 1}, clear=True,
+        ), mock.patch.object(
+                service, 'kl8_latest_issue', return_value='2026232',
+        ), mock.patch.object(
+                service, 'kl8_list_snapshots', return_value=[],
+        ), mock.patch.object(
+                service, 'get_kl8_analyzer', return_value=analyzer,
+        ):
+            payload = service.kl8_exclude_recalculate_payload({
+                'play_type': ['select_6'],
+                'numbers': ['20'],
+                'source_snapshot_id': ['context-id'],
+                'source_version': [current_version],
+                'source_target_issue': ['2026233'],
+                'source_based_on_issue': ['2026232'],
+                'source_config_fingerprint': [current_config],
+            })
+        self.assertIn('当前预测记录不存在', payload['error'])
+        analyzer.assert_not_called()
+
+
+    def test_history_save_waits_for_manual_recalculation_context(self):
+        current_version = service._current_kl8_predictor_version()
+        current_config = service._current_kl8_config_fingerprint()
+        based_on_issue = '2026232'
+        target_issue = '2026233'
+        prediction = {
+            'snapshot_file': 'snapshot_context-id.json',
+            'based_on_issue': based_on_issue,
+            'target_issue': target_issue,
+            'strategy_config_fingerprint': current_config,
+            'statistics': {
+                'version': current_version,
+                'based_on_issue': based_on_issue,
+                'target_issue': target_issue,
+            },
+            'select_6': {'numbers': [1, 2, 3, 4, 5, 6]},
+        }
+        snapshots = [{
+            'snapshot_id': 'context-id',
+            'target_issue': target_issue,
+            'based_on_issue': based_on_issue,
+            'version': current_version,
+            'strategy_config_fingerprint': current_config,
+            'predicted_at_ns': 100,
+        }]
+        source_params = {
+            'play_type': ['select_6'],
+            'numbers': ['20'],
+            'source_snapshot_id': ['context-id'],
+            'source_version': [current_version],
+            'source_target_issue': [target_issue],
+            'source_based_on_issue': [based_on_issue],
+            'source_config_fingerprint': [current_config],
+        }
+        manual_entered = threading.Event()
+        release_manual = threading.Event()
+        saver_started = threading.Event()
+        save_body_entered = threading.Event()
+        errors = []
+        manual_payloads = []
+
+        analyzer = mock.Mock()
+        analyzer.history_data = [{'issue': based_on_issue}]
+
+        def recalculate(*_args, **_kwargs):
+            manual_entered.set()
+            if not release_manual.wait(5):
+                raise RuntimeError('测试未释放手动重算线程')
+            return {'ok': True}
+
+        analyzer.recalculate_play_excluding.side_effect = recalculate
+
+        def run_manual():
+            try:
+                manual_payloads.append(
+                    service.kl8_exclude_recalculate_payload(source_params)
+                )
+            except Exception as exc:  # pragma: no cover - 线程异常回传
+                errors.append(exc)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            history_file = Path(temp_dir) / 'kl8_history.json'
+            history_file.write_text(json.dumps({'results': [{
+                'issue': based_on_issue,
+                'numbers': list(range(1, 21)),
+                'date': '2026-08-31',
+            }]}), encoding='utf-8')
+            original_save_body = kl8_fetch._save_kl8_data_locked
+
+            def save_body(data):
+                save_body_entered.set()
+                return original_save_body(data)
+
+            def save_new_draw():
+                saver_started.set()
+                try:
+                    kl8_fetch.save_kl8_data([{
+                        'issue': target_issue,
+                        'numbers': list(range(21, 41)),
+                        'date': '2026-09-01',
+                    }])
+                except Exception as exc:  # pragma: no cover - 线程异常回传
+                    errors.append(exc)
+
+            with mock.patch.dict(
+                    service._CACHE['kl8'],
+                    {'data': prediction, 'timestamp': 1},
+                    clear=True,
+            ), mock.patch.object(
+                    service, 'kl8_latest_issue', return_value=based_on_issue,
+            ), mock.patch.object(
+                    service, 'kl8_list_snapshots', return_value=snapshots,
+            ), mock.patch.object(
+                    service, 'get_kl8_analyzer', return_value=analyzer,
+            ), mock.patch.object(
+                    kl8_fetch, 'KL8_HISTORY_FILE', str(history_file),
+            ), mock.patch.object(
+                    kl8_fetch, '_save_kl8_data_locked', side_effect=save_body,
+            ), mock.patch.object(
+                    kl8_fetch, '_mirror_to_store',
+            ), mock.patch.object(
+                    kl8_fetch, 'clear_cache',
+            ):
+                manual_thread = threading.Thread(target=run_manual)
+                save_thread = threading.Thread(target=save_new_draw)
+                try:
+                    manual_thread.start()
+                    self.assertTrue(manual_entered.wait(2))
+                    save_thread.start()
+                    self.assertTrue(saver_started.wait(2))
+                    self.assertFalse(
+                        save_body_entered.wait(0.1),
+                        '新期开奖写入穿透了手动重算的来源核验区间',
+                    )
+                    before = json.loads(history_file.read_text(encoding='utf-8'))
+                    self.assertEqual(before['results'][0]['issue'], based_on_issue)
+                finally:
+                    release_manual.set()
+                    manual_thread.join(3)
+                    save_thread.join(3)
+
+            self.assertFalse(manual_thread.is_alive() or save_thread.is_alive())
+            self.assertEqual(errors, [])
+            self.assertEqual(manual_payloads, [{'result': {'ok': True}}])
+            after = json.loads(history_file.read_text(encoding='utf-8'))
+            self.assertEqual(after['results'][0]['issue'], target_issue)
 
 
 class MaintenanceFastExit(unittest.TestCase):

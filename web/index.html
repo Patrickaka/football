@@ -601,70 +601,470 @@
     min-width: 70px;
   }
 
-  /* 快乐8专用样式 */
-  .kl8-select-card {
-    border: 2px solid var(--line);
+  /* 快乐8 · 专业数据工作台 */
+  body.kl8-view {
+    background:
+      radial-gradient(circle at 12% -8%, rgba(255, 79, 112, .13), transparent 32%),
+      radial-gradient(circle at 92% 8%, rgba(79, 140, 255, .11), transparent 30%),
+      linear-gradient(180deg, #0a0f16 0%, #0d131c 48%, #0a1017 100%);
+    background-attachment: fixed;
+  }
+  body.kl8-view .wrap { max-width: 1180px; }
+  body.kl8-view header { margin-bottom: 20px; }
+  body.kl8-view header h1 {
+    font-size: 27px;
+    font-weight: 780;
+    letter-spacing: -.035em;
+  }
+  body.kl8-view header p { color: #8491a3; letter-spacing: .02em; }
+  body.kl8-view .tabs {
+    background: rgba(19, 27, 39, .78);
+    border-color: rgba(111, 128, 153, .18);
+    box-shadow: 0 16px 40px rgba(0, 0, 0, .28), inset 0 1px rgba(255, 255, 255, .035);
+    backdrop-filter: blur(18px);
+  }
+  body.kl8-view .tab.active {
+    color: #ff7189;
+    background: linear-gradient(180deg, rgba(255, 93, 120, .10), rgba(255, 93, 120, .035));
+  }
+  body.kl8-view .tab.active::before {
+    background: linear-gradient(90deg, #ff4f70, #ff8d74);
+    box-shadow: 0 0 16px rgba(255, 79, 112, .45);
+  }
+  #panel-kl8 { position: relative; }
+  .kl8-dashboard {
+    --kl8-red: #ff5d78;
+    --kl8-red-deep: #d92f54;
+    --kl8-blue: #63a4ff;
+    --kl8-green: #42d392;
+    --kl8-amber: #f6bd55;
+    --kl8-surface: rgba(20, 29, 42, .86);
+    --kl8-surface-2: rgba(27, 38, 54, .72);
+    --kl8-border: rgba(124, 142, 168, .19);
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    animation: kl8DashboardIn .34s ease both;
+  }
+  @keyframes kl8DashboardIn {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .kl8-dashboard > .card { margin-bottom: 0; }
+  .kl8-hero {
+    position: relative;
+    overflow: hidden;
+    padding: 26px 28px 22px;
+    border: 1px solid rgba(255, 112, 137, .23);
+    border-radius: 22px;
+    background:
+      linear-gradient(120deg, rgba(255, 82, 112, .13), transparent 38%),
+      linear-gradient(145deg, rgba(25, 35, 51, .96), rgba(13, 20, 30, .94));
+    box-shadow: 0 24px 70px rgba(0, 0, 0, .32), inset 0 1px rgba(255, 255, 255, .055);
+  }
+  .kl8-hero::before {
+    content: '';
+    position: absolute;
+    width: 340px;
+    height: 340px;
+    right: -120px;
+    top: -210px;
+    border-radius: 50%;
+    background: rgba(255, 83, 115, .18);
+    filter: blur(2px);
+    box-shadow: 0 0 100px rgba(255, 83, 115, .16);
+    pointer-events: none;
+  }
+  .kl8-hero::after {
+    content: '08';
+    position: absolute;
+    right: 28px;
+    bottom: -38px;
+    color: rgba(255, 255, 255, .025);
+    font-size: 150px;
+    font-weight: 900;
+    line-height: 1;
+    letter-spacing: -.08em;
+    pointer-events: none;
+  }
+  .kl8-hero-top {
+    position: relative;
+    z-index: 1;
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 22px;
+  }
+  .kl8-eyebrow,
+  .kl8-panel-kicker {
+    color: #ff8195;
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: .18em;
+    text-transform: uppercase;
+  }
+  .kl8-eyebrow { display: flex; align-items: center; gap: 8px; margin-bottom: 7px; }
+  .kl8-eyebrow::before {
+    content: '';
+    width: 22px;
+    height: 2px;
+    border-radius: 999px;
+    background: linear-gradient(90deg, #ff4f70, #ff9a78);
+  }
+  .kl8-hero h2 {
+    margin: 0;
+    color: #f4f7fb;
+    font-size: clamp(25px, 3.5vw, 38px);
+    line-height: 1.18;
+    letter-spacing: -.045em;
+  }
+  .kl8-hero h2 strong { color: #ff7189; font-variant-numeric: tabular-nums; }
+  .kl8-hero h2 span { color: #d7dee8; font-weight: 520; }
+  .kl8-hero-copy {
+    max-width: 680px;
+    margin-top: 8px;
+    color: #8f9caf;
+    font-size: 12px;
+  }
+  .kl8-status-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    flex: 0 0 auto;
+    padding: 8px 12px;
+    border: 1px solid rgba(246, 189, 85, .28);
+    border-radius: 999px;
+    background: rgba(246, 189, 85, .10);
+    color: #ffd47f;
+    font-size: 12px;
+    font-weight: 720;
+    box-shadow: inset 0 1px rgba(255, 255, 255, .04);
+  }
+  .kl8-status-pill i {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: currentColor;
+    box-shadow: 0 0 0 4px rgba(246, 189, 85, .11);
+  }
+  .kl8-status-pill.validated {
+    border-color: rgba(66, 211, 146, .28);
+    background: rgba(66, 211, 146, .10);
+    color: #76e7b4;
+  }
+  .kl8-status-pill.reference {
+    border-color: rgba(99, 164, 255, .28);
+    background: rgba(99, 164, 255, .10);
+    color: #91bdff;
+  }
+  .kl8-meta-grid {
+    position: relative;
+    z-index: 1;
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 10px;
+    margin-top: 22px;
+  }
+  .kl8-meta-item {
+    min-width: 0;
+    padding: 11px 13px;
+    border: 1px solid rgba(127, 145, 170, .15);
     border-radius: 12px;
-    padding: 16px;
+    background: rgba(6, 11, 18, .28);
+  }
+  .kl8-meta-label {
+    color: #778599;
+    font-size: 10px;
+    font-weight: 650;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+  }
+  .kl8-meta-value {
+    margin-top: 3px;
+    overflow: hidden;
+    color: #edf2f8;
+    font-size: 14px;
+    font-weight: 720;
+    font-variant-numeric: tabular-nums;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .kl8-meta-sub {
+    margin-top: 2px;
+    overflow: hidden;
+    color: #69778b;
+    font-size: 10px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .kl8-disclaimer {
+    display: flex;
+    align-items: flex-start;
+    gap: 9px;
+    padding: 10px 13px;
+    border: 1px solid rgba(99, 164, 255, .15);
+    border-radius: 12px;
+    background: rgba(99, 164, 255, .055);
+    color: #8e9bad;
+    font-size: 11px;
+    line-height: 1.55;
+  }
+  .kl8-disclaimer b { color: #a9cbff; font-size: 13px; line-height: 1.25; }
+  .kl8-panel,
+  .kl8-state-card,
+  .kl8-select-card,
+  .kl8-action-dock {
+    border: 1px solid var(--kl8-border);
+    background: linear-gradient(145deg, rgba(23, 33, 48, .92), rgba(15, 23, 34, .90));
+    box-shadow: 0 16px 42px rgba(0, 0, 0, .20), inset 0 1px rgba(255, 255, 255, .035);
+  }
+  .kl8-panel { border-radius: 18px; padding: 20px; }
+  .kl8-panel-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
     margin-bottom: 16px;
-    background: var(--card);
+    padding-bottom: 13px;
+    border-bottom: 1px solid rgba(124, 142, 168, .14);
+  }
+  .kl8-panel-head h3 {
+    margin: 2px 0 0;
+    color: #eef3f9;
+    font-size: 17px;
+    line-height: 1.25;
+    letter-spacing: -.02em;
+  }
+  .kl8-panel-count,
+  .kl8-soft-badge {
+    padding: 5px 9px;
+    border: 1px solid rgba(127, 145, 170, .16);
+    border-radius: 999px;
+    background: rgba(127, 145, 170, .07);
+    color: #8492a6;
+    font-size: 10px;
+    font-weight: 700;
+    white-space: nowrap;
+  }
+  .kl8-state-card {
+    position: relative;
+    overflow: hidden;
+    padding: 18px 20px;
+    border-radius: 16px;
+  }
+  .kl8-state-card::before {
+    content: '';
+    position: absolute;
+    inset: 0 auto 0 0;
+    width: 3px;
+    background: var(--state-accent, var(--kl8-blue));
+    box-shadow: 0 0 18px var(--state-accent, var(--kl8-blue));
+  }
+  .kl8-state-card.backfill { --state-accent: #63a4ff; }
+  .kl8-state-card.verifying { --state-accent: #f6bd55; }
+  .kl8-state-card.failed { --state-accent: #ff657e; }
+  .kl8-state-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--state-accent, #63a4ff);
+    font-size: 14px;
+    font-weight: 760;
+  }
+  .kl8-state-value {
+    margin-top: 8px;
+    color: #f2f6fb;
+    font-size: 24px;
+    font-weight: 820;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -.03em;
+  }
+  .kl8-state-copy { margin-top: 5px; color: #8492a6; font-size: 11px; }
+  .kl8-progress-track {
+    height: 7px;
+    margin: 11px 0 8px;
+    overflow: hidden;
+    border-radius: 999px;
+    background: rgba(100, 118, 143, .12);
+  }
+  .kl8-progress-bar {
+    height: 100%;
+    border-radius: inherit;
+    background: linear-gradient(90deg, #63a4ff, #57dfaa);
+    box-shadow: 0 0 14px rgba(99, 164, 255, .28);
+    transition: width .3s ease;
+  }
+  .kl8-select-card {
+    --kl8-card-accent: #ff5d78;
+    position: relative;
+    min-width: 0;
+    margin: 0;
+    overflow: hidden;
+    border-radius: 16px;
+    padding: 16px;
+    transition: transform .2s ease, border-color .2s ease, box-shadow .2s ease;
+  }
+  .kl8-select-card::before {
+    content: '';
+    position: absolute;
+    inset: 0 0 auto;
+    height: 2px;
+    background: linear-gradient(90deg, var(--kl8-card-accent), transparent 82%);
   }
   .kl8-select-card:hover {
-    border-color: #e53935;
+    transform: translateY(-2px);
+    border-color: color-mix(in srgb, var(--kl8-card-accent) 45%, transparent);
+    box-shadow: 0 20px 46px rgba(0, 0, 0, .27), inset 0 1px rgba(255, 255, 255, .05);
+  }
+  .kl8-select-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 10px;
+    margin-bottom: 11px;
   }
   .kl8-select-title {
-    font-size: 16px;
-    font-weight: 700;
-    color: #e53935;
-    margin-bottom: 12px;
+    margin: 0;
+    color: #edf2f8;
+    font-size: 15px;
+    font-weight: 760;
+    line-height: 1.35;
+  }
+  .kl8-select-title strong { color: var(--kl8-card-accent); }
+  .kl8-mode-badge {
+    flex: 0 0 auto;
+    padding: 4px 8px;
+    border: 1px solid color-mix(in srgb, var(--kl8-card-accent) 38%, transparent);
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--kl8-card-accent) 10%, transparent);
+    color: var(--kl8-card-accent);
+    font-size: 10px;
+    font-weight: 760;
+  }
+  .kl8-strategy-line {
+    margin-bottom: 11px;
+    overflow: hidden;
+    color: #69778a;
+    font-size: 10px;
+    font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .kl8-numbers-row {
     display: flex;
-    gap: 8px;
-    flex-wrap: wrap;
     align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
   }
   .kl8-ball {
+    position: relative;
     display: inline-flex;
     align-items: center;
     justify-content: center;
     width: 36px;
     height: 36px;
+    flex: 0 0 auto;
+    border: 1px solid rgba(255, 255, 255, .28);
     border-radius: 50%;
-    font-size: 14px;
-    font-weight: 700;
+    background: linear-gradient(145deg, #ff7a8e 0%, #ed4768 45%, #c9254d 100%);
+    box-shadow: 0 7px 16px rgba(206, 38, 76, .24), inset 0 1px 1px rgba(255, 255, 255, .36);
     color: #fff;
-    background: #e53935;
-    text-shadow: 0 1px 2px rgba(0,0,0,0.2);
+    font-size: 14px;
+    font-weight: 800;
+    font-variant-numeric: tabular-nums;
+    line-height: 1;
+    text-shadow: 0 1px 2px rgba(62, 0, 16, .34);
   }
   .kl8-ball.highlight-ball {
-    background: #c62828;
     width: 40px;
     height: 40px;
-    font-size: 16px;
-    box-shadow: 0 2px 10px rgba(198,40,40,0.45);
+    background: linear-gradient(145deg, #ff6f89 0%, #e5375e 52%, #b71f45 100%);
+    box-shadow: 0 9px 22px rgba(227, 49, 91, .30), inset 0 1px 1px rgba(255, 255, 255, .34);
+    font-size: 15px;
   }
-  .kl8-ball.small-ball {
-    width: 30px;
-    height: 30px;
+  .kl8-ball.small-ball { width: 30px; height: 30px; font-size: 11px; }
+  .kl8-draw-row {
+    display: grid;
+    grid-template-columns: 84px minmax(0, 1fr) 82px;
+    gap: 13px;
+    align-items: center;
+    padding: 10px 2px;
+    border-bottom: 1px solid rgba(124, 142, 168, .10);
+  }
+  .kl8-draw-row:last-child { border-bottom: 0; }
+  .kl8-draw-row .draw-issue {
+    color: #aeb9c8;
     font-size: 12px;
-    background: #ef5350;
+    font-weight: 700;
+  }
+  .kl8-draw-row .draw-date { color: #647286; font-size: 10px; }
+  .kl8-draw-balls { gap: 5px !important; }
+  .kl8-draw-balls .kl8-ball.small-ball {
+    width: 27px !important;
+    height: 27px !important;
+    border-color: rgba(126, 145, 171, .24);
+    background: linear-gradient(145deg, #2b394d, #1b2636);
+    box-shadow: inset 0 1px rgba(255, 255, 255, .055);
+    color: #bac4d1;
+    font-size: 10px !important;
+    text-shadow: none;
+  }
+  .kl8-draw-balls .kl8-ball.small-ball.highlight-ball {
+    border-color: rgba(255, 109, 135, .38);
+    background: linear-gradient(145deg, #fa627d, #c7294f);
+    box-shadow: 0 5px 13px rgba(211, 42, 82, .24), inset 0 1px rgba(255, 255, 255, .30);
     color: #fff;
   }
+  .kl8-picks-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+  }
+  .kl8-probability-line,
+  .kl8-inline-note {
+    margin-top: 8px;
+    color: #748196;
+    font-size: 10px;
+    line-height: 1.55;
+  }
+  .kl8-inline-warning {
+    margin-top: 8px;
+    padding: 7px 9px;
+    border: 1px solid rgba(246, 189, 85, .15);
+    border-radius: 8px;
+    background: rgba(246, 189, 85, .055);
+    color: #c7a65f;
+    font-size: 10px;
+    line-height: 1.5;
+  }
+  .kl8-fushi-card { --kl8-card-accent: #ff5d78; }
   .kl8-fushi-header {
-    background: linear-gradient(135deg, #e53935 0%, #c62828 100%);
-    color: #fff;
-    padding: 12px 16px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 13px;
+    padding-bottom: 13px;
+    border-bottom: 1px solid rgba(124, 142, 168, .14);
+    color: #edf2f8;
+    font-size: 16px;
+    font-weight: 760;
+  }
+  .kl8-fushi-summary {
+    margin-bottom: 12px;
+    padding: 9px 11px;
+    border: 1px solid rgba(99, 164, 255, .13);
     border-radius: 10px;
-    margin-bottom: 16px;
-    font-weight: 700;
+    background: rgba(99, 164, 255, .05);
+    color: #8190a4;
+    font-size: 11px;
   }
   .kl8-fushi-top7 {
     display: flex;
     flex-wrap: wrap;
     gap: 10px;
-    margin-bottom: 16px;
-    justify-content: center;
+    margin: 0 0 16px;
+    justify-content: flex-start;
   }
   .kl8-fushi-grid {
     display: grid;
@@ -673,14 +1073,14 @@
     margin-top: 12px;
   }
   .kl8-combo-item {
-    background: var(--card);
-    border: 1px solid var(--line);
-    border-radius: 8px;
     padding: 8px 12px;
-    font-size: 14px;
-    font-weight: 600;
-    letter-spacing: 1px;
-    color: #e53935;
+    border: 1px solid var(--kl8-border);
+    border-radius: 9px;
+    background: rgba(23, 33, 48, .72);
+    color: #ff7189;
+    font-size: 13px;
+    font-weight: 650;
+    letter-spacing: .06em;
   }
   .kl8-history-grid {
     display: grid;
@@ -694,58 +1094,168 @@
     width: 32px;
     height: 32px;
     border-radius: 50%;
+    background: linear-gradient(145deg, #ff6f89, #c9284f);
+    color: #fff;
     font-size: 11px;
-    font-weight: 700;
-    background: #e53935;
-    color: #fff;
+    font-weight: 760;
   }
-  .kl8-history-num.hit {
-    background: #c62828;
-    box-shadow: 0 1px 6px rgba(198,40,40,0.45);
-  }
-  .kl8-refresh-btn {
-    background: #e53935;
-    color: #fff;
-    border: none;
-    padding: 10px 20px;
-    border-radius: 8px;
-    font-size: 14px;
-    font-weight: 600;
-    cursor: pointer;
-    margin-top: 16px;
-  }
-  .kl8-refresh-btn:hover {
-    background: #c62828;
-  }
+  .kl8-history-num.hit { box-shadow: 0 5px 15px rgba(217, 47, 84, .30); }
   .kl8-shape-strip {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(118px, 1fr));
-    gap: 8px;
-    margin-top: 12px;
+    grid-template-columns: repeat(auto-fit, minmax(105px, 1fr));
+    gap: 7px;
+    margin-top: 13px;
   }
   .kl8-shape-chip {
-    background: rgba(34,45,61,.65);
-    border: 1px solid rgba(44,58,78,.95);
-    border-radius: 8px;
-    padding: 7px 9px;
     min-width: 0;
+    padding: 8px 9px;
+    border: 1px solid rgba(124, 142, 168, .13);
+    border-radius: 9px;
+    background: rgba(9, 15, 23, .28);
   }
-  .kl8-shape-chip .shape-k {
-    color: var(--muted);
-    font-size: 11px;
-    line-height: 1.2;
-  }
+  .kl8-shape-chip .shape-k { color: #68768a; font-size: 9px; line-height: 1.3; }
   .kl8-shape-chip .shape-v {
-    color: var(--text);
-    font-size: 13px;
-    font-weight: 700;
     margin-top: 2px;
-    white-space: nowrap;
     overflow: hidden;
+    color: #dfe6ef;
+    font-size: 12px;
+    font-weight: 720;
     text-overflow: ellipsis;
+    white-space: nowrap;
   }
-  .kl8-shape-chip.good .shape-v { color: var(--accent2); }
-  .kl8-shape-chip.warn .shape-v { color: var(--warn); }
+  .kl8-shape-chip.good .shape-v { color: #6adfac; }
+  .kl8-shape-chip.warn .shape-v { color: #f0c46e; }
+  .kl8-action-dock {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 18px;
+    padding: 16px 18px;
+    border-radius: 17px;
+  }
+  .kl8-action-copy { flex: 0 0 auto; }
+  .kl8-action-copy strong { display: block; color: #edf2f8; font-size: 13px; }
+  .kl8-action-copy span { display: block; margin-top: 2px; color: #68768a; font-size: 10px; }
+  .kl8-action-buttons { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+  .kl8-refresh-btn {
+    min-height: 38px;
+    margin: 0;
+    padding: 9px 13px;
+    border: 1px solid rgba(255, 112, 137, .24);
+    border-radius: 10px;
+    background: rgba(255, 93, 120, .09);
+    box-shadow: inset 0 1px rgba(255, 255, 255, .04);
+    color: #ff8297;
+    font-size: 11px;
+    font-weight: 720;
+    cursor: pointer;
+    transition: transform .18s ease, border-color .18s ease, background .18s ease, box-shadow .18s ease;
+  }
+  .kl8-refresh-btn:hover {
+    transform: translateY(-1px);
+    border-color: rgba(255, 112, 137, .45);
+    background: rgba(255, 93, 120, .15);
+    box-shadow: 0 9px 22px rgba(0, 0, 0, .20), inset 0 1px rgba(255, 255, 255, .055);
+  }
+  .kl8-refresh-btn:active { transform: translateY(0); }
+  .kl8-refresh-btn:focus-visible { outline: 2px solid #a8c9ff; outline-offset: 2px; }
+  .kl8-refresh-btn.action-warn { border-color: rgba(246, 189, 85, .25); background: rgba(246, 189, 85, .09); color: #f4ca75; }
+  .kl8-refresh-btn.action-danger { border-color: rgba(255, 101, 126, .27); background: rgba(255, 101, 126, .10); color: #ff8297; }
+  .kl8-refresh-btn.action-info { border-color: rgba(99, 164, 255, .25); background: rgba(99, 164, 255, .09); color: #91bdff; }
+  .kl8-refresh-btn.action-success { border-color: rgba(66, 211, 146, .25); background: rgba(66, 211, 146, .09); color: #76e7b4; }
+  .kl8-refresh-btn.action-muted { border-color: rgba(127, 145, 170, .19); background: rgba(127, 145, 170, .08); color: #9aa7b8; }
+  .kl8-modal-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 9999;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 18px;
+    background: rgba(2, 6, 12, .78);
+    backdrop-filter: blur(10px);
+  }
+  .kl8-modal-window {
+    width: min(820px, 96vw);
+    max-height: 88vh;
+    overflow: auto;
+    border: 1px solid rgba(255, 112, 137, .22);
+    border-radius: 20px;
+    background: linear-gradient(145deg, #172131, #0f1722);
+    box-shadow: 0 34px 100px rgba(0, 0, 0, .52), inset 0 1px rgba(255, 255, 255, .045);
+  }
+  .kl8-modal-window.records { display: flex; flex-direction: column; overflow: hidden; }
+  .kl8-modal-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 15px 18px;
+    border-bottom: 1px solid rgba(124, 142, 168, .14);
+  }
+  .kl8-modal-title { color: #eef3f9; font-size: 16px; font-weight: 760; }
+  .kl8-modal-body { padding: 18px; }
+  .kl8-modal-body::-webkit-scrollbar { width: 8px; }
+  .kl8-modal-body::-webkit-scrollbar-track { background: rgba(7, 12, 19, .30); }
+  .kl8-modal-body::-webkit-scrollbar-thumb {
+    border: 2px solid transparent;
+    border-radius: 999px;
+    background: rgba(125, 145, 172, .32);
+    background-clip: padding-box;
+  }
+  .kl8-record-card {
+    margin-bottom: 11px;
+    padding: 15px;
+    border: 1px solid rgba(124, 142, 168, .16);
+    border-radius: 14px;
+    background: rgba(18, 27, 40, .82);
+    box-shadow: inset 3px 0 #42d392, inset 0 1px rgba(255, 255, 255, .025);
+  }
+  .kl8-record-card.pending { box-shadow: inset 3px 0 #657488, inset 0 1px rgba(255, 255, 255, .025); }
+  .kl8-record-badge {
+    padding: 3px 8px;
+    border: 1px solid rgba(66, 211, 146, .25);
+    border-radius: 999px;
+    background: rgba(66, 211, 146, .09);
+    color: #76e7b4;
+    font-size: 10px;
+    font-weight: 700;
+  }
+  .kl8-record-badge.pending {
+    border-color: rgba(127, 145, 170, .20);
+    background: rgba(127, 145, 170, .08);
+    color: #96a3b4;
+  }
+  .kl8-record-play {
+    display: grid;
+    grid-template-columns: 78px minmax(0, 1fr);
+    gap: 8px;
+    align-items: center;
+    margin-top: 7px;
+  }
+  .kl8-record-play > span { color: #7f8da0; font-size: 11px; }
+  #kl8-exclude-options,
+  #kl8-kill-options { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  #kl8-exclude-options .kl8-select-card,
+  #kl8-kill-options .kl8-select-card { --kl8-card-accent: #718096; }
+  #kl8-exclude-options .kl8-select-card:has(input:checked) {
+    --kl8-card-accent: #f6bd55;
+    border-color: rgba(246, 189, 85, .34);
+    background: linear-gradient(145deg, rgba(49, 42, 28, .80), rgba(17, 25, 36, .94));
+  }
+  #kl8-kill-options .kl8-select-card:has(input:checked) {
+    --kl8-card-accent: #ff657e;
+    border-color: rgba(255, 101, 126, .34);
+    background: linear-gradient(145deg, rgba(51, 29, 38, .82), rgba(17, 25, 36, .94));
+  }
+  #kl8-exclude-options input[type="radio"],
+  #kl8-kill-options input[type="radio"] { accent-color: var(--kl8-card-accent); }
+  .kl8-modal-body .search {
+    border-width: 1px;
+    border-color: rgba(124, 142, 168, .20);
+    background: rgba(7, 12, 19, .34);
+    box-shadow: inset 0 1px 4px rgba(0, 0, 0, .18);
+  }
 
   /* ─── 移动端导航条优化 ─── */
   /* 中屏 (≤768px): 横向滚动导航 + 紧凑布局 */
@@ -1090,6 +1600,93 @@
       font-size: 14px;
     }
   }
+
+  /* 快乐8工作台响应式覆盖：放在通用移动规则之后，避免旧内联布局抢优先级 */
+  body.kl8-view #disclaimer { margin-top: 16px; opacity: .55; }
+  body.kl8-view .bottom-nav {
+    background: rgba(15, 22, 32, .94);
+    border-top-color: rgba(255, 112, 137, .16);
+    backdrop-filter: blur(16px);
+  }
+  body.kl8-view .bottom-nav-item.active { color: #ff7189; }
+  @media (max-width: 980px) {
+    .kl8-meta-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .kl8-action-dock { align-items: flex-start; flex-direction: column; }
+    .kl8-action-buttons { justify-content: flex-start; }
+  }
+  @media (max-width: 768px) {
+    body.kl8-view header { margin-bottom: 14px; }
+    body.kl8-view header h1 { font-size: 20px; }
+    .kl8-dashboard { gap: 12px; }
+    .kl8-hero { padding: 19px 16px 16px; border-radius: 17px; }
+    .kl8-hero::after { right: 12px; bottom: -18px; font-size: 96px; }
+    .kl8-hero-top { align-items: flex-start; flex-direction: column; gap: 13px; }
+    .kl8-hero h2 { font-size: 25px; }
+    .kl8-hero-copy { font-size: 11px; }
+    .kl8-status-pill { padding: 6px 10px; font-size: 11px; }
+    .kl8-meta-grid { gap: 7px; margin-top: 17px; }
+    .kl8-meta-item { padding: 9px 10px; border-radius: 10px; }
+    .kl8-meta-value { font-size: 13px; }
+    .kl8-disclaimer { padding: 9px 10px; border-radius: 10px; }
+    .kl8-panel { padding: 14px; border-radius: 15px; }
+    .kl8-panel-head { align-items: flex-start; margin-bottom: 12px; padding-bottom: 10px; }
+    .kl8-panel-head h3 { font-size: 15px; }
+    .kl8-state-card { padding: 15px 14px; border-radius: 14px; }
+    .kl8-state-value { font-size: 21px; }
+    .kl8-picks-grid { grid-template-columns: 1fr; gap: 9px; }
+    .kl8-select-card { margin: 0; padding: 13px; border-radius: 13px; }
+    .kl8-select-title { margin: 0; font-size: 14px; }
+    .kl8-select-head { margin-bottom: 9px; }
+    .kl8-draw-row {
+      grid-template-columns: 74px minmax(0, 1fr);
+      grid-template-areas: "issue date" "balls balls";
+      gap: 6px 8px;
+      padding: 9px 0 !important;
+      border-bottom-color: rgba(124, 142, 168, .11) !important;
+    }
+    .kl8-draw-row .draw-issue { grid-area: issue; min-width: 0; }
+    .kl8-draw-row .draw-date { grid-area: date; align-self: center; text-align: right; }
+    .kl8-draw-row .draw-numbers { grid-area: balls; margin-top: 2px; }
+    .kl8-draw-balls .kl8-ball.small-ball.highlight-ball {
+      border-color: rgba(255, 120, 144, .52) !important;
+      box-shadow: 0 0 0 2px rgba(255, 93, 120, .10), inset 0 1px rgba(255, 255, 255, .28) !important;
+    }
+    .kl8-fushi-header { padding: 0 0 11px; font-size: 14px; }
+    .kl8-fushi-summary { font-size: 10px; }
+    .kl8-action-dock { gap: 12px; padding: 14px; border-radius: 15px; }
+    .kl8-action-buttons { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); width: 100%; }
+    .kl8-action-buttons .kl8-refresh-btn { min-height: 44px; width: 100%; }
+    .kl8-action-dock .action-success { grid-column: 1 / -1; grid-row: 1; }
+    .kl8-modal-backdrop { align-items: flex-end; padding: 0; }
+    .kl8-modal-window {
+      width: 100%;
+      max-height: min(92dvh, 860px);
+      border-radius: 20px 20px 0 0;
+      overscroll-behavior: contain;
+    }
+    .kl8-modal-head { padding: 13px 14px; }
+    .kl8-modal-body { padding: 14px; }
+    #kl8-exclude-options,
+    #kl8-kill-options { grid-template-columns: 1fr; }
+    .kl8-record-card { padding: 12px; border-radius: 12px; }
+  }
+  @media (max-width: 480px) {
+    .kl8-hero { padding: 17px 13px 14px; }
+    .kl8-hero h2 { font-size: 22px; }
+    .kl8-meta-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .kl8-meta-item { padding: 8px; }
+    .kl8-meta-label, .kl8-meta-sub { font-size: 9px; }
+    .kl8-panel { padding: 12px; }
+    .kl8-panel-count { display: none; }
+    .kl8-action-copy span { display: none; }
+    .kl8-action-buttons { gap: 7px; }
+    .kl8-refresh-btn { padding: 8px 7px; font-size: 10px; }
+    .kl8-modal-body { padding: 12px 9px calc(12px + env(safe-area-inset-bottom, 0px)); }
+    .kl8-modal-head { padding: 12px 10px; }
+    .kl8-record-card { padding: 10px; }
+    .kl8-record-play { grid-template-columns: 1fr; gap: 3px; }
+    .kl8-record-play > span { margin-top: 3px; }
+  }
 </style>
 </head>
 <body>
@@ -1421,6 +2018,19 @@ function showError(text) {
   app.innerHTML = `<div class="status error">✗ ${esc(text)}</div>`;
 }
 
+function showFootballLoadError(text) {
+  searchWrap.style.display = 'none';
+  app.innerHTML = `
+    <div class="status error">✗ ${esc(text)}</div>
+    <div class="group-bar" style="justify-content:center;margin-top:18px">
+      <button type="button" onclick="loadMatches()">🔄 重新抓取比赛</button>
+      <button type="button" onclick="switchTab('predictions')">📋 查看预测记录</button>
+    </div>
+    <div class="note" style="text-align:center;margin-top:8px">
+      历史预测记录独立保存，不受本次比赛抓取结果影响。
+    </div>`;
+}
+
 async function loadMatches() {
   loading('正在联网获取今日比赛列表…');
   try {
@@ -1431,10 +2041,9 @@ async function loadMatches() {
     if (data.error) {
       const source = data.source_status?.source || 'unknown';
       const errorType = data.error_type ? ` (${data.error_type})` : '';
-      return showError(`${data.error}${errorType} · 赛程源状态: ${source}。请确认部署包含最新后端代码并已重启进程。`);
+      return showFootballLoadError(`${data.error}${errorType} · 赛程源状态: ${source}。请确认部署包含最新后端代码并已重启进程。`);
     }
     allMatches = data.matches || [];
-    if (!allMatches.length) return showError('未找到任何比赛数据，请稍后重试。');
     if (data.professional_status && !data.professional_status.error) {
       footballProfessionalStatus = data.professional_status.result || data.professional_status;
       renderFootballProfessionalStatus();
@@ -1443,7 +2052,7 @@ async function loadMatches() {
     }
     await loadAllPredictions(data.predictions);
   } catch (e) {
-    showError('网络请求失败：' + e.message);
+    showFootballLoadError('网络请求失败：' + e.message);
   }
 }
 
@@ -2341,7 +2950,9 @@ function renderFootballPredictions(results) {
   }
   
   if (!results.length) {
-    html += '<div class="status">暂无预测数据</div>';
+    html += allMatches.length
+      ? '<div class="status">暂无预测数据</div>'
+      : '<div class="status error">✗ 未找到任何比赛数据，请稍后重试。历史预测记录仍可通过上方按钮查看。</div>';
     app.innerHTML = html;
     attachFootballSearchListeners();
     return;
@@ -4278,6 +4889,7 @@ function renderResult(r) {
 
 function switchTab(tab) {
   activeTab = tab;
+  document.body.classList.toggle('kl8-view', tab === 'kl8');
   document.querySelectorAll('[data-tab]').forEach(el => {
     el.classList.toggle('active', el.dataset.tab === tab);
   });
@@ -4335,6 +4947,8 @@ let kl8Loaded = false;
 let kl8LastData = null;
 let kl8ExcludeState = null;
 let kl8KillState = null;
+const KL8_REFRESH_POLL_INTERVAL_MS = 1500;
+const KL8_REFRESH_TIMEOUT_MS = 180000;
 
 async function loadKL8() {
   if (kl8Loaded) return;
@@ -4354,16 +4968,96 @@ async function loadKL8() {
   }
 }
 
+function isCurrentKL8Container(appKL8) {
+  return Boolean(
+    appKL8
+    && appKL8.isConnected
+    && document.getElementById('app-kl8') === appKL8
+  );
+}
+
+function renderKL8RefreshProgress(appKL8, job, startedAt) {
+  if (!isCurrentKL8Container(appKL8)) return;
+  const status = job?.status || 'queued';
+  const elapsed = job?.elapsed_seconds ?? Math.round((Date.now() - startedAt) / 1000);
+  const label = status === 'queued' ? '重新计算任务排队中' : '正在重新计算快乐8数据';
+  appKL8.innerHTML = `<div class="status"><span class="spinner"></span>${label} · 已用 ${esc(elapsed)} 秒</div>`;
+}
+
+async function pollKL8Refresh(jobId, appKL8, startedAt) {
+  let consecutivePollErrors = 0;
+  while (Date.now() - startedAt < KL8_REFRESH_TIMEOUT_MS) {
+    // 页面容器已被替换或移除时，停止继续请求和更新过期页面。
+    if (!isCurrentKL8Container(appKL8)) return;
+
+    let data;
+    try {
+      data = await fetchJsonWithTimeout(
+        '/api/kl8-refresh/status?job_id=' + encodeURIComponent(jobId) + '&_=' + Date.now(),
+        10000
+      );
+      consecutivePollErrors = 0;
+    } catch (error) {
+      consecutivePollErrors += 1;
+      if (consecutivePollErrors >= 3) throw error;
+      if (!isCurrentKL8Container(appKL8)) return;
+      appKL8.innerHTML = `<div class="status"><span class="spinner"></span>状态查询暂时失败，正在重试 (${consecutivePollErrors}/3)…</div>`;
+      await new Promise(resolve => setTimeout(resolve, KL8_REFRESH_POLL_INTERVAL_MS));
+      continue;
+    }
+    if (!isCurrentKL8Container(appKL8)) return;
+    if (data.error) throw new Error(data.error);
+
+    const job = data.result || {};
+    if (job.status === 'completed') {
+      if (!job.result || job.result.error) {
+        throw new Error(job.result?.error || '重新计算完成，但没有返回预测结果');
+      }
+      invalidateKL8RecordsCache();
+      kl8Loaded = true;
+      renderKL8(job.result);
+      return;
+    }
+    if (job.status === 'failed') {
+      throw new Error(job.error || job.message || '快乐8重新计算失败');
+    }
+    if (job.status !== 'queued' && job.status !== 'running') {
+      throw new Error(`快乐8重新计算状态异常：${job.status || '未知'}`);
+    }
+
+    renderKL8RefreshProgress(appKL8, job, startedAt);
+    await new Promise(resolve => setTimeout(resolve, KL8_REFRESH_POLL_INTERVAL_MS));
+  }
+  throw new Error('快乐8重新计算超时（3分钟），任务可能仍在后台运行，请稍后再查看');
+}
+
 async function refreshKL8() {
   const appKL8 = document.getElementById('app-kl8');
-  appKL8.innerHTML = `<div class="status"><span class="spinner"></span>正在刷新快乐8数据…</div>`;
+  const previousData = kl8LastData;
+  const startedAt = Date.now();
+  renderKL8RefreshProgress(appKL8, { status: 'queued', elapsed_seconds: 0 }, startedAt);
   try {
-    await fetchJsonPost('/api/kl8-refresh');
-    invalidateKL8RecordsCache();
-    kl8Loaded = false;
-    await loadKL8();
+    const data = await fetchJsonPost('/api/kl8-refresh/start');
+    if (!isCurrentKL8Container(appKL8)) return;
+    if (data.error) throw new Error(data.error);
+    const job = data.result || {};
+    if (!job.job_id) throw new Error('重新计算任务未返回任务ID');
+    renderKL8RefreshProgress(appKL8, job, startedAt);
+    await pollKL8Refresh(job.job_id, appKL8, startedAt);
   } catch (e) {
-    appKL8.innerHTML = `<div class="status error">刷新失败：${esc(e.message)}</div>`;
+    if (isCurrentKL8Container(appKL8)) {
+      if (previousData) {
+        kl8Loaded = true;
+        renderKL8(previousData);
+        document.getElementById('app-kl8')?.insertAdjacentHTML(
+          'afterbegin',
+          `<div class="status error" style="margin-bottom:12px">重新计算失败：${esc(e.message)}；已保留上一次结果，可再次点击重试。</div>`
+        );
+      } else {
+        kl8Loaded = false;
+        appKL8.innerHTML = `<div class="status error">重新计算失败：${esc(e.message)}</div><div style="text-align:center"><button class="kl8-refresh-btn" onclick="refreshKL8()">重试</button></div>`;
+      }
+    }
   }
 }
 
@@ -4456,9 +5150,6 @@ function renderKL8(r) {
     { key: 'fu_shi_10_11', label: '选10复式 — 11码复式', field: 'top11_numbers', coreLabel: '11个核心号码', basePick: 10 },
   ];
 
-  html += `<div class="section-title">【快乐8数据分析】</div>`;
-  html += `<div class="note" style="color:var(--accent2);margin-bottom:12px">⚠ 快乐8开奖具有随机性，以下号码仅为历史统计参考，不构成投注建议，也无法保证提升命中率。</div>`;
-
   // v9.2: 三种状态 — 补数中 / 验证中 / 已验证
   const signalStatus = r.statistics?.signal_status || 'unknown';
   const backfillProgress = r.statistics?.backfill_progress || {};
@@ -4467,23 +5158,69 @@ function renderKL8(r) {
   const targetPeriods = backfillProgress.target_periods || 800;
   const progressPct = backfillProgress.progress_pct || 0;
 
-  // 版本信息 + 补数进度
-  html += `<div class="note" style="margin-bottom:8px">版本: ${esc(r.statistics?.version || 'unknown')} · 分析期数: ${currentPeriods} · 信号状态: ${esc(signalStatus)}</div>`;
-  html += `<div class="note" style="margin-bottom:8px">基于期号: ${esc(r.based_on_issue || r.statistics?.based_on_issue || '-')} · 预测期号: ${esc(r.target_issue || r.statistics?.target_issue || '-')} · 生成时间: ${esc(r.prediction_generated_at || r.statistics?.prediction_generated_at || '-')}</div>`;
+  const modelVersion = r.statistics?.version || 'unknown';
+  const basedOnIssue = r.based_on_issue || r.statistics?.based_on_issue || '-';
+  const targetIssue = r.target_issue || r.statistics?.target_issue || '-';
+  const generatedAt = r.prediction_generated_at || r.statistics?.prediction_generated_at || '-';
+  const statusClass = isBackfilling
+    ? ''
+    : signalStatus === 'validated'
+      ? 'validated'
+      : signalStatus === 'reference_unvalidated'
+        ? 'reference'
+        : '';
+  const statusLabel = isBackfilling
+    ? '历史补数中'
+    : signalStatus === 'validated'
+      ? '策略已验证'
+      : signalStatus === 'reference_unvalidated'
+        ? '统计参考'
+        : '等待验证';
+
+  html += `<div class="kl8-dashboard">`;
+  html += `<section class="kl8-hero">
+    <div class="kl8-hero-top">
+      <div>
+        <div class="kl8-eyebrow">KL8 Statistical Console</div>
+        <h2>第 <strong>${esc(targetIssue)}</strong> 期 <span>数据工作台</span></h2>
+        <div class="kl8-hero-copy">固定策略、历史样本与自动结算集中展示。界面只呈现已有分析结果，不改变任何选号和计算逻辑。</div>
+      </div>
+      <div class="kl8-status-pill ${statusClass}"><i></i>${esc(statusLabel)}</div>
+    </div>
+    <div class="kl8-meta-grid">
+      <div class="kl8-meta-item">
+        <div class="kl8-meta-label">预测期号</div>
+        <div class="kl8-meta-value">${esc(targetIssue)}</div>
+        <div class="kl8-meta-sub">本次输出目标</div>
+      </div>
+      <div class="kl8-meta-item">
+        <div class="kl8-meta-label">基于期号</div>
+        <div class="kl8-meta-value">${esc(basedOnIssue)}</div>
+        <div class="kl8-meta-sub">最近数据基准</div>
+      </div>
+      <div class="kl8-meta-item">
+        <div class="kl8-meta-label">分析样本</div>
+        <div class="kl8-meta-value">${esc(currentPeriods)} <small>期</small></div>
+        <div class="kl8-meta-sub">目标 ${esc(targetPeriods)} 期</div>
+      </div>
+      <div class="kl8-meta-item" title="${esc(modelVersion)}">
+        <div class="kl8-meta-label">模型版本</div>
+        <div class="kl8-meta-value">${esc(modelVersion)}</div>
+        <div class="kl8-meta-sub">生成于 ${esc(generatedAt)}</div>
+      </div>
+    </div>
+  </section>`;
+  html += `<div class="kl8-disclaimer"><b>ⓘ</b><span>快乐8开奖具有随机性，以下号码仅为历史统计参考，不构成投注建议，也无法保证提升命中率。</span></div>`;
   html += renderKL8PerformanceSummary(r.statistics?.recent_settlement_performance);
 
   // ── 状态1：历史补数中 ──
   if (isBackfilling) {
-    html += `<div class="card" style="margin-bottom:16px;background:linear-gradient(135deg,#1a2230,#1a2a3a);border:1px solid #4493f8;padding:16px 18px">`;
-    html += `<div style="font-size:15px;font-weight:700;color:#4493f8;margin-bottom:10px">📥 历史补数中</div>`;
-    html += `<div style="font-size:20px;font-weight:700;color:var(--text);margin-bottom:6px">${currentPeriods} / ${targetPeriods} 期</div>`;
-    // 进度条
-    html += `<div style="width:100%;height:8px;background:var(--card2);border-radius:4px;overflow:hidden;margin-bottom:8px">`;
-    html += `<div style="width:${progressPct}%;height:100%;background:linear-gradient(90deg,#4493f8,#3fb950);border-radius:4px;transition:width .3s"></div>`;
-    html += `</div>`;
-    html += `<div style="font-size:12px;color:var(--muted)">进度: ${progressPct}% · 系统正在分批抓取历史数据，每10分钟自动补一批</div>`;
-    html += `<div style="font-size:12px;color:var(--muted);margin-top:4px">达到${targetPeriods}期后将自动开始策略验证</div>`;
-    html += `</div>`;
+    html += `<section class="kl8-state-card backfill">`;
+    html += `<div class="kl8-state-title">📥 历史样本补充中</div>`;
+    html += `<div class="kl8-state-value">${esc(currentPeriods)} / ${esc(targetPeriods)} <small>期</small></div>`;
+    html += `<div class="kl8-progress-track"><div class="kl8-progress-bar" style="width:${esc(progressPct)}%"></div></div>`;
+    html += `<div class="kl8-state-copy">已完成 ${esc(progressPct)}% · 系统每10分钟自动补充一批历史数据，达到 ${esc(targetPeriods)} 期后自动开始策略验证。</div>`;
+    html += `</section>`;
   }
 
   // ── 状态2：验证中（历史已满800期，但尚无通过验证的策略）───
@@ -4500,35 +5237,34 @@ function renderKL8(r) {
 
       if (allNotVerified && anyWarning) {
         // 验证失败状态
-        html += `<div class="card" style="margin-bottom:16px;background:linear-gradient(135deg,#2a1a1a,#1a2230);border:1px solid #f85149;padding:16px 18px">`;
-        html += `<div style="font-size:15px;font-weight:700;color:#f85149;margin-bottom:10px">❌ 未发现可验证策略</div>`;
-        html += `<div style="font-size:13px;color:var(--muted);margin-bottom:6px">当前候选均未超过随机基线</div>`;
-        html += `<div style="font-size:12px;color:var(--muted);margin-top:6px">历史数据: ${currentPeriods} / ${targetPeriods} 期 · 本玩法不输出号码</div>`;
-        html += `</div>`;
+        html += `<section class="kl8-state-card failed">`;
+        html += `<div class="kl8-state-title">未发现可验证策略</div>`;
+        html += `<div class="kl8-state-copy">当前候选均未超过随机基线 · 历史数据 ${esc(currentPeriods)} / ${esc(targetPeriods)} 期 · 本玩法不输出号码。</div>`;
+        html += `</section>`;
       } else {
         // 验证中状态
-        html += `<div class="card" style="margin-bottom:16px;background:linear-gradient(135deg,#1a2230,#2a2a1a);border:1px solid #d29922;padding:16px 18px">`;
-        html += `<div style="font-size:15px;font-weight:700;color:#d29922;margin-bottom:10px">⏳ 验证中</div>`;
-        html += `<div style="font-size:13px;color:var(--text);margin-bottom:6px">历史数据已达到 ${currentPeriods} 期，正在运行训练、验证、封存测试</div>`;
-        html += `<div style="font-size:12px;color:var(--muted);margin-top:6px">当前状态: 暂不输出推荐 · 原因: 尚无通过验证的策略</div>`;
-        html += `</div>`;
+        html += `<section class="kl8-state-card verifying">`;
+        html += `<div class="kl8-state-title">⏳ 策略验证中</div>`;
+        html += `<div class="kl8-state-copy">历史数据已达到 ${esc(currentPeriods)} 期，正在运行训练、验证与封存测试。当前暂无通过验证的推荐策略。</div>`;
+        html += `</section>`;
       }
     }
   }
 
   // ── 状态3：已验证（至少一个玩法有validated策略）───
   if (signalStatus === 'validated') {
-    html += `<div class="note" style="color:#2ea043;margin-bottom:12px;font-weight:700">✅ 已验证策略：当前启用策略已通过严格回测验证。</div>`;
+    html += `<section class="kl8-state-card" style="--state-accent:#42d392"><div class="kl8-state-title">✓ 策略验证通过</div><div class="kl8-state-copy">当前启用策略已通过严格回测验证。</div></section>`;
   }
 
   // 最近开奖结果（始终显示）
   if (r.recent_results && r.recent_results.length > 0) {
     const isMobile = window.innerWidth <= 768;
     const showCount = isMobile ? 3 : 5;
-    html += `<div class="card" style="margin-bottom:16px">`;
-    html += `<div class="section-title" style="font-size:14px;margin-bottom:8px">最近开奖结果 ${isMobile ? '(近' + showCount + '期)' : ''}</div>`;
+    html += `<section class="card kl8-panel kl8-recent-panel">`;
+    html += `<div class="kl8-panel-head"><div><div class="kl8-panel-kicker">Draw history</div><h3>最近开奖结果</h3></div><span class="kl8-panel-count">近 ${esc(showCount)} 期</span></div>`;
     for (const rec of r.recent_results.slice(0, showCount)) {
-      html += `<div class="draw-row kl8-draw-row">`;
+      const isLatestDraw = String(rec.issue) === String(basedOnIssue);
+      html += `<div class="draw-row kl8-draw-row ${isLatestDraw ? 'is-latest' : ''}">`;
       html += `<span class="draw-issue">${esc(rec.issue)}</span>`;
       html += `<span class="draw-numbers kl8-draw-balls" style="font-size:13px;letter-spacing:1px;gap:4px">`;
       const nums = rec.numbers || [];
@@ -4541,13 +5277,13 @@ function renderKL8(r) {
       html += `<span class="draw-date">${esc(rec.date)}</span>`;
       html += `</div>`;
     }
-    html += `</div>`;
+    html += `</section>`;
   }
 
   // ── 本期变化对比信息（仅在有已验证策略时显示）───
   const changeInfo = r.change_info || {};
   if (changeInfo.has_previous && signalStatus === 'validated') {
-    html += `<div class="card" style="margin-bottom:12px;padding:10px 14px;border-left:3px solid #4493f8">`;
+    html += `<div class="card kl8-panel" style="padding:12px 15px;border-left:3px solid #63a4ff">`;
     html += `<div style="font-size:13px;font-weight:600;margin-bottom:6px;color:#4493f8">📊 本期相较上期变化</div>`;
     html += `<div style="font-size:11px;color:#8b949e;margin-bottom:8px">`;
     html += `本期基准: ${esc(changeInfo.current_based_on)} · 上期基准: ${esc(changeInfo.previous_based_on)}`;
@@ -4606,7 +5342,7 @@ function renderKL8(r) {
     ].filter(item => r[item.key]?.candidates?.length > 0);
 
     if (candidatePlays.length > 0) {
-      html += `<div class="card" style="margin-bottom:12px;padding:10px 14px">`;
+      html += `<div class="card kl8-panel" style="padding:14px 16px">`;
       html += `<div style="font-size:13px;font-weight:600;margin-bottom:8px">候选号码池 <span style="font-size:11px;color:#8b949e">(按玩法独立展示)</span></div>`;
       html += `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px">`;
       for (const play of candidatePlays) {
@@ -4637,9 +5373,9 @@ function renderKL8(r) {
   });
 
   if (hasAnyNumbers) {
-    html += `<div class="card" style="margin-bottom:16px">`;
-    html += `<div class="section-title" style="font-size:15px;margin-bottom:12px">本期统计参考号码</div>`;
-    html += `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px">`;
+    html += `<section class="card kl8-panel kl8-picks-panel">`;
+    html += `<div class="kl8-panel-head"><div><div class="kl8-panel-kicker">Number selections</div><h3>本期统计参考号码</h3></div><span class="kl8-panel-count">固定策略输出</span></div>`;
+    html += `<div class="kl8-picks-grid">`;
 
     for (const st of selectTypes) {
       const key = `select_${st}`;
@@ -4648,19 +5384,18 @@ function renderKL8(r) {
 
       const isRef = sel.prediction_mode === 'reference_unvalidated';
       const isCoverage = sel.baseline_type === 'fair_deterministic_coverage';
-      const borderColor = isRef ? '#ffcc02' : '#2ea043';
+      const borderColor = isRef ? '#f6bd55' : '#42d392';
       const badgeText = isCoverage ? '公平覆盖' : (isRef ? '参考' : '已验证');
-      const badgeColor = isRef ? '#9a6700' : '#2ea043';
 
       // 主推号码：每个玩法只输出一组。
       const kl8MinWin = { 3: 3, 4: 4, 5: 3, 6: 4, 7: 4, 8: 4, 9: 4, 10: 5 };
       const winTh = kl8MinWin[st] || st;
-      html += `<div class="kl8-select-card" style="border-color:${borderColor}">`;
-      html += `<div class="kl8-select-title">🎯 ${esc(sel.desc)} — 主推 ${sel.numbers.length}码 <span style="font-size:11px;color:${badgeColor};font-weight:700;margin-left:8px">[${badgeText}]</span></div>`;
-      html += `<div style="font-size:11px;color:#8b949e;margin-bottom:4px">策略: ${esc(sel.strategy_id || '')}</div>`;
+      html += `<article class="kl8-select-card" style="--kl8-card-accent:${borderColor}">`;
+      html += `<div class="kl8-select-head"><div class="kl8-select-title"><strong>${esc(sel.desc)}</strong> · 主推 ${esc(sel.numbers.length)} 码</div><span class="kl8-mode-badge">${esc(badgeText)}</span></div>`;
+      html += `<div class="kl8-strategy-line" title="${esc(sel.strategy_id || '')}">strategy / ${esc(sel.strategy_id || '-')}</div>`;
       if (sel.strategy_evidence) {
         const ev = sel.strategy_evidence;
-        html += `<div style="font-size:11px;color:#9a6700;margin-bottom:5px">单号弱信号：${(Number(ev.empirical_next_hit_rate || 0) * 100).toFixed(2)}% vs 随机 ${(Number(ev.random_baseline || 0) * 100).toFixed(2)}% · 未通过显著性验证</div>`;
+        html += `<div class="kl8-inline-warning">单号弱信号：${(Number(ev.empirical_next_hit_rate || 0) * 100).toFixed(2)}% vs 随机 ${(Number(ev.random_baseline || 0) * 100).toFixed(2)}% · 未通过显著性验证</div>`;
       }
       html += `<div class="kl8-numbers-row">`;
       const playChangeInfo = (changeInfo.play_changes || {})[key];
@@ -4674,22 +5409,22 @@ function renderKL8(r) {
       }
       html += `</div>`;
       const kl8WR = (kl8HypergeomPGe(st, winTh) * 100).toFixed(1);          // 单注参考率
-      html += `<div style="font-size:11px;color:#8b949e;margin:4px 0 2px">中${winTh}+约 <b style="color:${kl8WR >= 15 ? '#2ea043' : '#d29922'}">${kl8WR}%</b>/期 · 期望中${(sel.numbers.length * 0.25).toFixed(2)}个</div>`;
+      html += `<div class="kl8-probability-line">中${esc(winTh)}+ 约 <b style="color:${kl8WR >= 15 ? '#42d392' : '#f6bd55'}">${esc(kl8WR)}%</b>/期 · 期望中 ${esc((sel.numbers.length * 0.25).toFixed(2))} 个</div>`;
       html += renderKL8ShapeProfile(sel.shape_profile, sel.numbers);
       if (sel.repeat_profile) {
         const actualRepeats = sel.numbers.filter(n => (r.statistics?.last_numbers || []).includes(n)).length;
         const repeatRule = sel.repeat_profile.constraint_applied
           ? ` · 策略约束至少 ${esc(sel.repeat_profile.configured_minimum || 0)} 个`
           : ' · 仅统计观察，不强制换入重号';
-        html += `<div style="font-size:11px;color:#8b949e;margin-top:4px">重号结构：本组 ${actualRepeats} 个 · 近${esc(sel.repeat_profile.sample_size || 0)}期相邻开奖平均 ${esc(sel.repeat_profile.mean_draw_overlap || 0)} 个${repeatRule}</div>`;
+        html += `<div class="kl8-inline-note">重号结构：本组 ${esc(actualRepeats)} 个 · 近${esc(sel.repeat_profile.sample_size || 0)}期相邻开奖平均 ${esc(sel.repeat_profile.mean_draw_overlap || 0)} 个${repeatRule}</div>`;
       }
       html += renderKL8AccuracyProfile(sel.accuracy_profile);
       if (isRef && sel.warning) {
-        html += `<div style="font-size:11px;color:#9a6700;margin-top:6px">⚠ ${esc(sel.warning)}</div>`;
+        html += `<div class="kl8-inline-warning">⚠ ${esc(sel.warning)}</div>`;
       }
-      html += `</div>`;
+      html += `</article>`;
     }
-    html += `</div></div>`;
+    html += `</div></section>`;
   }
 
   // 复式玩法 — 仅在有号码时显示
@@ -4700,38 +5435,36 @@ function renderKL8(r) {
 
     const isRef = fushi.prediction_mode === 'reference_unvalidated';
     const isCoverage = fushi.baseline_type === 'fair_deterministic_coverage';
-    const border = isRef ? '#ffcc02' : '#2ea043';
+    const border = isRef ? '#f6bd55' : '#42d392';
     const badge = isCoverage ? '公平覆盖' : (isRef ? '参考' : '已验证');
-    const badgeColor = isRef ? '#9a6700' : '#2ea043';
     const comboPick = fushi.combo_pick || (f.key === 'fu_shi_10_11' ? 10 : 5);
     const poolSize = fushi.pool_size || coreNumbers.length;
 
-    html += `<div class="card" style="margin-bottom:16px;border:2px solid ${border}">`;
-    html += `<div class="kl8-fushi-header">🎱 ${esc(f.label)} (共${fushi.total_combinations}组) <span style="font-size:11px;color:${badgeColor};font-weight:700;margin-left:8px">[${badge}]</span></div>`;
+    html += `<section class="card kl8-panel kl8-fushi-card" style="--kl8-card-accent:${border}">`;
+    html += `<div class="kl8-fushi-header"><span>${esc(f.label)}</span><span class="kl8-mode-badge">${esc(badge)} · ${esc(fushi.total_combinations)} 组</span></div>`;
     if (fushi.strategy_id) {
-      html += `<div style="font-size:11px;color:#8b949e;margin-bottom:4px">策略: ${esc(fushi.strategy_id)}</div>`;
+      html += `<div class="kl8-strategy-line" title="${esc(fushi.strategy_id)}">strategy / ${esc(fushi.strategy_id)}</div>`;
     }
-    html += `<div class="section-title" style="font-size:14px;margin-bottom:8px">${esc(f.coreLabel)}</div>`;
-    html += `<div class="kl8-fushi-top7">`;
     const fushiBasePick = f.comboPick || f.basePick || (f.key === 'fu_shi_10_11' ? 10 : 5);
     const fushiWinTh = fushiBasePick <= 4 ? 2 : (fushiBasePick <= 7 ? 3 : 5);
     const fushiExpWins = (fushi.total_combinations * kl8HypergeomPGe(fushiBasePick, fushiWinTh)).toFixed(1);
-    html += `<div style="font-size:12px;color:#8b949e;margin:6px 0">每注中奖门槛: 中${fushiWinTh}个 · 期望中奖注数 ≈ <b style="color:#2ea043">${fushiExpWins}</b> 注（共 ${fushi.total_combinations} 注）</div>`;
+    html += `<div class="kl8-fushi-summary">${esc(f.coreLabel)} · 每注中奖门槛中 ${esc(fushiWinTh)} 个 · 期望中奖注数约 <b style="color:#42d392">${esc(fushiExpWins)}</b> 注（共 ${esc(fushi.total_combinations)} 注）</div>`;
+    html += `<div class="kl8-fushi-top7">`;
     for (const n of coreNumbers) {
       html += `<span class="kl8-ball highlight-ball" style="width:44px;height:44px;font-size:18px">${String(n).padStart(2,'0')}</span>`;
     }
     html += `</div>`;
     html += renderKL8ShapeProfile(fushi.shape_profile, coreNumbers);
     if (isRef && fushi.warning) {
-      html += `<div style="font-size:11px;color:#9a6700;margin-top:6px">⚠ ${esc(fushi.warning)}</div>`;
+      html += `<div class="kl8-inline-warning">⚠ ${esc(fushi.warning)}</div>`;
     }
-    html += `</div>`;
+    html += `</section>`;
   }
 
   // 号码排名Top20（仅在有已验证策略时显示）
   if (signalStatus === 'validated' && r.ranking && r.ranking.length > 0) {
-    html += `<div class="card" style="margin-bottom:16px">`;
-    html += `<div class="section-title" style="font-size:14px;margin-bottom:8px">号码排名 (Top20) — 启发式排序值，非开出概率</div>`;
+    html += `<section class="card kl8-panel">`;
+    html += `<div class="kl8-panel-head"><div><div class="kl8-panel-kicker">Heuristic ranking</div><h3>号码排名 Top20</h3></div><span class="kl8-panel-count">非开出概率</span></div>`;
     html += `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:6px">`;
     for (const item of r.ranking) {
       const rankingScore = item.ranking_score?.toFixed(3) || item.score?.toFixed(3) || '0';
@@ -4741,17 +5474,20 @@ function renderKL8(r) {
       html += `</div>`;
     }
     html += `</div>`;
-    html += `</div>`;
+    html += `</section>`;
   }
 
   // 刷新按钮
   html += `<div id="kl8-parameter-search-result"></div>`;
-  html += `<div style="display:flex;gap:12px;margin-top:16px;flex-wrap:wrap">`;
-  html += `<button class="kl8-refresh-btn" onclick="refreshKL8()">↻ 重新计算</button>`;
-  html += `<button class="kl8-refresh-btn" style="background:#d29922" onclick="openKL8ExcludeModal()">剔除号码重新计算</button>`;
-  html += `<button class="kl8-refresh-btn" style="background:#f85149" onclick="openKL8KillModal()">杀号计算</button>`;
-  html += `<button class="kl8-refresh-btn" style="background:#4493f8" onclick="fetchKL8Data()">🔄 抓取最新开奖数据</button>`;
-  html += `<button class="kl8-refresh-btn" style="background:#2ea043" onclick="openKL8RecordsModal()">📋 预测记录</button>`;
+  html += `<section class="kl8-action-dock">`;
+  html += `<div class="kl8-action-copy"><strong>数据与策略工具</strong><span>所有原有操作保持不变</span></div>`;
+  html += `<div class="kl8-action-buttons">`;
+  html += `<button type="button" class="kl8-refresh-btn" onclick="refreshKL8()">↻ 重新计算</button>`;
+  html += `<button type="button" class="kl8-refresh-btn action-warn" onclick="openKL8ExcludeModal()">⊖ 剔除号码重算</button>`;
+  html += `<button type="button" class="kl8-refresh-btn action-danger" onclick="openKL8KillModal()">⌫ 杀号计算</button>`;
+  html += `<button type="button" class="kl8-refresh-btn action-info" onclick="fetchKL8Data()">↻ 抓取最新开奖</button>`;
+  html += `<button type="button" class="kl8-refresh-btn action-success" onclick="openKL8RecordsModal()">▦ 预测记录</button>`;
+  html += `</div></section>`;
   html += `</div>`;
   html += `<div id="kl8-exclude-modal"></div>`;
   html += `<div id="kl8-records-modal"></div>`;
@@ -4761,12 +5497,29 @@ function renderKL8(r) {
 
 function getKL8ExcludeOptions() {
   const r = kl8LastData || {};
+  const statistics = r.statistics || {};
+  const snapshotFile = String(r.snapshot_file || '').split(/[\\/]/).pop();
+  const sourceContext = {
+    sourceSnapshotId: snapshotFile.replace(/^snapshot_/, '').replace(/\.json$/, ''),
+    sourceVersion: statistics.version || r.version || '',
+    sourceTargetIssue: statistics.target_issue || r.target_issue || '',
+    sourceBasedOnIssue: statistics.based_on_issue || r.based_on_issue || '',
+    sourceConfigFingerprint: r.strategy_config_fingerprint || statistics.strategy_config_fingerprint || '',
+  };
   return [
-    { key: 'select_5', label: '选5', numbers: r.select_5?.numbers || [], resultField: 'numbers' },
-    { key: 'select_6', label: '选6', numbers: r.select_6?.numbers || [], resultField: 'numbers' },
-    { key: 'select_10', label: '选10', numbers: r.select_10?.numbers || [], resultField: 'numbers' },
-    { key: 'fu_shi_7', label: '选5复式7码', numbers: r.fu_shi_7?.top7_numbers || r.fu_shi_7?.core_numbers || [], resultField: 'top7_numbers' },
+    { ...sourceContext, key: 'select_5', label: '选5', numbers: r.select_5?.numbers || [], resultField: 'numbers' },
+    { ...sourceContext, key: 'select_6', label: '选6', numbers: r.select_6?.numbers || [], resultField: 'numbers' },
+    { ...sourceContext, key: 'select_10', label: '选10', numbers: r.select_10?.numbers || [], resultField: 'numbers' },
+    { ...sourceContext, key: 'fu_shi_7', label: '选5复式7码', numbers: r.fu_shi_7?.top7_numbers || r.fu_shi_7?.core_numbers || [], resultField: 'top7_numbers' },
   ].filter(item => item.numbers && item.numbers.length > 0);
+}
+
+function buildKL8SourceContextQuery(option) {
+  return '&source_snapshot_id=' + encodeURIComponent(option.sourceSnapshotId || '')
+    + '&source_version=' + encodeURIComponent(option.sourceVersion || '')
+    + '&source_target_issue=' + encodeURIComponent(option.sourceTargetIssue || '')
+    + '&source_based_on_issue=' + encodeURIComponent(option.sourceBasedOnIssue || '')
+    + '&source_config_fingerprint=' + encodeURIComponent(option.sourceConfigFingerprint || '');
 }
 
 function renderPredictionsPager(total, page, totalPages, start, end) {
@@ -4814,7 +5567,7 @@ function renderKL8AccuracyProfile(profile) {
     ? ` | target ${esc(profile.target_hits)} hit=${pct(Number(profile.target_probability_random || 0))}`
     : '';
   const mode = profile.selected_mode ? ` | mode ${esc(profile.selected_mode)}` : '';
-  return `<div style="font-size:11px;color:#8b949e;margin-top:6px;line-height:1.5">
+  return `<div class="kl8-inline-note kl8-accuracy-line">
     random E=${expected} | P(0 hit)=${zero}${targetText}${keyText ? ` | ${keyText}` : ''}${mode}
   </div>`;
 }
@@ -4822,7 +5575,7 @@ function renderKL8AccuracyProfile(profile) {
 function renderKL8PerformanceSummary(performance) {
   const available = Number(performance?.available_count || 0);
   if (!available) {
-    return `<div class="note" style="margin:8px 0 12px;color:#d29922">实际效果：等待下一期开奖自动结算；当前页面概率均为随机理论值，不代表模型准确率。</div>`;
+    return `<div class="kl8-inline-warning kl8-performance-note">实际效果等待下一期开奖自动结算；当前页面概率均为随机理论值，不代表模型准确率。</div>`;
   }
   const windows = Array.isArray(performance.windows) ? performance.windows : [];
   const current = windows.find(w => Number(w.settled_count || 0) > 0) || {};
@@ -4839,7 +5592,7 @@ function renderKL8PerformanceSummary(performance) {
     }
     return line;
   }).join('');
-  return `<div class="card" style="padding:10px 14px;margin:8px 0 12px;border-left:3px solid #4493f8">
+  return `<div class="card kl8-panel" style="padding:12px 15px;border-left:3px solid #63a4ff">
     <div style="font-size:12px;color:#8b949e;margin-bottom:5px">最近 ${esc(current.settled_count || available)} 期实际结算（与随机基线比较）</div>
     <div style="font-size:12px;line-height:1.7">${cells}</div>
   </div>`;
@@ -4940,22 +5693,22 @@ function openKL8ExcludeModal() {
   }
   initKL8ExcludeState(options);
 
-  let html = `<div style="position:fixed;inset:0;background:rgba(1,4,9,.72);z-index:9999;display:flex;align-items:center;justify-content:center;padding:18px">`;
-  html += `<div class="card" style="width:min(720px,96vw);max-height:86vh;overflow:auto;border:1px solid #d29922">`;
-  html += `<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px">`;
-  html += `<div class="section-title" style="font-size:16px;margin:0">剔除号码重新计算</div>`;
-  html += `<button class="kl8-refresh-btn" style="padding:6px 10px;background:#30363d" onclick="closeKL8ExcludeModal()">关闭</button>`;
-  html += `</div>`;
-  html += `<div class="note" style="margin-bottom:12px">选择玩法后，会剔除该玩法当前显示的整组号码并重算；重算出的新结果会成为下一次剔除对象，直到候选号码不足为止。不会覆盖正式预测和快照。</div>`;
+  let html = `<div class="kl8-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="kl8-exclude-title">`;
+  html += `<div class="kl8-modal-window">`;
+  html += `<div class="kl8-modal-head">`;
+  html += `<div><div class="kl8-panel-kicker">Advanced recalculation</div><div class="kl8-modal-title" id="kl8-exclude-title">剔除号码重新计算</div></div>`;
+  html += `<button type="button" class="kl8-refresh-btn action-muted" onclick="closeKL8ExcludeModal()">关闭</button>`;
+  html += `</div><div class="kl8-modal-body">`;
+  html += `<div class="kl8-disclaimer" style="margin-bottom:12px"><b>ⓘ</b><span>选择玩法后，会剔除当前整组号码并重算；新结果会成为下一次剔除对象，直到候选不足为止。不会覆盖正式预测和快照。</span></div>`;
   html += `<div id="kl8-exclude-options" style="display:grid;gap:10px">`;
   html += renderKL8ExcludeCards(options[0].key);
   html += `</div>`;
-  html += `<div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:14px">`;
-  html += `<button class="kl8-refresh-btn" style="background:#d29922" onclick="runKL8ExcludeRecalculate()">剔除并重新计算</button>`;
-  html += `<button class="kl8-refresh-btn" style="background:#30363d" onclick="closeKL8ExcludeModal()">取消</button>`;
+  html += `<div class="kl8-action-buttons" style="justify-content:flex-start;margin-top:14px">`;
+  html += `<button type="button" class="kl8-refresh-btn action-warn" onclick="runKL8ExcludeRecalculate()">剔除并重新计算</button>`;
+  html += `<button type="button" class="kl8-refresh-btn action-muted" onclick="closeKL8ExcludeModal()">取消</button>`;
   html += `</div>`;
   html += `<div id="kl8-exclude-result" style="margin-top:14px"></div>`;
-  html += `</div></div>`;
+  html += `</div></div></div>`;
   target.innerHTML = html;
 }
 
@@ -5046,23 +5799,23 @@ function openKL8KillModal() {
   }
   initKL8KillState(options);
 
-  let html = `<div style="position:fixed;inset:0;background:rgba(1,4,9,.72);z-index:9999;display:flex;align-items:center;justify-content:center;padding:18px">`;
-  html += `<div class="card" style="width:min(760px,96vw);max-height:86vh;overflow:auto;border:1px solid #f85149">`;
-  html += `<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px">`;
-  html += `<div class="section-title" style="font-size:16px;margin:0">杀号计算</div>`;
-  html += `<button class="kl8-refresh-btn" style="padding:6px 10px;background:#30363d" onclick="closeKL8KillModal()">关闭</button>`;
-  html += `</div>`;
-  html += `<div class="note" style="margin-bottom:12px">输入你要杀掉的号码后先计算一次；之后每点一次“杀号计算”，会把当前结果整组加入排除列表再推荐，不影响“剔除号码重新计算”。</div>`;
-  html += `<textarea id="kl8-kill-input" class="search" style="min-height:70px;margin-bottom:10px" placeholder="输入杀号，例如：03, 12, 25 或 03 12 25"></textarea>`;
+  let html = `<div class="kl8-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="kl8-kill-title">`;
+  html += `<div class="kl8-modal-window">`;
+  html += `<div class="kl8-modal-head">`;
+  html += `<div><div class="kl8-panel-kicker">Manual exclusion</div><div class="kl8-modal-title" id="kl8-kill-title">杀号计算</div></div>`;
+  html += `<button type="button" class="kl8-refresh-btn action-muted" onclick="closeKL8KillModal()">关闭</button>`;
+  html += `</div><div class="kl8-modal-body">`;
+  html += `<div class="kl8-disclaimer" style="margin-bottom:12px"><b>ⓘ</b><span>输入杀号后先计算一次；之后每次计算会把当前结果整组加入排除列表再推荐，不影响“剔除号码重新计算”。</span></div>`;
+  html += `<textarea id="kl8-kill-input" class="search" inputmode="numeric" style="min-height:76px;margin-bottom:12px" placeholder="输入杀号，例如：03, 12, 25 或 03 12 25"></textarea>`;
   html += `<div id="kl8-kill-options" style="display:grid;gap:10px">`;
   html += renderKL8KillCards(options[0].key);
   html += `</div>`;
-  html += `<div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:14px">`;
-  html += `<button class="kl8-refresh-btn" style="background:#f85149" onclick="runKL8KillRecalculate()">杀号计算</button>`;
-  html += `<button class="kl8-refresh-btn" style="background:#30363d" onclick="closeKL8KillModal()">取消</button>`;
+  html += `<div class="kl8-action-buttons" style="justify-content:flex-start;margin-top:14px">`;
+  html += `<button type="button" class="kl8-refresh-btn action-danger" onclick="runKL8KillRecalculate()">杀号计算</button>`;
+  html += `<button type="button" class="kl8-refresh-btn action-muted" onclick="closeKL8KillModal()">取消</button>`;
   html += `</div>`;
   html += `<div id="kl8-kill-result" style="margin-top:14px"></div>`;
-  html += `</div></div>`;
+  html += `</div></div></div>`;
   target.innerHTML = html;
 }
 
@@ -5090,14 +5843,14 @@ function invalidateKL8RecordsCache() {
 async function openKL8RecordsModal() {
   const target = document.getElementById('kl8-records-modal');
   if (!target) return;
-  target.innerHTML = `<div style="position:fixed;inset:0;background:rgba(1,4,9,.72);z-index:9999;display:flex;align-items:center;justify-content:center;padding:18px">
-    <div class="card" style="width:min(820px,96vw);max-height:88vh;display:flex;flex-direction:column;border:1px solid #2ea043">
-      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 16px;border-bottom:1px solid var(--line)">
-        <div class="section-title" style="font-size:16px;margin:0">📋 快乐8预测记录</div>
-        <button class="kl8-refresh-btn" style="padding:6px 10px;background:#30363d" onclick="closeKL8RecordsModal()">关闭</button>
+  target.innerHTML = `<div class="kl8-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="kl8-records-title">
+    <div class="kl8-modal-window records">
+      <div class="kl8-modal-head">
+        <div><div class="kl8-panel-kicker">Prediction archive</div><div class="kl8-modal-title" id="kl8-records-title">快乐8预测记录</div></div>
+        <button type="button" class="kl8-refresh-btn action-muted" onclick="closeKL8RecordsModal()">关闭</button>
       </div>
-      <div id="kl8-records-body" style="flex:1;overflow:auto;padding:16px">
-        <div id="kl8-records-summary" style="font-size:12px;color:var(--muted);margin-bottom:12px"></div>
+      <div id="kl8-records-body" class="kl8-modal-body" style="flex:1;min-height:0;overflow:auto">
+        <div id="kl8-records-summary" class="kl8-soft-badge" style="display:inline-flex;margin-bottom:12px"></div>
         <div id="kl8-records-list"><div class="status"><span class="spinner"></span>加载中…</div></div>
         <div id="kl8-records-pager"></div>
       </div>
@@ -5235,12 +5988,12 @@ function renderKL8RecordCard(rec) {
   const st = rec.settlement;
   const settled = rec.has_settlement && st;
   const statusBadge = settled
-    ? `<span style="padding:2px 8px;border-radius:10px;font-size:11px;background:rgba(46,160,67,.15);color:#2ea043;border:1px solid #2ea043">已结算</span>`
-    : `<span style="padding:2px 8px;border-radius:10px;font-size:11px;background:rgba(139,148,158,.15);color:var(--muted);border:1px solid var(--line)">待开奖</span>`;
+    ? `<span class="kl8-record-badge">已结算</span>`
+    : `<span class="kl8-record-badge pending">待开奖</span>`;
 
-  let html = `<div class="card" style="margin-bottom:12px;border-left:3px solid #2ea043">`;
+  let html = `<article class="kl8-record-card ${settled ? '' : 'pending'}">`;
   html += `<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
-    <div style="font-weight:600;font-size:15px">第 ${esc(rec.target_issue || '?')} 期预测</div>
+    <div style="font-weight:720;font-size:15px">第 ${esc(rec.target_issue || '?')} 期预测</div>
     <div style="display:flex;gap:8px;align-items:center">
       ${statusBadge}
       <span style="font-size:11px;color:var(--muted)">${esc(rec.predicted_at || '')}</span>
@@ -5255,7 +6008,7 @@ function renderKL8RecordCard(rec) {
     const pool = rec.main_pool && rec.main_pool[key];
     const nums = (rec.predicted && rec.predicted[key]) || pool || [];
     if (nums && nums.length) {
-      predHtml += `<div style="margin-top:6px"><span style="font-size:12px;color:var(--muted);display:inline-block;min-width:78px">${label}</span>${renderKL8Balls(nums, 26)}</div>`;
+      predHtml += `<div class="kl8-record-play"><span>${label}</span><div class="kl8-numbers-row">${renderKL8Balls(nums, 26)}</div></div>`;
     }
   }
   if (predHtml) {
@@ -5314,7 +6067,7 @@ function renderKL8RecordCard(rec) {
     html += `<div class="note" style="margin-top:10px">该期尚未开奖，开奖后系统会自动结算并在此显示中奖情况。</div>`;
   }
 
-  html += `</div>`;
+  html += `</article>`;
   return html;
 }
 
@@ -5354,6 +6107,7 @@ async function runKL8KillRecalculate() {
     const url = '/api/kl8/exclude-recalculate?play_type='
       + encodeURIComponent(option.key)
       + '&numbers=' + encodeURIComponent(excludeNumbers.join(','))
+      + buildKL8SourceContextQuery(option)
       + '&_=' + Date.now();
     const data = await fetchJson(url);
     if (data.error) throw new Error(data.error);
@@ -5424,6 +6178,7 @@ async function runKL8ExcludeRecalculate() {
     const url = '/api/kl8/exclude-recalculate?play_type='
       + encodeURIComponent(option.key)
       + '&numbers=' + encodeURIComponent(excludeNumbers.join(','))
+      + buildKL8SourceContextQuery(option)
       + '&_=' + Date.now();
     const data = await fetchJson(url);
     if (data.error) throw new Error(data.error);
@@ -6113,15 +6868,30 @@ async function loadPredictions() {
   app.innerHTML = `<div class="status"><span class="spinner"></span>正在加载预测记录…</div>`;
   
   try {
-    const [syncStatus, recordsData, diagnosticsData] = await Promise.all([
-      fetchJson('/api/sync/status'),
+    // 预测记录是主数据；同步状态和诊断只是辅助卡片。辅助接口失败时也必须
+    // 展示已保存记录，不能因为当前没有赛程或诊断暂不可用把历史一起隐藏。
+    const optionalResult = async promise => {
+      try {
+        const data = await promise;
+        return data?.error ? { error: data.error } : data;
+      } catch (error) {
+        return { error: error.message || String(error) };
+      }
+    };
+    const [recordsData, syncStatus, diagnosticsData] = await Promise.all([
       fetchJson('/api/predictions'),
-      fetchJson('/api/football/diagnostics')
+      optionalResult(fetchJsonWithTimeout('/api/sync/status', 5000)),
+      optionalResult(fetchJsonWithTimeout('/api/football/diagnostics', 5000))
     ]);
+    if (recordsData.error) throw new Error(recordsData.error);
     
     const sync = syncStatus.result || {};
     const records = recordsData.result?.records || [];
     const diagnostics = diagnosticsData.result || {};
+    const auxiliaryWarnings = [
+      syncStatus.error ? `同步状态暂不可用：${syncStatus.error}` : '',
+      diagnosticsData.error ? `诊断数据暂不可用：${diagnosticsData.error}` : '',
+    ].filter(Boolean);
     predictionExportData = {
       schema_version: 'football-prediction-export-v1',
       exported_at: new Date().toISOString(),
@@ -6135,7 +6905,9 @@ async function loadPredictions() {
     const settledAt = sync.last_settled_at || '';
     const syncStamp = formatSyncStamp(settledAt);
     
-    let html = '';
+    let html = auxiliaryWarnings.length
+      ? `<div class="note" style="margin-bottom:12px">${auxiliaryWarnings.map(esc).join(' · ')}；以下预测记录仍可正常查看。</div>`
+      : '';
     
     // ── 自动同步状态卡片 ──
     html += `<div class="card model-health"><h3>🔄 自动赛果同步</h3>

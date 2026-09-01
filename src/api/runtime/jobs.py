@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""后台任务：报告同步、足球预分析与快乐8参数搜索。"""
+"""后台任务：报告同步、足球预分析与快乐8长任务。"""
 
 import os
 import sys
@@ -304,6 +304,183 @@ KL8_PARAMETER_SEARCH_LOCK = threading.Lock()
 
 
 KL8_PARAMETER_SEARCH_REPORT_DIR = Path(data_path('kl8_parameter_search_reports'))
+
+
+KL8_REFRESH_JOBS = {}
+
+
+KL8_REFRESH_THREADS = {}
+
+
+KL8_REFRESH_LOCK = threading.Lock()
+
+
+KL8_REFRESH_MAX_JOBS = 32
+
+
+KL8_REFRESH_STALE_SECONDS = 300
+
+
+def _copy_kl8_refresh_job(job):
+    return dict(job) if job else None
+
+
+def _prune_kl8_refresh_jobs_locked(preserve_id):
+    if len(KL8_REFRESH_JOBS) <= KL8_REFRESH_MAX_JOBS:
+        return
+    terminal = sorted(
+        (
+            (key, value)
+            for key, value in KL8_REFRESH_JOBS.items()
+            if key != preserve_id
+            and value.get('status') in ('completed', 'failed')
+        ),
+        key=lambda item: float(
+            item[1].get('finished_at')
+            or item[1].get('created_at')
+            or 0
+        ),
+    )
+    while len(KL8_REFRESH_JOBS) > KL8_REFRESH_MAX_JOBS and terminal:
+        old_id, _ = terminal.pop(0)
+        KL8_REFRESH_JOBS.pop(old_id, None)
+        KL8_REFRESH_THREADS.pop(old_id, None)
+
+
+def _set_kl8_refresh_job(job_id, updates):
+    """更新刷新任务，并限制已完成任务的内存占用。"""
+    with KL8_REFRESH_LOCK:
+        job = KL8_REFRESH_JOBS.setdefault(job_id, {})
+        job.update(updates)
+        _prune_kl8_refresh_jobs_locked(job_id)
+        return _copy_kl8_refresh_job(job)
+
+
+def _get_kl8_refresh_job(job_id):
+    with KL8_REFRESH_LOCK:
+        return _copy_kl8_refresh_job(KL8_REFRESH_JOBS.get(job_id))
+
+
+def _transition_kl8_refresh_job(job_id, allowed_statuses, updates):
+    """仅让仍处于预期状态的 worker 推进任务，禁止超时任务复活。"""
+    with KL8_REFRESH_LOCK:
+        job = KL8_REFRESH_JOBS.get(job_id)
+        if not job or job.get('status') not in allowed_statuses:
+            return _copy_kl8_refresh_job(job)
+        job.update(updates)
+        _prune_kl8_refresh_jobs_locked(job_id)
+        return _copy_kl8_refresh_job(job)
+
+
+def _run_kl8_refresh_job(job_id, refresh_fn):
+    """在线程中执行完整预测；HTTP 请求只查询这里的轻量状态。"""
+    running = _transition_kl8_refresh_job(job_id, {'queued'}, {
+        'status': 'running',
+        'started_at': time.time(),
+        'message': '正在重新计算快乐8预测',
+    })
+    if not running or running.get('status') != 'running':
+        return
+    try:
+        payload = refresh_fn()
+        if not isinstance(payload, dict):
+            raise RuntimeError('快乐8重新计算返回格式错误')
+        if payload.get('error'):
+            raise RuntimeError(str(payload['error']))
+        result = payload.get('result')
+        if not payload.get('success') or not isinstance(result, dict):
+            raise RuntimeError('快乐8重新计算未返回有效结果')
+        if result.get('error'):
+            raise RuntimeError(str(result['error']))
+        _transition_kl8_refresh_job(job_id, {'running'}, {
+            'status': 'completed',
+            'finished_at': time.time(),
+            'message': '重新计算完成',
+            # 前端契约直接 renderKL8(job.result)，不要再包一层 result。
+            'result': result,
+        })
+    except Exception as exc:
+        _transition_kl8_refresh_job(job_id, {'queued', 'running'}, {
+            'status': 'failed',
+            'finished_at': time.time(),
+            'message': str(exc),
+            'error': str(exc),
+        })
+        log.exception('快乐8重新计算任务失败')
+    finally:
+        with KL8_REFRESH_LOCK:
+            worker = KL8_REFRESH_THREADS.get(job_id)
+            if worker is threading.current_thread():
+                KL8_REFRESH_THREADS.pop(job_id, None)
+
+
+def _start_kl8_refresh_job(refresh_fn):
+    """单飞启动刷新任务；重复点击复用正在运行的同一个任务。"""
+    with KL8_REFRESH_LOCK:
+        now = time.time()
+        for existing_id, job in KL8_REFRESH_JOBS.items():
+            if job.get('status') not in ('queued', 'running'):
+                continue
+            active_since = float(
+                job.get('started_at') or job.get('created_at') or now
+            )
+            if now - active_since > KL8_REFRESH_STALE_SECONDS:
+                worker = KL8_REFRESH_THREADS.get(existing_id)
+                if worker is not None and worker.is_alive():
+                    # Python 线程不能安全强杀。继续复用真实存活的单飞任务，
+                    # 不能假装失败后再启动一个必然等同一把预测锁的重试线程。
+                    job['message'] = '重新计算耗时较长，仍在后台执行，请勿重复提交'
+                else:
+                    job.update({
+                        'status': 'failed',
+                        'finished_at': now,
+                        'message': '重新计算任务已停止，请重试',
+                        'error': '重新计算任务已停止，请重试',
+                    })
+
+        active = [
+            job for job in KL8_REFRESH_JOBS.values()
+            if job.get('status') in ('queued', 'running')
+        ]
+        if active:
+            active.sort(
+                key=lambda job: float(job.get('created_at') or 0),
+                reverse=True,
+            )
+            return _copy_kl8_refresh_job(active[0])
+
+        job_id = uuid.uuid4().hex
+        queued = {
+            'job_id': job_id,
+            'status': 'queued',
+            'created_at': now,
+            'started_at': None,
+            'finished_at': None,
+            'message': '已进入重新计算队列',
+        }
+        KL8_REFRESH_JOBS[job_id] = dict(queued)
+
+    thread = threading.Thread(
+        target=_run_kl8_refresh_job,
+        args=(job_id, refresh_fn),
+        daemon=True,
+        name=f'KL8Refresh-{job_id[:8]}',
+    )
+    with KL8_REFRESH_LOCK:
+        KL8_REFRESH_THREADS[job_id] = thread
+    try:
+        thread.start()
+    except Exception as exc:
+        with KL8_REFRESH_LOCK:
+            KL8_REFRESH_THREADS.pop(job_id, None)
+        return _set_kl8_refresh_job(job_id, {
+            'status': 'failed',
+            'finished_at': time.time(),
+            'message': f'无法启动重新计算任务: {exc}',
+            'error': f'无法启动重新计算任务: {exc}',
+        })
+    # 返回启动前的快照，保证接口契约稳定为 queued；状态由轮询读取。
+    return queued
 
 
 def _set_kl8_parameter_search_job(job_id, updates):

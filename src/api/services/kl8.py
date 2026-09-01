@@ -27,6 +27,7 @@ from src.api.runtime.caching import (
     _CACHE, _current_kl8_predictor_version,
 )
 from src.api.runtime.jobs import (
+    _get_kl8_refresh_job, _start_kl8_refresh_job,
     _get_kl8_parameter_search_job, _run_kl8_parameter_search_job,
     _save_kl8_parameter_search_report, _set_kl8_parameter_search_job,
 )
@@ -37,8 +38,144 @@ _KL8_RECORDS_DEFAULT_PAGE_SIZE = 8
 _KL8_RECORDS_MAX_PAGE_SIZE = 50
 _KL8_RECORDS_MAINTENANCE_INTERVAL = 300.0
 _kl8_records_maintenance_lock = threading.Lock()
+_kl8_compat_cache_lock = threading.Lock()
+_kl8_refresh_execution_lock = threading.Lock()
 _kl8_records_maintenance_running = False
 _kl8_records_maintenance_last_finished = 0.0
+
+
+def _current_kl8_config_fingerprint():
+    """取得当前完整策略指纹，供跨进程预测缓存键使用。"""
+    try:
+        from src.kl8.snapshots import _strategy_config_fingerprint
+
+        return str(_strategy_config_fingerprint() or '')
+    except Exception:
+        log.warning('读取快乐8策略指纹失败，本次仅按代码版本缓存', exc_info=True)
+        return ''
+
+
+def _kl8_cache_version(version=None, config_fingerprint=None):
+    """把同代码版本内的策略变更也编码进缓存身份。"""
+    version = str(version or _current_kl8_predictor_version())
+    fingerprint = str(
+        config_fingerprint
+        if config_fingerprint is not None
+        else _current_kl8_config_fingerprint()
+    )
+    return f'{version}:{fingerprint}' if fingerprint else version
+
+
+def _kl8_prediction_freshness(data):
+    if not isinstance(data, dict):
+        return ('', False, False, 0, '')
+    statistics = data.get('statistics') or {}
+    version = str(statistics.get('version') or data.get('version') or '')
+    config_fingerprint = str(
+        data.get('strategy_config_fingerprint')
+        or statistics.get('strategy_config_fingerprint')
+        or ''
+    )
+    issue = str(
+        statistics.get('based_on_issue')
+        or data.get('based_on_issue')
+        or ''
+    )
+    generated_at = str(
+        statistics.get('prediction_generated_at')
+        or data.get('prediction_generated_at')
+        or ''
+    )
+    try:
+        generated_at_ns = int(
+            statistics.get('prediction_generated_at_ns')
+            or data.get('prediction_generated_at_ns')
+            or 0
+        )
+    except (TypeError, ValueError):
+        generated_at_ns = 0
+    current_config = _current_kl8_config_fingerprint()
+    latest_issue = str(kl8_latest_issue() or '')
+    return (
+        issue,
+        version == _current_kl8_predictor_version()
+        and (not config_fingerprint or config_fingerprint == current_config),
+        not latest_issue or issue == latest_issue,
+        generated_at_ns,
+        generated_at,
+    )
+
+
+def _sync_kl8_compat_cache(result):
+    """按版本、期号和生成时间单调更新旧进程状态。"""
+    if not isinstance(result, dict) or result.get('error'):
+        return
+
+    with _kl8_compat_cache_lock:
+        previous = _CACHE['kl8'].get('data')
+        if (
+            previous is not None
+            and _kl8_prediction_freshness(result)
+            <= _kl8_prediction_freshness(previous)
+        ):
+            return
+        _CACHE['kl8']['data'] = result
+        _CACHE['kl8']['timestamp'] = time.time()
+
+
+def _publish_kl8_prediction(result):
+    """成功计算后同时替换兼容缓存和两层共享缓存。"""
+    if not isinstance(result, dict) or result.get('error'):
+        raise RuntimeError(
+            str(result.get('error') if isinstance(result, dict) else '')
+            or '快乐8重新计算未返回有效结果'
+        )
+
+    statistics = result.get('statistics') or {}
+    result_issue = str(
+        statistics.get('based_on_issue')
+        or result.get('based_on_issue')
+        or ''
+    )
+    latest_issue = str(kl8_latest_issue() or '')
+    if result_issue and latest_issue and result_issue != latest_issue:
+        raise RuntimeError(
+            f'开奖号已从{result_issue}更新到{latest_issue}，旧预测已丢弃，请重试'
+        )
+    cache_issue = result_issue or latest_issue
+    version = str(
+        statistics.get('version')
+        or result.get('version')
+        or _current_kl8_predictor_version()
+    )
+    result_config = str(
+        result.get('strategy_config_fingerprint')
+        or statistics.get('strategy_config_fingerprint')
+        or ''
+    )
+    current_config = _current_kl8_config_fingerprint()
+    if result_config and current_config and result_config != current_config:
+        raise RuntimeError('快乐8策略已更新，较旧计算结果已丢弃，请重试')
+    with _kl8_compat_cache_lock:
+        previous = _CACHE['kl8'].get('data')
+        if (
+            previous is not None
+            and _kl8_prediction_freshness(result)
+            < _kl8_prediction_freshness(previous)
+        ):
+            raise RuntimeError('检测到更新的快乐8预测，较旧结果已丢弃')
+
+        cache = get_shared_cache()
+        if cache is not None and cache_issue:
+            key = kl8_cache.cache_key(
+                cache_issue,
+                _kl8_cache_version(version, result_config or current_config),
+            )
+            # invalidate 先推进缓存纪元，避免更早启动的 SWR 线程在 set 后写回旧值。
+            cache.invalidate(key)
+            cache.set(key, result, ttl=kl8_cache.TTL_SECONDS)
+        _CACHE['kl8']['data'] = result
+        _CACHE['kl8']['timestamp'] = time.time()
 
 
 def kl8_payload():
@@ -61,15 +198,13 @@ def kl8_payload():
         data = kl8_cache.predict(
             compute_fn=_compute,
             latest_issue=kl8_latest_issue(),
-            version=_current_kl8_predictor_version(),
+            version=_kl8_cache_version(),
             cache=get_shared_cache())
         # 手动删号重算仍通过兼容状态取得当前正式快照的上下文。主读取路径
         # 命中 Redis/L1 时不会经过 refresh/fetch，若不在这里同步，后续重算
         # 会以空 source_snapshot_id 落盘，预测记录便无法归入对应快照。
         # 这里只复用已经取得的结果，不触发第二次预测计算。
-        if isinstance(data, dict):
-            _CACHE['kl8']['data'] = data
-            _CACHE['kl8']['timestamp'] = time.time()
+        _sync_kl8_compat_cache(data)
         return {'result': data}
     except Exception:
         log.error('快乐8预测失败', exc_info=True)
@@ -130,52 +265,69 @@ def _kl8_draw_map_from_history_file():
 def kl8_refresh_payload():
     """强制刷新快乐8数据缓存"""
     try:
-        log.info('快乐8强制刷新请求到达')
-        kl8_clear_cache()
-        _CACHE['kl8']['data'] = None
-        _CACHE['kl8']['timestamp'] = 0
-
-        result = kl8_run_prediction(force_refresh=True)
-
-        _CACHE['kl8']['data'] = result
-        _CACHE['kl8']['timestamp'] = time.time()
-
-        return {'success': True, 'result': result}
-    except Exception:
+        with _kl8_refresh_execution_lock:
+            log.info('快乐8强制刷新请求到达')
+            kl8_clear_cache()
+            result = kl8_run_prediction(force_refresh=True)
+            _publish_kl8_prediction(result)
+            return {'success': True, 'result': result}
+    except Exception as exc:
         log.error('快乐8刷新失败', exc_info=True)
-        return {'error': '快乐8刷新失败'}
+        return {'error': f'快乐8刷新失败: {exc}'}
+
+
+def kl8_refresh_start_payload():
+    """立即返回后台任务；完整计算不再占用网关请求生命周期。"""
+    return {
+        'success': True,
+        'result': _start_kl8_refresh_job(kl8_refresh_payload),
+    }
+
+
+def kl8_refresh_status_payload(params):
+    """查询快乐8重新计算任务状态。"""
+    job_id = (params.get('job_id') or [''])[0]
+    if not job_id:
+        return {'error': '缺少job_id参数'}
+    job = _get_kl8_refresh_job(job_id)
+    if not job:
+        return {'error': f'重新计算任务不存在: {job_id}'}
+
+    now = time.time()
+    started_at = job.get('started_at') or job.get('created_at') or now
+    finished_at = job.get('finished_at') or now
+    job['elapsed_seconds'] = round(max(0, finished_at - started_at), 1)
+    return {'success': True, 'result': job}
 
 
 def kl8_fetch_payload():
     """抓取最新快乐8开奖数据"""
     try:
-        log.info('快乐8抓取最新数据请求到达')
-        from src.kl8.fetch import fetch_kl8_data, save_kl8_data
+        with _kl8_refresh_execution_lock:
+            log.info('快乐8抓取最新数据请求到达')
+            from src.kl8.fetch import fetch_kl8_data, save_kl8_data
 
-        # 日常只需最近两页；历史补数由独立调度器负责。
-        data = fetch_kl8_data(pages=2, per_page=50)
-        if not data:
-            return {'success': False, 'message': '网络抓取失败'}
+            # 日常只需最近两页；历史补数由独立调度器负责。
+            data = fetch_kl8_data(pages=2, per_page=50)
+            if not data:
+                return {'success': False, 'message': '网络抓取失败'}
 
-        # v2: 合并保存（不是覆盖），save_kl8_data内部会调clear_cache()
-        save_ok = save_kl8_data(data)
-        if not save_ok:
-            return {'success': False, 'message': '数据量不足，不允许覆盖原历史'}
+            # v2: 合并保存（不是覆盖），save_kl8_data内部会调clear_cache()
+            save_ok = save_kl8_data(data)
+            if not save_ok:
+                return {'success': False, 'message': '数据量不足，不允许覆盖原历史'}
 
-        # 重新预测（clear_cache已在save内部完成）
-        _CACHE['kl8']['data'] = None
-        _CACHE['kl8']['timestamp'] = 0
+            # 重新预测（clear_cache已在save内部完成）。兼容缓存不能先裸清空，
+            # 否则计算窗口内的手动杀号会失去来源快照；成功后由 publish 原子替换。
+            result = kl8_run_prediction(force_refresh=True)
+            _publish_kl8_prediction(result)
 
-        result = kl8_run_prediction(force_refresh=True)
-        _CACHE['kl8']['data'] = result
-        _CACHE['kl8']['timestamp'] = time.time()
-
-        return {
-            'success': True,
-            'message': f'成功抓取 {len(data)} 期数据',
-            'latest_issue': data[0]['issue'] if data else '',
-            'result': result,
-        }
+            return {
+                'success': True,
+                'message': f'成功抓取 {len(data)} 期数据',
+                'latest_issue': data[0]['issue'] if data else '',
+                'result': result,
+            }
     except Exception:
         log.error('快乐8抓取失败', exc_info=True)
         return {'error': '快乐8抓取失败'}
@@ -198,31 +350,139 @@ def kl8_exclude_recalculate_payload(params):
         except ValueError:
             return {'error': 'numbers格式错误，应为逗号分隔的1-80整数'}
 
-        analyzer = get_kl8_analyzer()
-        current = _CACHE.get('kl8', {}).get('data') or {}
-        snapshot_file = str(current.get('snapshot_file') or '')
-        source_snapshot_id = Path(snapshot_file).stem.replace('snapshot_', '', 1) if snapshot_file else ''
-        current_play = current.get(play_type) or {}
-        initial_numbers = (
-            current_play.get('numbers')
-            or current_play.get('core_numbers')
-            or current_play.get('top7_numbers')
-            # 兼容升级前已经落盘的 8 码缓存；新预测只会生成 top7_numbers。
-            or current_play.get('top8_numbers')
-            or current_play.get('top11_numbers')
-            or []
-        ) if isinstance(current_play, dict) else []
-        result = analyzer.recalculate_play_excluding(
-            play_type,
-            exclude_numbers,
-            record_context={
+        requested_context = {
+            'source_snapshot_id': (params.get('source_snapshot_id') or [''])[0],
+            'source_version': (params.get('source_version') or [''])[0],
+            'source_target_issue': (params.get('source_target_issue') or [''])[0],
+            'source_based_on_issue': (params.get('source_based_on_issue') or [''])[0],
+            'source_config_fingerprint': (
+                params.get('source_config_fingerprint') or ['']
+            )[0],
+        }
+        if not all(str(value or '') for value in requested_context.values()):
+            return {'error': '页面预测上下文不完整，请刷新快乐8页面后重试'}
+
+        with _kl8_compat_cache_lock:
+            current = _CACHE.get('kl8', {}).get('data') or {}
+
+        # 进程刚重启、模型版本或策略刚升级时，兼容状态可能为空/过期；先通过
+        # 正常缓存入口取得当前结果，禁止写出 source_snapshot_id 为空的孤儿记录。
+        freshness = _kl8_prediction_freshness(current)
+        if not current or not (freshness[1] and freshness[2]):
+            current_payload = kl8_payload()
+            if current_payload.get('error'):
+                return {'error': '当前预测尚未就绪，请先刷新快乐8数据'}
+
+        # 从核对页面上下文到计算落盘都持有预测锁，避免刷新/定时任务在中途
+        # 更换 analyzer、历史期号或快照。kl8_payload 已在锁外完成，避免与
+        # foundation/cache 的单飞锁形成反向等待。
+        from src.kl8.snapshots import _prediction_run_lock
+
+        with _prediction_run_lock:
+            with _kl8_compat_cache_lock:
+                current = _CACHE.get('kl8', {}).get('data') or {}
+            freshness = _kl8_prediction_freshness(current)
+            if not current or not (freshness[1] and freshness[2]):
+                return {'error': '预测期号或版本已更新，请刷新快乐8页面后重试'}
+
+            snapshot_file = str(current.get('snapshot_file') or '')
+            source_snapshot_id = (
+                Path(snapshot_file).stem.replace('snapshot_', '', 1)
+                if snapshot_file else ''
+            )
+            statistics = current.get('statistics') or {}
+            source_version = str(
+                statistics.get('version') or current.get('version') or ''
+            )
+            current_target = str(
+                statistics.get('target_issue')
+                or current.get('target_issue')
+                or ''
+            )
+            current_based_on = str(
+                statistics.get('based_on_issue')
+                or current.get('based_on_issue')
+                or ''
+            )
+            latest_issue = str(kl8_latest_issue() or '')
+            if not latest_issue:
+                return {'error': '开奖历史暂时不可读取，请稍后重试'}
+            if latest_issue != current_based_on:
+                return {'error': '开奖历史已更新，请刷新快乐8页面后再进行杀号计算'}
+            current_config = str(
+                current.get('strategy_config_fingerprint')
+                or statistics.get('strategy_config_fingerprint')
+                or ''
+            )
+            actual_context = {
                 'source_snapshot_id': source_snapshot_id,
-                'source_version': current.get('statistics', {}).get('version') or current.get('version') or '',
-                'generation_mode': 'manual',
-                'initial_numbers': initial_numbers,
-            },
-        )
-        return {'result': result}
+                'source_version': source_version,
+                'source_target_issue': current_target,
+                'source_based_on_issue': current_based_on,
+                'source_config_fingerprint': current_config,
+            }
+            if any(
+                str(requested_context[key]) != str(actual_context[key])
+                for key in requested_context
+            ):
+                return {'error': '页面显示的预测已经更新，请刷新后再进行杀号计算'}
+
+            try:
+                snapshots = kl8_list_snapshots()
+            except Exception:
+                log.warning('快乐8读取重算来源快照失败', exc_info=True)
+                return {'error': '预测记录暂时不可读取，请稍后重试'}
+            matching = [
+                item for item in snapshots
+                if str(item.get('target_issue') or '') == current_target
+                and str(item.get('based_on_issue') or '') == current_based_on
+                and str(item.get('version') or '') == source_version
+                and str(item.get('strategy_config_fingerprint') or '')
+                == current_config
+            ]
+            if not matching:
+                return {'error': '当前预测记录不存在，请重新计算快乐8预测'}
+            latest = max(matching, key=lambda item: (
+                int(item.get('predicted_at_ns') or 0),
+                str(item.get('predicted_at') or ''),
+                str(item.get('snapshot_id') or item.get('file') or ''),
+            ))
+            latest_snapshot_id = str(
+                latest.get('snapshot_id')
+                or Path(str(latest.get('file') or '')).stem.replace(
+                    'snapshot_', '', 1,
+                )
+            )
+            if latest_snapshot_id != source_snapshot_id:
+                return {'error': '预测记录已更新，请刷新快乐8页面后再进行杀号计算'}
+
+            analyzer = get_kl8_analyzer()
+            history = getattr(analyzer, 'history_data', None) or []
+            analyzer_issue = str(history[0].get('issue') or '') if history else ''
+            if analyzer_issue != current_based_on:
+                return {'error': '开奖历史已更新，请刷新快乐8页面后再进行杀号计算'}
+
+            current_play = current.get(play_type) or {}
+            initial_numbers = (
+                current_play.get('numbers')
+                or current_play.get('core_numbers')
+                or current_play.get('top7_numbers')
+                # 兼容升级前已经落盘的 8 码缓存；新预测只会生成 top7_numbers。
+                or current_play.get('top8_numbers')
+                or current_play.get('top11_numbers')
+                or []
+            ) if isinstance(current_play, dict) else []
+            result = analyzer.recalculate_play_excluding(
+                play_type,
+                exclude_numbers,
+                record_context={
+                    'source_snapshot_id': source_snapshot_id,
+                    'source_version': source_version,
+                    'generation_mode': 'manual',
+                    'initial_numbers': initial_numbers,
+                },
+            )
+            return {'result': result}
     except Exception as e:
         log.error('快乐8剔除重算失败', exc_info=True)
         return {'error': f'剔除重算失败: {str(e)}'}
@@ -262,13 +522,31 @@ def _kl8_records_page_options(params, total):
 
 
 def _dedupe_kl8_snapshots(snapshots):
-    """同一目标期只留最新快照，并在读取大块预测内容之前完成去重。"""
+    """同一目标期优先显示当前代码及当前策略配置的最新预测。"""
+    current_version = _current_kl8_predictor_version()
+    current_config = _current_kl8_config_fingerprint()
+
+    def _selection_key(item):
+        is_current = str(item.get('version') or '') == current_version
+        is_current_config = (
+            str(item.get('strategy_config_fingerprint') or '') == current_config
+        )
+        try:
+            predicted_at_ns = int(item.get('predicted_at_ns') or 0)
+        except (TypeError, ValueError):
+            predicted_at_ns = 0
+        return (
+            str(item.get('target_issue') or ''),
+            is_current,
+            is_current_config,
+            predicted_at_ns,
+            str(item.get('predicted_at') or ''),
+            str(item.get('snapshot_id') or item.get('file') or ''),
+        )
+
     ordered = sorted(
         snapshots,
-        key=lambda item: (
-            str(item.get('target_issue') or ''),
-            str(item.get('predicted_at') or ''),
-        ),
+        key=_selection_key,
         reverse=True,
     )
     seen = set()
@@ -855,6 +1133,12 @@ def kl8_activate_payload(params):
             auto_activate=auto_activate,
             n_permutations=n_permutations,
         )
+        if isinstance(result, dict) and result.get('activated'):
+            # 内部预测缓存已由 activate_verified_strategy 清理；兼容状态也要
+            # 清掉。跨进程缓存会因策略指纹进入新 key 而自然失效。
+            with _kl8_compat_cache_lock:
+                _CACHE['kl8']['data'] = None
+                _CACHE['kl8']['timestamp'] = 0
         return {'result': result}
     except Exception as e:
         log.error('快乐8策略激活失败', exc_info=True)

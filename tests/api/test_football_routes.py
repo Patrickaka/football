@@ -135,6 +135,39 @@ class BatchPrediction(unittest.TestCase):
             self.assertEqual(client.get('/api/predict/batch').status_code, 405)
 
 
+class PredictionRecordsIndependentOfSchedule(unittest.TestCase):
+
+    def test_records_route_reaches_the_records_service(self):
+        payload = {'result': {'records': [{'match_id': 'history-1'}], 'count': 1}}
+        with mock.patch.object(
+                service, 'predictions_payload', return_value=payload,
+        ) as records:
+            with make_client() as client:
+                response = client.get('/api/predictions')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), payload)
+        records.assert_called_once_with()
+
+    def test_records_service_does_not_require_a_current_match_list(self):
+        stored_records = [{'match_id': 'history-1'}]
+        with mock.patch(
+                'src.football.result_sync.get_prediction_records',
+                return_value=stored_records,
+        ) as records, mock.patch.object(
+                service, 'matches_payload',
+                side_effect=AssertionError('预测记录不应抓取当前赛程'),
+        ) as matches:
+            payload = service.predictions_payload()
+
+        self.assertEqual(
+            payload,
+            {'result': {'records': stored_records, 'count': 1}},
+        )
+        records.assert_called_once_with(include_hidden=False)
+        matches.assert_not_called()
+
+
 class SideEffectRoutesStillWired(unittest.TestCase):
     """差分排掉的那几条——**接线仍要有测试**，否则它们没人看过。"""
 

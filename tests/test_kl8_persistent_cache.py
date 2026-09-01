@@ -40,6 +40,12 @@ class CacheKeyTests(unittest.TestCase):
         """与其它业务共用一个 Redis，前缀不能省。"""
         self.assertTrue(kl8_cache.cache_key('1', 'v').startswith('kl8:'))
 
+    def test_service_cache_identity_changes_with_strategy_fingerprint(self):
+        self.assertNotEqual(
+            service._kl8_cache_version('v10', 'strategy-a'),
+            service._kl8_cache_version('v10', 'strategy-b'),
+        )
+
 
 class PredictTests(unittest.TestCase):
     def setUp(self):

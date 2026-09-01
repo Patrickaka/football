@@ -27,6 +27,19 @@ async def refresh():
     return await run_blocking(service.kl8_refresh_payload)
 
 
+@router.post('/api/kl8-refresh/start')
+async def refresh_start():
+    """启动后台重算，避免网关等待完整预测而返回 504。"""
+    # 控制面只登记一个 daemon 任务，不能排在共享阻塞线程池后面；线程池若
+    # 正被其他慢分析占满，连“开始任务”本身都可能等到网关超时。
+    return service.kl8_refresh_start_payload()
+
+
+@router.get('/api/kl8-refresh/status')
+async def refresh_status(params: dict = Depends(query_params)):
+    return service.kl8_refresh_status_payload(params)
+
+
 @router.get('/api/kl8/fetch')
 async def fetch():
     return await run_blocking(service.kl8_fetch_payload)

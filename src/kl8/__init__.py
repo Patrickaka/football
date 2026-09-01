@@ -41,7 +41,7 @@ from .candidates import (
     generate_multi_slips, _simulate_multi_slip_coverage,
 )
 from .records import (
-    normalize_record, _checksum_numbers, _compute_next_issue, load_prize_table, _strategy_fingerprint,
+    normalize_record, _checksum_numbers, _compute_next_issue, load_prize_table, _strategy_fingerprint, _resolved_strategies_fingerprint, _prediction_config_fingerprint,
     _persist_trial_results, _load_trial_results, _persist_active_strategies, _load_active_strategies, _persist_final_test_report,
     loaded_strategies, save_conflict_to_queue, list_conflict_queue, check_data_integrity, _load_last_snapshot,
     _load_recent_settlements, _summarize_settlement_window, _build_recent_settlement_performance, _build_strategy_health, _compute_prediction_changes,
@@ -50,7 +50,7 @@ from .analyzer import (
     KL8Analyzer, _analyzer_instance, get_kl8_analyzer, build_candidate_pool,
 )
 from .snapshots import (
-    activate_verified_strategy, _prediction_cache, run_prediction, clear_cache, list_prediction_snapshots,
+    activate_verified_strategy, mark_strategy_degradation, _prediction_cache, run_prediction, clear_cache, list_prediction_snapshots,
     list_exclude_recalculations, _check_settlement_exists,
 )
 from .backtest import (

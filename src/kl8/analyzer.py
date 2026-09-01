@@ -6,6 +6,7 @@ import json
 import time
 import hashlib
 import uuid
+import threading
 from collections import defaultdict, Counter
 from typing import List, Dict, Optional, Tuple
 from itertools import combinations
@@ -34,7 +35,7 @@ from .candidates import (
     _adaptive_repeat_cap, _adaptive_repeat_target, _clean_pick_numbers, _diversify_candidate_pool, _enforce_minimum_repeats, _high_tier_chase_candidate_pool, _prize_floor_candidate_pool, _select_final_candidate_pool, _shape_balanced_candidate_pool, _shape_penalty, _shape_profile, _shape_targets, _zone_spread_candidate_pool,
 )
 from .records import (
-    _build_recent_settlement_performance, _build_strategy_health, _checksum_numbers, _compute_next_issue, _compute_prediction_changes, _load_last_snapshot, _strategy_fingerprint, check_data_integrity, load_prize_table, normalize_record, save_conflict_to_queue,
+    _build_recent_settlement_performance, _build_strategy_health, _checksum_numbers, _compute_next_issue, _compute_prediction_changes, _load_last_snapshot, _prediction_config_fingerprint, _resolved_strategies_fingerprint, check_data_integrity, load_prize_table, normalize_record, save_conflict_to_queue,
 )
 
 # 两个入口各自要展示哪几种候选形态。写成常量而不是散在函数里，是因为
@@ -44,6 +45,7 @@ CANDIDATE_VARIANTS = ('high_tier_chase', 'balanced', 'concentrated', 'low_repeat
                       'repeat_follow', 'zone_spread', 'prize_floor', 'shape_balanced')
 EXCLUDE_RECALC_VARIANTS = ('concentrated', 'balanced', 'repeat_follow', 'low_repeat',
                            'prize_floor', 'zone_spread', 'shape_balanced')
+_recalculation_record_lock = threading.Lock()
 
 # 候选池整形已在领域层（3-10）。这里仍然显式注入而不是让 voting 直接
 # import：投票要的是「一种整形办法」，不是「kl8 的那一种」，
@@ -376,22 +378,58 @@ class KL8Analyzer:
         snapshot_dir = Path(_cfg.KL8_SNAPSHOT_DIR)
         snapshot_dir.mkdir(parents=True, exist_ok=True)
 
-        # v9: 策略指纹 — 用于唯一约束
-        # 使用 select_5 的策略作为基准指纹（所有玩法当前使用同一策略）
+        # 策略指纹用于正式快照唯一约束。各玩法现在允许独立策略，不能再只
+        # 看 select_5；否则 select_6 / 复式策略变化会被误判为同一预测。
         resolved = prediction_result.get('resolved_strategies', {})
-        base_strategy = resolved.get('select_5', {})
-        strategy_fp = _strategy_fingerprint(base_strategy) if base_strategy else 'no_strategy'
+        strategy_fp = _resolved_strategies_fingerprint(resolved)
+        config_fp = str(
+            prediction_result.get('strategy_config_fingerprint')
+            or _prediction_config_fingerprint()
+        )
 
         # v9: 检查是否已有同一目标期+策略指纹的正式快照
         target_issue_val = _compute_next_issue(self.history_data[0]['issue'], self.history_data)
-        snapshot_key = f'{target_issue_val}_{strategy_fp}'
+        snapshot_key = (
+            str(target_issue_val),
+            KL8_PREDICTOR_VERSION,
+            strategy_fp,
+            config_fp,
+        )
         is_experiment = False
 
         # 扫描已有快照
         for existing_file in snapshot_dir.glob('snapshot_*.json'):
             try:
                 existing_data = json.loads(existing_file.read_text(encoding='utf-8'))
-                existing_key = f'{existing_data.get("target_issue", "")}_{_strategy_fingerprint(existing_data.get("resolved_strategies", {}).get("select_5", {}))}'
+                existing_version = str(existing_data.get('version') or '')
+                existing_fp = str(
+                    existing_data.get('strategy_fingerprint') or ''
+                )
+                existing_config_fp = str(
+                    existing_data.get('strategy_config_fingerprint') or ''
+                )
+                if (
+                    existing_version == KL8_PREDICTOR_VERSION
+                    and not existing_config_fp
+                ):
+                    # 当前版旧格式没有完整配置指纹，不能证明与当前配置相同。
+                    # 保守补一份正式记录，之后即可精确判重。
+                    continue
+                if not existing_fp:
+                    # 旧格式快照没有落盘指纹时才重算。已有指纹
+                    # 必须直接使用：指纹包含当时的代码版本，若用
+                    # 当前版本重算旧快照，会误把新版本判为重复实验。
+                    if existing_version and existing_version != KL8_PREDICTOR_VERSION:
+                        continue
+                    existing_fp = _resolved_strategies_fingerprint(
+                        existing_data.get('resolved_strategies', {})
+                    )
+                existing_key = (
+                    str(existing_data.get('target_issue') or ''),
+                    existing_version or KL8_PREDICTOR_VERSION,
+                    existing_fp,
+                    existing_config_fp,
+                )
                 if existing_key == snapshot_key and not existing_data.get('is_experiment', False):
                     # 已有正式快照 → 新快照标记为实验
                     is_experiment = True
@@ -432,12 +470,19 @@ class KL8Analyzer:
             'target_issue': target_issue,  # v9: 从历史模式推算（用于调度器匹配）
             'target_type': target_type,     # v9: 结算时验证actual是based_on的直接下一期
             'based_on_issue': latest_issue,
-            'predicted_at': time.strftime('%Y-%m-%dT%H:%M:%S'),
+            'predicted_at': (
+                prediction_result.get('prediction_generated_at')
+                or time.strftime('%Y-%m-%dT%H:%M:%S')
+            ),
+            'predicted_at_ns': int(
+                prediction_result.get('prediction_generated_at_ns') or 0
+            ),
             'history_window_size': recent,
             'history_start_issue': history_window[-1]['issue'] if history_window else '',
             'history_end_issue': latest_issue,
             'history_fingerprint': history_fingerprint,
             'strategy_fingerprint': strategy_fp,  # v9: 策略指纹
+            'strategy_config_fingerprint': config_fp,
             'is_experiment': is_experiment,  # v9: 实验预测标记
             'version': KL8_PREDICTOR_VERSION,
             'feature_config': {k: dict(v) for k, v in FEATURE_CONFIG.items()},
@@ -1216,55 +1261,129 @@ class KL8Analyzer:
         }, sort_keys=True, separators=(',', ':')).encode()).hexdigest()[:20]
         path = directory / f'recalculation_{identity}.json'
 
-        existing = []
-        for candidate in directory.glob('recalculation_*.json'):
-            try:
-                item = json.loads(candidate.read_text(encoding='utf-8'))
-                if (
-                    str(item.get('target_issue') or '') == target_issue
-                    and str(item.get('source_snapshot_id') or '') == source_snapshot_id
-                    and item.get('play_type') == play_type
-                ):
-                    existing.append(item)
-            except Exception:
-                continue
-
-        previous = next((item for item in existing if item.get('record_id') == identity), None)
-        if previous:
-            return previous
-
-        record = {
-            'record_id': identity,
-            'target_issue': target_issue,
-            'based_on_issue': based_on_issue,
-            'source_snapshot_id': source_snapshot_id,
-            'source_version': source_version,
-            'generation_mode': generation_mode,
-            'initial_numbers': initial_numbers,
-            'play_type': play_type,
-            'round': 1 + max((int(item.get('round', 0)) for item in existing), default=0),
-            'excluded_numbers': excluded,
-            'numbers': numbers,
-            'status': status,
-            'remaining_count': result.get('remaining_count'),
-            'required_count': result.get('required_count'),
-            'strategy_id': result.get('strategy_id', ''),
-            'selection_mode': (result.get('quality') or {}).get('selection_mode', ''),
-            'created_at': time.strftime('%Y-%m-%dT%H:%M:%S'),
-            'version': source_version,
-        }
+        # 同一累计排除集的记录路径是确定的。自动链重放或
+        # 并发触发时先直读该文件，避免每一轮都解析整个目录。
         try:
-            with path.open('x', encoding='utf-8') as f:
-                json.dump(record, f, ensure_ascii=False, indent=2)
-            return record
-        except FileExistsError:
+            previous = json.loads(path.read_text(encoding='utf-8'))
+            if isinstance(previous, dict):
+                return previous
+        except (OSError, ValueError, TypeError):
+            pass
+
+        explicit_round = context.get('round')
+        try:
+            explicit_round = int(explicit_round)
+            if explicit_round <= 0:
+                explicit_round = None
+        except (TypeError, ValueError):
+            explicit_round = None
+
+        round_index_id = hashlib.sha256(json.dumps({
+            'target_issue': target_issue,
+            'source_snapshot_id': source_snapshot_id,
+            'play_type': play_type,
+        }, sort_keys=True, separators=(',', ':')).encode()).hexdigest()[:20]
+        round_index_path = directory / f'.round_index_{round_index_id}.json'
+
+        # 自动链会显式写入轮次，并同步生成一个同来源/玩法的轻量计数索引。
+        # 此后手动杀号只读这一个小文件即可得到下一轮；旧部署首次没有索引时
+        # 才兼容扫描一次，并立即补建。这样刷新页面/多标签也不会重复 round=1。
+        with _recalculation_record_lock:
             try:
-                return json.loads(path.read_text(encoding='utf-8'))
-            except Exception:
-                return record
-        except Exception as exc:
-            log.error(f'快乐8: 保存删号重算记录失败: {exc}')
-            return {}
+                previous = json.loads(path.read_text(encoding='utf-8'))
+                if isinstance(previous, dict):
+                    return previous
+            except (OSError, ValueError, TypeError):
+                pass
+
+            max_round = None
+            try:
+                round_index = json.loads(
+                    round_index_path.read_text(encoding='utf-8')
+                )
+                if (
+                    isinstance(round_index, dict)
+                    and str(round_index.get('target_issue') or '') == target_issue
+                    and str(round_index.get('source_snapshot_id') or '') == source_snapshot_id
+                    and str(round_index.get('play_type') or '') == play_type
+                ):
+                    max_round = max(0, int(round_index.get('max_round') or 0))
+            except (OSError, ValueError, TypeError):
+                max_round = None
+
+            if explicit_round is None and max_round is None:
+                max_round = 0
+                for candidate in directory.glob('recalculation_*.json'):
+                    try:
+                        item = json.loads(candidate.read_text(encoding='utf-8'))
+                        if (
+                            str(item.get('target_issue') or '') == target_issue
+                            and str(item.get('source_snapshot_id') or '') == source_snapshot_id
+                            and item.get('play_type') == play_type
+                        ):
+                            max_round = max(max_round, int(item.get('round', 0)))
+                    except Exception:
+                        continue
+
+            round_number = explicit_round
+            if round_number is None:
+                round_number = int(max_round or 0) + 1
+
+            record = {
+                'record_id': identity,
+                'target_issue': target_issue,
+                'based_on_issue': based_on_issue,
+                'source_snapshot_id': source_snapshot_id,
+                'source_version': source_version,
+                'generation_mode': generation_mode,
+                'initial_numbers': initial_numbers,
+                'play_type': play_type,
+                'round': round_number,
+                'excluded_numbers': excluded,
+                'numbers': numbers,
+                'status': status,
+                'remaining_count': result.get('remaining_count'),
+                'required_count': result.get('required_count'),
+                'strategy_id': result.get('strategy_id', ''),
+                'selection_mode': (result.get('quality') or {}).get('selection_mode', ''),
+                'created_at': time.strftime('%Y-%m-%dT%H:%M:%S'),
+                'version': source_version,
+            }
+            try:
+                with path.open('x', encoding='utf-8') as f:
+                    json.dump(record, f, ensure_ascii=False, indent=2)
+            except FileExistsError:
+                try:
+                    return json.loads(path.read_text(encoding='utf-8'))
+                except Exception:
+                    return record
+            except Exception as exc:
+                log.error(f'快乐8: 保存删号重算记录失败: {exc}')
+                return {}
+
+            index_payload = {
+                'target_issue': target_issue,
+                'source_snapshot_id': source_snapshot_id,
+                'play_type': play_type,
+                'max_round': max(int(max_round or 0), round_number),
+            }
+            index_temp = round_index_path.with_name(
+                f'.{round_index_path.name}.{uuid.uuid4().hex}.tmp'
+            )
+            try:
+                index_temp.write_text(
+                    json.dumps(index_payload, ensure_ascii=False),
+                    encoding='utf-8',
+                )
+                index_temp.replace(round_index_path)
+            except OSError as exc:
+                log.warning(f'快乐8: 更新删号轮次索引失败: {exc}')
+            finally:
+                try:
+                    index_temp.unlink(missing_ok=True)
+                except OSError:
+                    pass
+            return record
 
     def generate_exclude_recalculation_chain(
         self,
@@ -1294,12 +1413,12 @@ class KL8Analyzer:
         }
         generated = []
         exhausted = None
-        for _ in range(max(1, max_rounds)):
+        for round_number in range(1, max(1, max_rounds) + 1):
             excluded.update(current)
             result = self.recalculate_play_excluding(
                 play_type,
                 sorted(excluded),
-                record_context=record_context,
+                record_context={**record_context, 'round': round_number},
             )
             if result.get('error'):
                 exhausted = {
@@ -1352,12 +1471,23 @@ class KL8Analyzer:
         generated = []
         exhausted = None
         select6_records = select6_chain.get('records') or []
-        for select6_record in select6_records[:max(1, max_rounds)]:
+        last_round = 0
+        for fallback_round, select6_record in enumerate(
+            select6_records[:max(1, max_rounds)], start=1,
+        ):
+            try:
+                round_number = max(
+                    1,
+                    int(select6_record.get('round') or fallback_round),
+                )
+            except (TypeError, ValueError):
+                round_number = fallback_round
+            last_round = max(last_round, round_number)
             excluded = select6_record.get('excluded_numbers') or []
             result = self.recalculate_play_excluding(
                 'fu_shi_7',
                 excluded,
-                record_context=record_context,
+                record_context={**record_context, 'round': round_number},
             )
             if result.get('error'):
                 exhausted = {
@@ -1387,7 +1517,7 @@ class KL8Analyzer:
             terminal_result = self.recalculate_play_excluding(
                 'fu_shi_7',
                 terminal_excluded,
-                record_context=record_context,
+                record_context={**record_context, 'round': last_round + 1},
             )
             if terminal_result.get('error'):
                 exhausted = {
@@ -1784,11 +1914,13 @@ class KL8Analyzer:
 
         # v9: 保存 resolved_strategies 到 results，以便 _save_prediction_snapshot 使用
         results['resolved_strategies'] = resolved_strategies
+        results['strategy_config_fingerprint'] = _prediction_config_fingerprint()
 
         latest_issue = self.history_data[0]['issue'] if self.history_data else ''
         target_issue = _compute_next_issue(latest_issue, self.history_data) if latest_issue else ''
         results['based_on_issue'] = latest_issue
         results['target_issue'] = target_issue
+        results['prediction_generated_at_ns'] = time.time_ns()
         results['prediction_generated_at'] = time.strftime('%Y-%m-%dT%H:%M:%S')
 
         recent = self.history_data[:10] if self.history_data else []
@@ -1824,6 +1956,7 @@ class KL8Analyzer:
             'based_on_issue': latest_issue,
             'target_issue': target_issue,
             'prediction_generated_at': results['prediction_generated_at'],
+            'prediction_generated_at_ns': results['prediction_generated_at_ns'],
             'expected_freq': round(stats.get('expected_freq', 2), 2),
             'expected_gap': round(stats.get('expected_gap', 1), 1),
             'last_numbers': sorted(list(stats.get('last_numbers', set()))),

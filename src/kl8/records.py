@@ -190,11 +190,50 @@ def _strategy_fingerprint(strategy: Dict) -> str:
         'pool_max_last_numbers': strategy.get('pool_max_last_numbers'),
         'frequency_mode': strategy.get('frequency_mode', 'mean_reversion'),
         'final_selection_mode': strategy.get('final_selection_mode', 'balanced'),
+        'final_max_last_numbers': strategy.get('final_max_last_numbers'),
+        'final_min_last_numbers': strategy.get('final_min_last_numbers', 0),
+        'chain_objective': strategy.get('chain_objective'),
+        'chain_audit_rounds': strategy.get('chain_audit_rounds'),
+        'target_hits': strategy.get('target_hits'),
         'code_version': KL8_PREDICTOR_VERSION,
     }
     return hashlib.sha256(
         json.dumps(fp_data, sort_keys=True, separators=(',', ':')).encode()
     ).hexdigest()[:12]
+
+
+def _resolved_strategies_fingerprint(strategies: Dict) -> str:
+    """整份预测实际使用策略的稳定指纹，而不是只观察某一个玩法。"""
+    play_fingerprints = {
+        key: _strategy_fingerprint(strategy)
+        for key, strategy in sorted((strategies or {}).items())
+        if isinstance(strategy, dict)
+    }
+    if not play_fingerprints:
+        return 'no_strategy'
+    return hashlib.sha256(
+        json.dumps(
+            play_fingerprints,
+            sort_keys=True,
+            separators=(',', ':'),
+        ).encode()
+    ).hexdigest()[:12]
+
+
+def _prediction_config_fingerprint() -> str:
+    """所有会改变当前预测输出的运行时策略配置指纹。"""
+    return hashlib.sha256(
+        json.dumps(
+            {
+                'active_strategies': _cfg.ACTIVE_STRATEGIES,
+                'reference_strategy': _cfg.REFERENCE_STRATEGY,
+                'candidate_strategies': _cfg.CANDIDATE_STRATEGIES,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(',', ':'),
+        ).encode()
+    ).hexdigest()[:16]
 
 
 def _persist_trial_results():

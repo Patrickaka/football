@@ -25,7 +25,8 @@ from src.api.deps import query_params
 from src.api.services import kl8 as service
 
 OLD_PATHS = {
-    '/api/kl8', '/api/kl8-refresh', '/api/kl8/fetch',
+    '/api/kl8', '/api/kl8-refresh', '/api/kl8-refresh/start', '/api/kl8/fetch',
+    '/api/kl8-refresh/status',
     '/api/kl8/exclude-recalculate', '/api/kl8/snapshots', '/api/kl8/records',
     '/api/kl8/settle', '/api/kl8/backtest', '/api/kl8/parameter-search',
     '/api/kl8/parameter-search/start', '/api/kl8/parameter-search/status',
@@ -82,6 +83,15 @@ class QueryPassThrough(unittest.TestCase):
                 'kl8_records_payload',
             ),
             {'page': ['2'], 'page_size': ['8']},
+        )
+
+    def test_refresh_status_job_id_reaches_the_service(self):
+        self.assertEqual(
+            self._captured(
+                '/api/kl8-refresh/status?job_id=refresh-123',
+                'kl8_refresh_status_payload',
+            ),
+            {'job_id': ['refresh-123']},
         )
 
     def test_repeated_keys_keep_every_value(self):
@@ -148,11 +158,31 @@ class SlowRoutesStillWired(unittest.TestCase):
 
     def test_refresh_accepts_the_web_pages_post(self):
         with mock.patch.object(service, 'kl8_refresh_payload',
-                               return_value={'success': True}) as spy:
+                               return_value={
+                                   'success': True,
+                                   'result': {'marker': 'finished'},
+                               }) as spy:
             with make_client() as client:
                 response = client.post('/api/kl8-refresh')
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json(), {'success': True})
+        self.assertEqual(response.json(), {
+            'success': True,
+            'result': {'marker': 'finished'},
+        })
+        spy.assert_called_once_with()
+
+    def test_refresh_start_post_reaches_the_job_service(self):
+        queued = {
+            'success': True,
+            'result': {'job_id': 'refresh-123', 'status': 'queued'},
+        }
+        with mock.patch.object(
+                service, 'kl8_refresh_start_payload', return_value=queued,
+        ) as spy:
+            with make_client() as client:
+                response = client.post('/api/kl8-refresh/start')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), queued)
         spy.assert_called_once_with()
 
 

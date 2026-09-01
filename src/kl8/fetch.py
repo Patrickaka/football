@@ -173,6 +173,25 @@ def fetch_kl8_data(
 
 
 def save_kl8_data(data: List[Dict]) -> Optional[List[Dict]]:
+    """在预测互斥区内保存开奖历史并清除分析缓存。
+
+    历史文件替换和 ``clear_cache`` 必须对预测/手动重算表现为一个原子动作；
+    否则新期开奖可能在来源核验后、重算落盘前穿透，生成事后记录。
+    """
+    # 延迟导入避免 fetch 模块初始化时与 src.kl8 facade 形成循环依赖。
+    from src.kl8.snapshots import _prediction_run_lock
+
+    with _prediction_run_lock:
+        merged_list = _save_kl8_data_locked(data)
+
+    # foundation/store 是旁路镜像，不参与预测的一致性边界；放在锁外避免
+    # 数据库暂时变慢时阻塞页面预测和手动重算。
+    if merged_list:
+        _mirror_to_store(merged_list)
+    return merged_list
+
+
+def _save_kl8_data_locked(data: List[Dict]) -> Optional[List[Dict]]:
     """保存快乐8数据到本地（v4: 号码冲突保护+溯源字段+返回合并后完整历史）
 
     - 与旧数据合并，按期号去重
@@ -263,11 +282,6 @@ def save_kl8_data(data: List[Dict]) -> Optional[List[Dict]]:
         if temp_path.exists():
             temp_path.unlink()
         return None
-
-    # 镜像进 foundation/store。迁移之后开奖数据有两个写入方，不接上的话
-    # 库里的数据会越来越旧且没有任何报错。失败只告警——抓取是主链路，
-    # 落库是旁路，不该让后者的可用性绑架前者。
-    _mirror_to_store(merged_list)
 
     # 数据更新后必须清除预测缓存
     clear_cache()

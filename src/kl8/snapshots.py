@@ -6,7 +6,6 @@ import copy
 import json
 import os
 import time
-import hashlib
 import threading
 import uuid
 from collections import defaultdict, Counter
@@ -21,11 +20,10 @@ from src.common.logger import setup_logger
 log = setup_logger('kl8')
 from . import config as _cfg
 
-from .config import (
-    CANDIDATE_STRATEGIES, KL8_PREDICTOR_VERSION, REFERENCE_STRATEGY,
-)
+from .config import KL8_PREDICTOR_VERSION
 from .records import (
-    _checksum_numbers, _persist_active_strategies, _strategy_fingerprint,
+    _checksum_numbers, _persist_active_strategies,
+    _prediction_config_fingerprint, _strategy_fingerprint,
 )
 from .analyzer import (
     get_kl8_analyzer,
@@ -35,6 +33,7 @@ from .analyzer import (
 _PREDICTION_CACHE_FILE = Path(data_path('kl8_prediction_cache.json'))
 _PREDICTION_CACHE_SCHEMA = 1
 _prediction_cache_lock = threading.Lock()
+_prediction_run_lock = threading.RLock()
 _record_index_lock = threading.Lock()
 _snapshot_index_cache = {'signature': None, 'records': []}
 _recalculation_index_cache = {'signature': None, 'records': []}
@@ -51,18 +50,7 @@ def _directory_signature(directory: Path):
 
 def _strategy_config_fingerprint() -> str:
     """返回会改变推荐号码的完整策略指纹。"""
-    return hashlib.sha256(
-        json.dumps(
-            {
-                'active_strategies': _cfg.ACTIVE_STRATEGIES,
-                'reference_strategy': REFERENCE_STRATEGY,
-                'candidate_strategies': CANDIDATE_STRATEGIES,
-            },
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(',', ':'),
-        ).encode()
-    ).hexdigest()[:16]
+    return _prediction_config_fingerprint()
 
 
 def _history_signature():
@@ -94,7 +82,10 @@ def _load_persisted_prediction(history_signature, config_fingerprint):
     if payload.get('history_signature') != history_signature:
         return None
     result = payload.get('result')
-    return result if isinstance(result, dict) and 'error' not in result else None
+    if isinstance(result, dict) and 'error' not in result:
+        result.setdefault('strategy_config_fingerprint', config_fingerprint)
+        return result
+    return None
 
 
 def _persist_prediction(result, history_signature, config_fingerprint):
@@ -140,19 +131,52 @@ def activate_verified_strategy(play_type: str, strategy: Dict, report: Dict):
     """
     fingerprint = _strategy_fingerprint(strategy)
 
-    _cfg.ACTIVE_STRATEGIES[play_type] = {
-        **strategy,
-        'strategy_id': f'{play_type}_{fingerprint}',
-        'status': 'validated',
-        'validated_at': time.strftime('%Y-%m-%dT%H:%M:%S'),
-        'validated_on_issue': report.get('data_cutoff_issue', ''),
-        'validation_report': report,
-        'degradation_status': 'normal',
-    }
+    # 策略替换、持久化与预测共用一把可重入锁。否则 predict_all 逐玩法解析
+    # 策略时可能前半读取旧配置、后半读取新配置，最终生成一份混合版本结果。
+    with _prediction_run_lock:
+        _cfg.ACTIVE_STRATEGIES[play_type] = {
+            **strategy,
+            'strategy_id': f'{play_type}_{fingerprint}',
+            'status': 'validated',
+            'validated_at': time.strftime('%Y-%m-%dT%H:%M:%S'),
+            'validated_on_issue': report.get('data_cutoff_issue', ''),
+            'validation_report': report,
+            'degradation_status': 'normal',
+        }
 
-    _persist_active_strategies()
-    clear_cache()
-    log.info(f'快乐8: 策略已激活 {play_type} -> {_cfg.ACTIVE_STRATEGIES[play_type]["strategy_id"]}')
+        _persist_active_strategies()
+        clear_cache()
+        strategy_id = _cfg.ACTIVE_STRATEGIES[play_type]['strategy_id']
+    log.info(f'快乐8: 策略已激活 {play_type} -> {strategy_id}')
+
+
+def mark_strategy_degradation(
+    play_type: str,
+    expected_strategy_id: str,
+    deviation: float,
+    ci_lower: float,
+) -> bool:
+    """原子标记策略降级，并让后续预测立即使用新的策略状态。
+
+    ``expected_strategy_id`` 防止评估完成到写入之间策略已被替换，误把新策略
+    标成黄色观察。策略修改与预测、历史更新共用同一把锁，避免保存出混合配置
+    的正式快照。
+    """
+    with _prediction_run_lock:
+        strategy = _cfg.ACTIVE_STRATEGIES.get(play_type)
+        if (
+            not isinstance(strategy, dict)
+            or str(strategy.get('strategy_id') or '')
+            != str(expected_strategy_id or '')
+        ):
+            return False
+
+        strategy['degradation_status'] = 'yellow_watch'
+        strategy['degradation_deviation'] = round(deviation, 4)
+        strategy['degradation_ci_lower'] = round(ci_lower, 4)
+        _persist_active_strategies()
+        clear_cache()
+        return True
 
 
 _prediction_cache = {'data': None, 'timestamp': 0, 'cache_key': None}
@@ -160,6 +184,14 @@ _prediction_cache = {'data': None, 'timestamp': 0, 'cache_key': None}
 
 def run_prediction(force_refresh: bool = False) -> Dict:
     """快乐8预测入口（v8: 缓存指纹包含所有策略配置）"""
+    # scheduler、手动刷新和抓取接口最终都走这里。串行化完整计算，避免两个
+    # 调用同时扫描快照目录后各自写成“正式”记录，也避免 clear_cache 在
+    # 另一轮 predict_all 执行中途替换全局分析器。
+    with _prediction_run_lock:
+        return _run_prediction_locked(force_refresh)
+
+
+def _run_prediction_locked(force_refresh: bool = False) -> Dict:
     config_fingerprint = _strategy_config_fingerprint()
     history_signature = _history_signature()
     fast_cache_key = (
@@ -211,6 +243,10 @@ def run_prediction(force_refresh: bool = False) -> Dict:
         return cache['data']
 
     result = analyzer.predict_all()
+    if isinstance(result, dict) and 'error' not in result:
+        # API 的跨进程缓存也必须区分策略配置；仅靠代码版本无法覆盖同版本
+        # 激活新策略的场景。
+        result['strategy_config_fingerprint'] = config_fingerprint
 
     cache['data'] = result
     cache['cache_key'] = cache_key
@@ -222,13 +258,14 @@ def run_prediction(force_refresh: bool = False) -> Dict:
 
 def clear_cache():
     global _prediction_cache
-    from . import analyzer as _analyzer_mod
-    _analyzer_mod._analyzer_instance = None
-    _prediction_cache = {'data': None, 'timestamp': 0, 'cache_key': None}
-    try:
-        _PREDICTION_CACHE_FILE.unlink(missing_ok=True)
-    except OSError as exc:
-        log.warning(f'快乐8: 清理预测磁盘缓存失败: {exc}')
+    with _prediction_run_lock:
+        from . import analyzer as _analyzer_mod
+        _analyzer_mod._analyzer_instance = None
+        _prediction_cache = {'data': None, 'timestamp': 0, 'cache_key': None}
+        try:
+            _PREDICTION_CACHE_FILE.unlink(missing_ok=True)
+        except OSError as exc:
+            log.warning(f'快乐8: 清理预测磁盘缓存失败: {exc}')
 
 
 def list_prediction_snapshots() -> List[Dict]:
@@ -255,7 +292,11 @@ def list_prediction_snapshots() -> List[Dict]:
                 'target_issue': data.get('target_issue'),
                 'based_on_issue': data.get('based_on_issue'),
                 'predicted_at': data.get('predicted_at'),
+                'predicted_at_ns': data.get('predicted_at_ns', 0),
                 'version': data.get('version'),
+                'strategy_config_fingerprint': data.get(
+                    'strategy_config_fingerprint', ''
+                ),
                 'is_experiment': data.get('is_experiment', False),
                 'strategy_fingerprint': data.get('strategy_fingerprint', ''),
                 'prediction_modes': data.get('prediction_modes', {}),
