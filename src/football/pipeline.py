@@ -47,6 +47,53 @@ from .scoring import (
     _adjust_goal_dist_with_total_movement, _adjust_half_full_with_market_context, _adjust_half_full_with_score_context, _adjust_score_probs_with_total_movement, _anchor_goal_dist_to_total_line, _anchor_score_candidates_to_1x2, _anchor_score_candidates_to_goal_mean, _apply_joint_market_state, _goal_over_under_from_line, _half_full_probs_to_dict, _pick_recommendations, _recommend_reasons, _score_entry, apply_market_change_prior, calculate_half_full_time_probs, predict_scores, score_heat_label,
 )
 
+
+_ANALYSIS_FLIGHTS = {}
+_ANALYSIS_FLIGHTS_LOCK = threading.Lock()
+
+
+def _run_analysis_singleflight(match, force_refresh=False, cache_key=None):
+    """同一场冷分析只执行一次，重复请求等待并复用结果。
+
+    首屏后台预热、前端批量请求以及超时后的用户刷新可能同时命中同一场。
+    HTTP 客户端超时不会终止服务端线程；没有这一层时，每次刷新都会再起一套
+    赔率抓取，最容易把 500.com 推到 428/429 限流。
+    """
+    key = cache_key or analysis_cache_key(match)
+    with _ANALYSIS_FLIGHTS_LOCK:
+        flight = _ANALYSIS_FLIGHTS.get(key)
+        owner = flight is None
+        if owner:
+            flight = {'event': threading.Event(), 'result': None, 'error': None}
+            _ANALYSIS_FLIGHTS[key] = flight
+
+    if not owner:
+        flight['event'].wait()
+        if flight['error'] is not None:
+            raise flight['error']
+        return flight['result']
+
+    try:
+        flight['result'] = _analyze_match_impl(match, force_refresh=force_refresh)
+        return flight['result']
+    except BaseException as exc:
+        flight['error'] = exc
+        raise
+    finally:
+        flight['event'].set()
+        with _ANALYSIS_FLIGHTS_LOCK:
+            if _ANALYSIS_FLIGHTS.get(key) is flight:
+                _ANALYSIS_FLIGHTS.pop(key, None)
+
+
+def analyze_match(match, force_refresh=False):
+    cache_key = analysis_cache_key(match)
+    return _run_analysis_singleflight(
+        match,
+        force_refresh=force_refresh,
+        cache_key=cache_key,
+    )
+
 def _cached_prediction_logic_version(result: Dict) -> str:
     if not isinstance(result, dict):
         return ''
@@ -340,7 +387,7 @@ def build_match_analysis(result):
         return None
 
 
-def analyze_match(match, force_refresh=False):
+def _analyze_match_impl(match, force_refresh=False):
     """抓取赔率 + 球队攻防 + 泊松模型，返回完整结果 dict
     
     参数：

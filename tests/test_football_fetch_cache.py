@@ -7,10 +7,12 @@
 import threading
 import time
 import unittest
+from unittest.mock import patch
 
 import src.football as fb
 from src.football import fetching as fb_fetching
 from src.football import parsing as fb_parsing
+from src.football import pipeline as fb_pipeline
 
 
 class FootballFetchCacheTests(unittest.TestCase):
@@ -103,6 +105,38 @@ class FootballFetchCacheTests(unittest.TestCase):
         fb.fetch(url)
 
         self.assertEqual(len(self.calls), 2)
+
+
+class FootballAnalysisSingleflightTests(unittest.TestCase):
+    def test_same_match_concurrent_analysis_runs_only_once(self):
+        state = {'calls': 0, 'active': 0, 'peak': 0}
+        state_lock = threading.Lock()
+
+        def analyze(match, force_refresh=False):
+            with state_lock:
+                state['calls'] += 1
+                state['active'] += 1
+                state['peak'] = max(state['peak'], state['active'])
+            time.sleep(0.08)
+            with state_lock:
+                state['active'] -= 1
+            return {'match_id': match['match_id']}
+
+        match = {'match_id': 'same-1', 'home': '主队', 'away': '客队'}
+        results = []
+        with patch.object(fb_pipeline, '_analyze_match_impl', side_effect=analyze):
+            threads = [threading.Thread(
+                target=lambda: results.append(fb_pipeline.analyze_match(match)),
+            ) for _ in range(6)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join()
+
+        self.assertEqual(state['calls'], 1)
+        self.assertEqual(state['peak'], 1)
+        self.assertEqual(len(results), 6)
+        self.assertTrue(all(result == {'match_id': 'same-1'} for result in results))
 
 
 class FootballAnalyzeParallelFetchTests(unittest.TestCase):

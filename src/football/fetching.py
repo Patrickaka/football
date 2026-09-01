@@ -29,10 +29,10 @@ from .config import (
 FETCH_PAGE_TTL = float(os.getenv('FOOTBALL_PAGE_TTL', '90'))
 
 
-FETCH_MAX_CONCURRENCY = max(1, int(os.getenv('FOOTBALL_FETCH_CONCURRENCY', '6')))
+FETCH_MAX_CONCURRENCY = max(1, int(os.getenv('FOOTBALL_FETCH_CONCURRENCY', '4')))
 
 
-FETCH_RATE_LIMIT = float(os.getenv('FOOTBALL_FETCH_RATE', '6'))
+FETCH_RATE_LIMIT = float(os.getenv('FOOTBALL_FETCH_RATE', '3'))
 
 
 FETCH_RETRY_ATTEMPTS = max(1, int(os.getenv('FOOTBALL_FETCH_RETRIES', '4')))

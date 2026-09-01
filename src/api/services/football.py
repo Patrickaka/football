@@ -31,7 +31,7 @@ log = logging.getLogger('api.services.football')
 # 提升时随函数体一起带过来的模块级常量——函数引用的是模块全局，
 # 漏掉不会在导入时报错，运行到那一行才 NameError。
 FOOTBALL_BATCH_LIMIT = max(1, int(os.getenv('FOOTBALL_BATCH_LIMIT', '30')))
-FOOTBALL_BATCH_CONCURRENCY = max(1, int(os.getenv('FOOTBALL_BATCH_CONCURRENCY', '4')))
+FOOTBALL_BATCH_CONCURRENCY = max(1, int(os.getenv('FOOTBALL_BATCH_CONCURRENCY', '2')))
 
 
 def try_generate_report(rel: str):

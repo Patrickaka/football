@@ -2785,7 +2785,11 @@ async function fetchJsonWithTimeout(path, timeoutMs = 30000, options = {}) {
   try {
     return await fetchJson(path, { ...options, signal: controller.signal });
   } catch (error) {
-    if (error?.name === 'AbortError') throw new Error(`分析超时（${Math.round(timeoutMs / 1000)}秒）`);
+    if (error?.name === 'AbortError') {
+      const timeoutError = new Error(`分析超时（${Math.round(timeoutMs / 1000)}秒）`);
+      timeoutError.code = 'ANALYSIS_TIMEOUT';
+      throw timeoutError;
+    }
     throw error;
   } finally {
     clearTimeout(timer);
@@ -3237,16 +3241,15 @@ function setFootballSort(sort) {
   loadAllPredictions();
 }
 
-// 单场分析要打好几个源站页面，串行时 50+ 场会把首屏拖到分钟级。
-// 这里用固定并发的工作池把整轮压缩成「最慢的一批」，服务端的抓取信号量
-// 兜住上游并发，不会因为前端并行把源站打爆。
-const FOOTBALL_ANALYSIS_CONCURRENCY = 6;
+// 冷缓存时一场分析会抓多个源站页面。批次顺序执行，让服务端稳定消化，
+// 避免多个批次叠加内部线程池后瞬间触发 428/429。
+const FOOTBALL_ANALYSIS_CONCURRENCY = 1;
 // 每完成一场就整表重绘会造成 50+ 次全量 DOM 重建，按间隔合并重绘。
 const FOOTBALL_RENDER_INTERVAL_MS = 400;
 // /api/predict 是单场接口，一场一次往返，50+ 场就是 50+ 次 HTTP。打包成批后
 // 往返次数降到 ceil(总场次/批大小)。仍分多批而非一次全量，是为了保住渐进渲染：
 // 每批落地即可先行展示，冷缓存时不会退化成长时间白屏。
-const FOOTBALL_BATCH_SIZE = 12;
+const FOOTBALL_BATCH_SIZE = 6;
 
 function buildPredictQuery(m) {
   return new URLSearchParams({
@@ -3365,13 +3368,48 @@ async function loadAllPredictions(warmed) {
     }
   };
 
+  // 浏览器中止请求只会断开等待，不会杀掉服务端正在跑的分析线程。
+  // 超时后轮询缓存接回已完成结果，禁止立刻再发一轮单场抓取制造重复流量。
+  const recoverTimedOutChunk = async (matches, indexes) => {
+    const pendingIds = new Set(matches.map(m => String(m.match_id)));
+    let lastError = '';
+    for (let attempt = 0; attempt < 3 && pendingIds.size; attempt += 1) {
+      await new Promise(resolve => setTimeout(resolve, 4000 * (attempt + 1)));
+      try {
+        const warmed = await fetchJsonWithTimeout('/api/bff/football/home', 20000);
+        if (warmed.error) throw new Error(warmed.error);
+        const recovered = new Map(
+          (warmed.predictions?.ready || []).map(entry => [String(entry.match_id), entry.result])
+        );
+        matches.forEach((match, offset) => {
+          const matchId = String(match.match_id);
+          const result = recovered.get(matchId);
+          if (!result || !pendingIds.has(matchId)) return;
+          slots[indexes[offset]] = { match, result };
+          pendingIds.delete(matchId);
+        });
+      } catch (pollError) {
+        lastError = pollError.message || String(pollError);
+      }
+    }
+    matches.forEach(match => {
+      if (!pendingIds.has(String(match.match_id))) return;
+      footballAnalysisFailures.push({
+        match,
+        reason: lastError
+          ? `后台分析尚未完成：${lastError}`
+          : '后台分析尚未完成，请稍后刷新接续缓存结果',
+      });
+    });
+  };
+
   // 整批失败（旧后端没有该接口、网关拦 POST、批量超时）时逐场重试，
   // 保证新前端配旧后端也能出结果，只是退回到原来的往返次数。
   // **槽位用显式的 indexes，不能再用 start + offset**：BFF 预填之后
   // 剩下要算的场次在赛程里不再连续，按偏移写会把结果落到别人的位置上。
   const analyzeChunk = async ({ matches, indexes }) => {
     try {
-      const data = await fetchJsonWithTimeout('/api/predict/batch', 60000, {
+      const data = await fetchJsonWithTimeout('/api/predict/batch', 90000, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ matches: matches.map(buildBatchMatch) })
@@ -3385,9 +3423,14 @@ async function loadAllPredictions(warmed) {
         else footballAnalysisFailures.push({ match: m, reason: (entry && entry.error) || '未返回预测结果' });
       });
     } catch (e) {
-      console.warn('批量预测失败，回退到单场请求:', e);
-      for (let offset = 0; offset < matches.length; offset++) {
-        await analyzeSingle(matches[offset], indexes[offset]);
+      if (e.code === 'ANALYSIS_TIMEOUT') {
+        console.warn('批量预测超时，等待后台结果写入缓存:', e);
+        await recoverTimedOutChunk(matches, indexes);
+      } else {
+        console.warn('批量预测接口失败，回退到单场请求:', e);
+        for (let offset = 0; offset < matches.length; offset++) {
+          await analyzeSingle(matches[offset], indexes[offset]);
+        }
       }
     }
     completed += matches.length;
