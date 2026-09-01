@@ -5,6 +5,29 @@ from src.football import result_sync
 
 
 class FootballPredictionRecordsMarketViewTests(unittest.TestCase):
+    def test_prediction_signature_stays_legacy_compatible_but_tracks_rqspf(self):
+        args = (
+            {'1-0': 0.6, '0-0': 0.4},
+            {'H': 0.6, 'D': 0.4, 'A': 0.0},
+            -0.5,
+            2.5,
+            {'lottery': {'offer_matched': True}},
+            None,
+            'test-model',
+        )
+        legacy = result_sync._prediction_content_sig(*args)
+        explicit_empty = result_sync._prediction_content_sig(
+            *args, lottery_handicap=None, predicted_rqspf=None,
+        )
+        with_rqspf = result_sync._prediction_content_sig(
+            *args,
+            lottery_handicap=-1,
+            predicted_rqspf={'让胜': 0.2, '让平': 0.3, '让负': 0.5},
+        )
+
+        self.assertEqual(legacy, explicit_empty)
+        self.assertNotEqual(legacy, with_rqspf)
+
     def test_save_keeps_both_markets_when_both_are_offered(self):
         history = result_sync.PredictionHistory.__new__(result_sync.PredictionHistory)
         history.records = []

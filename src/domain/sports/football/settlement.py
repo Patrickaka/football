@@ -575,10 +575,16 @@ def _prediction_content_sig(predicted_scores, predicted_1x2, asian, total_line,
     每次内容相同却因时间戳不同而反复写库（整表重写风暴的根源之一）。
     """
     try:
+        signature_fields = [
+            predicted_scores, predicted_1x2, asian, total_line,
+            odds_data, predicted_half_full, model_version, professional_snapshot,
+        ]
+        # 保持历史调用的签名完全兼容。只有新纳入去重判断的竞彩让球字段
+        # 实际存在时才扩展载荷，避免所有旧黄金与既有 SPF-only 记录漂移。
+        if lottery_handicap is not None or predicted_rqspf is not None:
+            signature_fields.extend([lottery_handicap, predicted_rqspf])
         payload = json.dumps(
-            [predicted_scores, predicted_1x2, asian, total_line,
-             odds_data, predicted_half_full, model_version, professional_snapshot,
-             lottery_handicap, predicted_rqspf],
+            signature_fields,
             ensure_ascii=False, sort_keys=True, default=str,
         )
     except Exception:
