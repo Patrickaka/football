@@ -287,6 +287,29 @@ class PredictionHistory:
             ml_available: ML模型是否可用
             ml_feature_snapshot: ML特征快照
         """
+        # 已核验到官方竞彩场次时，只保存实际开售玩法的预测。部分数据源会
+        # 短暂留下 ``*_available=True``，但对应赔率已经为空；没有完整赔率
+        # 就不能视为开售，尤其不能把模型内部的普通胜平负结果记成官方预测。
+        lottery_snapshot = (
+            (odds_data or {}).get('lottery')
+            if isinstance(odds_data, dict) else None
+        ) or {}
+        if lottery_snapshot.get('offer_matched'):
+            spf_was_offered = bool(
+                lottery_snapshot.get('spf_available')
+                and lottery_snapshot.get('spf_odds')
+            )
+            rqspf_was_offered = bool(
+                lottery_snapshot.get('rqspf_available')
+                and lottery_snapshot.get('rqspf_odds')
+            )
+            if not spf_was_offered:
+                predicted_1x2 = {}
+                base_1x2 = {} if base_1x2 is not None else None
+                ml_1x2 = {} if ml_1x2 is not None else None
+            if not rqspf_was_offered:
+                predicted_rqspf = {}
+
         # 检查是否已存在
         for record in self.records:
             if record.get('match_id') == match_id:

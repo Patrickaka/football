@@ -140,6 +140,25 @@ class PredictionPostprocessTests(unittest.TestCase):
         self.assertIsNone(markets['linked_recommendation'])
         self.assertIsNotNone(markets['handicap'])
 
+    def test_spf_without_odds_is_not_treated_as_offered(self):
+        markets = football.lottery_market_probabilities([
+            ((3, 0), 0.45), ((2, 0), 0.30), ((1, 1), 0.25),
+        ], lottery_handicap=-2, rqspf_odds={
+            '让胜': 2.23, '让平': 3.80, '让负': 2.40,
+        })
+        markets.update({
+            'offer_matched': True,
+            'spf_available': True,
+            'spf_odds': None,
+            'rqspf_available': True,
+        })
+
+        enabled = football._apply_lottery_market_availability(markets)
+
+        self.assertFalse(enabled)
+        self.assertIsNone(markets['standard'])
+        self.assertIsNotNone(markets['handicap'])
+
     def test_joint_lottery_recommendation_avoids_impossible_independent_picks(self):
         markets = football.lottery_market_probabilities([
             ((2, 0), 0.21),  # 胜 + 让胜

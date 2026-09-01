@@ -5,6 +5,70 @@ from src.football import result_sync
 
 
 class FootballPredictionRecordsMarketViewTests(unittest.TestCase):
+    def test_save_keeps_both_markets_when_both_are_offered(self):
+        history = result_sync.PredictionHistory.__new__(result_sync.PredictionHistory)
+        history.records = []
+        spf = {'H': 0.55, 'D': 0.25, 'A': 0.20}
+        rqspf = {'让胜': 0.25, '让平': 0.45, '让负': 0.30}
+
+        with patch.object(history, '_save_record', return_value='test'):
+            history.add_prediction(
+                match_id='spf-and-rqspf',
+                league='英超',
+                home='主队',
+                away='客队',
+                match_time='2099-08-21 22:00',
+                predicted_scores={'2-1': 0.30},
+                predicted_1x2=spf,
+                lottery_handicap=-1,
+                predicted_rqspf=rqspf,
+                odds_data={'lottery': {
+                    'offer_matched': True,
+                    'spf_available': True,
+                    'spf_odds': {'胜': 1.9, '平': 3.4, '负': 4.2},
+                    'rqspf_available': True,
+                    'rqspf_odds': {'让胜': 2.8, '让平': 3.5, '让负': 2.1},
+                }},
+            )
+
+        saved = history.records[0]
+        self.assertEqual(saved['predicted_1x2'], spf)
+        self.assertEqual(saved['predicted_rqspf'], rqspf)
+
+    def test_save_keeps_only_rqspf_when_standard_market_is_not_offered(self):
+        history = result_sync.PredictionHistory.__new__(result_sync.PredictionHistory)
+        history.records = []
+        rqspf = {'让胜': 0.40, '让平': 0.35, '让负': 0.25}
+
+        with patch.object(history, '_save_record', return_value='test'):
+            history.add_prediction(
+                match_id='rqspf-only',
+                league='英超',
+                home='阿森纳',
+                away='考文垂',
+                match_time='2099-08-21 22:00',
+                predicted_scores={'2-0': 0.30},
+                predicted_1x2={'H': 0.80, 'D': 0.12, 'A': 0.08},
+                base_1x2={'H': 0.78, 'D': 0.13, 'A': 0.09},
+                ml_1x2={'H': 0.82, 'D': 0.11, 'A': 0.07},
+                lottery_handicap=-2,
+                predicted_rqspf=rqspf,
+                odds_data={'lottery': {
+                    'offer_matched': True,
+                    'primary_market': 'rqspf',
+                    'spf_available': False,
+                    'spf_odds': None,
+                    'rqspf_available': True,
+                    'rqspf_odds': {'让胜': 2.1, '让平': 4.2, '让负': 2.42},
+                }},
+            )
+
+        saved = history.records[0]
+        self.assertEqual(saved['predicted_1x2'], {})
+        self.assertEqual(saved['base_1x2'], {})
+        self.assertEqual(saved['ml_1x2'], {})
+        self.assertEqual(saved['predicted_rqspf'], rqspf)
+
     def test_list_exposes_market_predictions_and_only_actual_score(self):
         record = {
             'match_id': 'market-view-1',

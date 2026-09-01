@@ -277,7 +277,8 @@ def apply_lottery_market_availability(lottery):
     **就地改传入的 dict**——迁移前就是这个契约，调用方依赖它。
     """
     spf_prediction_enabled = (
-        not lottery.get('offer_matched') or bool(lottery.get('spf_available'))
+        not lottery.get('offer_matched')
+        or bool(lottery.get('spf_available') and lottery.get('spf_odds'))
     )
     if not spf_prediction_enabled:
         # 模型内部仍可用比分分布分析让球玩法，对外不产生 SPF 推荐。
