@@ -2220,9 +2220,9 @@ def scan_and_predict_time_layers() -> Dict[str, int]:
             
             # 检查是否需要在这个时间层进行预测
             if time_layer in result:
-                # 检查是否已经在这个时间层预测过（避免重复）
-                history = PredictionHistory()
-                existing = history.get_record(match_id)
+                # 检查是否已经在这个时间层预测过（避免重复）。
+                # 用共享实例：每场比赛重建一次就是一次整表读。
+                existing = _global_history.get_record(match_id)
                 
                 if existing:
                     time_layers = existing.get('time_layers', {})

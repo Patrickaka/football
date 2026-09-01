@@ -1252,28 +1252,27 @@ def analyze_match(match, force_refresh=False):
         'updated_modules': []
     }
     try:
-        from .result_sync import PredictionHistory, _is_match_settle_due
-        ph = PredictionHistory()
-        for rec in ph.records:
-            if rec.get('match_id') == mid:
-                if rec.get('settled') and _is_match_settle_due(rec.get('match_time'), minutes=180):
-                    settlement = {
-                        'status': 'settled',
-                        'actual_score': rec.get('actual_score'),
-                        'hit': {
-                            'top1': rec.get('hit_top1', False),
-                            'top3': rec.get('hit_top3', False),
-                            'result_1x2': rec.get('hit_1x2', False),
-                            'goal_count': rec.get('hit_total', False)
-                        },
-                        'updated_modules': [
-                            'bayesian_calibration',
-                            'elo',
-                            'market_cluster',
-                            'market_score_db'
-                        ]
-                    }
-                break
+        # 必须复用进程内实例：每构造一个 PredictionHistory 就整表读一次
+        # football_prediction（约 30MB），而这里是每场比赛都会走的路径。
+        from .result_sync import get_history, _is_match_settle_due
+        rec = get_history().get_record(mid)
+        if rec and rec.get('settled') and _is_match_settle_due(rec.get('match_time'), minutes=180):
+            settlement = {
+                'status': 'settled',
+                'actual_score': rec.get('actual_score'),
+                'hit': {
+                    'top1': rec.get('hit_top1', False),
+                    'top3': rec.get('hit_top3', False),
+                    'result_1x2': rec.get('hit_1x2', False),
+                    'goal_count': rec.get('hit_total', False)
+                },
+                'updated_modules': [
+                    'bayesian_calibration',
+                    'elo',
+                    'market_cluster',
+                    'market_score_db'
+                ]
+            }
     except Exception as e:
         log.debug(f"获取赛后回填状态失败: {e}")
     

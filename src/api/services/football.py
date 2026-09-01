@@ -489,14 +489,14 @@ def threshold_payload():
 def model_status_payload():
     """获取模型状态信息"""
     try:
-        from src.football.result_sync import PredictionHistory
+        from src.football.result_sync import get_history
         from src.football.bayesian_calibration import get_calibrator
         from src.football.market_db import MarketScoreDB
         from src.football.similar_market import SimilarMarketDB
         from src.football.dynamic_elo import get_team_elo
         
         # 赛后回填状态
-        history = PredictionHistory()
+        history = get_history()
         stats = history.get_stats()
         
         # 贝叶斯校准状态
