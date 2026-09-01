@@ -22,12 +22,18 @@ async def kl8():
     return await run_blocking(service.kl8_payload)
 
 
-@router.api_route('/api/kl8-refresh', methods=['GET', 'POST'])
+@router.api_route('/api/kl8-refresh', methods=['GET', 'POST'], status_code=202)
 async def refresh():
-    return await run_blocking(service.kl8_refresh_payload)
+    """兼容旧页面的刷新入口，但绝不再把完整重算挂在 HTTP 请求上。
+
+    部署前已打开的旧标签页仍会请求这个地址。若这里保留同步实现，即使后端
+    已升级，旧页面也会稳定等到反向代理返回 504。旧页面不会轮询任务，但会
+    立即拿回旧缓存；后台完成后，下次加载即可看到新结果。
+    """
+    return service.kl8_refresh_start_payload()
 
 
-@router.post('/api/kl8-refresh/start')
+@router.post('/api/kl8-refresh/start', status_code=202)
 async def refresh_start():
     """启动后台重算，避免网关等待完整预测而返回 504。"""
     # 控制面只登记一个 daemon 任务，不能排在共享阻塞线程池后面；线程池若

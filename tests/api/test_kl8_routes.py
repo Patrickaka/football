@@ -142,7 +142,7 @@ class SlowRoutesStillWired(unittest.TestCase):
         ('/api/kl8/parameter-search/start?top_n=3',
          'kl8_parameter_search_start_payload', {'top_n': ['3']}),
         ('/api/kl8/fetch', 'kl8_fetch_payload', None),
-        ('/api/kl8-refresh', 'kl8_refresh_payload', None),
+        ('/api/kl8-refresh', 'kl8_refresh_start_payload', None),
     )
 
     def test_each_slow_route_reaches_its_own_service_function(self):
@@ -157,19 +157,19 @@ class SlowRoutesStillWired(unittest.TestCase):
                     self.assertEqual(spy.call_args[0][0], expected)
 
     def test_refresh_accepts_the_web_pages_post(self):
-        with mock.patch.object(service, 'kl8_refresh_payload',
-                               return_value={
-                                   'success': True,
-                                   'result': {'marker': 'finished'},
-                               }) as spy:
+        queued = {
+            'success': True,
+            'result': {'job_id': 'legacy-refresh-123', 'status': 'queued'},
+        }
+        with mock.patch.object(
+                service, 'kl8_refresh_start_payload', return_value=queued,
+        ) as spy, mock.patch.object(service, 'kl8_refresh_payload') as blocking:
             with make_client() as client:
                 response = client.post('/api/kl8-refresh')
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json(), {
-            'success': True,
-            'result': {'marker': 'finished'},
-        })
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(response.json(), queued)
         spy.assert_called_once_with()
+        blocking.assert_not_called()
 
     def test_refresh_start_post_reaches_the_job_service(self):
         queued = {
@@ -181,7 +181,7 @@ class SlowRoutesStillWired(unittest.TestCase):
         ) as spy:
             with make_client() as client:
                 response = client.post('/api/kl8-refresh/start')
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.status_code, 202)
         self.assertEqual(response.json(), queued)
         spy.assert_called_once_with()
 

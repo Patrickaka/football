@@ -1,5 +1,8 @@
 import contextlib
+import pathlib
+import tempfile
 import unittest
+from unittest import mock
 
 from fastapi.testclient import TestClient
 
@@ -27,6 +30,29 @@ class HealthTests(unittest.TestCase):
         payload = self.client.get('/healthz').json()
         self.assertIn('cache', payload['components'])
         self.assertIn('database', payload['components'])
+
+    def test_healthz_exposes_the_exact_deployed_revision(self):
+        from src.api.routers import health
+
+        revision = 'b40af43f8e72d1e86d0787e66a0bd347a97ce63c'
+        with tempfile.TemporaryDirectory() as directory:
+            marker = pathlib.Path(directory) / 'deployed_revision'
+            marker.write_text(revision + '\n', encoding='utf-8')
+            with mock.patch.object(health, 'DEPLOY_REVISION_FILE', marker):
+                payload = self.client.get('/healthz').json()
+
+        self.assertEqual(payload['revision'], revision)
+
+    def test_healthz_rejects_an_invalid_revision_marker(self):
+        from src.api.routers import health
+
+        with tempfile.TemporaryDirectory() as directory:
+            marker = pathlib.Path(directory) / 'deployed_revision'
+            marker.write_text('not-a-git-sha', encoding='utf-8')
+            with mock.patch.object(health, 'DEPLOY_REVISION_FILE', marker):
+                payload = self.client.get('/healthz').json()
+
+        self.assertEqual(payload['revision'], 'development')
 
     def test_healthz_reports_tasks_component_ok(self):
         """当前这个 app 没有登记任何后台任务——「没有任务要跑」是正常空闲。"""

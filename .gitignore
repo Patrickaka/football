@@ -53,6 +53,9 @@ data/kl8_strategy_trials.json
 # 号码冲突的人工审核队列，跑分析器就会生成
 data/kl8_conflict_queue.json
 
+# 部署脚本写入，健康检查据此确认运行进程确实加载了目标提交
+data/deployed_revision
+
 # CatBoost 训练产物
 catboost_info/
 

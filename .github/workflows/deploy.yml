@@ -1,12 +1,24 @@
 name: Deploy
 
 on:
-  push:
+  workflow_run:
+    workflows: [Test]
+    types: [completed]
     branches: [master]
+  workflow_dispatch:
+
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
 
 jobs:
   deploy:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
+    env:
+      DEPLOY_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
     steps:
       - name: SSH 部署到服务器
         uses: appleboy/ssh-action@v1.2.0
@@ -14,9 +26,38 @@ jobs:
           host: ${{ secrets.SERVER_HOST }}
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
+          envs: DEPLOY_SHA
           script: |
+            set -Eeuo pipefail
             cd /root/football
-            git pull origin master
+
+            git fetch --prune origin master
+            if ! git diff --quiet || ! git diff --cached --quiet; then
+              echo "检测到服务器 tracked 文件有改动，先保存到 git stash 后再部署"
+              git stash push -m "auto-deploy-${DEPLOY_SHA}-$(date +%Y%m%d%H%M%S)"
+            fi
+            git switch master
+            git merge --ff-only "${DEPLOY_SHA}"
+            test "$(git rev-parse HEAD)" = "${DEPLOY_SHA}"
+            grep -Fq '/api/kl8-refresh/start' web/index.html
+            grep -Fq 'kl8-dashboard' web/index.html
+
             /root/miniconda3/envs/football/bin/pip install -r requirements.txt
+            mkdir -p data
+            printf '%s\n' "${DEPLOY_SHA}" > data/deployed_revision
             systemctl restart football
-            systemctl is-active football
+            systemctl is-active --quiet football
+            systemctl show football -p MainPID -p ExecStart -p WorkingDirectory
+
+            for attempt in $(seq 1 30); do
+              health_json="$(curl -fsS http://127.0.0.1:9004/healthz || true)"
+              if printf '%s' "${health_json}" | grep -Fq "\"revision\":\"${DEPLOY_SHA}\""; then
+                echo "部署完成，运行版本 ${DEPLOY_SHA}"
+                exit 0
+              fi
+              sleep 2
+            done
+
+            echo "健康检查没有返回目标版本 ${DEPLOY_SHA}"
+            systemctl status football --no-pager || true
+            exit 1

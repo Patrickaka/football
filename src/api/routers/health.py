@@ -1,12 +1,21 @@
+import pathlib
+import re
+
 from fastapi import APIRouter, Request
 from pydantic import BaseModel
 
 router = APIRouter(tags=['health'])
 
+DEPLOY_REVISION_FILE = (
+    pathlib.Path(__file__).resolve().parents[3] / 'data' / 'deployed_revision'
+)
+_FULL_GIT_SHA = re.compile(r'^[0-9a-f]{40}$', re.IGNORECASE)
+
 
 class HealthResponse(BaseModel):
     status: str
     components: dict
+    revision: str
 
 
 @router.get('/healthz', response_model=HealthResponse)
@@ -17,7 +26,20 @@ async def healthz(request: Request):
         'tasks': _probe_tasks(request.app.state.tasks),
     }
     healthy = all(v == 'ok' for v in components.values())
-    return HealthResponse(status='ok' if healthy else 'degraded', components=components)
+    return HealthResponse(
+        status='ok' if healthy else 'degraded',
+        components=components,
+        revision=_deployment_revision(),
+    )
+
+
+def _deployment_revision():
+    """返回部署脚本写入的精确 Git SHA；本地运行使用 development。"""
+    try:
+        revision = DEPLOY_REVISION_FILE.read_text(encoding='utf-8').strip()
+    except OSError:
+        return 'development'
+    return revision.lower() if _FULL_GIT_SHA.fullmatch(revision) else 'development'
 
 
 def _probe_cache(cache):
