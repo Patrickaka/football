@@ -17,7 +17,8 @@ class DeployWorkflowTests(unittest.TestCase):
         self.assertNotIn('  push:\n', WORKFLOW)
 
     def test_remote_script_fails_fast_and_deploys_the_tested_sha(self):
-        self.assertIn('set -Eeuo pipefail', WORKFLOW)
+        self.assertIn('set -eu', WORKFLOW)
+        self.assertNotIn('set -Eeuo pipefail', WORKFLOW)
         self.assertIn('git merge --ff-only "${DEPLOY_SHA}"', WORKFLOW)
         self.assertIn('test "$(git rev-parse HEAD)" = "${DEPLOY_SHA}"', WORKFLOW)
 

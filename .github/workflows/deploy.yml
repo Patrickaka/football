@@ -28,7 +28,9 @@ jobs:
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           envs: DEPLOY_SHA
           script: |
-            set -Eeuo pipefail
+            # appleboy 默认交给远端 /bin/sh；这里只使用 POSIX sh 支持的严格模式。
+            # `pipefail`/`-E` 在 Ubuntu 的 dash 中会让脚本尚未部署就直接退出。
+            set -eu
             cd /root/football
 
             git fetch --prune origin master
