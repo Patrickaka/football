@@ -64,7 +64,10 @@ class FootballRecordsWithoutMatches(unittest.TestCase):
         )[0]
         self.assertIn('predictionRecordDateKey', loader)
         self.assertIn('prediction-date-filter', loader)
+        self.assertIn('class="prediction-date-input" type="date"', loader)
+        self.assertNotIn('<select id="prediction-date-filter"', loader)
         self.assertIn('setPredictionDateFilter(this.value)', loader)
+        self.assertIn('setPredictionDateToday()', loader)
         self.assertIn('record.match_num', loader)
 
 

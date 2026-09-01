@@ -2292,6 +2292,83 @@
       scroll-behavior: auto !important;
     }
   }
+  .prediction-date-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    padding: 12px 14px;
+    margin-bottom: 12px;
+    border: 1px solid rgba(68, 147, 248, .24);
+    border-radius: 12px;
+    background: linear-gradient(135deg, rgba(28, 42, 61, .92), rgba(20, 31, 47, .92));
+    box-shadow: inset 0 1px rgba(255, 255, 255, .035), 0 10px 26px rgba(0, 0, 0, .14);
+  }
+  .prediction-date-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    color: var(--muted);
+    font-size: 13px;
+    font-weight: 600;
+  }
+  .prediction-date-label::before {
+    content: '▦';
+    color: #60a5fa;
+    font-size: 17px;
+  }
+  .prediction-date-input {
+    min-width: 176px;
+    height: 40px;
+    padding: 0 11px;
+    border: 1px solid rgba(96, 165, 250, .34);
+    border-radius: 9px;
+    background: rgba(8, 17, 29, .62);
+    color: var(--text);
+    color-scheme: dark;
+    font: inherit;
+    font-size: 13px;
+    cursor: pointer;
+    outline: none;
+    transition: border-color .18s ease, box-shadow .18s ease, background .18s ease;
+  }
+  .prediction-date-input:hover {
+    border-color: rgba(96, 165, 250, .65);
+    background: rgba(12, 25, 42, .82);
+  }
+  .prediction-date-input:focus {
+    border-color: #60a5fa;
+    box-shadow: 0 0 0 3px rgba(96, 165, 250, .13);
+  }
+  .prediction-date-input::-webkit-calendar-picker-indicator {
+    cursor: pointer;
+    opacity: .82;
+    filter: invert(.85) sepia(.2) saturate(1.4) hue-rotate(175deg);
+  }
+  .prediction-date-action {
+    min-height: 36px;
+    padding: 7px 11px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: rgba(255, 255, 255, .035);
+    color: var(--muted);
+    cursor: pointer;
+  }
+  .prediction-date-action:hover {
+    border-color: rgba(96, 165, 250, .5);
+    color: #bfdbfe;
+  }
+  .prediction-date-result {
+    margin-left: auto;
+    color: var(--muted);
+    font-size: 12px;
+  }
+  @media (max-width: 560px) {
+    .prediction-date-toolbar { align-items: stretch; }
+    .prediction-date-label { flex: 0 0 100%; }
+    .prediction-date-input { flex: 1; min-width: 0; }
+    .prediction-date-result { flex: 0 0 100%; margin-left: 0; }
+  }
 </style>
 </head>
 <body>
@@ -7390,6 +7467,12 @@ function setPredictionDateFilter(value) {
   loadPredictions();
 }
 
+function setPredictionDateToday() {
+  const now = new Date();
+  const localToday = `${now.getFullYear()}-${pad2(now.getMonth() + 1)}-${pad2(now.getDate())}`;
+  setPredictionDateFilter(localToday);
+}
+
 function getFootballAuditBreakdown(audit = {}) {
   const labels = {
     future_settlement: '提前回填',
@@ -7541,9 +7624,6 @@ async function loadPredictions() {
     const allRecords = recordsData.result?.records || [];
     const availableDates = [...new Set(allRecords.map(predictionRecordDateKey).filter(Boolean))]
       .sort((a, b) => b.localeCompare(a));
-    if (predictionDateFilter && !availableDates.includes(predictionDateFilter)) {
-      predictionDateFilter = '';
-    }
     const records = predictionDateFilter
       ? allRecords.filter(record => predictionRecordDateKey(record) === predictionDateFilter)
       : allRecords;
@@ -7637,14 +7717,15 @@ async function loadPredictions() {
     </div>`;
     
     // ── 预测记录列表 ──
-    html += `<div class="card" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px">
-      <label for="prediction-date-filter" style="font-size:13px;color:var(--muted)">比赛日期</label>
-      <select id="prediction-date-filter" onchange="setPredictionDateFilter(this.value)"
-        style="min-width:160px;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--card2);color:var(--text)">
-        <option value="">全部日期</option>
-        ${availableDates.map(date => `<option value="${esc(date)}" ${predictionDateFilter === date ? 'selected' : ''}>${esc(date)}</option>`).join('')}
-      </select>
-      ${predictionDateFilter ? `<span style="font-size:12px;color:var(--muted)">筛选到 ${records.length} 场</span>` : ''}
+    html += `<div class="prediction-date-toolbar">
+      <label class="prediction-date-label" for="prediction-date-filter">比赛日期</label>
+      <input id="prediction-date-filter" class="prediction-date-input" type="date"
+        value="${esc(predictionDateFilter)}"
+        ${availableDates.length ? `min="${esc(availableDates[availableDates.length - 1])}" max="${esc(availableDates[0])}"` : ''}
+        onchange="setPredictionDateFilter(this.value)" aria-label="按比赛日期筛选预测记录">
+      <button type="button" class="prediction-date-action" onclick="setPredictionDateToday()">今天</button>
+      ${predictionDateFilter ? `<button type="button" class="prediction-date-action" onclick="setPredictionDateFilter('')">查看全部</button>` : ''}
+      <span class="prediction-date-result">${predictionDateFilter ? `${esc(predictionDateFilter)} · ${records.length} 场` : `全部日期 · ${records.length} 场`}</span>
     </div>`;
     html += `<div class="section-title">📋 预测记录（共 ${records.length} 条）</div>`;
     
