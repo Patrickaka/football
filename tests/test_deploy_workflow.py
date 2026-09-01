@@ -28,6 +28,12 @@ class DeployWorkflowTests(unittest.TestCase):
         self.assertIn('http://127.0.0.1:9004/healthz', WORKFLOW)
         self.assertIn('"revision\\\":\\\"${DEPLOY_SHA}', WORKFLOW)
 
+    def test_remote_failures_are_captured_with_their_stage(self):
+        self.assertIn('capture_stdout: true', WORKFLOW)
+        self.assertIn('__DEPLOY_STAGE__=fetch', WORKFLOW)
+        self.assertIn('__DEPLOY_STATUS__=%s', WORKFLOW)
+        self.assertIn('steps.ssh_deploy.outputs.stdout', WORKFLOW)
+
 
 if __name__ == '__main__':
     unittest.main()

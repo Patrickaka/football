@@ -22,45 +22,84 @@ jobs:
       DEPLOY_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
     steps:
       - name: SSH 部署到服务器
-        uses: appleboy/ssh-action@v1.2.0
+        id: ssh_deploy
+        continue-on-error: true
+        uses: appleboy/ssh-action@v1.2.5
         with:
           host: ${{ secrets.SERVER_HOST }}
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           envs: DEPLOY_SHA
+          capture_stdout: true
           script: |
-            # appleboy 默认交给远端 /bin/sh；这里只使用 POSIX sh 支持的严格模式。
-            # `pipefail`/`-E` 在 Ubuntu 的 dash 中会让脚本尚未部署就直接退出。
-            set -eu
-            cd /root/football
+            # 外层负责无论成功失败都回传阶段和状态；真正部署仍在严格子 shell 中。
+            # 这样 GitHub 后续步骤能公开显示失败点，而不是只有笼统的 exit code 1。
+            set +e
+            (
+              set -eu
+              echo '__DEPLOY_STAGE__=repository'
+              cd /root/football
 
-            git fetch --prune origin master
-            if ! git diff --quiet || ! git diff --cached --quiet; then
-              echo "检测到服务器 tracked 文件有改动，先保存到 git stash 后再部署"
-              git stash push -m "auto-deploy-${DEPLOY_SHA}-$(date +%Y%m%d%H%M%S)"
-            fi
-            git switch master
-            git merge --ff-only "${DEPLOY_SHA}"
-            test "$(git rev-parse HEAD)" = "${DEPLOY_SHA}"
-            grep -Fq '/api/kl8-refresh/start' web/index.html
-            grep -Fq 'kl8-dashboard' web/index.html
-
-            /root/miniconda3/envs/football/bin/pip install -r requirements.txt
-            mkdir -p data
-            printf '%s\n' "${DEPLOY_SHA}" > data/deployed_revision
-            systemctl restart football
-            systemctl is-active --quiet football
-            systemctl show football -p MainPID -p ExecStart -p WorkingDirectory
-
-            for attempt in $(seq 1 30); do
-              health_json="$(curl -fsS http://127.0.0.1:9004/healthz || true)"
-              if printf '%s' "${health_json}" | grep -Fq "\"revision\":\"${DEPLOY_SHA}\""; then
-                echo "部署完成，运行版本 ${DEPLOY_SHA}"
-                exit 0
+              echo '__DEPLOY_STAGE__=fetch'
+              git fetch --prune origin master
+              if ! git diff --quiet || ! git diff --cached --quiet; then
+                echo '__DEPLOY_STAGE__=stash'
+                echo "检测到服务器 tracked 文件有改动，先保存到 git stash 后再部署"
+                git stash push -m "auto-deploy-${DEPLOY_SHA}-$(date +%Y%m%d%H%M%S)"
               fi
-              sleep 2
-            done
+              echo '__DEPLOY_STAGE__=merge'
+              git switch master
+              git merge --ff-only "${DEPLOY_SHA}"
+              test "$(git rev-parse HEAD)" = "${DEPLOY_SHA}"
+              grep -Fq '/api/kl8-refresh/start' web/index.html
+              grep -Fq 'kl8-dashboard' web/index.html
 
-            echo "健康检查没有返回目标版本 ${DEPLOY_SHA}"
-            systemctl status football --no-pager || true
+              echo '__DEPLOY_STAGE__=install'
+              /root/miniconda3/envs/football/bin/pip install -r requirements.txt
+              mkdir -p data
+              printf '%s\n' "${DEPLOY_SHA}" > data/deployed_revision
+
+              echo '__DEPLOY_STAGE__=restart'
+              systemctl restart football
+              systemctl is-active --quiet football
+              systemctl show football -p MainPID -p ExecStart -p WorkingDirectory
+
+              echo '__DEPLOY_STAGE__=health'
+              for attempt in $(seq 1 30); do
+                health_json="$(curl -fsS http://127.0.0.1:9004/healthz || true)"
+                if printf '%s' "${health_json}" | grep -Fq "\"revision\":\"${DEPLOY_SHA}\""; then
+                  echo "部署完成，运行版本 ${DEPLOY_SHA}"
+                  exit 0
+                fi
+                sleep 2
+              done
+
+              echo "健康检查没有返回目标版本 ${DEPLOY_SHA}"
+              systemctl status football --no-pager || true
+              exit 1
+            )
+            deploy_status=$?
+            printf '__DEPLOY_STATUS__=%s\n' "${deploy_status}"
+            exit 0
+
+      - name: 校验远端部署结果
+        if: always()
+        shell: bash
+        env:
+          SSH_OUTCOME: ${{ steps.ssh_deploy.outcome }}
+          DEPLOY_OUTPUT: ${{ steps.ssh_deploy.outputs.stdout }}
+        run: |
+          set -eu
+          printf '%s\n' "${DEPLOY_OUTPUT}"
+
+          if [ "${SSH_OUTCOME}" != 'success' ]; then
+            echo '::error title=SSH 部署执行器失败::未能正常连接服务器或捕获远端输出'
             exit 1
+          fi
+
+          if ! printf '%s\n' "${DEPLOY_OUTPUT}" | grep -Fq '__DEPLOY_STATUS__=0'; then
+            deploy_stage="$(printf '%s\n' "${DEPLOY_OUTPUT}" | grep -F '__DEPLOY_STAGE__=' | tail -n 1 || true)"
+            error_tail="$(printf '%s\n' "${DEPLOY_OUTPUT}" | tail -n 80 | python3 -c 'import sys; text=sys.stdin.read(); print(text.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A"))')"
+            echo "::error title=远端部署失败 ${deploy_stage:-未知阶段}::${error_tail}"
+            exit 1
+          fi
