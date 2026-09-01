@@ -166,6 +166,51 @@ def upsert_one(table, columns, row_values, key_cols):
         return 'fallback'
 
 
+def sync_append_only(table, columns, rows_values):
+    """把「只增不改」的表同步到 rows_values，只写新增的尾部。
+
+    similar_market 这类样本库有近两万行，每次保存都整表 DELETE + INSERT，
+    row-based binlog 会把两万行的删除和插入全记一遍（约 12MB/次）。行数只增
+    的表没有理由这么写：库里已有 N 行就只插第 N 行之后的部分。
+
+    行数变少意味着调用方重建了内容（导入、清空），此时才回退到整表重写。
+    """
+    try:
+        stored = db.query(f"SELECT COUNT(*) AS c FROM {table}")[0]['c']
+    except Exception as e:
+        _record_degradation(table, e, operation='append')
+        _fallback_replace_all(table, columns, rows_values)
+        return
+
+    if len(rows_values) < stored:
+        replace_all(table, columns, rows_values)
+        return
+
+    pending = rows_values[stored:]
+    if not pending:
+        clear_degradation(table)
+        return
+
+    placeholders = ",".join(["%s"] * len(columns))
+    sql = f"INSERT INTO {table} ({','.join(columns)}) VALUES ({placeholders})"
+    try:
+        conn = db.get_connection()
+    except Exception as e:
+        _record_degradation(table, e, operation='append')
+        _fallback_replace_all(table, columns, rows_values)
+        return
+    try:
+        conn.begin()
+        with conn.cursor() as cur:
+            cur.executemany(sql, pending)
+        conn.commit()
+        clear_degradation(table)
+    except Exception as e:
+        conn.rollback()
+        _record_degradation(table, e, operation='append')
+        _fallback_replace_all(table, columns, rows_values)
+
+
 def replace_all(table, columns, rows_values):
     """事务内清空并批量写入。columns 与 rows_values 的每个元组列序一致。"""
     placeholders = ",".join(["%s"] * len(columns))

@@ -72,29 +72,57 @@ def elo_load():
     return {'ratings': ratings, 'history': history, 'updated_at': row['u'] if row else None}
 
 
+def _entry_tuple(entry):
+    return (entry.get('rating'), entry.get('date'), entry.get('event'))
+
+
+def _sync_elo_ratings(cur, ratings, updated):
+    """评分表按主键 UPSERT，只删真正消失的球队。"""
+    if ratings:
+        cur.executemany(
+            "INSERT INTO elo_rating (team, rating, updated_at) VALUES (%s,%s,%s)"
+            " ON DUPLICATE KEY UPDATE rating=VALUES(rating), updated_at=VALUES(updated_at)",
+            [(t, v, updated) for t, v in ratings.items()],
+        )
+    stored = {r['team'] for r in db.query("SELECT team FROM elo_rating")}
+    stale = sorted(stored - set(ratings))
+    if stale:
+        placeholders = ",".join(["%s"] * len(stale))
+        cur.execute(f"DELETE FROM elo_rating WHERE team IN ({placeholders})", tuple(stale))
+
+
+def _sync_elo_history(cur, history):
+    """轨迹表按球队比对，只重写内容真的变了的那几支球队。
+
+    一场比赛只动两支球队，整表重写却要把上千行删了再写回去。
+    """
+    stored = {}
+    for row in db.query("SELECT team, rating, date, event FROM elo_history ORDER BY id"):
+        stored.setdefault(row['team'], []).append((row['rating'], row['date'], row['event']))
+
+    for team, entries in history.items():
+        desired = [_entry_tuple(e) for e in entries]
+        if stored.get(team, []) == desired:
+            continue
+        cur.execute("DELETE FROM elo_history WHERE team=%s", (team,))
+        if desired:
+            cur.executemany(
+                "INSERT INTO elo_history (team, rating, date, event) VALUES (%s,%s,%s,%s)",
+                [(team, *entry) for entry in desired],
+            )
+
+    for team in sorted(set(stored) - set(history)):
+        cur.execute("DELETE FROM elo_history WHERE team=%s", (team,))
+
+
 def elo_save(data):
-    ratings = data.get('ratings', {})
-    history = data.get('history', {})
-    updated = data.get('updated_at')
-    rating_rows = [(t, v, updated) for t, v in ratings.items()]
-    hist_rows = [
-        (t, e.get('rating'), e.get('date'), e.get('event'))
-        for t, entries in history.items() for e in entries
-    ]
+    """增量保存 ELO：整表重写会把每场比赛的两行改动放大成上千行 binlog。"""
     conn = db.get_connection()
     try:
         conn.begin()
         with conn.cursor() as cur:
-            cur.execute("DELETE FROM elo_rating")
-            cur.execute("DELETE FROM elo_history")
-            if rating_rows:
-                cur.executemany(
-                    "INSERT INTO elo_rating (team, rating, updated_at) VALUES (%s,%s,%s)", rating_rows
-                )
-            if hist_rows:
-                cur.executemany(
-                    "INSERT INTO elo_history (team, rating, date, event) VALUES (%s,%s,%s,%s)", hist_rows
-                )
+            _sync_elo_ratings(cur, data.get('ratings', {}), data.get('updated_at'))
+            _sync_elo_history(cur, data.get('history', {}))
         conn.commit()
     except Exception:
         conn.rollback()
@@ -119,4 +147,4 @@ def similar_market_load():
 def similar_market_save(data):
     records = data.get('records', [])
     rows = [tuple(rec.get(c) for c in SIMILAR_COLS) for rec in records]
-    doc_store.replace_all('similar_market', SIMILAR_COLS, rows)
+    doc_store.sync_append_only('similar_market', SIMILAR_COLS, rows)
