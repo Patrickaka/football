@@ -3587,6 +3587,18 @@ function renderFootballPredictions(results) {
   }
   html += `<div class="status" style="padding:4px 0 12px;font-size:13px">共 ${results.length} 场比赛，筛选后 ${visibleResults.length} 场，第 ${footballPage}/${totalPages} 页</div>`;
 
+  const footballPagerHtml = `<div class="pager sport-pager">
+    <button onclick="setFootballPage(1)" ${footballPage <= 1 ? 'disabled' : ''}>首页</button>
+    <button onclick="setFootballPage(${footballPage - 1})" ${footballPage <= 1 ? 'disabled' : ''}>上一页</button>
+    <span class="page-info">第 ${footballPage} / ${totalPages} 页</span>
+    <button onclick="setFootballPage(${footballPage + 1})" ${footballPage >= totalPages ? 'disabled' : ''}>下一页</button>
+    <button onclick="setFootballPage(${totalPages})" ${footballPage >= totalPages ? 'disabled' : ''}>末页</button>
+    <select onchange="setFootballPageSize(this.value)" aria-label="足球每页显示数量">
+      ${[8, 12, 20, 50].map(size => `<option value="${size}" ${footballPageSize === size ? 'selected' : ''}>每页 ${size}</option>`).join('')}
+    </select>
+  </div>`;
+  html += footballPagerHtml;
+
   if (!visibleResults.length) {
     html += `<div class="status">${kw ? '没有匹配的比赛' : '当前筛选下暂无主推，下方仍提供比分参考'}</div>`;
     if (!kw) html += renderFootballScoreReferencePanel(results);
@@ -3964,19 +3976,8 @@ function renderFootballPredictions(results) {
       });
     }
     
-    // 分页组件
-    if (totalPages > 1) {
-      html += `<div class="pager" style="margin-top:16px">
-        <button onclick="setFootballPage(1)" ${footballPage <= 1 ? 'disabled' : ''}>首页</button>
-        <button onclick="setFootballPage(${footballPage - 1})" ${footballPage <= 1 ? 'disabled' : ''}>上一页</button>
-        <span class="page-info">${footballPage} / ${totalPages}</span>
-        <button onclick="setFootballPage(${footballPage + 1})" ${footballPage >= totalPages ? 'disabled' : ''}>下一页</button>
-        <button onclick="setFootballPage(${totalPages})" ${footballPage >= totalPages ? 'disabled' : ''}>末页</button>
-        <select onchange="setFootballPageSize(this.value)">
-          ${[8, 12, 20, 50].map(size => `<option value="${size}" ${footballPageSize === size ? 'selected' : ''}>每页 ${size}</option>`).join('')}
-        </select>
-      </div>`;
-    }
+    // 多页时在长列表底部重复显示分页；顶部分页始终可见。
+    if (totalPages > 1) html += footballPagerHtml;
     
     html += `<div style="margin-top:20px;padding-top:16px;border-top:1px solid var(--line)">
       <div style="font-size:12px;color:var(--muted);text-align:center">
@@ -4562,16 +4563,16 @@ function renderBeidan(result) {
   html += renderBeidanHistorySummary(result.history_summary);
   // 顶部冷门雷达汇总区已隐藏：用户反馈太占页面，保留每场内的爆冷预警内联标记即可
   // html += renderBeidanUpsetWatch(result.upset_watch);
-  const pagerHtml = totalPages > 1 ? `<div class="pager">
+  const pagerHtml = `<div class="pager sport-pager">
     <button onclick="setBeidanPage(1)" ${beidanPage <= 1 ? 'disabled' : ''}>首页</button>
     <button onclick="setBeidanPage(${beidanPage - 1})" ${beidanPage <= 1 ? 'disabled' : ''}>上一页</button>
-    <span class="page-info">${beidanPage} / ${totalPages}</span>
+    <span class="page-info">第 ${beidanPage} / ${totalPages} 页</span>
     <button onclick="setBeidanPage(${beidanPage + 1})" ${beidanPage >= totalPages ? 'disabled' : ''}>下一页</button>
     <button onclick="setBeidanPage(${totalPages})" ${beidanPage >= totalPages ? 'disabled' : ''}>末页</button>
-    <select onchange="setBeidanPageSize(this.value)">
+    <select onchange="setBeidanPageSize(this.value)" aria-label="北单每页显示数量">
       ${[8, 12, 20, 50].map(size => `<option value="${size}" ${beidanPageSize === size ? 'selected' : ''}>每页 ${size}</option>`).join('')}
     </select>
-  </div>` : '';
+  </div>`;
   html += pagerHtml;
 
   if (!visibleRecommendations.length) {
@@ -4829,7 +4830,7 @@ function renderBeidan(result) {
       });
     html += '</div>';
   }
-  html += pagerHtml;
+  if (totalPages > 1) html += pagerHtml;
   
   appBeidan.innerHTML = html;
   attachBeidanSearchListeners();
@@ -7114,16 +7115,16 @@ function renderBasketball(result) {
   
   html += `<div class="status" style="padding:4px 0 12px;font-size:13px">数据源 ${esc(srcLabel)}${result.version ? ' · ' + esc(result.version) : ''} · 共 ${result.total_matches || filteredMatches.length} 场，筛选后 ${filteredMatches.length} 场，第 ${basketballPage}/${totalPages} 页</div>`;
   
-  const pagerHtml = totalPages > 1 ? `<div class="pager">
+  const pagerHtml = `<div class="pager sport-pager">
     <button onclick="setBasketballPage(1)" ${basketballPage <= 1 ? 'disabled' : ''}>首页</button>
     <button onclick="setBasketballPage(${basketballPage - 1})" ${basketballPage <= 1 ? 'disabled' : ''}>上一页</button>
-    <span class="page-info">${basketballPage} / ${totalPages}</span>
+    <span class="page-info">第 ${basketballPage} / ${totalPages} 页</span>
     <button onclick="setBasketballPage(${basketballPage + 1})" ${basketballPage >= totalPages ? 'disabled' : ''}>下一页</button>
     <button onclick="setBasketballPage(${totalPages})" ${basketballPage >= totalPages ? 'disabled' : ''}>末页</button>
-    <select onchange="setBasketballPageSize(this.value)">
+    <select onchange="setBasketballPageSize(this.value)" aria-label="篮球每页显示数量">
       ${[8, 12, 20, 50].map(size => `<option value="${size}" ${basketballPageSize === size ? 'selected' : ''}>每页 ${size}</option>`).join('')}
     </select>
-  </div>` : '';
+  </div>`;
   // 顶部翻页
   html += pagerHtml;
 
@@ -7283,7 +7284,7 @@ function renderBasketball(result) {
   }
   
   // 底部翻页
-  html += pagerHtml;
+  if (totalPages > 1) html += pagerHtml;
   
   appBasketball.innerHTML = html;
   
