@@ -63,6 +63,28 @@ class KL8VisualShell(unittest.TestCase):
         self.assertIn('max-height: min(92dvh, 860px);', HTML)
         self.assertIn('grid-template-areas: "issue date" "balls balls";', HTML)
 
+    def test_fushi7_recalculation_excludes_only_its_linked_select6_core(self):
+        self.assertIn(
+            "recalculationNumbers: r.fu_shi_7?.select_6_numbers || r.select_6?.numbers || []",
+            HTML,
+        )
+        self.assertEqual(
+            HTML.count(
+                'result.next_exclude_numbers || result.select_6_numbers || newNumbers'
+            ),
+            2,
+        )
+        self.assertEqual(
+            HTML.count(
+                'option.currentRecalculationNumbers || option.currentNumbers || []'
+            ),
+            2,
+        )
+        self.assertIn(
+            'removeNow.length < option.requiredRecalculationPick',
+            HTML,
+        )
+
 
 if __name__ == '__main__':
     unittest.main()

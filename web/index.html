@@ -6116,7 +6116,16 @@ function getKL8ExcludeOptions() {
     { ...sourceContext, key: 'select_5', label: '选5', numbers: r.select_5?.numbers || [], resultField: 'numbers' },
     { ...sourceContext, key: 'select_6', label: '选6', numbers: r.select_6?.numbers || [], resultField: 'numbers' },
     { ...sourceContext, key: 'select_10', label: '选10', numbers: r.select_10?.numbers || [], resultField: 'numbers' },
-    { ...sourceContext, key: 'fu_shi_7', label: '选5复式7码', numbers: r.fu_shi_7?.top7_numbers || r.fu_shi_7?.core_numbers || [], resultField: 'top7_numbers' },
+    {
+      ...sourceContext,
+      key: 'fu_shi_7',
+      label: '选5复式7码',
+      numbers: r.fu_shi_7?.top7_numbers || r.fu_shi_7?.core_numbers || [],
+      // 7码复式由选6主号顺序补1码而来；后续杀号必须只累计选6的6个
+      // 主号，否则补充号会被多杀一次，下一轮就会与选6轨迹分叉。
+      recalculationNumbers: r.fu_shi_7?.select_6_numbers || r.select_6?.numbers || [],
+      resultField: 'top7_numbers',
+    },
   ].filter(item => item.numbers && item.numbers.length > 0);
 }
 
@@ -6251,13 +6260,20 @@ function renderKL8MultiSlips(sel, st) {
 
 function initKL8ExcludeState(options) {
   kl8ExcludeState = {
-    options: options.map(item => ({
-      ...item,
-      currentNumbers: [...item.numbers],
-      excludedNumbers: [],
-      requiredPick: item.numbers.length,
-      round: 0,
-    })),
+    options: options.map(item => {
+      const recalculationNumbers = item.recalculationNumbers?.length
+        ? item.recalculationNumbers
+        : item.numbers;
+      return {
+        ...item,
+        currentNumbers: [...item.numbers],
+        currentRecalculationNumbers: [...recalculationNumbers],
+        excludedNumbers: [],
+        requiredPick: item.numbers.length,
+        requiredRecalculationPick: recalculationNumbers.length,
+        round: 0,
+      };
+    }),
   };
 }
 
@@ -6352,15 +6368,22 @@ function parseKL8NumberInput(value) {
 
 function initKL8KillState(options) {
   kl8KillState = {
-    options: options.map(item => ({
-      ...item,
-      currentNumbers: [...item.numbers],
-      excludedNumbers: [],
-      manualKillNumbers: [],
-      requiredPick: item.numbers.length,
-      round: 0,
-      initialized: false,
-    })),
+    options: options.map(item => {
+      const recalculationNumbers = item.recalculationNumbers?.length
+        ? item.recalculationNumbers
+        : item.numbers;
+      return {
+        ...item,
+        currentNumbers: [...item.numbers],
+        currentRecalculationNumbers: [...recalculationNumbers],
+        excludedNumbers: [],
+        manualKillNumbers: [],
+        requiredPick: item.numbers.length,
+        requiredRecalculationPick: recalculationNumbers.length,
+        round: 0,
+        initialized: false,
+      };
+    }),
   };
 }
 
@@ -6694,8 +6717,12 @@ async function runKL8KillRecalculate() {
     return;
   }
 
-  const removeNow = option.initialized ? [...(option.currentNumbers || [])] : [];
-  if (option.initialized && (!removeNow.length || removeNow.length < option.requiredPick)) {
+  const removeNow = option.initialized
+    ? [...(option.currentRecalculationNumbers || option.currentNumbers || [])]
+    : [];
+  if (option.initialized && (
+    !removeNow.length || removeNow.length < option.requiredRecalculationPick
+  )) {
     resultTarget.innerHTML = `<div class="status error">${esc(option.label)} 剩余号码不足，不能继续杀号计算</div>`;
     refreshKL8KillCards(option.key);
     return;
@@ -6732,6 +6759,7 @@ async function runKL8KillRecalculate() {
     }
 
     option.currentNumbers = newNumbers;
+    option.currentRecalculationNumbers = result.next_exclude_numbers || result.select_6_numbers || newNumbers;
     option.excludedNumbers = result.excluded_numbers || excludeNumbers;
     option.manualKillNumbers = manualKillNumbers;
     option.initialized = true;
@@ -6771,8 +6799,8 @@ async function runKL8ExcludeRecalculate() {
   if (!resultTarget || !selected) return;
   const option = getKL8ExcludeOption(selected.value);
   if (!option) return;
-  const removeNow = [...(option.currentNumbers || [])];
-  if (!removeNow.length || removeNow.length < option.requiredPick) {
+  const removeNow = [...(option.currentRecalculationNumbers || option.currentNumbers || [])];
+  if (!removeNow.length || removeNow.length < option.requiredRecalculationPick) {
     resultTarget.innerHTML = `<div class="status error">${esc(option.label)} 剩余号码不足，不能继续剔除重算</div>`;
     refreshKL8ExcludeCards(option.key);
     return;
@@ -6800,6 +6828,7 @@ async function runKL8ExcludeRecalculate() {
       throw new Error(`${option.label} 候选号码不足，已停止输出新结果`);
     }
     option.currentNumbers = newNumbers;
+    option.currentRecalculationNumbers = result.next_exclude_numbers || result.select_6_numbers || newNumbers;
     option.excludedNumbers = result.excluded_numbers || excludeNumbers;
     option.round = (option.round || 0) + 1;
     const candidates = (result.candidates || []).map(item => Array.isArray(item) ? item[0] : item).slice(0, 12);

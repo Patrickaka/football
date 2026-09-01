@@ -1032,9 +1032,15 @@ class KL8Analyzer:
             repeat_cap,
             strategy.get('final_selection_mode', 'best_variant'),
         )
+        numbers = sorted(num for num, _ in final_pool)
         return {
             'play_type': play_type,
-            'numbers': sorted(num for num, _ in final_pool),
+            'numbers': numbers,
+            # The client uses this field as the next cumulative-exclusion unit.
+            # For ordinary plays it is the result itself; fu_shi_7 overrides it
+            # with the linked select-6 core so its seventh supplement is not
+            # incorrectly killed on the next round.
+            'next_exclude_numbers': numbers,
             'excluded_numbers': excluded,
             'candidates': candidates[:12],
             'quality': quality,
@@ -1143,6 +1149,7 @@ class KL8Analyzer:
                 fushi_cfg['numbers_field']: core_numbers,
                 'core_numbers': core_numbers,
                 'select_6_numbers': select6_result['numbers'],
+                'next_exclude_numbers': select6_result['numbers'],
                 'supplemental_number': supplemental_number,
                 'ranking_source': 'select_6',
                 'excluded_numbers': excluded,
@@ -1243,6 +1250,8 @@ class KL8Analyzer:
         excluded = sorted({int(n) for n in result.get('excluded_numbers', [])})
         numbers = result.get('numbers') or result.get('core_numbers') or []
         numbers = sorted({int(n) for n in numbers})
+        next_exclude_numbers = result.get('next_exclude_numbers') or numbers
+        next_exclude_numbers = sorted({int(n) for n in next_exclude_numbers})
         based_on_issue = str(self.history_data[0].get('issue') or '')
         target_issue = str(_compute_next_issue(based_on_issue, self.history_data) or '')
         context = dict(record_context or {})
@@ -1341,6 +1350,7 @@ class KL8Analyzer:
                 'round': round_number,
                 'excluded_numbers': excluded,
                 'numbers': numbers,
+                'next_exclude_numbers': next_exclude_numbers,
                 'status': status,
                 'remaining_count': result.get('remaining_count'),
                 'required_count': result.get('required_count'),

@@ -560,6 +560,7 @@ class KL8PredictionGuardTests(unittest.TestCase):
             set(select6_result['numbers']).issubset(result['top7_numbers'])
         )
         self.assertEqual(result['select_6_numbers'], select6_result['numbers'])
+        self.assertEqual(result['next_exclude_numbers'], select6_result['numbers'])
         self.assertEqual(result['supplemental_number'], expected_supplement)
         self.assertEqual(
             set(result['top7_numbers']),
@@ -574,6 +575,7 @@ class KL8PredictionGuardTests(unittest.TestCase):
         self.assertEqual(len(stored), 1)
         self.assertEqual(stored[0]['play_type'], 'fu_shi_7')
         self.assertEqual(stored[0]['numbers'], result['top7_numbers'])
+        self.assertEqual(stored[0]['next_exclude_numbers'], select6_result['numbers'])
         self.assertEqual(stored[0]['source_snapshot_id'], 'fushi7-snapshot')
 
     def test_fushi7_recalculation_chain_runs_until_candidates_are_exhausted(self):
