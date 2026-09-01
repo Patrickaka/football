@@ -265,7 +265,8 @@ class PredictionHistory:
                        predicted_rqspf: Dict[str, float] = None,
                        goal_count: Dict = None,
                        professional_snapshot: Dict = None,
-                       model_version: str = PRODUCTION_MODEL_VERSION):
+                       model_version: str = PRODUCTION_MODEL_VERSION,
+                       match_num: str = None):
         """
         添加预测记录
         
@@ -275,6 +276,7 @@ class PredictionHistory:
             home: 主队名称
             away: 客队名称
             match_time: 比赛时间
+            match_num: 竞彩比赛编号，如“周一001”
             predicted_scores: 预测比分概率 {"1-1": 0.108, ...}
             predicted_1x2: 预测胜平负 {"home": 0.46, "draw": 0.27, "away": 0.27}
             asian: 亚盘让球
@@ -328,6 +330,7 @@ class PredictionHistory:
                     and record.get('_pred_sig') == new_sig
                     and existing_layers.get(layer) is not None
                     and not record.get('settled')
+                    and (not match_num or record.get('match_num') == match_num)
                 ):
                     return {'saved': False, 'persistence_backend': 'unchanged'}
 
@@ -346,6 +349,8 @@ class PredictionHistory:
                     'professional_snapshot': professional_snapshot,
                     '_pred_sig': new_sig,
                 }
+                if match_num:
+                    update_data['match_num'] = match_num
                 if predicted_half_full:
                     update_data['predicted_half_full'] = predicted_half_full
                 # 添加影子预测字段
@@ -440,6 +445,7 @@ class PredictionHistory:
             'home': home,
             'away': away,
             'match_time': match_time,
+            'match_num': match_num,
             'asian': asian,
             'total_line': total_line,
             'predicted_scores': predicted_scores,
@@ -1857,7 +1863,8 @@ def save_prediction(match_id: str, league: str, home: str, away: str,
                    predicted_rqspf: Dict[str, float] = None,
                    goal_count: Dict = None,
                    professional_snapshot: Dict = None,
-                   model_version: str = PRODUCTION_MODEL_VERSION):
+                   model_version: str = PRODUCTION_MODEL_VERSION,
+                   match_num: str = None):
     """保存预测记录"""
     return _global_history.add_prediction(
         match_id, league, home, away, match_time,
@@ -1873,6 +1880,7 @@ def save_prediction(match_id: str, league: str, home: str, away: str,
         goal_count=goal_count,
         professional_snapshot=professional_snapshot,
         model_version=model_version,
+        match_num=match_num,
     )
 
 
@@ -2108,6 +2116,8 @@ def get_prediction_records(include_hidden: bool = False,
             'home': record.get('home'),
             'away': record.get('away'),
             'match_time': record.get('match_time'),
+            'match_num': record.get('match_num'),
+            'created_at': record.get('created_at'),
             'settled': False if is_future_settled else record.get('settled', False),
             'actual_score': None if is_future_settled else record.get('actual_score'),
             'sync_status': 'pending' if is_future_settled else record.get('sync_status', 'pending'),
@@ -2141,6 +2151,7 @@ def get_prediction_export() -> Dict:
     """返回可用于离线回测/校准的完整预测记录（不包含数据库配置）。"""
     export_fields = (
         'match_id', 'league', 'home', 'away', 'match_time',
+        'match_num',
         'created_at', 'updated_at', 'settled_at', 'model_version',
         'prediction_logic_version', 'asian', 'total_line',
         'predicted_scores', 'predicted_1x2', 'predicted_rqspf', 'goal_count',
@@ -2207,6 +2218,7 @@ def predict_at_time_layer(match: Dict, time_layer: str) -> bool:
             'away': match.get('away', ''),
             'league': match.get('league', ''),
             'time': match.get('time', match.get('match_time', '')),
+            'num': match.get('num') or match.get('match_num'),
         }, force_refresh=True)
 
         log.info(f"时间分层预测成功: match_id={match_id}, time_layer={time_layer}")

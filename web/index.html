@@ -2364,6 +2364,7 @@ let groupMode = 'league';
 let activeTab = 'football';
 let predictionsPage = 1;
 const PREDICTIONS_PAGE_SIZE = 20;
+let predictionDateFilter = '';
 let beidanMatches = [];
 
 const TAB_META = {
@@ -7373,6 +7374,22 @@ function startSyncStampTimer() {
   syncStampTimer = setInterval(() => updateSyncStampAges(), 60000);
 }
 
+function predictionRecordDateKey(record) {
+  const matchTime = String(record?.match_time || '').trim();
+  const fullDate = matchTime.match(/^(\d{4}-\d{2}-\d{2})/);
+  if (fullDate) return fullDate[1];
+  const shortDate = matchTime.match(/^(\d{2}-\d{2})/);
+  if (!shortDate) return '';
+  const createdYear = String(record?.created_at || '').match(/^(\d{4})/);
+  return `${createdYear ? createdYear[1] : new Date().getFullYear()}-${shortDate[1]}`;
+}
+
+function setPredictionDateFilter(value) {
+  predictionDateFilter = value || '';
+  predictionsPage = 1;
+  loadPredictions();
+}
+
 function getFootballAuditBreakdown(audit = {}) {
   const labels = {
     future_settlement: '提前回填',
@@ -7521,7 +7538,15 @@ async function loadPredictions() {
     if (recordsData.error) throw new Error(recordsData.error);
     
     const sync = syncStatus.result || {};
-    const records = recordsData.result?.records || [];
+    const allRecords = recordsData.result?.records || [];
+    const availableDates = [...new Set(allRecords.map(predictionRecordDateKey).filter(Boolean))]
+      .sort((a, b) => b.localeCompare(a));
+    if (predictionDateFilter && !availableDates.includes(predictionDateFilter)) {
+      predictionDateFilter = '';
+    }
+    const records = predictionDateFilter
+      ? allRecords.filter(record => predictionRecordDateKey(record) === predictionDateFilter)
+      : allRecords;
     const diagnostics = diagnosticsData.result || {};
     const auxiliaryWarnings = [
       syncStatus.error ? `同步状态暂不可用：${syncStatus.error}` : '',
@@ -7530,12 +7555,12 @@ async function loadPredictions() {
     predictionExportData = {
       schema_version: 'football-prediction-export-v1',
       exported_at: new Date().toISOString(),
-      record_count: records.length,
-      settled_count: records.filter(record => record.settled || record.actual_score).length,
-      model_versions: [...new Set(records.map(record => record.model_version).filter(Boolean))],
+      record_count: allRecords.length,
+      settled_count: allRecords.filter(record => record.settled || record.actual_score).length,
+      model_versions: [...new Set(allRecords.map(record => record.model_version).filter(Boolean))],
       sync_status: sync,
       diagnostics,
-      records,
+      records: allRecords,
     };
     const settledAt = sync.last_settled_at || '';
     const syncStamp = formatSyncStamp(settledAt);
@@ -7612,6 +7637,15 @@ async function loadPredictions() {
     </div>`;
     
     // ── 预测记录列表 ──
+    html += `<div class="card" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px">
+      <label for="prediction-date-filter" style="font-size:13px;color:var(--muted)">比赛日期</label>
+      <select id="prediction-date-filter" onchange="setPredictionDateFilter(this.value)"
+        style="min-width:160px;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--card2);color:var(--text)">
+        <option value="">全部日期</option>
+        ${availableDates.map(date => `<option value="${esc(date)}" ${predictionDateFilter === date ? 'selected' : ''}>${esc(date)}</option>`).join('')}
+      </select>
+      ${predictionDateFilter ? `<span style="font-size:12px;color:var(--muted)">筛选到 ${records.length} 场</span>` : ''}
+    </div>`;
     html += `<div class="section-title">📋 预测记录（共 ${records.length} 条）</div>`;
     
     const totalPages = Math.max(1, Math.ceil(records.length / PREDICTIONS_PAGE_SIZE));
@@ -7660,7 +7694,7 @@ async function loadPredictions() {
         html += `<div class="card" style="${idx > 0 ? 'margin-top:8px' : ''}">
           <div style="display:flex;justify-content:space-between;align-items:center">
             <div>
-              <div style="font-weight:600;font-size:15px">${esc(record.home)} vs ${esc(record.away)}</div>
+              <div style="font-weight:600;font-size:15px">${record.match_num ? `<span style="display:inline-block;margin-right:7px;padding:2px 6px;border-radius:5px;background:rgba(68,147,248,.14);color:#93c5fd;font-size:12px;vertical-align:1px">${esc(record.match_num)}</span>` : ''}${esc(record.home)} vs ${esc(record.away)}</div>
               <div style="color:var(--muted);font-size:12px;margin-top:2px">${esc(record.league || '')} · ${esc(record.match_time || '')}</div>
             </div>
             <div style="text-align:right">

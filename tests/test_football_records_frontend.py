@@ -58,6 +58,15 @@ class FootballRecordsWithoutMatches(unittest.TestCase):
         self.assertIn('if (recordsData.error) throw new Error(recordsData.error);', loader)
         self.assertIn('以下预测记录仍可正常查看', loader)
 
+    def test_records_support_date_filter_and_match_number(self):
+        loader = HTML.split('async function loadPredictions()', 1)[1].split(
+            'async function exportPredictionRecords()', 1,
+        )[0]
+        self.assertIn('predictionRecordDateKey', loader)
+        self.assertIn('prediction-date-filter', loader)
+        self.assertIn('setPredictionDateFilter(this.value)', loader)
+        self.assertIn('record.match_num', loader)
+
 
 if __name__ == '__main__':
     unittest.main()

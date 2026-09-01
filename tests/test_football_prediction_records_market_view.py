@@ -18,6 +18,7 @@ class FootballPredictionRecordsMarketViewTests(unittest.TestCase):
                 home='主队',
                 away='客队',
                 match_time='2099-08-21 22:00',
+                match_num='周一001',
                 predicted_scores={'2-1': 0.30},
                 predicted_1x2=spf,
                 lottery_handicap=-1,
@@ -34,6 +35,7 @@ class FootballPredictionRecordsMarketViewTests(unittest.TestCase):
         saved = history.records[0]
         self.assertEqual(saved['predicted_1x2'], spf)
         self.assertEqual(saved['predicted_rqspf'], rqspf)
+        self.assertEqual(saved['match_num'], '周一001')
 
     def test_save_keeps_only_rqspf_when_standard_market_is_not_offered(self):
         history = result_sync.PredictionHistory.__new__(result_sync.PredictionHistory)
@@ -75,6 +77,7 @@ class FootballPredictionRecordsMarketViewTests(unittest.TestCase):
             'home': '主队',
             'away': '客队',
             'match_time': '2020-01-01 12:00',
+            'match_num': '周三006',
             'settled': True,
             'sync_status': 'synced',
             'predicted_scores': {'2-1': 0.3},
@@ -94,6 +97,7 @@ class FootballPredictionRecordsMarketViewTests(unittest.TestCase):
         self.assertEqual(row['predicted_1x2']['H'], 0.55)
         self.assertEqual(row['predicted_rqspf']['让平'], 0.45)
         self.assertEqual(row['lottery_handicap'], -1)
+        self.assertEqual(row['match_num'], '周三006')
         self.assertEqual(row['actual_score'], '2-1')
         self.assertTrue(row['hit_1x2'])
         self.assertTrue(row['hit_rqspf'])
