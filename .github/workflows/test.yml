@@ -29,20 +29,14 @@ jobs:
       #
       # 存量失败已清零（2026-08-27），**CI 绿 == 全量套件绿**，不再需要心算
       # 「哪些红是允许的」，也就没有再分快慢两档的理由。全量本身 ~70 秒。
-      # 固定 4 个 worker，避免 `-n auto` 因 runner 暴露的宿主机核数变化而突然
-      # 创建过多进程、在几秒内耗尽内存。GitHub 的标准 runner 本来就是 4 核。
-      # 本机实测 75s → 57s(4 进程) → 53s(8 进程)，**且三者的通过/跳过数完全
-      # 一致**——这一点是前提而不是巧合：并行以前会把结果跑成 2416/12 而串行
-      # 是 2411/17，差额来自 test_score_prediction 那族 `except: skipTest`
-      # 和它掩盖的状态依赖。那两处修掉之后并行才谈得上安全。
-      #
-      # 并行的天花板是**最慢的单个测试方法**（一个方法再慢也只能待在一个进程
-      # 里）。kl8 那两族原本各是一个 20 秒的方法，已按候选池拆开。
+      # CI 固定串行运行。该套件包含大量共享缓存/临时文件用例，GitHub runner
+      # 上的 xdist worker 偶发被系统终止：同一个提交可能一次绿、下一次几秒内
+      # 崩溃。串行约多等几分钟，但结果可复现，也不会再产生假红。
       - name: 跑全量测试
         shell: bash
         run: |
           set +e
-          python3 -m pytest -q -n 4 2>&1 | tee pytest-output.log
+          python3 -m pytest -q 2>&1 | tee pytest-output.log
           test_status=${PIPESTATUS[0]}
 
           if [ "${test_status}" -ne 0 ]; then
