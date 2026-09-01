@@ -65,9 +65,12 @@ class FootballCacheManager:
                 self._memory.popitem(last=False)
     
     def _ensure_cache_dir(self):
-        """确保缓存目录存在"""
-        if not os.path.exists(self.cache_dir):
-            os.makedirs(self.cache_dir)
+        """确保缓存目录存在。
+
+        `exist_ok=True` 不是保险起见：模块级的单例会在每个进程 import 时构造，
+        并发跑测试或多进程启动时，先检查再创建之间必然有人插队。
+        """
+        os.makedirs(self.cache_dir, exist_ok=True)
     
     def _get_today_str(self) -> str:
         """获取今天的日期字符串（YYYY-MM-DD）"""

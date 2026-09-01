@@ -35,25 +35,25 @@ ACTIONABLE_1X2_MIN_MARGIN = 0.10
 try:
     from .elo import get_elo_system, elo_to_goals_expected, elo_to_strength_factor
     ELO_AVAILABLE = True
-except Exception:
+except Exception as import_error:
     ELO_AVAILABLE = False
-    log.warning("ELO 模块未导入，将使用默认球队实力计算")
+    log.warning("ELO 模块未导入，将使用默认球队实力计算: %s", import_error)
 
 # 相似盘口数据库（延迟导入）
 try:
     from .similar_market import similar_market_match
     SIMILAR_MARKET_AVAILABLE = True
-except Exception:
+except Exception as import_error:
     SIMILAR_MARKET_AVAILABLE = False
-    log.warning("相似盘口数据库模块未导入")
+    log.warning("相似盘口数据库模块未导入: %s", import_error)
 
 # 临场资金流检测器（延迟导入）
 try:
     from .steam_move import steam_move_detector, integrate_steam_signal
     STEAM_MOVE_AVAILABLE = True
-except Exception:
+except Exception as import_error:
     STEAM_MOVE_AVAILABLE = False
-    log.warning("临场资金流检测器模块未导入")
+    log.warning("临场资金流检测器模块未导入: %s", import_error)
 
 # 贝叶斯校准层（延迟导入）
 try:
@@ -66,41 +66,41 @@ except Exception:
 try:
     from .cache_manager import get_cache, set_cache, invalidate_cache, clear_all_cache
     CACHE_AVAILABLE = True
-except Exception:
+except Exception as import_error:
     CACHE_AVAILABLE = False
-    log.warning("缓存管理器模块未导入")
+    log.warning("缓存管理器模块未导入: %s", import_error)
 
 # 动态ELO系统（延迟导入）
 try:
     from .dynamic_elo import get_team_elo, get_elo_difference
     DYNAMIC_ELO_AVAILABLE = True
-except Exception:
+except Exception as import_error:
     DYNAMIC_ELO_AVAILABLE = False
-    log.warning("动态ELO系统模块未导入")
+    log.warning("动态ELO系统模块未导入: %s", import_error)
 
 # 赔率价值分析（延迟导入）
 try:
     from .value_betting import adjust_by_value, identify_value_bets, calculate_value, calculate_ev
     VALUE_BETTING_AVAILABLE = True
-except Exception:
+except Exception as import_error:
     VALUE_BETTING_AVAILABLE = False
-    log.warning("赔率价值分析模块未导入")
+    log.warning("赔率价值分析模块未导入: %s", import_error)
 
 # 动态权重调整（延迟导入）
 try:
     from .dynamic_weights import get_dynamic_weights, fuse_predictions
     DYNAMIC_WEIGHTS_AVAILABLE = True
-except Exception:
+except Exception as import_error:
     DYNAMIC_WEIGHTS_AVAILABLE = False
-    log.warning("动态权重调整模块未导入")
+    log.warning("动态权重调整模块未导入: %s", import_error)
 
 # 盘口聚类（延迟导入）
 try:
     from .market_clustering import fuse_poisson_with_prior, get_market_prior
     MARKET_CLUSTERING_AVAILABLE = True
-except Exception:
+except Exception as import_error:
     MARKET_CLUSTERING_AVAILABLE = False
-    log.warning("盘口聚类模块未导入")
+    log.warning("盘口聚类模块未导入: %s", import_error)
 
 # ===================== 常量 =====================
 BASE = 'https://odds.500.com'
