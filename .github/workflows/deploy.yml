@@ -55,7 +55,9 @@ jobs:
               grep -Fq 'kl8-dashboard' web/index.html
 
               echo '__DEPLOY_STAGE__=install'
-              /root/miniconda3/envs/football/bin/pip install -r requirements.txt
+              # 运行环境是 uv 管理的 /root/football/.venv（旧的 conda 环境已废弃）。
+              # 用绝对路径调 uv：非交互 SSH 不加载 ~/.bashrc，PATH 里没有 ~/.local/bin。
+              /root/.local/bin/uv pip install --python /root/football/.venv/bin/python -r requirements.txt
               mkdir -p data
               printf '%s\n' "${DEPLOY_SHA}" > data/deployed_revision
 
