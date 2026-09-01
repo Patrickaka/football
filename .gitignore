@@ -35,6 +35,9 @@ src/beidan/cache/
 
 # 运行时抓取的开奖历史与快照（可重建）
 data/kl8_history.json
+# 双色球玩法已下线，这两份历史是 `git add -A` 误提交进来的死数据
+data/ssq_history.json
+data/ssq_history_full.json
 data/kl8_recalculations/
 data/kl8_snapshots/
 
