@@ -14,6 +14,7 @@ class DeployWorkflowTests(unittest.TestCase):
         self.assertIn('workflow_run:', WORKFLOW)
         self.assertIn('workflows: [Test]', WORKFLOW)
         self.assertIn("workflow_run.conclusion == 'success'", WORKFLOW)
+        self.assertIn("workflow_run.event == 'push'", WORKFLOW)
         self.assertNotIn('  push:\n', WORKFLOW)
 
     def test_remote_script_fails_fast_and_deploys_the_tested_sha(self):
