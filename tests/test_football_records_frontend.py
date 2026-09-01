@@ -63,10 +63,14 @@ class FootballRecordsWithoutMatches(unittest.TestCase):
             'async function exportPredictionRecords()', 1,
         )[0]
         self.assertIn('predictionRecordDateKey', loader)
-        self.assertIn('prediction-date-filter', loader)
-        self.assertIn('class="prediction-date-input" type="date"', loader)
+        self.assertIn('prediction-date-trigger', loader)
+        self.assertIn('prediction-calendar-popover', loader)
+        self.assertIn('togglePredictionCalendar(event)', loader)
+        self.assertIn('role="dialog"', loader)
+        self.assertNotIn('class="prediction-date-input" type="date"', loader)
         self.assertNotIn('<select id="prediction-date-filter"', loader)
-        self.assertIn('setPredictionDateFilter(this.value)', loader)
+        self.assertIn('choosePredictionCalendarDate', HTML)
+        self.assertIn('shiftPredictionCalendar', HTML)
         self.assertIn('setPredictionDateToday()', loader)
         self.assertIn('record.match_num', loader)
         self.assertIn('record.lottery_offer_matched === false', loader)

@@ -2317,7 +2317,14 @@
     color: #60a5fa;
     font-size: 17px;
   }
-  .prediction-date-input {
+  .prediction-calendar-wrap {
+    position: relative;
+  }
+  .prediction-date-trigger {
+    display: inline-flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 18px;
     min-width: 176px;
     height: 40px;
     padding: 0 11px;
@@ -2332,18 +2339,119 @@
     outline: none;
     transition: border-color .18s ease, box-shadow .18s ease, background .18s ease;
   }
-  .prediction-date-input:hover {
+  .prediction-date-trigger:hover,
+  .prediction-date-trigger[aria-expanded="true"] {
     border-color: rgba(96, 165, 250, .65);
     background: rgba(12, 25, 42, .82);
   }
-  .prediction-date-input:focus {
+  .prediction-date-trigger:focus-visible {
     border-color: #60a5fa;
     box-shadow: 0 0 0 3px rgba(96, 165, 250, .13);
   }
-  .prediction-date-input::-webkit-calendar-picker-indicator {
+  .prediction-date-trigger-icon {
+    color: #60a5fa;
+    font-size: 15px;
+  }
+  .prediction-calendar-popover {
+    position: absolute;
+    z-index: 80;
+    top: calc(100% + 8px);
+    left: 0;
+    width: 318px;
+    padding: 13px;
+    border: 1px solid rgba(96, 165, 250, .38);
+    border-radius: 12px;
+    background: #111d2d;
+    box-shadow: 0 18px 48px rgba(0, 0, 0, .48), inset 0 1px rgba(255, 255, 255, .04);
+  }
+  .prediction-calendar-popover[hidden] { display: none; }
+  .prediction-calendar-head {
+    display: grid;
+    grid-template-columns: 34px 1fr 34px;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 10px;
+  }
+  .prediction-calendar-title {
+    text-align: center;
+    color: var(--text);
+    font-weight: 700;
+    letter-spacing: .03em;
+  }
+  .prediction-calendar-nav {
+    width: 34px;
+    height: 32px;
+    padding: 0;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: rgba(255, 255, 255, .035);
+    color: #bfdbfe;
     cursor: pointer;
-    opacity: .82;
-    filter: invert(.85) sepia(.2) saturate(1.4) hue-rotate(175deg);
+  }
+  .prediction-calendar-nav:hover:not(:disabled) {
+    border-color: #60a5fa;
+    background: rgba(96, 165, 250, .12);
+  }
+  .prediction-calendar-nav:disabled { opacity: .3; cursor: default; }
+  .prediction-calendar-weekdays,
+  .prediction-calendar-grid {
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+    gap: 4px;
+  }
+  .prediction-calendar-weekdays span {
+    padding: 4px 0 6px;
+    color: var(--muted);
+    text-align: center;
+    font-size: 11px;
+  }
+  .prediction-calendar-day {
+    position: relative;
+    height: 36px;
+    padding: 0;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--muted);
+    cursor: pointer;
+    font-size: 12px;
+  }
+  .prediction-calendar-day:hover:not(:disabled) {
+    border-color: rgba(96, 165, 250, .45);
+    background: rgba(96, 165, 250, .1);
+    color: #dbeafe;
+  }
+  .prediction-calendar-day.has-records {
+    color: var(--text);
+    font-weight: 650;
+  }
+  .prediction-calendar-day.has-records::after {
+    content: '';
+    position: absolute;
+    left: 50%;
+    bottom: 3px;
+    width: 4px;
+    height: 4px;
+    margin-left: -2px;
+    border-radius: 50%;
+    background: #60a5fa;
+  }
+  .prediction-calendar-day.today { border-color: rgba(34, 197, 94, .45); }
+  .prediction-calendar-day.selected {
+    border-color: #3b82f6;
+    background: #2563eb;
+    color: #fff;
+  }
+  .prediction-calendar-day.selected::after { background: #fff; }
+  .prediction-calendar-day:disabled { opacity: .2; cursor: default; }
+  .prediction-calendar-empty { height: 36px; }
+  .prediction-calendar-foot {
+    margin-top: 9px;
+    padding-top: 9px;
+    border-top: 1px solid var(--line);
+    color: var(--muted);
+    font-size: 11px;
+    text-align: center;
   }
   .prediction-date-action {
     min-height: 36px;
@@ -2366,7 +2474,9 @@
   @media (max-width: 560px) {
     .prediction-date-toolbar { align-items: stretch; }
     .prediction-date-label { flex: 0 0 100%; }
-    .prediction-date-input { flex: 1; min-width: 0; }
+    .prediction-calendar-wrap { flex: 1; }
+    .prediction-date-trigger { width: 100%; min-width: 0; }
+    .prediction-calendar-popover { width: min(318px, calc(100vw - 48px)); }
     .prediction-date-result { flex: 0 0 100%; margin-left: 0; }
   }
 </style>
@@ -2442,7 +2552,14 @@ let activeTab = 'football';
 let predictionsPage = 1;
 const PREDICTIONS_PAGE_SIZE = 20;
 let predictionDateFilter = '';
+let predictionCalendarMonth = '';
+let predictionAvailableDates = [];
+let predictionDateCounts = {};
 let beidanMatches = [];
+
+function pad2(value) {
+  return String(value).padStart(2, '0');
+}
 
 const TAB_META = {
   football: {
@@ -7473,6 +7590,101 @@ function setPredictionDateToday() {
   setPredictionDateFilter(localToday);
 }
 
+function predictionCalendarMonthShift(monthKey, delta) {
+  const match = String(monthKey || '').match(/^(\d{4})-(\d{2})$/);
+  const base = match
+    ? new Date(Number(match[1]), Number(match[2]) - 1, 1)
+    : new Date(new Date().getFullYear(), new Date().getMonth(), 1);
+  base.setMonth(base.getMonth() + delta);
+  return `${base.getFullYear()}-${pad2(base.getMonth() + 1)}`;
+}
+
+function renderPredictionCalendar() {
+  const panel = document.getElementById('prediction-calendar-popover');
+  if (!panel) return;
+  const monthMatch = String(predictionCalendarMonth || '').match(/^(\d{4})-(\d{2})$/);
+  const now = new Date();
+  const year = monthMatch ? Number(monthMatch[1]) : now.getFullYear();
+  const month = monthMatch ? Number(monthMatch[2]) : now.getMonth() + 1;
+  predictionCalendarMonth = `${year}-${pad2(month)}`;
+
+  const firstDayOffset = (new Date(year, month - 1, 1).getDay() + 6) % 7;
+  const daysInMonth = new Date(year, month, 0).getDate();
+  const today = `${now.getFullYear()}-${pad2(now.getMonth() + 1)}-${pad2(now.getDate())}`;
+  const minDate = predictionAvailableDates.length
+    ? predictionAvailableDates[predictionAvailableDates.length - 1] : '';
+  const maxDate = predictionAvailableDates.length ? predictionAvailableDates[0] : '';
+  const minMonth = minDate.slice(0, 7);
+  const maxMonth = maxDate.slice(0, 7);
+  const previousMonth = predictionCalendarMonthShift(predictionCalendarMonth, -1);
+  const nextMonth = predictionCalendarMonthShift(predictionCalendarMonth, 1);
+
+  let daysHtml = '<div class="prediction-calendar-weekdays">' +
+    ['一', '二', '三', '四', '五', '六', '日'].map(day => `<span>${day}</span>`).join('') +
+    '</div><div class="prediction-calendar-grid">';
+  daysHtml += '<span class="prediction-calendar-empty"></span>'.repeat(firstDayOffset);
+  for (let day = 1; day <= daysInMonth; day += 1) {
+    const date = `${year}-${pad2(month)}-${pad2(day)}`;
+    const count = Number(predictionDateCounts[date] || 0);
+    const outsideRange = Boolean(minDate && maxDate && (date < minDate || date > maxDate));
+    const classes = [
+      'prediction-calendar-day',
+      count ? 'has-records' : '',
+      date === today ? 'today' : '',
+      date === predictionDateFilter ? 'selected' : '',
+    ].filter(Boolean).join(' ');
+    daysHtml += `<button type="button" class="${classes}" ${outsideRange ? 'disabled' : ''}
+      onclick="choosePredictionCalendarDate('${date}')" aria-label="${date}${count ? `，${count}场比赛` : ''}">${day}</button>`;
+  }
+  daysHtml += '</div>';
+  panel.innerHTML = `<div class="prediction-calendar-head">
+      <button type="button" class="prediction-calendar-nav" onclick="shiftPredictionCalendar(-1)"
+        ${minMonth && previousMonth < minMonth ? 'disabled' : ''} aria-label="上个月">‹</button>
+      <div class="prediction-calendar-title">${year} 年 ${month} 月</div>
+      <button type="button" class="prediction-calendar-nav" onclick="shiftPredictionCalendar(1)"
+        ${maxMonth && nextMonth > maxMonth ? 'disabled' : ''} aria-label="下个月">›</button>
+    </div>${daysHtml}
+    <div class="prediction-calendar-foot">蓝点表示该日期有预测记录</div>`;
+}
+
+function togglePredictionCalendar(clickEvent) {
+  if (clickEvent) clickEvent.stopPropagation();
+  const panel = document.getElementById('prediction-calendar-popover');
+  const trigger = document.getElementById('prediction-date-trigger');
+  if (!panel || !trigger) return;
+  const willOpen = panel.hidden;
+  panel.hidden = !willOpen;
+  trigger.setAttribute('aria-expanded', String(willOpen));
+  if (willOpen) renderPredictionCalendar();
+}
+
+function shiftPredictionCalendar(delta) {
+  predictionCalendarMonth = predictionCalendarMonthShift(predictionCalendarMonth, delta);
+  renderPredictionCalendar();
+}
+
+function choosePredictionCalendarDate(value) {
+  setPredictionDateFilter(value);
+}
+
+document.addEventListener('click', event => {
+  const calendar = document.querySelector('.prediction-calendar-wrap');
+  if (!calendar || calendar.contains(event.target)) return;
+  const panel = document.getElementById('prediction-calendar-popover');
+  const trigger = document.getElementById('prediction-date-trigger');
+  if (panel) panel.hidden = true;
+  if (trigger) trigger.setAttribute('aria-expanded', 'false');
+});
+
+document.addEventListener('keydown', event => {
+  if (event.key !== 'Escape') return;
+  const panel = document.getElementById('prediction-calendar-popover');
+  const trigger = document.getElementById('prediction-date-trigger');
+  if (panel) panel.hidden = true;
+  if (trigger) trigger.setAttribute('aria-expanded', 'false');
+  if (trigger) trigger.focus();
+});
+
 function getFootballAuditBreakdown(audit = {}) {
   const labels = {
     future_settlement: '提前回填',
@@ -7624,6 +7836,17 @@ async function loadPredictions() {
     const allRecords = recordsData.result?.records || [];
     const availableDates = [...new Set(allRecords.map(predictionRecordDateKey).filter(Boolean))]
       .sort((a, b) => b.localeCompare(a));
+    predictionAvailableDates = availableDates;
+    predictionDateCounts = allRecords.reduce((counts, record) => {
+      const date = predictionRecordDateKey(record);
+      if (date) counts[date] = (counts[date] || 0) + 1;
+      return counts;
+    }, {});
+    const calendarAnchor = predictionDateFilter || availableDates[0]
+      || new Date().toISOString().slice(0, 10);
+    if (!predictionCalendarMonth || predictionDateFilter) {
+      predictionCalendarMonth = calendarAnchor.slice(0, 7);
+    }
     const records = predictionDateFilter
       ? allRecords.filter(record => predictionRecordDateKey(record) === predictionDateFilter)
       : allRecords;
@@ -7718,11 +7941,16 @@ async function loadPredictions() {
     
     // ── 预测记录列表 ──
     html += `<div class="prediction-date-toolbar">
-      <label class="prediction-date-label" for="prediction-date-filter">比赛日期</label>
-      <input id="prediction-date-filter" class="prediction-date-input" type="date"
-        value="${esc(predictionDateFilter)}"
-        ${availableDates.length ? `min="${esc(availableDates[availableDates.length - 1])}" max="${esc(availableDates[0])}"` : ''}
-        onchange="setPredictionDateFilter(this.value)" aria-label="按比赛日期筛选预测记录">
+      <span class="prediction-date-label">比赛日期</span>
+      <div class="prediction-calendar-wrap">
+        <button id="prediction-date-trigger" type="button" class="prediction-date-trigger"
+          onclick="togglePredictionCalendar(event)" aria-haspopup="dialog" aria-expanded="false">
+          <span>${predictionDateFilter ? esc(predictionDateFilter) : '年 / 月 / 日'}</span>
+          <span class="prediction-date-trigger-icon" aria-hidden="true">▣</span>
+        </button>
+        <div id="prediction-calendar-popover" class="prediction-calendar-popover" role="dialog"
+          aria-label="选择比赛日期" onclick="event.stopPropagation()" hidden></div>
+      </div>
       <button type="button" class="prediction-date-action" onclick="setPredictionDateToday()">今天</button>
       ${predictionDateFilter ? `<button type="button" class="prediction-date-action" onclick="setPredictionDateFilter('')">查看全部</button>` : ''}
       <span class="prediction-date-result">${predictionDateFilter ? `${esc(predictionDateFilter)} · ${records.length} 场` : `全部日期 · ${records.length} 场`}</span>
