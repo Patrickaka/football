@@ -33,6 +33,12 @@ class DeployWorkflowTests(unittest.TestCase):
         self.assertIn('FOOTBALL_PORT=', WORKFLOW)
         self.assertIn('http://127.0.0.1:${health_port}/healthz', WORKFLOW)
 
+    def test_dependencies_are_installed_with_uv_not_conda(self):
+        """线上环境已从 miniconda 迁到 uv 管理的 .venv，部署脚本不能再指向 conda。"""
+        self.assertNotIn('miniconda', WORKFLOW)
+        self.assertIn('/root/.local/bin/uv pip install', WORKFLOW)
+        self.assertIn('/root/football/.venv/bin/python', WORKFLOW)
+
     def test_remote_failures_are_captured_with_their_stage(self):
         self.assertIn('capture_stdout: true', WORKFLOW)
         self.assertIn('__DEPLOY_STAGE__=fetch', WORKFLOW)
