@@ -25,7 +25,10 @@ class WebProfessionalModalTests(unittest.TestCase):
         path = os.path.join(ROOT, 'web', 'index.html')
         with open(path, encoding='utf-8') as handle:
             html = handle.read()
-        self.assertIn("let footballQualityFilter = 'selected';", html)
+        self.assertIn("let footballQualityFilter = 'all';", html)
+        self.assertIn("requestAnimationFrame(scrollToFootballResults);", html)
+        self.assertIn("id=\"football-results-start\"", html)
+        self.assertIn("已加载 ${results.length} 场", html)
         self.assertIn("getAccuracyGatePresentation", html)
         self.assertIn("return getFootballResultTier(item).tier === footballQualityFilter", html)
         self.assertIn("研究精选", html)

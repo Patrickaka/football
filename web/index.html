@@ -3208,7 +3208,9 @@ document.addEventListener('keydown', event => {
   }
 });
 
-let footballQualityFilter = 'selected';
+// 首屏默认展示所有已完成分析。生产门禁可能让当天全部比赛都落入观察/观望，
+// 默认“精选”会形成“接口已有数据、页面却像空白”的误导。
+let footballQualityFilter = 'all';
 let footballSort = 'time';
 let footballPage = 1;
 let footballPageSize = 12;
@@ -3463,6 +3465,15 @@ function setFootballQualityFilter(filter) {
   footballQualityFilter = filter;
   footballPage = 1;
   renderFootballPredictions(allPredictions);
+  // 小窗口里工具栏会占满首屏；筛选后主动把真正的比赛结果带进视口。
+  requestAnimationFrame(scrollToFootballResults);
+}
+
+function scrollToFootballResults() {
+  document.getElementById('football-results-start')?.scrollIntoView({
+    behavior: 'smooth',
+    block: 'start',
+  });
 }
 
 function calculateFootballPredictionReliability(probability, informationCompleteness) {
@@ -3777,6 +3788,10 @@ function renderFootballPredictions(results) {
           <button onclick="setFootballSort('league')" class="tb-btn ${footballSort === 'league' ? 'tb-active' : ''}">按联赛</button>
         </div>
       </div>
+      <div class="toolbar-group" style="margin-left:auto">
+        <span style="font-size:12px;color:var(--accent2)">已加载 ${results.length} 场</span>
+        <button type="button" class="tb-btn" onclick="scrollToFootballResults()">↓ 查看比赛</button>
+      </div>
     </div>
   </div>`;
 
@@ -3823,7 +3838,7 @@ function renderFootballPredictions(results) {
       <button class="tb-btn" style="margin-left:6px" onclick="setFootballQualityFilter('upset')">查看防冷场次</button>
     </div>`;
   }
-  html += `<div class="status" style="padding:4px 0 12px;font-size:13px">共 ${results.length} 场比赛，筛选后 ${visibleResults.length} 场，第 ${footballPage}/${totalPages} 页</div>`;
+  html += `<div id="football-results-start" class="status" style="padding:4px 0 12px;font-size:13px;scroll-margin-top:12px">共 ${results.length} 场比赛，筛选后 ${visibleResults.length} 场，第 ${footballPage}/${totalPages} 页</div>`;
 
   const footballPagerHtml = `<div class="pager sport-pager">
     <button onclick="setFootballPage(1)" ${footballPage <= 1 ? 'disabled' : ''}>首页</button>
