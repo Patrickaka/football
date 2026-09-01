@@ -417,6 +417,21 @@ def get_match_list_status():
     return dict(_MATCH_LIST_STATUS)
 
 
+def _sporttery_schedule():
+    """读取中国竞彩网公开计算器数据，作为无 Key 的生产主赛程。"""
+    from .sporttery import (
+        SPORTTERY_CALCULATOR_URL,
+        SPORTTERY_REFERER,
+        parse_sporttery_calculator,
+    )
+
+    payload = fetch_json(SPORTTERY_CALCULATOR_URL, referer=SPORTTERY_REFERER)
+    matches = parse_sporttery_calculator(payload)
+    if not matches:
+        raise ValueError('sporttery returned no HAD/HHAD matches')
+    return matches
+
+
 def _zgzcw_schedule_fallback(cached_matches=None):
     """将中国足彩网竞彩足球赛程转换为足球主列表结构。
 
@@ -467,20 +482,38 @@ def _zgzcw_schedule_fallback(cached_matches=None):
 
 
 def fetch_match_list():
-    """优先抓取实时赛程；源站不可用时回退最后成功快照。
+    """优先竞彩网官方赛程；失败后依次回退 500、足彩网和磁盘快照。
 
     生产环境偶发 DNS/TLS/WAF 故障不应让整个足球页面变空。
     后续的 server 层仍会过滤已开赛项，因此陈旧快照不会展示过期比赛。
     """
+    sporttery_error = None
     try:
-        matches = _fetch_match_list_remote()
+        matches = _sporttery_schedule()
         if not matches:
             raise ValueError('upstream returned no parseable matches')
         try:
             _save_match_list_cache(matches)
         except OSError as exc:
             log.warning('比赛列表快照写入失败: %s', exc)
-        _MATCH_LIST_STATUS.update({'source': 'live', 'stale': False, 'error': None})
+        _MATCH_LIST_STATUS.update({'source': 'sporttery', 'stale': False, 'error': None})
+        return matches
+    except Exception as exc:
+        sporttery_error = exc
+        log.warning('中国竞彩网主赛程失败，尝试500备用源: %s', exc)
+
+    try:
+        matches = _fetch_match_list_remote()
+        if not matches:
+            raise ValueError('500 returned no parseable matches')
+        try:
+            _save_match_list_cache(matches)
+        except OSError as exc:
+            log.warning('比赛列表快照写入失败: %s', exc)
+        _MATCH_LIST_STATUS.update({
+            'source': 'live', 'stale': False,
+            'error': f'sporttery: {type(sporttery_error).__name__}: {str(sporttery_error)[:120]}',
+        })
         return matches
     except Exception as exc:
         cached = _load_match_list_cache()
@@ -492,14 +525,20 @@ def fetch_match_list():
         if zgzcw_matches:
             _MATCH_LIST_STATUS.update({
                 'source': 'zgzcw', 'stale': False,
-                'error': f'500 upstream: {type(exc).__name__}: {str(exc)[:140]}',
+                'error': (
+                    f'sporttery: {type(sporttery_error).__name__}: {str(sporttery_error)[:80]}; '
+                    f'500: {type(exc).__name__}: {str(exc)[:80]}'
+                ),
             })
             log.warning('500赛程源失败，已切换中国足彩网赛程 %d 场', len(zgzcw_matches))
             return zgzcw_matches
         if cached:
             _MATCH_LIST_STATUS.update({
                 'source': 'disk_cache', 'stale': True,
-                'error': f'{type(exc).__name__}: {str(exc)[:180]}',
+                'error': (
+                    f'sporttery: {type(sporttery_error).__name__}: {str(sporttery_error)[:80]}; '
+                    f'500: {type(exc).__name__}: {str(exc)[:80]}'
+                ),
             })
             log.warning('实时比赛源失败，回退快照 %d 场: %s', len(cached), exc)
             return cached

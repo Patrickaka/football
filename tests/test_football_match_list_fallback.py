@@ -22,6 +22,7 @@ class FootballMatchListFallbackTests(unittest.TestCase):
         matches = [{'match_id': '1', 'home': 'A', 'away': 'B', 'time': '08-08 20:00'}]
         with tempfile.TemporaryDirectory() as folder, \
              patch.object(fb_config, 'MATCH_LIST_CACHE_PATH', os.path.join(folder, 'matches.json')), \
+             patch.object(fb_fetching, '_sporttery_schedule', side_effect=OSError('official down')), \
              patch.object(fb_fetching, '_fetch_match_list_remote', return_value=matches):
             self.assertEqual(football.fetch_match_list(), matches)
             with open(fb_config.MATCH_LIST_CACHE_PATH, encoding='utf-8') as handle:
@@ -33,7 +34,8 @@ class FootballMatchListFallbackTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder, \
              patch.object(fb_config, 'MATCH_LIST_CACHE_PATH', os.path.join(folder, 'matches.json')):
             football._save_match_list_cache(cached)
-            with patch.object(fb_fetching, '_fetch_match_list_remote', side_effect=OSError('TLS failed')), \
+            with patch.object(fb_fetching, '_sporttery_schedule', side_effect=OSError('official down')), \
+                 patch.object(fb_fetching, '_fetch_match_list_remote', side_effect=OSError('TLS failed')), \
                  patch.object(fb_fetching, '_zgzcw_schedule_fallback', return_value=[]):
                 self.assertEqual(football.fetch_match_list(), cached)
             status = football.get_match_list_status()

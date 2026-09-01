@@ -116,13 +116,44 @@ def analysis_cache_key(match: Dict) -> str:
     return f"{match['match_id']}_{match.get('home', '')}_{match.get('away', '')}"
 
 
+def _lottery_only_market_inputs(match: Dict):
+    """返回官方竞彩单源模型使用的 (胜, 平, 负, 中性大小球线)。"""
+    spf = match.get('lottery_spf_odds') or {}
+    if spf:
+        home_odd = float(spf.get('胜') or 2.50)
+        draw_odd = float(spf.get('平') or 3.20)
+        away_odd = float(spf.get('负') or 2.80)
+    else:
+        rqspf = match.get('lottery_rqspf_odds') or {}
+        rq_odds = [
+            float(rqspf.get('让胜') or 2.50),
+            float(rqspf.get('让平') or 3.20),
+            float(rqspf.get('让负') or 2.80),
+        ]
+        rq_inverse = [1.0 / max(value, 1.01) for value in rq_odds]
+        rq_total = sum(rq_inverse) or 1.0
+        rq_home, _, rq_away = [value / rq_total for value in rq_inverse]
+        lottery_handicap = parse_lottery_handicap(match.get('lottery_handicap')) or 0.0
+        # 让球后方向差减去主队所得让球，近似还原真实净胜球方向。
+        expected_goal_diff = 1.35 * (rq_home - rq_away) - lottery_handicap
+        pseudo_draw = max(0.035, min(0.28, 0.27 * math.exp(-0.72 * abs(expected_goal_diff))))
+        pseudo_home = (1.0 - pseudo_draw) / (1.0 + math.exp(-1.45 * expected_goal_diff))
+        pseudo_away = max(0.01, 1.0 - pseudo_draw - pseudo_home)
+        home_odd = 1.0 / max(pseudo_home, 0.01)
+        draw_odd = 1.0 / max(pseudo_draw, 0.01)
+        away_odd = 1.0 / max(pseudo_away, 0.01)
+    handicap_size = abs(parse_lottery_handicap(match.get('lottery_handicap')) or 0.0)
+    neutral_total = 2.5 + min(1.2, handicap_size * 0.35)
+    return home_odd, draw_odd, away_odd, neutral_total
+
+
 def _is_prediction_cache_current(result: Dict) -> bool:
     return _cached_prediction_logic_version(result) == FOOTBALL_PREDICTION_LOGIC_VERSION
 
 
 def _is_lottery_cache_current(result: Dict, match: Dict) -> bool:
-    """中国足彩网核实销售玩法后，使旧的未核实分析缓存失效。"""
-    # 中国足彩网临时失败时不能丢弃此前已核实的销售玩法。
+    """官方竞彩核实销售玩法后，使旧的未核实分析缓存失效。"""
+    # 官方竞彩临时失败时不能丢弃此前已核实的销售玩法。
     if not match.get('lottery_offer_matched'):
         return True
     cached = result.get('lottery') or {}
@@ -501,17 +532,15 @@ def _analyze_match_impl(match, force_refresh=False):
                 log.error(f"保存缓存结果的预测记录失败: {e}")
             return cached_result
 
-    zgzcw_only = (
-        match.get('schedule_source') == 'zgzcw'
+    lottery_only = (
+        match.get('schedule_source') in ('sporttery', 'zgzcw')
         and not match.get('analysis_source_id_available')
     )
-    if zgzcw_only:
-        # 中国足彩网独立降级：官方胜平负决定方向；缺少连续亚盘/大小球时
-        # 使用中性盘与联赛基准，后续置为低信息完整度。
-        spf = match.get('lottery_spf_odds') or {}
-        home_odd = float(spf.get('胜') or 2.50)
-        draw_odd = float(spf.get('平') or 3.20)
-        away_odd = float(spf.get('负') or 2.80)
+    if lottery_only:
+        # 官方竞彩独立模型：优先用胜平负；若该场只开让球胜平负，则从
+        # 让球后的三项概率反推未让球强弱。缺少商业亚盘/大小球时仍可稳定
+        # 生成低置信分析，不再因为 500 页面被风控而整场失败。
+        home_odd, draw_odd, away_odd, neutral_total = _lottery_only_market_inputs(match)
         asian_raw = {
             'open': {'handicap': 0.0, 'home_odds': 1.0, 'away_odds': 1.0},
             'close': {'handicap': 0.0, 'home_odds': 1.0, 'away_odds': 1.0},
@@ -522,8 +551,8 @@ def _analyze_match_impl(match, force_refresh=False):
             'series': [],
         }
         total_raw = {
-            'open': {'line': 2.5, 'over_odds': 1.0, 'under_odds': 1.0},
-            'close': {'line': 2.5, 'over_odds': 1.0, 'under_odds': 1.0},
+            'open': {'line': neutral_total, 'over_odds': 1.0, 'under_odds': 1.0},
+            'close': {'line': neutral_total, 'over_odds': 1.0, 'under_odds': 1.0},
         }
         yazhi_raw = asian_raw
         daxiao_raw = total_raw
@@ -531,7 +560,8 @@ def _analyze_match_impl(match, force_refresh=False):
         euro = analyze_euro(euro_raw)
         total = analyze_total(total_raw)
         team = None
-        log.warning('比赛 %s 使用中国足彩网独立降级模型', mid)
+        log.info('比赛 %s 使用官方竞彩独立模型 source=%s', mid,
+                 match.get('schedule_source'))
     else:
         # 五组抓取彼此独立，并发发起把单场耗时从「往返之和」降到「最慢的一次」；
         # 对源站的实际压力由 _fetching_mod.fetch() 的发号器统一控速，重复 URL 也只会打一次。
@@ -567,7 +597,7 @@ def _analyze_match_impl(match, force_refresh=False):
     
     # ========== 新增：抓取 Bet365 和 Pinnacle 独赔数据 ==========
     single_odds = None
-    if not zgzcw_only:
+    if not lottery_only:
         try:
             single_odds = single_odds_task.result()
             log.debug(
@@ -672,11 +702,12 @@ def _analyze_match_impl(match, force_refresh=False):
         euro['kelly']['trend'] = kelly_trend
 
     confidence = compute_prediction_confidence(asian, euro, total, team)
-    if zgzcw_only:
+    if lottery_only:
+        source_label = '中国竞彩网' if match.get('schedule_source') == 'sporttery' else '中国足彩网'
         confidence = {
             'score': 0.44,
             'level': 'low',
-            'label': '中国足彩网单源·低置信',
+            'label': f'{source_label}单源·低置信',
             'notes': ['500盘口不可用', '缺少连续大小球与亚盘'],
             'recommend_count': 1,
         }
@@ -689,8 +720,8 @@ def _analyze_match_impl(match, force_refresh=False):
     ml_feature_snapshot = {}
     
     try:
-        if zgzcw_only:
-            raise RuntimeError('中国足彩网单源降级不启用 ML 融合')
+        if lottery_only:
+            raise RuntimeError('官方竞彩单源模式不启用 ML 融合')
         # 准备特征
         ml_features = {
             'elo_home': team.get('elo_home', 1500) if team else 1500,
