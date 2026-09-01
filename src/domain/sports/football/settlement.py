@@ -567,7 +567,8 @@ def _audited_decision_snapshot(
 
 def _prediction_content_sig(predicted_scores, predicted_1x2, asian, total_line,
                             odds_data, predicted_half_full, model_version,
-                            professional_snapshot=None):
+                            professional_snapshot=None, *,
+                            lottery_handicap=None, predicted_rqspf=None):
     """预测的「有意义内容」签名，用于跳过无变化的重复写入。
 
     只覆盖影响预测结果的字段，刻意排除 updated_at 等时间戳——否则缓存命中时
@@ -576,7 +577,8 @@ def _prediction_content_sig(predicted_scores, predicted_1x2, asian, total_line,
     try:
         payload = json.dumps(
             [predicted_scores, predicted_1x2, asian, total_line,
-             odds_data, predicted_half_full, model_version, professional_snapshot],
+             odds_data, predicted_half_full, model_version, professional_snapshot,
+             lottery_handicap, predicted_rqspf],
             ensure_ascii=False, sort_keys=True, default=str,
         )
     except Exception:

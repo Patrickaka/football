@@ -200,6 +200,78 @@ def _append_market_timeline(
     return rows[-limit:], snapshot
 
 
+def _complete_offered_lottery_predictions(
+    predicted_scores,
+    predicted_1x2,
+    predicted_rqspf,
+    lottery_handicap,
+    lottery_snapshot,
+):
+    """保证每个已开售竞彩玩法都有一份可保存、可展示的概率预测。
+
+    正常路径会直接传入两种预测；这里主要修复历史记录和缓存升级场景：
+    玩法已经核验为开售，但旧版本漏存了其中一种预测时，从同一份比分分布
+    重新边际化，不能继续把空值渲染成“暂无预测”。
+    """
+    lottery_snapshot = lottery_snapshot or {}
+    handicap_snapshot = lottery_snapshot.get('handicap') or {}
+    resolved_handicap = (
+        lottery_handicap
+        if lottery_handicap is not None
+        else handicap_snapshot.get('handicap')
+    )
+    if not lottery_snapshot.get('offer_matched'):
+        return predicted_1x2, predicted_rqspf, resolved_handicap
+
+    spf_was_offered = bool(
+        lottery_snapshot.get('spf_available')
+        and lottery_snapshot.get('spf_odds')
+    )
+    rqspf_was_offered = bool(
+        lottery_snapshot.get('rqspf_available')
+        and lottery_snapshot.get('rqspf_odds')
+    )
+    if ((not spf_was_offered or predicted_1x2)
+            and (not rqspf_was_offered or predicted_rqspf)):
+        return predicted_1x2, predicted_rqspf, resolved_handicap
+
+    candidates = []
+    for score, probability in (predicted_scores or {}).items():
+        score_match = re.match(r'^\s*(\d+)\s*[-:：]\s*(\d+)\s*$', str(score))
+        if not score_match:
+            continue
+        try:
+            probability = float(probability)
+        except (TypeError, ValueError):
+            continue
+        if probability > 0:
+            candidates.append(((int(score_match.group(1)), int(score_match.group(2))),
+                               probability))
+    if not candidates:
+        return predicted_1x2, predicted_rqspf, resolved_handicap
+
+    from ..domain.sports.football.lottery import lottery_market_probabilities
+
+    completed = lottery_market_probabilities(
+        candidates,
+        resolved_handicap,
+        spf_odds=lottery_snapshot.get('spf_odds'),
+        rqspf_odds=lottery_snapshot.get('rqspf_odds'),
+    )
+    if spf_was_offered and not predicted_1x2:
+        standard = ((completed.get('standard') or {}).get('probabilities') or {})
+        predicted_1x2 = {
+            'H': standard.get('胜', 0.0),
+            'D': standard.get('平', 0.0),
+            'A': standard.get('负', 0.0),
+        }
+    if rqspf_was_offered and not predicted_rqspf:
+        predicted_rqspf = (
+            (completed.get('handicap') or {}).get('probabilities') or {}
+        )
+    return predicted_1x2, predicted_rqspf, resolved_handicap
+
+
 class PredictionHistory:
     """预测历史记录管理器"""
 
@@ -296,6 +368,15 @@ class PredictionHistory:
             (odds_data or {}).get('lottery')
             if isinstance(odds_data, dict) else None
         ) or {}
+        predicted_1x2, predicted_rqspf, lottery_handicap = (
+            _complete_offered_lottery_predictions(
+                predicted_scores,
+                predicted_1x2,
+                predicted_rqspf,
+                lottery_handicap,
+                lottery_snapshot,
+            )
+        )
         if lottery_snapshot.get('offer_matched'):
             spf_was_offered = bool(
                 lottery_snapshot.get('spf_available')
@@ -323,6 +404,8 @@ class PredictionHistory:
                     predicted_scores, predicted_1x2, asian, total_line,
                     odds_data, predicted_half_full, model_version,
                     professional_snapshot,
+                    lottery_handicap=lottery_handicap,
+                    predicted_rqspf=predicted_rqspf,
                 )
                 existing_layers = record.get('time_layers') or {}
                 if (
@@ -504,6 +587,8 @@ class PredictionHistory:
                 predicted_scores, predicted_1x2, asian, total_line,
                 odds_data, predicted_half_full, model_version,
                 professional_snapshot,
+                lottery_handicap=lottery_handicap,
+                predicted_rqspf=predicted_rqspf,
             ),
         }
         self.records.append(record_data)
@@ -2106,8 +2191,35 @@ def get_prediction_records(include_hidden: bool = False,
             and not _is_match_settle_due(record.get('match_time'), minutes=180, now=now)
         )
         lottery_snapshot = (record.get('odds_snapshot') or {}).get('lottery') or {}
-        spf_was_offered = not lottery_snapshot.get('offer_matched') or bool(
-            lottery_snapshot.get('spf_available') and lottery_snapshot.get('spf_odds')
+        lottery_snapshot_present = bool(lottery_snapshot)
+        lottery_offer_matched = bool(lottery_snapshot.get('offer_matched'))
+        predicted_1x2, predicted_rqspf, lottery_handicap = (
+            _complete_offered_lottery_predictions(
+                record.get('predicted_scores'),
+                record.get('predicted_1x2'),
+                record.get('predicted_rqspf'),
+                record.get('lottery_handicap'),
+                lottery_snapshot,
+            )
+        )
+        # 旧数据完全没有体彩快照时维持兼容；已经明确记录为抓取失败/未核验的
+        # 场次，不能把内部模型 SPF 冒充成已开售的官方胜平负。
+        spf_was_offered = (
+            not lottery_snapshot_present
+            or bool(
+                lottery_offer_matched
+                and lottery_snapshot.get('spf_available')
+                and lottery_snapshot.get('spf_odds')
+            )
+        )
+        rqspf_was_offered = (
+            not lottery_snapshot_present
+            or bool(
+                lottery_offer_matched
+                and lottery_snapshot.get('rqspf_available')
+                and lottery_snapshot.get('rqspf_odds')
+                and lottery_handicap not in (None, 0)
+            )
         )
 
         records.append({
@@ -2118,6 +2230,14 @@ def get_prediction_records(include_hidden: bool = False,
             'match_time': record.get('match_time'),
             'match_num': record.get('match_num'),
             'created_at': record.get('created_at'),
+            'lottery_offer_matched': (
+                lottery_offer_matched if lottery_snapshot_present else None
+            ),
+            'lottery_unavailable_reason': lottery_snapshot.get('unavailable_reason'),
+            'lottery_spf_available': spf_was_offered if lottery_snapshot_present else None,
+            'lottery_rqspf_available': (
+                rqspf_was_offered if lottery_snapshot_present else None
+            ),
             'settled': False if is_future_settled else record.get('settled', False),
             'actual_score': None if is_future_settled else record.get('actual_score'),
             'sync_status': 'pending' if is_future_settled else record.get('sync_status', 'pending'),
@@ -2131,9 +2251,9 @@ def get_prediction_records(include_hidden: bool = False,
             'hit_top3': None if is_future_settled else record.get('hit_top3'),
             # 预测记录页以两个竞彩赛果市场为主。精确比分仍保留在存储和
             # 完整导出中，列表只在赛后输出 actual_score。
-            'predicted_1x2': record.get('predicted_1x2') if spf_was_offered else {},
-            'predicted_rqspf': record.get('predicted_rqspf'),
-            'lottery_handicap': record.get('lottery_handicap'),
+            'predicted_1x2': predicted_1x2 if spf_was_offered else {},
+            'predicted_rqspf': predicted_rqspf if rqspf_was_offered else {},
+            'lottery_handicap': lottery_handicap,
             'actual_result': None if is_future_settled else record.get('actual_result'),
             'actual_rqspf': None if is_future_settled else record.get('actual_rqspf'),
             'hit_1x2': (

@@ -31,7 +31,11 @@ def football_home_payload(params=None) -> Dict:
     """
     from src.api.services import football as football_service
     from src.football.config import CACHE_AVAILABLE, get_cache
-    from src.football.pipeline import _is_prediction_cache_current, analysis_cache_key
+    from src.football.pipeline import (
+        _is_lottery_cache_current,
+        _is_prediction_cache_current,
+        analysis_cache_key,
+    )
 
     matches_payload = football_service.matches_payload()
     if matches_payload.get('error'):
@@ -54,7 +58,11 @@ def football_home_payload(params=None) -> Dict:
                 cached = None
         # 逻辑版本变了的缓存等于没有——照 `analyze_match` 的规矩来，
         # 否则首屏会拿旧口径的结果去渲染，而重算后的数字对不上。
-        if cached is not None and _is_prediction_cache_current(cached):
+        if (
+            cached is not None
+            and _is_prediction_cache_current(cached)
+            and _is_lottery_cache_current(cached, match)
+        ):
             ready.append({'match_id': match.get('match_id'), 'result': cached})
         else:
             pending.append(match.get('match_id'))

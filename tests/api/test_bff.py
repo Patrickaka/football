@@ -100,6 +100,30 @@ class CacheKeyMustMatchTheWriter(unittest.TestCase):
 
 class StaleCacheCountsAsMissing(unittest.TestCase):
 
+    def test_unverified_lottery_cache_is_pending_after_rqspf_offer_recovers(self):
+        match = {
+            **MATCHES[0],
+            'lottery_offer_matched': True,
+            'lottery_primary_market': 'rqspf',
+            'lottery_spf_available': False,
+            'lottery_rqspf_available': True,
+            'lottery_handicap': 3,
+        }
+        cached = {
+            **FRESH,
+            'lottery': {'offer_matched': False, 'primary_market': None},
+        }
+        with mock.patch.object(football_service, 'matches_payload',
+                               return_value={'matches': [match]}), \
+             mock.patch.object(service, '_professional_status', return_value={}), \
+             mock.patch('src.football.config.get_cache', return_value=cached), \
+             mock.patch('src.football.pipeline._is_prediction_cache_current',
+                        return_value=True):
+            payload = service.football_home_payload()
+
+        self.assertEqual(payload['predictions']['ready'], [])
+        self.assertEqual(payload['predictions']['pending'], ['m1'])
+
     def test_an_out_of_date_logic_version_is_not_served(self):
         """**逻辑版本变了的缓存等于没有**——照 `analyze_match` 的规矩来。
 

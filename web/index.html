@@ -7756,9 +7756,12 @@ async function loadPredictions() {
         
         const spfLabels = { H: '胜', D: '平', A: '负', home: '胜', draw: '平', away: '负', '胜': '胜', '平': '平', '负': '负' };
         const marketSummary = (probabilities, labels) => {
-          const ranked = Object.entries(probabilities || {}).sort((a, b) => Number(b[1]) - Number(a[1]));
-          if (!ranked.length) return { pick: '-', detail: '暂无预测' };
+          const ranked = Object.entries(probabilities || {})
+            .filter(([, probability]) => Number.isFinite(Number(probability)))
+            .sort((a, b) => Number(b[1]) - Number(a[1]));
+          if (!ranked.length) return { available: false, pick: '', detail: '' };
           return {
+            available: true,
             pick: labels[ranked[0][0]] || ranked[0][0],
             detail: ranked.map(([key, probability]) =>
               `${esc(labels[key] || key)} ${(Number(probability) * 100).toFixed(1)}%`
@@ -7767,10 +7770,18 @@ async function loadPredictions() {
         };
         const spf = marketSummary(record.predicted_1x2, spfLabels);
         const rqspf = marketSummary(record.predicted_rqspf, {});
+        const hasSpf = spf.available;
+        const hasRqspf = rqspf.available;
+        const lotteryUnverified = record.lottery_offer_matched === false;
         const handicap = record.lottery_handicap;
         const handicapText = handicap === null || handicap === undefined || handicap === ''
-          ? '' : `（${Number(handicap) > 0 ? '+' : ''}${esc(handicap)}）`;
+          ? '' : `（主队 ${Number(handicap) > 0 ? '+' : ''}${esc(handicap)}）`;
         const actualSpf = spfLabels[record.actual_result] || record.actual_result || '-';
+        const marketVerificationNote = lotteryUnverified
+          ? `<div style="margin-top:4px;color:var(--warn)">⚠ 竞彩玩法暂未核验，本条不展示未核验的模型赛果；数据源恢复后会自动重算。</div>`
+          : (!hasSpf && !hasRqspf
+            ? `<div style="margin-top:4px;color:var(--muted)">暂无可核验的竞彩胜平负玩法预测</div>`
+            : '');
         
         html += `<div class="card" style="${idx > 0 ? 'margin-top:8px' : ''}">
           <div style="display:flex;justify-content:space-between;align-items:center">
@@ -7787,8 +7798,9 @@ async function loadPredictions() {
         if (record.settled) {
           // 已结算
           html += `<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--line);font-size:13px">
-            ${Object.keys(record.predicted_1x2 || {}).length ? `<div><span style="color:var(--muted)">胜平负预测：</span><b>${esc(spf.pick)}</b> · ${spf.detail} ${record.hit_1x2 === true ? '✅' : record.hit_1x2 === false ? '❌' : ''}</div>` : ''}
-            <div style="margin-top:4px"><span style="color:var(--muted)">让球胜平负${handicapText}预测：</span><b>${esc(rqspf.pick)}</b> · ${rqspf.detail} ${record.hit_rqspf === true ? '✅' : record.hit_rqspf === false ? '❌' : ''}</div>
+            ${hasSpf ? `<div><span style="color:var(--muted)">胜平负预测：</span><b>${esc(spf.pick)}</b> · ${spf.detail} ${record.hit_1x2 === true ? '✅' : record.hit_1x2 === false ? '❌' : ''}</div>` : ''}
+            ${hasRqspf ? `<div style="margin-top:4px"><span style="color:var(--muted)">让球胜平负${handicapText}预测：</span><b>${esc(rqspf.pick)}</b> · ${rqspf.detail} ${record.hit_rqspf === true ? '✅' : record.hit_rqspf === false ? '❌' : ''}</div>` : ''}
+            ${marketVerificationNote}
             <div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:6px">
             <div><span style="color:var(--muted)">赛后比分：</span><b style="color:var(--accent2)">${esc(record.actual_score || '-')}</b></div>
             <div><span style="color:var(--muted)">实际胜平负：</span>${esc(actualSpf)}</div>
@@ -7804,8 +7816,9 @@ async function loadPredictions() {
         } else {
           // 待同步
           html += `<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--line);font-size:12px">
-            ${Object.keys(record.predicted_1x2 || {}).length ? `<div><span style="color:var(--muted)">胜平负预测：</span><b>${esc(spf.pick)}</b> · ${spf.detail}</div>` : ''}
-            <div style="margin-top:4px"><span style="color:var(--muted)">让球胜平负${handicapText}预测：</span><b>${esc(rqspf.pick)}</b> · ${rqspf.detail}</div>
+            ${hasSpf ? `<div><span style="color:var(--muted)">胜平负预测：</span><b>${esc(spf.pick)}</b> · ${spf.detail}</div>` : ''}
+            ${hasRqspf ? `<div style="margin-top:4px"><span style="color:var(--muted)">让球胜平负${handicapText}预测：</span><b>${esc(rqspf.pick)}</b> · ${rqspf.detail}</div>` : ''}
+            ${marketVerificationNote}
             ${record.next_sync_at ? `<div style="color:var(--muted);margin-top:2px">预计同步：${record.next_sync_at?.replace('T', ' ').slice(0, 16) || '-'}</div>` : ''}
           </div>`;
         }
