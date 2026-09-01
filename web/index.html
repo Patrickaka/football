@@ -6908,6 +6908,17 @@ async function loadPredictions() {
     let html = auxiliaryWarnings.length
       ? `<div class="note" style="margin-bottom:12px">${auxiliaryWarnings.map(esc).join(' · ')}；以下预测记录仍可正常查看。</div>`
       : '';
+
+    // 数据库读不到时列表来自本地快照，可能缺最近若干天的记录——必须说出来，
+    // 否则用户看到的是「中间的记录莫名消失」。
+    const storageDegraded = recordsData.result?.storage_degraded;
+    if (storageDegraded) {
+      const degradedAt = (storageDegraded.at || '').replace('T', ' ').slice(0, 19);
+      html += `<div class="status error" style="margin-bottom:12px">
+        ⚠️ 数据库暂不可用，当前列表读自本地快照，可能缺少最近入库的记录。
+        原因：${esc(storageDegraded.error || '未知')}${degradedAt ? ` · ${esc(degradedAt)}` : ''}
+      </div>`;
+    }
     
     // ── 自动同步状态卡片 ──
     html += `<div class="card model-health"><h3>🔄 自动赛果同步</h3>

@@ -4,10 +4,37 @@
 写入沿用原「整文件重写」语义：事务内 DELETE 全量 + 批量 INSERT。
 """
 import json
+import logging
+from datetime import datetime
 from pathlib import Path
 
 from . import db
 from .paths import data_path
+
+log = logging.getLogger(__name__)
+
+# 表 -> 最近一次降级信息。MySQL 不可用时读写会静默回落到本地 JSON 快照，
+# 快照可能是几天前的：不把降级暴露出去，页面上「记录凭空消失」就无从解释。
+_degradations = {}
+
+
+def _record_degradation(table, error, operation='load'):
+    _degradations[table] = {
+        'source': 'fallback',
+        'operation': operation,
+        'error': str(error),
+        'at': datetime.now().isoformat(),
+    }
+    log.error('doc_store %s 降级到本地快照（表 %s）：%s', operation, table, error)
+
+
+def clear_degradation(table):
+    _degradations.pop(table, None)
+
+
+def degradation(table):
+    """返回该表最近一次降级信息；None 表示当前读写走的是 MySQL。"""
+    return _degradations.get(table)
 
 
 def _fallback_path(table):
@@ -47,13 +74,29 @@ def _fallback_replace_all(table, columns, rows_values):
     tmp_path.replace(path)
 
 
+def _sort_key(row, columns):
+    # NULL 与字符串不可比较，统一压成 (非空, 值)；NULL 排在前面与 MySQL 的
+    # `ORDER BY ... ASC` 一致。排序列都是时间戳/自增 ID，collation 差异无影响。
+    return tuple((row.get(c) is not None, row.get(c)) for c in columns)
+
+
 def load_all(table, order_by):
-    """读取整表，反序列化 doc 列为 dict 列表。"""
+    """读取整表，反序列化 doc 列为 dict 列表。
+
+    **排序放在 Python 侧**：doc 是大 JSON 列（football_prediction 单条约 40KB），
+    交给 MySQL `ORDER BY` 会把整列塞进 sort buffer，行数一多就
+    `ERROR 1038 Out of sort memory`，整表读取失败后静默回落到过期快照。
+    """
+    columns = [c.strip() for c in order_by.split(',') if c.strip()]
+    select_cols = ', '.join(columns + ['doc'])
     try:
-        rows = db.query(f"SELECT doc FROM {table} ORDER BY {order_by}")
-        return [json.loads(r['doc']) for r in rows]
-    except Exception:
+        rows = list(db.query(f"SELECT {select_cols} FROM {table}"))
+    except Exception as e:
+        _record_degradation(table, e)
         return _fallback_load_all(table)
+    clear_degradation(table)
+    rows.sort(key=lambda r: _sort_key(r, columns))
+    return [json.loads(r['doc']) for r in rows]
 
 
 def _fallback_upsert_one(table, columns, row_values, key_cols):
@@ -108,14 +151,17 @@ def upsert_one(table, columns, row_values, key_cols):
     )
     try:
         conn = db.get_connection()
-    except Exception:
+    except Exception as e:
+        _record_degradation(table, e, operation='upsert')
         _fallback_upsert_one(table, columns, row_values, key_cols)
         return 'fallback'
     try:
         with conn.cursor() as cur:
             cur.execute(sql, row_values)
+        clear_degradation(table)
         return 'mysql'
-    except Exception:
+    except Exception as e:
+        _record_degradation(table, e, operation='upsert')
         _fallback_upsert_one(table, columns, row_values, key_cols)
         return 'fallback'
 
@@ -126,7 +172,8 @@ def replace_all(table, columns, rows_values):
     sql = f"INSERT INTO {table} ({','.join(columns)}) VALUES ({placeholders})"
     try:
         conn = db.get_connection()
-    except Exception:
+    except Exception as e:
+        _record_degradation(table, e, operation='replace')
         _fallback_replace_all(table, columns, rows_values)
         return
     try:
@@ -136,6 +183,8 @@ def replace_all(table, columns, rows_values):
             if rows_values:
                 cur.executemany(sql, rows_values)
         conn.commit()
-    except Exception:
+        clear_degradation(table)
+    except Exception as e:
         conn.rollback()
+        _record_degradation(table, e, operation='replace')
         _fallback_replace_all(table, columns, rows_values)

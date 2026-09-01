@@ -607,11 +607,20 @@ def backtest_stats_payload(params):
 
 
 def predictions_payload():
-    """获取预测记录列表"""
+    """获取预测记录列表
+
+    存储降级时必须随记录一起返回：此时列表来自本地 JSON 快照，可能比库里少
+    好几天的记录，页面上不说明就成了「记录凭空消失」。
+    """
     try:
+        from src.common import doc_store
         from src.football.result_sync import get_prediction_records
         records = get_prediction_records(include_hidden=False)
-        return {'result': {'records': records, 'count': len(records)}}
+        result = {'records': records, 'count': len(records)}
+        degraded = doc_store.degradation('football_prediction')
+        if degraded:
+            result['storage_degraded'] = degraded
+        return {'result': result}
     except Exception as e:
         log.error('获取预测记录失败', exc_info=True)
         return {'error': f'获取失败: {str(e)}'}
