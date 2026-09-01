@@ -87,6 +87,16 @@ def resolve_play_strategy(play_type: str, allow_reference: bool = False) -> Opti
         prediction_mode: 'validated' 或 'reference_unvalidated'
         is_validated: True 或 False
     """
+    # 选5复式7码只是选6主推的扩展池，不再维护另一套可能漂移的排名。
+    # 所有调用方（预测、回测、后台任务）解析该玩法时都拿到选6的实际策略。
+    if play_type == 'fu_shi_7':
+        linked = resolve_play_strategy('select_6', allow_reference=allow_reference)
+        if linked is None:
+            return None
+        linked['ranking_source'] = 'select_6'
+        linked['linked_play_type'] = 'select_6'
+        return linked
+
     strategy = _cfg.ACTIVE_STRATEGIES.get(play_type, {})
 
     # 已验证的正式策略（且不在降级观察中）
@@ -212,18 +222,6 @@ def resolve_play_strategy(play_type: str, allow_reference: bool = False) -> Opti
             'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
             'window_size': 100,
             'repeat_direction': 'neutral',
-            'pool_diversify': False,
-            'final_selection_mode': 'concentrated',
-            'prediction_mode': 'reference_unvalidated',
-            'is_validated': False,
-        },
-        'fu_shi_7': {
-            'strategy_id': 'fu_shi_7_ref_trend100_shape_balanced',
-            'feature_weights': {'frequency': 0.35, 'gap': 0.20, 'trend': 0.20, 'pair_cooccurrence': 0.15, 'position_residual': 0.075, 'position_residual_cross': 0.075, 'road_residual': 0.0, 'repeat': 0.0, 'odd_even': 0.0, 'big_small': 0.0},
-            'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
-            'window_size': 100,
-            'repeat_direction': 'neutral',
-            'pool_max_last_numbers': 4,
             'pool_diversify': False,
             'final_selection_mode': 'concentrated',
             'prediction_mode': 'reference_unvalidated',

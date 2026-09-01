@@ -36,7 +36,7 @@ from .records import (
     load_prize_table,
 )
 from .analyzer import (
-    KL8Analyzer, get_kl8_analyzer,
+    KL8Analyzer, _fushi7_from_select6, get_kl8_analyzer,
 )
 
 
@@ -201,6 +201,7 @@ class KL8RollingBacktest:
             top20 = [num for num, _ in candidate_items]
 
             # 后续各选型都从同一份候选池取号，但按各自选型控制上期重号比例
+            selected_numbers_by_pick = {}
             for select_type in SELECT_TYPES:
                 adaptive_cap = _adaptive_repeat_cap(temp_analyzer.history_data, select_type)
                 final_repeat_cap = min(
@@ -216,6 +217,7 @@ class KL8RollingBacktest:
                         selection_mode=final_selection_mode,
                     )[0]
                 ]
+                selected_numbers_by_pick[select_type] = top_nums
                 hits = len(set(top_nums) & actual_numbers)
                 all_hits[select_type].append(hits)
 
@@ -223,20 +225,29 @@ class KL8RollingBacktest:
             for fushi_key, fushi_cfg in FUSHI_CONFIG.items():
                 pool_size = fushi_cfg['pool_size']
                 base_pick = fushi_cfg['base_pick']
-                adaptive_cap = _adaptive_repeat_cap(temp_analyzer.history_data, pool_size)
-                repeat_cap = min(
-                    pool_max_last_numbers if pool_max_last_numbers is not None else adaptive_cap,
-                    adaptive_cap,
-                )
-                core_numbers = [
-                    num for num, _ in _select_final_candidate_pool(
+                if fushi_key == 'fu_shi_7':
+                    # 与线上预测保持同一不变量：完整保留选6，再从同一排名补1码。
+                    # 不能重新以 target_size=7 选池，否则未来切换非 concentrated
+                    # 模式时，回测结果会与实际出号逻辑悄悄分叉。
+                    core_numbers, _ = _fushi7_from_select6(
+                        selected_numbers_by_pick.get(6, []),
                         candidate_items,
-                        pool_size,
-                        temp_analyzer.statistics.get('last_numbers', set()),
-                        max_last_numbers=repeat_cap,
-                        selection_mode=final_selection_mode,
-                    )[0]
-                ]
+                    )
+                else:
+                    adaptive_cap = _adaptive_repeat_cap(temp_analyzer.history_data, pool_size)
+                    repeat_cap = min(
+                        pool_max_last_numbers if pool_max_last_numbers is not None else adaptive_cap,
+                        adaptive_cap,
+                    )
+                    core_numbers = [
+                        num for num, _ in _select_final_candidate_pool(
+                            candidate_items,
+                            pool_size,
+                            temp_analyzer.statistics.get('last_numbers', set()),
+                            max_last_numbers=repeat_cap,
+                            selection_mode=final_selection_mode,
+                        )[0]
+                    ]
                 pool_hits = len(set(core_numbers) & actual_numbers)
                 all_fushi_pool_hits[fushi_key].append(pool_hits)
 

@@ -63,6 +63,13 @@ def kl8_payload():
             latest_issue=kl8_latest_issue(),
             version=_current_kl8_predictor_version(),
             cache=get_shared_cache())
+        # 手动删号重算仍通过兼容状态取得当前正式快照的上下文。主读取路径
+        # 命中 Redis/L1 时不会经过 refresh/fetch，若不在这里同步，后续重算
+        # 会以空 source_snapshot_id 落盘，预测记录便无法归入对应快照。
+        # 这里只复用已经取得的结果，不触发第二次预测计算。
+        if isinstance(data, dict):
+            _CACHE['kl8']['data'] = data
+            _CACHE['kl8']['timestamp'] = time.time()
         return {'result': data}
     except Exception:
         log.error('快乐8预测失败', exc_info=True)

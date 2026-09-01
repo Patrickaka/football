@@ -100,6 +100,54 @@ class RecordsPagination(unittest.TestCase):
         )
 
 
+class ManualRecalculationContext(unittest.TestCase):
+
+    def test_cached_payload_supplies_snapshot_context_for_both_recorded_plays(self):
+        prediction = {
+            'snapshot_file': 'snapshot_context-id.json',
+            'statistics': {'version': 'kl8-test-version'},
+            'select_6': {'numbers': [1, 2, 3, 4, 5, 6]},
+            'fu_shi_7': {'top7_numbers': [1, 2, 3, 4, 5, 6, 7]},
+        }
+        analyzer = mock.Mock()
+        analyzer.recalculate_play_excluding.return_value = {'ok': True}
+
+        with mock.patch.dict(
+                service._CACHE['kl8'], {'data': None, 'timestamp': 0}), \
+                mock.patch.object(service.kl8_cache, 'predict',
+                                  return_value=prediction), \
+                mock.patch.object(service, 'kl8_run_prediction') as calculate:
+            self.assertEqual(service.kl8_payload(), {'result': prediction})
+            calculate.assert_not_called()
+            self.assertIs(service._CACHE['kl8']['data'], prediction)
+            self.assertGreater(service._CACHE['kl8']['timestamp'], 0)
+
+            with mock.patch.object(service, 'get_kl8_analyzer',
+                                   return_value=analyzer):
+                service.kl8_exclude_recalculate_payload({
+                    'play_type': ['select_6'], 'numbers': ['20'],
+                })
+                service.kl8_exclude_recalculate_payload({
+                    'play_type': ['fu_shi_7'], 'numbers': ['21'],
+                })
+
+        select6_call, fushi7_call = analyzer.recalculate_play_excluding.call_args_list
+        self.assertEqual(select6_call.args[:2], ('select_6', [20]))
+        self.assertEqual(fushi7_call.args[:2], ('fu_shi_7', [21]))
+        self.assertEqual(select6_call.kwargs['record_context'], {
+            'source_snapshot_id': 'context-id',
+            'source_version': 'kl8-test-version',
+            'generation_mode': 'manual',
+            'initial_numbers': [1, 2, 3, 4, 5, 6],
+        })
+        self.assertEqual(fushi7_call.kwargs['record_context'], {
+            'source_snapshot_id': 'context-id',
+            'source_version': 'kl8-test-version',
+            'generation_mode': 'manual',
+            'initial_numbers': [1, 2, 3, 4, 5, 6, 7],
+        })
+
+
 class MaintenanceFastExit(unittest.TestCase):
 
     def test_future_pending_issue_does_not_initialize_the_analyzer(self):

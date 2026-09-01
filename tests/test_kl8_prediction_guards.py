@@ -512,7 +512,13 @@ class KL8PredictionGuardTests(unittest.TestCase):
         analyzer.history_data = [_record(i) for i in range(80, 0, -1)]
         analyzer.using_simulated_data = False
         analyzer.statistics = {'last_numbers': set()}
-        candidates = [(n, float(100 - n)) for n in range(1, 41)]
+        ranked_numbers = [40, 3, 70, 12, 55, 8, 61, 20, 4, 79]
+        ranked_numbers += [n for n in range(1, 81) if n not in ranked_numbers]
+        candidates = [
+            (number, float(100 - index))
+            for index, number in enumerate(ranked_numbers)
+        ]
+        excluded = [5, 40, 70]
 
         original_build = KL8Analyzer.build_pool_by_strategy
         original_dir = kl8_config.KL8_RECALCULATION_DIR
@@ -526,9 +532,12 @@ class KL8PredictionGuardTests(unittest.TestCase):
                     'candidates': candidates,
                     'votes': {},
                 }
+                select6_result, available_candidates = (
+                    analyzer._calculate_select_recalculation('select_6', excluded)
+                )
                 result = analyzer.recalculate_play_excluding(
                     'fu_shi_7',
-                    [1, 2, 3],
+                    excluded,
                     record_context={
                         'source_snapshot_id': 'fushi7-snapshot',
                         'generation_mode': 'manual',
@@ -541,7 +550,26 @@ class KL8PredictionGuardTests(unittest.TestCase):
             kl8_config.KL8_RECALCULATION_DIR = original_dir
             kl8_config.VERIFY_ONLY_MODE = original_verify_only
 
+        expected_supplement = next(
+            number
+            for number, _ in available_candidates
+            if number not in select6_result['numbers']
+        )
         self.assertEqual(len(result['top7_numbers']), 7)
+        self.assertTrue(
+            set(select6_result['numbers']).issubset(result['top7_numbers'])
+        )
+        self.assertEqual(result['select_6_numbers'], select6_result['numbers'])
+        self.assertEqual(result['supplemental_number'], expected_supplement)
+        self.assertEqual(
+            set(result['top7_numbers']),
+            set(select6_result['numbers']) | {expected_supplement},
+        )
+        self.assertEqual(result['strategy_id'], select6_result['strategy_id'])
+        self.assertEqual(
+            result['quality']['shape_profile'],
+            _shape_profile(result['top7_numbers'], set()),
+        )
         self.assertEqual(result['total_combinations'], 21)
         self.assertEqual(len(stored), 1)
         self.assertEqual(stored[0]['play_type'], 'fu_shi_7')
@@ -583,6 +611,138 @@ class KL8PredictionGuardTests(unittest.TestCase):
             for row in stored
             if row['status'] == 'generated'
         ))
+
+    def test_fushi7_linked_chain_reuses_select6_exclusions_each_round(self):
+        analyzer = KL8Analyzer.__new__(KL8Analyzer)
+        analyzer.history_data = [_record(i) for i in range(80, 0, -1)]
+        analyzer.using_simulated_data = False
+        analyzer.statistics = {'last_numbers': set()}
+        ranked_numbers = [40, 3, 70, 12, 55, 8, 61, 20, 4, 79]
+        ranked_numbers += [n for n in range(1, 41) if n not in ranked_numbers]
+        candidates = [
+            (number, float(100 - index))
+            for index, number in enumerate(ranked_numbers)
+        ]
+        initial_select6 = sorted(ranked_numbers[:6])
+        initial_fushi7 = sorted(ranked_numbers[:7])
+
+        original_build = KL8Analyzer.build_pool_by_strategy
+        original_verify_only = kl8_config.VERIFY_ONLY_MODE
+        try:
+            kl8_config.VERIFY_ONLY_MODE = False
+            KL8Analyzer.build_pool_by_strategy = lambda self, strategy, pool_size=20: {
+                'selected': ranked_numbers,
+                'candidates': candidates,
+                'votes': {},
+            }
+            select6_chain = analyzer.generate_exclude_recalculation_chain(
+                'select_6',
+                initial_select6,
+                max_rounds=2,
+                source_snapshot_id='linked-chain-snapshot',
+            )
+            fushi7_chain = (
+                analyzer.generate_fushi7_recalculation_chain_from_select6(
+                    select6_chain,
+                    initial_fushi7,
+                    max_rounds=2,
+                    source_snapshot_id='linked-chain-snapshot',
+                )
+            )
+        finally:
+            KL8Analyzer.build_pool_by_strategy = original_build
+            kl8_config.VERIFY_ONLY_MODE = original_verify_only
+
+        self.assertEqual(fushi7_chain['generated_rounds'], 2)
+        self.assertEqual(
+            len(fushi7_chain['records']),
+            len(select6_chain['records']),
+        )
+        for select6_record, fushi7_record in zip(
+            select6_chain['records'],
+            fushi7_chain['records'],
+        ):
+            with self.subTest(round=select6_record['round']):
+                self.assertEqual(
+                    fushi7_record['excluded_numbers'],
+                    select6_record['excluded_numbers'],
+                )
+                self.assertTrue(
+                    set(select6_record['numbers']).issubset(
+                        fushi7_record['numbers']
+                    )
+                )
+                expected_supplement = next(
+                    number
+                    for number in ranked_numbers
+                    if number not in select6_record['excluded_numbers']
+                    and number not in select6_record['numbers']
+                )
+                self.assertEqual(
+                    set(fushi7_record['numbers']),
+                    set(select6_record['numbers']) | {expected_supplement},
+                )
+
+    def test_fushi7_recalculation_requires_one_candidate_beyond_select6(self):
+        analyzer = KL8Analyzer.__new__(KL8Analyzer)
+        analyzer.history_data = [_record(i) for i in range(80, 0, -1)]
+        analyzer.using_simulated_data = False
+        analyzer.statistics = {'last_numbers': set()}
+        candidates = [(number, float(20 - number)) for number in range(1, 13)]
+
+        original_build = KL8Analyzer.build_pool_by_strategy
+        original_verify_only = kl8_config.VERIFY_ONLY_MODE
+        try:
+            kl8_config.VERIFY_ONLY_MODE = False
+            KL8Analyzer.build_pool_by_strategy = lambda self, strategy, pool_size=20: {
+                'selected': list(range(1, 13)),
+                'candidates': candidates,
+                'votes': {},
+            }
+            result = analyzer.recalculate_play_excluding(
+                'fu_shi_7',
+                list(range(1, 7)),
+                record_context={
+                    'source_snapshot_id': 'six-left-snapshot',
+                    'initial_numbers': list(range(1, 8)),
+                },
+            )
+        finally:
+            KL8Analyzer.build_pool_by_strategy = original_build
+            kl8_config.VERIFY_ONLY_MODE = original_verify_only
+
+        self.assertIn('error', result)
+        self.assertEqual(result['remaining_count'], 6)
+        self.assertEqual(result['required_count'], 7)
+        stored = kl8_module.list_exclude_recalculations()
+        self.assertEqual(len(stored), 1)
+        self.assertEqual(stored[0]['status'], 'exhausted')
+        self.assertEqual(stored[0]['numbers'], [])
+
+    def test_fushi7_recalculation_stops_when_select6_has_no_strategy(self):
+        analyzer = KL8Analyzer.__new__(KL8Analyzer)
+        analyzer.history_data = [_record(i) for i in range(80, 0, -1)]
+        analyzer.using_simulated_data = False
+        analyzer.statistics = {'last_numbers': set()}
+
+        original_verify_only = kl8_config.VERIFY_ONLY_MODE
+        original_select6 = kl8_config.ACTIVE_STRATEGIES['select_6']
+        try:
+            kl8_config.VERIFY_ONLY_MODE = True
+            kl8_config.ACTIVE_STRATEGIES['select_6'] = {
+                'strategy_id': '',
+                'feature_weights': {},
+                'model_weights': {},
+                'window_size': 0,
+            }
+            result = analyzer.recalculate_play_excluding('fu_shi_7', [])
+        finally:
+            kl8_config.ACTIVE_STRATEGIES['select_6'] = original_select6
+            kl8_config.VERIFY_ONLY_MODE = original_verify_only
+
+        self.assertEqual(result['play_type'], 'fu_shi_7')
+        self.assertEqual(result['error'], '当前玩法没有可用策略')
+        self.assertEqual(kl8_module.list_exclude_recalculations(), [])
 
     def test_recalculation_identity_is_scoped_to_source_snapshot(self):
         analyzer = KL8Analyzer.__new__(KL8Analyzer)
@@ -769,6 +929,7 @@ class KL8PredictionGuardTests(unittest.TestCase):
             kl8_config.VERIFY_ONLY_MODE = False
             select5 = kl8_strategies.resolve_play_strategy('select_5')
             select6 = kl8_strategies.resolve_play_strategy('select_6')
+            fushi7 = kl8_strategies.resolve_play_strategy('fu_shi_7')
             select10 = kl8_strategies.resolve_play_strategy('select_10')
         finally:
             kl8_config.VERIFY_ONLY_MODE = original_verify_only
@@ -781,6 +942,11 @@ class KL8PredictionGuardTests(unittest.TestCase):
         self.assertFalse(select10['pool_diversify'])
         self.assertEqual(select5['strategy_id'], 'select_5_ref_transition_repeat_v3')
         self.assertEqual(select6['strategy_id'], 'select_6_ref_transition_primary_v5')
+        self.assertEqual(fushi7['strategy_id'], select6['strategy_id'])
+        self.assertEqual(fushi7['feature_weights'], select6['feature_weights'])
+        self.assertEqual(fushi7['model_weights'], select6['model_weights'])
+        self.assertEqual(fushi7['ranking_source'], 'select_6')
+        self.assertEqual(fushi7['linked_play_type'], 'select_6')
         self.assertEqual(select10['strategy_id'], 'select_10_ref_trend100_shape_balanced')
         self.assertNotEqual(select5['feature_weights'], select6['feature_weights'])
         self.assertEqual(select5['target_hits'], 4)
@@ -885,7 +1051,25 @@ class KL8PredictionGuardTests(unittest.TestCase):
         self.assertEqual(result['fu_shi_7']['pool_size'], 7)
         self.assertEqual(result['fu_shi_7']['total_combinations'], 21)
         self.assertEqual(result['fu_shi_7']['prize_hit_thresholds'], ['>=3'])
-        self.assertEqual(result['resolved_strategies']['fu_shi_7']['pool_max_last_numbers'], 4)
+        self.assertEqual(result['resolved_strategies']['fu_shi_7']['pool_max_last_numbers'], 3)
+        self.assertEqual(result['fu_shi_7']['ranking_source'], 'select_6')
+        select6_numbers = set(result['select_6']['numbers'])
+        fushi7_numbers = set(result['fu_shi_7']['top7_numbers'])
+        self.assertTrue(select6_numbers.issubset(fushi7_numbers))
+        expected_supplement = next(
+            number
+            for number, _ in result['all_candidate_pools']['select_6']['candidates']
+            if number not in select6_numbers
+        )
+        self.assertEqual(
+            result['fu_shi_7']['supplemental_number'],
+            expected_supplement,
+        )
+        self.assertEqual(fushi7_numbers, select6_numbers | {expected_supplement})
+        self.assertEqual(
+            result['fu_shi_7']['strategy_id'],
+            result['select_6']['strategy_id'],
+        )
 
         self.assertIn('fu_shi_10_11', result)
         self.assertEqual(
@@ -913,6 +1097,9 @@ class KL8PredictionGuardTests(unittest.TestCase):
 
         original_save = KL8Analyzer._save_prediction_snapshot
         original_chain = KL8Analyzer.generate_exclude_recalculation_chain
+        original_linked_chain = (
+            KL8Analyzer.generate_fushi7_recalculation_chain_from_select6
+        )
         original_verify_only = kl8_config.VERIFY_ONLY_MODE
         try:
             kl8_config.VERIFY_ONLY_MODE = False
@@ -930,18 +1117,53 @@ class KL8PredictionGuardTests(unittest.TestCase):
                     'play_type': play_type,
                     'generation_mode': 'automatic',
                     'generated_rounds': 12,
+                    'records': [
+                        {
+                            'excluded_numbers': list(initial_numbers),
+                            'numbers': [21, 22, 23, 24, 25, 26],
+                        }
+                    ],
+                }
+
+            def fake_linked_chain(
+                self,
+                select6_chain,
+                initial_numbers,
+                **kwargs,
+            ):
+                captured.append({
+                    'play_type': 'fu_shi_7',
+                    'select6_chain': select6_chain,
+                    'initial_numbers': list(initial_numbers),
+                    **kwargs,
+                })
+                return {
+                    'play_type': 'fu_shi_7',
+                    'linked_play_type': 'select_6',
+                    'generation_mode': 'automatic',
+                    'generated_rounds': 12,
                 }
 
             KL8Analyzer.generate_exclude_recalculation_chain = fake_chain
+            KL8Analyzer.generate_fushi7_recalculation_chain_from_select6 = (
+                fake_linked_chain
+            )
             result = analyzer.predict_all()
         finally:
             KL8Analyzer._save_prediction_snapshot = original_save
             KL8Analyzer.generate_exclude_recalculation_chain = original_chain
+            KL8Analyzer.generate_fushi7_recalculation_chain_from_select6 = (
+                original_linked_chain
+            )
             kl8_config.VERIFY_ONLY_MODE = original_verify_only
 
         self.assertEqual([item['play_type'] for item in captured], ['select_6', 'fu_shi_7'])
         self.assertEqual(captured[0]['initial_numbers'], result['select_6']['numbers'])
         self.assertEqual(captured[1]['initial_numbers'], result['fu_shi_7']['top7_numbers'])
+        self.assertIs(
+            captured[1]['select6_chain'],
+            result['select_6_recalculation_chain'],
+        )
         self.assertTrue(all(
             item['source_snapshot_id'] == 'auto-chain-id'
             for item in captured
@@ -963,7 +1185,7 @@ class KL8PredictionGuardTests(unittest.TestCase):
         analyzer = KL8Analyzer.__new__(KL8Analyzer)
         analyzer.history_data = [_record(i) for i in range(80, 0, -1)]
         select6 = [1, 2, 3, 4, 5, 6]
-        fushi7 = [11, 12, 13, 14, 15, 16, 17]
+        fushi7 = [1, 2, 3, 4, 5, 6, 7]
 
         with tempfile.TemporaryDirectory() as temp_dir:
             original_snapshot_dir = kl8_config.KL8_SNAPSHOT_DIR
@@ -983,6 +1205,7 @@ class KL8PredictionGuardTests(unittest.TestCase):
         self.assertEqual(saved['select_6'], select6)
         self.assertEqual(saved['fu_shi_7'], fushi7)
         self.assertEqual(len(saved['fu_shi_7']), 7)
+        self.assertTrue(set(saved['select_6']).issubset(saved['fu_shi_7']))
 
     def test_backtest_passes_repeat_configuration_to_voting(self):
         analyzer = KL8Analyzer.__new__(KL8Analyzer)

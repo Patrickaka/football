@@ -59,6 +59,31 @@ KL8_ZONE_SIZE = 5           # 16 个 5 码区，与 position_residual 粒度一�
 KL8_BIG_SMALL_THRESHOLD = 40  # 大于 40 为大；40 本身算小
 
 
+def _fushi7_from_select6(
+    select6_numbers: List[int],
+    ranked_candidates: List[Tuple[int, float]],
+) -> Tuple[List[int], Optional[int]]:
+    """用选6的同一排名补出选5复式7码。
+
+    选6的6个号码是已经过完整策略与形态约束选定的主推，不能为了
+    复式玩法再排一次名。第7个号只能是选6候选排名中第一个尚未入选的
+    号码。返回值仍按号码升序供展示，同时单独返回补位号便于审计。
+    """
+    base = _clean_pick_numbers(select6_numbers, 6)
+    if not base:
+        return [], None
+
+    selected = set(base)
+    for candidate in ranked_candidates or []:
+        try:
+            number = int(candidate[0])
+        except (TypeError, ValueError, IndexError):
+            continue
+        if 1 <= number <= KL8_NUM_RANGE and number not in selected:
+            return sorted([*base, number]), number
+    return [], None
+
+
 class KL8Analyzer:
     """快乐8预测分析器（v5: 严格三段式+预测就绪判断+纯参数化回测）"""
 
@@ -911,6 +936,70 @@ class KL8Analyzer:
         ]
         return best_pool, quality
 
+    def _calculate_select_recalculation(
+        self,
+        play_type: str,
+        excluded: List[int],
+    ) -> Tuple[Dict, List[Tuple[int, float]]]:
+        """计算一轮单式结果，但不落盘。
+
+        选6单式和选5复式7码必须共用这一次排名与选池。把纯计算与
+        `recalculate_play_excluding` 的记录落盘分开，可避免为了派生7码
+        而额外写入一条选6记录。
+        """
+        try:
+            pick_n = int(play_type.split('_')[1])
+        except (ValueError, IndexError):
+            return {'error': f'无效玩法: {play_type}'}, []
+
+        strategy = _strategies_mod.resolve_play_strategy(play_type)
+        if strategy is None:
+            return {'error': '当前玩法没有可用策略'}, []
+
+        excluded_set = set(excluded)
+        pool_result = self.build_pool_by_strategy(
+            strategy,
+            pool_size=min(KL8_NUM_RANGE, max(40, pick_n + len(excluded) + 20)),
+        )
+        candidates = [
+            (num, score)
+            for num, score in pool_result.get('candidates', [])
+            if num not in excluded_set
+        ]
+        if len(candidates) < pick_n:
+            return {
+                'error': f'剔除后候选号码不足，{play_type} 至少需要 {pick_n} 个号码，当前仅剩 {len(candidates)} 个',
+                'play_type': play_type,
+                'excluded_numbers': excluded,
+                'remaining_count': len(candidates),
+                'required_count': pick_n,
+            }, candidates
+
+        adaptive_cap = _adaptive_repeat_cap(self.history_data, pick_n)
+        repeat_cap = (
+            max(0, min(pick_n, int(strategy.get('pool_max_last_numbers'))))
+            if strategy.get('pool_max_last_numbers') is not None
+            else adaptive_cap
+        )
+        final_pool, quality = self._best_exclude_recalculation_pool(
+            candidates,
+            pick_n,
+            repeat_cap,
+            strategy.get('final_selection_mode', 'best_variant'),
+        )
+        return {
+            'play_type': play_type,
+            'numbers': sorted(num for num, _ in final_pool),
+            'excluded_numbers': excluded,
+            'candidates': candidates[:12],
+            'quality': quality,
+            'strategy_id': strategy.get('strategy_id', ''),
+            'prediction_mode': strategy.get('prediction_mode', ''),
+            'is_validated': strategy.get('is_validated', False),
+            'source': 'exclude_recalculate',
+            'version': KL8_PREDICTOR_VERSION,
+        }, candidates
+
     def recalculate_play_excluding(
         self,
         play_type: str,
@@ -926,59 +1015,101 @@ class KL8Analyzer:
             if isinstance(n, int) or str(n).isdigit()
         })
         excluded = [n for n in excluded if 1 <= n <= KL8_NUM_RANGE]
-        excluded_set = set(excluded)
-
         if play_type in SELECT_PLAY_KEYS:
-            try:
-                pick_n = int(play_type.split('_')[1])
-            except (ValueError, IndexError):
-                return {'error': f'无效玩法: {play_type}'}
-
-            strategy = _strategies_mod.resolve_play_strategy(play_type)
-            if strategy is None:
-                return {'error': '当前玩法没有可用策略'}
-
-            pool_result = self.build_pool_by_strategy(
-                strategy,
-                pool_size=min(KL8_NUM_RANGE, max(40, pick_n + len(excluded) + 20)),
+            result, _ = self._calculate_select_recalculation(play_type, excluded)
+            if result.get('error'):
+                if 'remaining_count' in result:
+                    self._save_exclude_recalculation(
+                        result, status='exhausted', record_context=record_context,
+                    )
+                return result
+            result['recalculation_record'] = self._save_exclude_recalculation(
+                result, record_context=record_context,
             )
-            candidates = [
-                (num, score)
-                for num, score in pool_result.get('candidates', [])
-                if num not in excluded_set
-            ]
-            if len(candidates) < pick_n:
+            return result
+
+        if play_type == 'fu_shi_7':
+            select6_result, candidates = self._calculate_select_recalculation(
+                'select_6', excluded,
+            )
+            if (
+                select6_result.get('error')
+                and 'remaining_count' not in select6_result
+            ):
+                return {
+                    **select6_result,
+                    'play_type': play_type,
+                    'excluded_numbers': excluded,
+                }
+            if select6_result.get('error') or len(candidates) < 7:
                 result = {
-                    'error': f'剔除后候选号码不足，{play_type} 至少需要 {pick_n} 个号码，当前仅剩 {len(candidates)} 个',
+                    'error': f'剔除后候选号码不足，{play_type} 至少需要 7 个号码，当前仅剩 {len(candidates)} 个',
                     'play_type': play_type,
                     'excluded_numbers': excluded,
                     'remaining_count': len(candidates),
-                    'required_count': pick_n,
+                    'required_count': 7,
                 }
                 self._save_exclude_recalculation(result, status='exhausted', record_context=record_context)
                 return result
-            adaptive_cap = _adaptive_repeat_cap(self.history_data, pick_n)
-            repeat_cap = (
-                max(0, min(pick_n, int(strategy.get('pool_max_last_numbers'))))
-                if strategy.get('pool_max_last_numbers') is not None
-                else adaptive_cap
+
+            core_numbers, supplemental_number = _fushi7_from_select6(
+                select6_result.get('numbers', []), candidates,
             )
-            final_pool, quality = self._best_exclude_recalculation_pool(
+            if len(core_numbers) != 7:
+                result = {
+                    'error': '选6排名无法补齐7个复式号码',
+                    'play_type': play_type,
+                    'excluded_numbers': excluded,
+                    'remaining_count': len(candidates),
+                    'required_count': 7,
+                }
+                self._save_exclude_recalculation(
+                    result, status='exhausted', record_context=record_context,
+                )
+                return result
+
+            fushi_cfg = FUSHI_CONFIG[play_type]
+            source_quality = select6_result.get('quality') or {}
+            score_lookup = {number: score for number, score in candidates}
+            selected_candidates = [
+                (number, score_lookup.get(number, 0.0))
+                for number in core_numbers
+            ]
+            quality = self._score_exclude_recalculation_pool(
+                selected_candidates,
                 candidates,
-                pick_n,
-                repeat_cap,
-                strategy.get('final_selection_mode', 'best_variant'),
+                fushi_cfg['pool_size'],
+                int(source_quality.get('repeat_cap') or 0),
             )
-            output_numbers = sorted(num for num, _ in final_pool)
+            quality.update({
+                'selection_mode': source_quality.get('selection_mode', ''),
+                'requested_selection_mode': source_quality.get(
+                    'requested_selection_mode', ''
+                ),
+                'ranking_source': 'select_6',
+                'supplemental_number': supplemental_number,
+            })
+            combo_list = [
+                sorted(combo)
+                for combo in combinations(core_numbers, fushi_cfg['base_pick'])
+            ]
             result = {
                 'play_type': play_type,
-                'numbers': output_numbers,
+                fushi_cfg['numbers_field']: core_numbers,
+                'core_numbers': core_numbers,
+                'select_6_numbers': select6_result['numbers'],
+                'supplemental_number': supplemental_number,
+                'ranking_source': 'select_6',
                 'excluded_numbers': excluded,
                 'candidates': candidates[:12],
                 'quality': quality,
-                'strategy_id': strategy.get('strategy_id', ''),
-                'prediction_mode': strategy.get('prediction_mode', ''),
-                'is_validated': strategy.get('is_validated', False),
+                'combinations': combo_list,
+                'total_combinations': len(combo_list),
+                'combo_pick': fushi_cfg['base_pick'],
+                'pool_size': fushi_cfg['pool_size'],
+                'strategy_id': select6_result.get('strategy_id', ''),
+                'prediction_mode': select6_result.get('prediction_mode', ''),
+                'is_validated': select6_result.get('is_validated', False),
                 'source': 'exclude_recalculate',
                 'version': KL8_PREDICTOR_VERSION,
             }
@@ -988,6 +1119,7 @@ class KL8Analyzer:
             return result
 
         if play_type in FUSHI_CONFIG:
+            excluded_set = set(excluded)
             fushi_cfg = FUSHI_CONFIG[play_type]
             strategy = _strategies_mod.resolve_play_strategy(play_type)
             if strategy is None:
@@ -1190,6 +1322,92 @@ class KL8Analyzer:
             'terminal': exhausted,
         }
 
+    def generate_fushi7_recalculation_chain_from_select6(
+        self,
+        select6_chain: Dict,
+        initial_numbers: List[int],
+        max_rounds: int = 20,
+        source_snapshot_id: str = '',
+        source_version: str = '',
+    ) -> Dict:
+        """按选6杀号链的每轮排除条件生成对应的7码复式记录。
+
+        这里不允许复式玩法自己累计排除7个号码。每一轮都复用选6记录的
+        ``excluded_numbers``，再由 :meth:`recalculate_play_excluding` 使用
+        选6策略选出同轮6码并顺序补1码，因此两条记录链可以逐轮对齐。
+        """
+        required = FUSHI_CONFIG['fu_shi_7']['pool_size']
+        current = sorted(_clean_pick_numbers(initial_numbers, required))
+        if len(current) != required:
+            return {'error': f'fu_shi_7 初始号码必须为{required}个'}
+        if not isinstance(select6_chain, dict):
+            return {'error': '选6杀号链无效'}
+
+        record_context = {
+            'source_snapshot_id': source_snapshot_id,
+            'source_version': source_version or KL8_PREDICTOR_VERSION,
+            'generation_mode': 'automatic',
+            'initial_numbers': current,
+        }
+        generated = []
+        exhausted = None
+        select6_records = select6_chain.get('records') or []
+        for select6_record in select6_records[:max(1, max_rounds)]:
+            excluded = select6_record.get('excluded_numbers') or []
+            result = self.recalculate_play_excluding(
+                'fu_shi_7',
+                excluded,
+                record_context=record_context,
+            )
+            if result.get('error'):
+                exhausted = {
+                    'excluded_numbers': result.get('excluded_numbers', excluded),
+                    'remaining_count': result.get('remaining_count'),
+                    'required_count': result.get('required_count', required),
+                }
+                break
+
+            fushi_numbers = result.get('top7_numbers') or result.get('core_numbers') or []
+            select6_numbers = select6_record.get('numbers') or []
+            if not set(select6_numbers).issubset(fushi_numbers):
+                exhausted = {
+                    'excluded_numbers': result.get('excluded_numbers', excluded),
+                    'remaining_count': len(fushi_numbers),
+                    'required_count': required,
+                    'reason': 'select6_linkage_mismatch',
+                }
+                break
+            generated.append(result.get('recalculation_record') or {})
+
+        # 选6已无法再生成6码时，复式7码必然也无法补齐；复用相同的终止
+        # 排除条件落一条 exhausted 记录，使两条自动轨迹的结束点一致。
+        select6_terminal = select6_chain.get('terminal')
+        if exhausted is None and isinstance(select6_terminal, dict):
+            terminal_excluded = select6_terminal.get('excluded_numbers') or []
+            terminal_result = self.recalculate_play_excluding(
+                'fu_shi_7',
+                terminal_excluded,
+                record_context=record_context,
+            )
+            if terminal_result.get('error'):
+                exhausted = {
+                    'excluded_numbers': terminal_result.get(
+                        'excluded_numbers', terminal_excluded
+                    ),
+                    'remaining_count': terminal_result.get('remaining_count'),
+                    'required_count': terminal_result.get('required_count', required),
+                }
+
+        return {
+            'play_type': 'fu_shi_7',
+            'linked_play_type': 'select_6',
+            'generated_rounds': len(generated),
+            'generation_mode': 'automatic',
+            'records': generated,
+            'exhausted': exhausted is not None,
+            'terminal': exhausted,
+        }
+
     def _candidate_variants(
         self,
         candidates: List[Tuple[int, float]],
@@ -1239,6 +1457,7 @@ class KL8Analyzer:
         results = {}
         resolved_strategies = {}  # v9: 保存每种玩法当时的完整策略
         all_candidate_pools = {}  # v9.1: 各玩法独立候选池
+        select_candidate_rankings = {}  # 保留单式完整排名供关联玩法复用
 
         # ── 加载上期快照，用于本期变化对比 ──
         last_snapshot = _load_last_snapshot()
@@ -1253,6 +1472,7 @@ class KL8Analyzer:
 
             # v9.2: _cfg.VERIFY_ONLY_MODE — 没有已验证策略时不输出号码
             if strategy is None:
+                select_candidate_rankings[s_key] = []
                 results[s_key] = {
                     'desc': config['desc'],
                     'pick': config['pick'],
@@ -1300,6 +1520,7 @@ class KL8Analyzer:
             pool_result = self.build_pool_by_strategy(strategy, pool_size=internal_pool_size)
             pool_top = pool_result.get('selected', [])[:20]
             selection_candidates = pool_result.get('candidates', [])[:internal_pool_size]
+            select_candidate_rankings[s_key] = selection_candidates
             pool_candidates = selection_candidates[:20]
             all_candidate_pools[s_key] = {
                 'top20': pool_top,
@@ -1384,10 +1605,89 @@ class KL8Analyzer:
 
         # 复式玩法（v9.2: 也按自己的策略独立验证）
         for fushi_key, fushi_cfg in FUSHI_CONFIG.items():
-            strategy = _strategies_mod.resolve_play_strategy(fushi_key)
             numbers_field = fushi_cfg['numbers_field']
             pool_size = fushi_cfg['pool_size']
             base_pick = fushi_cfg['base_pick']
+
+            # 选5复式7码不是一套独立猜号策略。它必须完整保留选6主推，
+            # 并从选6的同一候选排名中取第一个未入选号码作为第7个号。
+            if fushi_key == 'fu_shi_7':
+                select6_result = results.get('select_6', {})
+                select6_numbers = select6_result.get('numbers', [])
+                select6_candidates = select_candidate_rankings.get('select_6', [])
+                core_numbers, supplemental_number = _fushi7_from_select6(
+                    select6_numbers,
+                    select6_candidates,
+                )
+                linked_strategy = dict(resolved_strategies.get('select_6', {}))
+                linked_strategy['ranking_source'] = 'select_6'
+                linked_strategy['linked_play_type'] = 'select_6'
+                resolved_strategies[fushi_key] = linked_strategy
+
+                all_candidate_pools[fushi_key] = {
+                    f'top{pool_size}': core_numbers,
+                    'core_numbers': core_numbers,
+                    'candidates': select6_candidates[:20],
+                    'strategy_id': select6_result.get('strategy_id', ''),
+                    'ranking_source': 'select_6',
+                }
+
+                if len(core_numbers) != pool_size:
+                    results[fushi_key] = {
+                        numbers_field: [],
+                        'core_numbers': [],
+                        'select_6_numbers': select6_numbers,
+                        'supplemental_number': None,
+                        'ranking_source': 'select_6',
+                        'total_combinations': 0,
+                        'combinations': [],
+                        'combo_pick': base_pick,
+                        'pool_size': pool_size,
+                        'desc': fushi_cfg['desc'],
+                        'status': 'verification_pending',
+                        'prediction_mode': select6_result.get(
+                            'prediction_mode', 'not_verified'
+                        ),
+                        'is_validated': select6_result.get('is_validated', False),
+                        'warning': '选6主推或候选排名不完整，暂不输出7码复式。',
+                    }
+                    continue
+
+                combo_list = [
+                    sorted(combo)
+                    for combo in combinations(core_numbers, base_pick)
+                ]
+                results[fushi_key] = {
+                    numbers_field: core_numbers,
+                    'core_numbers': core_numbers,
+                    'select_6_numbers': sorted(select6_numbers),
+                    'supplemental_number': supplemental_number,
+                    'ranking_source': 'select_6',
+                    'shape_profile': _shape_profile(
+                        core_numbers,
+                        self.statistics.get('last_numbers', set()),
+                    ),
+                    'prize_hit_thresholds': _prize_tier_thresholds(fushi_key),
+                    'hit_rate_priority_thresholds': _hit_rate_priority_thresholds(
+                        fushi_key
+                    ),
+                    'total_combinations': len(combo_list),
+                    'combinations': combo_list,
+                    'combo_pick': base_pick,
+                    'pool_size': pool_size,
+                    'desc': fushi_cfg['desc'],
+                    'strategy_id': select6_result.get('strategy_id', ''),
+                    'prediction_mode': select6_result.get('prediction_mode', ''),
+                    'is_validated': select6_result.get('is_validated', False),
+                    'baseline_type': select6_result.get('baseline_type', ''),
+                    'final_selection_mode': select6_result.get(
+                        'final_selection_mode', ''
+                    ),
+                    'warning': select6_result.get('warning', ''),
+                }
+                continue
+
+            strategy = _strategies_mod.resolve_play_strategy(fushi_key)
 
             # v9.2: _cfg.VERIFY_ONLY_MODE — 没有已验证策略时不输出号码
             if strategy is None:
@@ -1595,13 +1895,15 @@ class KL8Analyzer:
             results['snapshot_file'] = snapshot_name
             source_snapshot_id = Path(snapshot_name).stem.replace('snapshot_', '', 1)
             select6_numbers = results.get('select_6', {}).get('numbers', [])
+            select6_chain = None
             if len(select6_numbers) == 6:
-                results['select_6_recalculation_chain'] = self.generate_exclude_recalculation_chain(
+                select6_chain = self.generate_exclude_recalculation_chain(
                     'select_6',
                     select6_numbers,
                     source_snapshot_id=source_snapshot_id,
                     source_version=KL8_PREDICTOR_VERSION,
                 )
+                results['select_6_recalculation_chain'] = select6_chain
 
             # 选5复式7码与选6使用相同的“第0轮主推 → 累计杀号重算”记录模式。
             # 重算记录绑定本次正式快照，预测记录接口会按 source_snapshot_id
@@ -1610,12 +1912,18 @@ class KL8Analyzer:
                 results.get('fu_shi_7', {}).get('top7_numbers')
                 or results.get('fu_shi_7', {}).get('core_numbers', [])
             )
-            if len(fushi7_numbers) == FUSHI_CONFIG['fu_shi_7']['pool_size']:
-                results['fu_shi_7_recalculation_chain'] = self.generate_exclude_recalculation_chain(
-                    'fu_shi_7',
-                    fushi7_numbers,
-                    source_snapshot_id=source_snapshot_id,
-                    source_version=KL8_PREDICTOR_VERSION,
+            if (
+                len(fushi7_numbers) == FUSHI_CONFIG['fu_shi_7']['pool_size']
+                and isinstance(select6_chain, dict)
+                and not select6_chain.get('error')
+            ):
+                results['fu_shi_7_recalculation_chain'] = (
+                    self.generate_fushi7_recalculation_chain_from_select6(
+                        select6_chain,
+                        fushi7_numbers,
+                        source_snapshot_id=source_snapshot_id,
+                        source_version=KL8_PREDICTOR_VERSION,
+                    )
                 )
 
         return results
