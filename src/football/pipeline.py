@@ -26,7 +26,7 @@ from . import fetching as _fetching_mod
 from ..domain.sports.football.analysis_result import build_analysis_result
 from ..domain.sports.football.market_anchoring import anchor_candidates_to_market
 from .config import (
-    ACTIONABLE_1X2_MIN_MARGIN, ACTIONABLE_1X2_MIN_PROBABILITY, AVG_LEAGUE_GOAL, BAYESIAN_CALIBRATION_AVAILABLE, CACHE_AVAILABLE, DYNAMIC_ELO_AVAILABLE, DYNAMIC_WEIGHTS_AVAILABLE, FOOTBALL_PREDICTION_LOGIC_VERSION, MAX_GOALS, SIMILAR_MARKET_AVAILABLE, STEAM_MOVE_AVAILABLE, calibrate_predictions, get_cache, get_calibrator, get_dynamic_weights, set_cache, similar_market_match, steam_move_detector,
+    ACTIONABLE_1X2_MIN_MARGIN, ACTIONABLE_1X2_MIN_PROBABILITY, AVG_LEAGUE_GOAL, BAYESIAN_CALIBRATION_AVAILABLE, CACHE_AVAILABLE, DYNAMIC_ELO_AVAILABLE, DYNAMIC_WEIGHTS_AVAILABLE, FOOTBALL_PREDICTION_LOGIC_VERSION, LOTTERY_OFFICIAL_ODDS_WEIGHT, MAX_GOALS, SIMILAR_MARKET_AVAILABLE, STEAM_MOVE_AVAILABLE, calibrate_predictions, get_cache, get_calibrator, get_dynamic_weights, set_cache, similar_market_match, steam_move_detector,
 )
 from .fetching import (
     clear_fetch_cache,
@@ -117,12 +117,17 @@ def analysis_cache_key(match: Dict) -> str:
 
 
 def _lottery_only_market_inputs(match: Dict):
-    """返回官方竞彩单源模型使用的 (胜, 平, 负, 中性大小球线)。"""
+    """融合竞彩网与 HKJC，返回 (胜, 平, 负, 大小球线)。"""
     spf = match.get('lottery_spf_odds') or {}
     if spf:
-        home_odd = float(spf.get('胜') or 2.50)
-        draw_odd = float(spf.get('平') or 3.20)
-        away_odd = float(spf.get('负') or 2.80)
+        inverse = [
+            1.0 / float(spf.get('胜') or 2.50),
+            1.0 / float(spf.get('平') or 3.20),
+            1.0 / float(spf.get('负') or 2.80),
+        ]
+        total_inverse = sum(inverse) or 1.0
+        probabilities = [value / total_inverse for value in inverse]
+        hkjc_weight = max(0.0, min(0.50, 1.0 - LOTTERY_OFFICIAL_ODDS_WEIGHT))
     else:
         rqspf = match.get('lottery_rqspf_odds') or {}
         rq_odds = [
@@ -139,11 +144,28 @@ def _lottery_only_market_inputs(match: Dict):
         pseudo_draw = max(0.035, min(0.28, 0.27 * math.exp(-0.72 * abs(expected_goal_diff))))
         pseudo_home = (1.0 - pseudo_draw) / (1.0 + math.exp(-1.45 * expected_goal_diff))
         pseudo_away = max(0.01, 1.0 - pseudo_draw - pseudo_home)
-        home_odd = 1.0 / max(pseudo_home, 0.01)
-        draw_odd = 1.0 / max(pseudo_draw, 0.01)
-        away_odd = 1.0 / max(pseudo_away, 0.01)
+        probabilities = [pseudo_home, pseudo_draw, pseudo_away]
+        # 普通胜平负未开售时，HKJC 的 HAD 比从整数让球反推更直接。
+        hkjc_weight = 0.58
+
+    hkjc_had = match.get('hkjc_had_odds') or {}
+    if all(hkjc_had.get(key) for key in ('胜', '平', '负')):
+        hkjc_inverse = [1.0 / float(hkjc_had[key]) for key in ('胜', '平', '负')]
+        hkjc_total = sum(hkjc_inverse) or 1.0
+        hkjc_probabilities = [value / hkjc_total for value in hkjc_inverse]
+        probabilities = [
+            (1.0 - hkjc_weight) * base + hkjc_weight * external
+            for base, external in zip(probabilities, hkjc_probabilities)
+        ]
+
+    home_odd, draw_odd, away_odd = [
+        1.0 / max(value, 0.01) for value in probabilities
+    ]
     handicap_size = abs(parse_lottery_handicap(match.get('lottery_handicap')) or 0.0)
-    neutral_total = 2.5 + min(1.2, handicap_size * 0.35)
+    hkjc_total = match.get('total_current') or {}
+    neutral_total = float(
+        hkjc_total.get('line') or (2.5 + min(1.2, handicap_size * 0.35))
+    )
     return home_odd, draw_odd, away_odd, neutral_total
 
 
@@ -169,6 +191,33 @@ def _is_lottery_cache_current(result: Dict, match: Dict) -> bool:
     expected_handicap = parse_lottery_handicap(match.get('lottery_handicap'))
     cached_handicap = parse_lottery_handicap((cached.get('handicap') or {}).get('handicap'))
     return expected_handicap == cached_handicap
+
+
+def _is_hkjc_cache_current(result: Dict, match: Dict) -> bool:
+    """HKJC 主盘变化后使旧分析失效，刷新时才能真正吃到新盘口。"""
+    if not match.get('hkjc_id'):
+        return True
+    cached_asian = result.get('asian') or {}
+    cached_total = result.get('total') or {}
+    if bool(cached_asian.get('source_matched')) != bool(match.get('asian_offer_matched')):
+        return False
+    if bool(cached_total.get('source_matched')) != bool(match.get('total_offer_matched')):
+        return False
+    expected_update = str(match.get('hkjc_updated_at') or '')
+    cached_update = str(
+        cached_asian.get('updated_at') or cached_total.get('updated_at') or ''
+    )
+    if expected_update and expected_update != cached_update:
+        return False
+    current_asian = match.get('asian_current') or {}
+    if current_asian and float(cached_asian.get('handicap', 99)) != float(
+            current_asian.get('handicap', 98)):
+        return False
+    current_total = match.get('total_current') or {}
+    if current_total and float(cached_total.get('close_line', 99)) != float(
+            current_total.get('line', 98)):
+        return False
+    return True
 
 
 def build_match_analysis(result):
@@ -455,6 +504,12 @@ def _analyze_match_impl(match, force_refresh=False):
                 home, away, match.get('lottery_primary_market'), match.get('lottery_handicap'),
             )
             cached_result = None
+        if cached_result is not None and not _is_hkjc_cache_current(cached_result, match):
+            log.info(
+                'cached HKJC market stale, recomputing %s vs %s: updated_at=%s',
+                home, away, match.get('hkjc_updated_at'),
+            )
+            cached_result = None
         if cached_result is not None:
             log.debug("使用缓存的比赛分析结果: %s vs %s", home, away)
             # 即使使用缓存，也要确保预测记录被保存
@@ -541,24 +596,58 @@ def _analyze_match_impl(match, force_refresh=False):
         # 让球后的三项概率反推未让球强弱。缺少商业亚盘/大小球时仍可稳定
         # 生成低置信分析，不再因为 500 页面被风控而整场失败。
         home_odd, draw_odd, away_odd, neutral_total = _lottery_only_market_inputs(match)
-        asian_raw = {
-            'open': {'handicap': 0.0, 'home_odds': 1.0, 'away_odds': 1.0},
-            'close': {'handicap': 0.0, 'home_odds': 1.0, 'away_odds': 1.0},
-        }
+        hkjc_asian = match.get('asian_current') or {}
+        if match.get('asian_offer_matched') and hkjc_asian:
+            asian_current = {
+                'handicap': float(hkjc_asian['handicap']),
+                'home_odds': float(hkjc_asian['home_odds']),
+                'away_odds': float(hkjc_asian['away_odds']),
+            }
+            asian_raw = {'open': dict(asian_current), 'close': dict(asian_current)}
+        else:
+            asian_raw = {
+                'open': {'handicap': 0.0, 'home_odds': 1.0, 'away_odds': 1.0},
+                'close': {'handicap': 0.0, 'home_odds': 1.0, 'away_odds': 1.0},
+            }
         euro_raw = {
             'open': {'home': home_odd, 'draw': draw_odd, 'away': away_odd},
             'close': {'home': home_odd, 'draw': draw_odd, 'away': away_odd},
             'series': [],
         }
-        total_raw = {
-            'open': {'line': neutral_total, 'over_odds': 1.0, 'under_odds': 1.0},
-            'close': {'line': neutral_total, 'over_odds': 1.0, 'under_odds': 1.0},
-        }
+        hkjc_total = match.get('total_current') or {}
+        if match.get('total_offer_matched') and hkjc_total:
+            total_current = {
+                'line': float(hkjc_total['line']),
+                'over_odds': float(hkjc_total['over_odds']),
+                'under_odds': float(hkjc_total['under_odds']),
+            }
+            total_raw = {'open': dict(total_current), 'close': dict(total_current)}
+        else:
+            total_raw = {
+                'open': {'line': neutral_total, 'over_odds': 1.0, 'under_odds': 1.0},
+                'close': {'line': neutral_total, 'over_odds': 1.0, 'under_odds': 1.0},
+            }
         yazhi_raw = asian_raw
         daxiao_raw = total_raw
         asian = analyze_asian(asian_raw)
         euro = analyze_euro(euro_raw)
         total = analyze_total(total_raw)
+        asian.update({
+            'source': 'hkjc' if match.get('asian_offer_matched') else 'model_proxy',
+            'source_matched': bool(match.get('asian_offer_matched')),
+            'updated_at': match.get('hkjc_updated_at'),
+            'history_available': False,
+        })
+        total.update({
+            'source': 'hkjc' if match.get('total_offer_matched') else 'model_proxy',
+            'source_matched': bool(match.get('total_offer_matched')),
+            'updated_at': match.get('hkjc_updated_at'),
+            'history_available': False,
+        })
+        euro.update({
+            'source': 'sporttery+hkjc' if match.get('hkjc_had_odds') else 'sporttery',
+            'hkjc_odds': match.get('hkjc_had_odds'),
+        })
         team = None
         log.info('比赛 %s 使用官方竞彩独立模型 source=%s', mid,
                  match.get('schedule_source'))
@@ -704,13 +793,30 @@ def _analyze_match_impl(match, force_refresh=False):
     confidence = compute_prediction_confidence(asian, euro, total, team)
     if lottery_only:
         source_label = '中国竞彩网' if match.get('schedule_source') == 'sporttery' else '中国足彩网'
-        confidence = {
-            'score': 0.44,
-            'level': 'low',
-            'label': f'{source_label}单源·低置信',
-            'notes': ['500盘口不可用', '缺少连续大小球与亚盘'],
-            'recommend_count': 1,
-        }
+        if match.get('asian_offer_matched') and match.get('total_offer_matched'):
+            confidence = {
+                'score': 0.60,
+                'level': 'medium',
+                'label': f'{source_label}+香港马会·中等置信',
+                'notes': ['已融合HKJC亚洲让球与大小球主盘', '暂无跨时点盘口变化'],
+                'recommend_count': 2,
+            }
+        elif match.get('hkjc_id'):
+            confidence = {
+                'score': 0.52,
+                'level': 'low',
+                'label': f'{source_label}+香港马会·有限增强',
+                'notes': ['已融合可用的HKJC市场', '该场未提供完整亚洲让球主盘'],
+                'recommend_count': 1,
+            }
+        else:
+            confidence = {
+                'score': 0.44,
+                'level': 'low',
+                'label': f'{source_label}单源·低置信',
+                'notes': ['外部亚洲盘口不可用', '缺少连续大小球与亚盘'],
+                'recommend_count': 1,
+            }
 
     # 新增：机器学习模型预测
     ml_result = None

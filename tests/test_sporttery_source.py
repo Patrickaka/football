@@ -62,6 +62,24 @@ class SportteryParserTests(unittest.TestCase):
 
 
 class SportteryPriorityTests(unittest.TestCase):
+    def test_hkjc_failure_does_not_remove_official_matches(self):
+        payload = {
+            'success': True, 'errorCode': 0,
+            'value': {'matchInfoList': [{'subMatchList': [{
+                'matchId': 1, 'matchNumStr': '周二001',
+                'matchDate': '2026-09-02', 'matchTime': '20:00:00',
+                'leagueAbbName': '测试', 'homeTeamAbbName': '主队',
+                'awayTeamAbbName': '客队', 'poolList': [_market('HAD')],
+                'had': {'h': '2.00', 'd': '3.20', 'a': '3.50'},
+            }]}]},
+        }
+        with patch.object(fb_fetching, 'fetch_json', return_value=payload), \
+             patch.object(fb_fetching, 'fetch_json_post', side_effect=OSError('HKJC down')):
+            result = fb_fetching._sporttery_schedule()
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]['match_id'], 'sporttery_1')
+        self.assertNotIn('hkjc_id', result[0])
+
     def test_official_schedule_is_used_before_500(self):
         matches = [{
             'match_id': 'sporttery_1', 'home': '主队', 'away': '客队',

@@ -226,6 +226,52 @@ def fetch_json(url, referer=None):
     return json.loads(fetch(url, encoding='utf-8', referer=referer))
 
 
+def fetch_json_post(url, payload, referer=None):
+    """POST JSON，复用足球抓取层的 TTL、并发去重、限速和退避。"""
+    body = json.dumps(
+        payload, ensure_ascii=True, sort_keys=True, separators=(',', ':')
+    ).encode('utf-8')
+    cache_key = (url, 'POST', body)
+    cached = _fetch_cache_get(cache_key)
+    if cached is not None:
+        return cached
+    with _fetch_url_lock(cache_key):
+        cached = _fetch_cache_get(cache_key)
+        if cached is not None:
+            return cached
+        last_error = None
+        with _fetch_semaphore:
+            for attempt in range(FETCH_RETRY_ATTEMPTS):
+                _await_fetch_throttle()
+                _await_rate_slot()
+                try:
+                    headers = {
+                        **HEADERS,
+                        'Accept': 'application/json',
+                        'Content-Type': 'application/json',
+                    }
+                    if referer:
+                        headers['Referer'] = referer
+                    request = urllib.request.Request(url, data=body, headers=headers)
+                    with urllib.request.urlopen(request, timeout=20) as response:
+                        raw = response.read()
+                    if raw[:2] == b'\x1f\x8b':
+                        raw = gzip.decompress(raw)
+                    result = json.loads(raw.decode('utf-8'))
+                    _fetch_cache_set(cache_key, result)
+                    return result
+                except urllib.error.HTTPError as exc:
+                    if exc.code not in RATE_LIMIT_STATUSES:
+                        raise
+                    last_error = exc
+                    backoff = min(
+                        FETCH_THROTTLE_SECONDS * (attempt + 1) + random.uniform(0, 0.3),
+                        FETCH_THROTTLE_CEILING,
+                    )
+                    _enter_fetch_throttle(backoff)
+        raise last_error or OSError('POST JSON upstream failed')
+
+
 def _fetch_match_list_remote():
     """抓取今日比赛列表，返回 [{home, away, match_id, league, time}, ...]"""
     log.info('获取比赛列表')
@@ -418,7 +464,7 @@ def get_match_list_status():
 
 
 def _sporttery_schedule():
-    """读取中国竞彩网公开计算器数据，作为无 Key 的生产主赛程。"""
+    """读取竞彩网主赛程，并以 HKJC 公开主盘口做无 Key 增强。"""
     from .sporttery import (
         SPORTTERY_CALCULATOR_URL,
         SPORTTERY_REFERER,
@@ -429,6 +475,28 @@ def _sporttery_schedule():
     matches = parse_sporttery_calculator(payload)
     if not matches:
         raise ValueError('sporttery returned no HAD/HHAD matches')
+    try:
+        from .hkjc_markets import (
+            HKJC_GRAPHQL_URL,
+            HKJC_REFERER,
+            enrich_with_hkjc_markets,
+            hkjc_request_payload,
+            parse_hkjc_matches,
+        )
+        hkjc_payload = fetch_json_post(
+            HKJC_GRAPHQL_URL, hkjc_request_payload(), referer=HKJC_REFERER
+        )
+        hkjc_matches = parse_hkjc_matches(hkjc_payload)
+        enrich_with_hkjc_markets(matches, hkjc_matches)
+        log.info(
+            'HKJC盘口增强: 匹配=%d, 亚盘=%d, 大小球=%d',
+            sum(1 for item in matches if item.get('hkjc_id')),
+            sum(1 for item in matches if item.get('asian_offer_matched')),
+            sum(1 for item in matches if item.get('total_offer_matched')),
+        )
+    except Exception as exc:
+        # 盘口增强失败不影响竞彩网稳定主赛程和官方玩法预测。
+        log.warning('HKJC盘口增强失败，保留竞彩网单源模式: %s', exc)
     return matches
 
 

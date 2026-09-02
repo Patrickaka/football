@@ -2485,7 +2485,7 @@
 <div class="wrap">
   <header>
     <h1 id="page-title">⚽ 足球比分预测</h1>
-    <p id="page-desc">赛程与固定奖金：中国竞彩网 · 500/足彩网备用 · 多模型融合</p>
+    <p id="page-desc">竞彩固定奖金：中国竞彩网 · 亚洲盘：香港马会 · 多源容错融合</p>
   </header>
   <div class="tabs" role="tablist">
     <button type="button" class="tab active" data-tab="football" role="tab">⚽ 足球预测</button>
@@ -2564,7 +2564,7 @@ function pad2(value) {
 const TAB_META = {
   football: {
     title: '⚽ 足球比分预测',
-    desc: '赛程与固定奖金：中国竞彩网 · 500/足彩网备用 · 多模型融合',
+    desc: '竞彩固定奖金：中国竞彩网 · 亚洲盘：香港马会 · 多源容错融合',
     disclaimer: '⚠ 以上分析仅为概率统计参考，体育赛事结果受多种不确定因素影响，不构成任何投注建议。请理性对待！',
   },
   beidan: {
@@ -5376,7 +5376,15 @@ function renderResult(r) {
   html += renderCalibrationEffect(r.calibration_effect);
   html += renderSimilarMarketDetail(r.similar_market_detail);
 
+  if (a.source === 'model_proxy' || a.source_matched === false) {
+    html += `<div class="card"><h3>🀄 亚盘分析</h3>
+      <div class="row"><span class="k">数据源</span><span class="v">香港马会 HDC</span></div>
+      <div class="note" style="color:var(--muted)">该场当前未提供亚洲让球主盘；内部模型代理值不作为真实盘口展示。</div>
+    </div>`;
+  } else {
   html += `<div class="card"><h3>🀄 亚盘分析</h3>
+    <div class="row"><span class="k">数据源</span><span class="v">${a.source === 'hkjc' ? '香港马会 HDC（当前主盘）' : esc(a.source || '盘口源')}</span></div>
+    ${a.close_water ? `<div class="row"><span class="k">主盘赔率</span><span class="v">主 ${Number(a.close_water.home).toFixed(2)} / 客 ${Number(a.close_water.away).toFixed(2)}</span></div>` : ''}
     <div class="row"><span class="k">终盘让球</span><span class="v">${a.handicap != null ? (a.handicap > 0 ? '+' : '') + a.handicap : '-'}</span></div>
     <div class="row"><span class="k">开盘让球</span><span class="v">${a.open_handicap != null ? (a.open_handicap > 0 ? '+' : '') + a.open_handicap : '-'}</span></div>
     <div class="row"><span class="k">让球变化</span><span class="v" style="color:${a.handicap_change != null && a.handicap_change > 0 ? 'var(--accent2)' : a.handicap_change != null && a.handicap_change < 0 ? 'var(--away)' : 'var(--muted)'}">${a.handicap_change != null && a.handicap_change > 0 ? '↑' : a.handicap_change != null && a.handicap_change < 0 ? '↓' : '→'} ${a.handicap_change != null ? (a.handicap_change > 0 ? '+' : '') + a.handicap_change.toFixed(2) : '-'}</span></div>
@@ -5388,6 +5396,7 @@ function renderResult(r) {
     <div class="row"><span class="k">终盘判断</span><span class="v">${esc(a.favor_desc || '')}，${esc(a.diff_desc || '')}</span></div>
     ${a.lambda_adjust && a.lambda_adjust.home != null && a.lambda_adjust.away != null && (a.lambda_adjust.home != 0 || a.lambda_adjust.away != 0) ? `<div class="row"><span class="k">λ 调整</span><span class="v">主队 ${a.lambda_adjust.home > 0 ? '+' : ''}${a.lambda_adjust.home.toFixed(3)} / 客队 ${a.lambda_adjust.away > 0 ? '+' : ''}${a.lambda_adjust.away.toFixed(3)}</span></div>` : ''}
     ${a.implied_supremacy != null ? `<div class="row"><span class="k">反推净胜球</span><span class="v">${a.implied_supremacy >= 0 ? '+' : ''}${a.implied_supremacy.toFixed(2)}（非盘口 ${a.handicap}）</span></div>` : ''}</div>`;
+  }
 
   // 盘口变化历史
   const mc = r.market_change;

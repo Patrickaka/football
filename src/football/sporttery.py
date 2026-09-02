@@ -90,6 +90,14 @@ def parse_sporttery_calculator(payload: Dict) -> List[Dict]:
             converted.append({
                 'home': home,
                 'away': away,
+                'home_full': str(raw.get('homeTeamAllName') or home).strip(),
+                'away_full': str(raw.get('awayTeamAllName') or away).strip(),
+                'home_code': str(
+                    raw.get('homeTeamCode') or raw.get('homeTeamAbbEnName') or ''
+                ).strip(),
+                'away_code': str(
+                    raw.get('awayTeamCode') or raw.get('awayTeamAbbEnName') or ''
+                ).strip(),
                 # 与 500 分析 ID 分域，避免把竞彩网 ID 错送给 500 详情页。
                 'match_id': f'sporttery_{sporttery_id}',
                 'sporttery_id': sporttery_id,
