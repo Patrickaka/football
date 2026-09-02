@@ -102,9 +102,10 @@ class ValidationErrors(unittest.TestCase):
 class Routing(unittest.TestCase):
 
     EXPECTED = {'/api/beidan', '/api/beidan/matches',
-                '/api/beidan/value', '/api/beidan/history'}
+                '/api/beidan/value', '/api/beidan/history',
+                '/api/beidan/records', '/api/beidan/sync'}
 
-    def test_all_four_old_routes_exist(self):
+    def test_all_beidan_routes_exist(self):
         """清单取自 OpenAPI schema——`app.routes` 看不到 `include_router`
         进来的路由，那样的断言会永远通过。
         """

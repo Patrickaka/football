@@ -2551,6 +2551,7 @@ let groupMode = 'league';
 let activeTab = 'football';
 let predictionsPage = 1;
 const PREDICTIONS_PAGE_SIZE = 20;
+let predictionRecordType = 'football';
 let predictionDateFilter = '';
 let predictionCalendarMonth = '';
 let predictionAvailableDates = [];
@@ -4752,6 +4753,7 @@ function renderBeidan(result) {
         <span class="toolbar-label">日期</span>
         <span class="date-value">${esc(result.date)}</span>
       </div>
+      <button onclick="openBeidanPredictionRecords()" class="tb-refresh">📋 预测记录</button>
       <button onclick="loadBeidan(true)" class="tb-refresh">🔄 刷新</button>
     </div>
     <div class="toolbar-row">
@@ -7636,6 +7638,8 @@ function startSyncStampTimer() {
 }
 
 function predictionRecordDateKey(record) {
+  const directDate = String(record?.date || '').trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(directDate)) return directDate;
   const matchTime = String(record?.match_time || '').trim();
   const fullDate = matchTime.match(/^(\d{4}-\d{2}-\d{2})/);
   if (fullDate) return fullDate[1];
@@ -7877,11 +7881,140 @@ function renderFootballDiagnostics(diagnostics) {
   </div>`;
 }
 
+function renderPredictionRecordTypeTabs() {
+  return `<div class="card" style="display:flex;gap:8px;align-items:center;padding:8px;margin-bottom:12px">
+    <button type="button" class="tb-btn ${predictionRecordType === 'football' ? 'tb-active' : ''}" onclick="setPredictionRecordType('football')">⚽ 竞彩足球记录</button>
+    <button type="button" class="tb-btn ${predictionRecordType === 'beidan' ? 'tb-active' : ''}" onclick="setPredictionRecordType('beidan')">🏈 北单记录</button>
+  </div>`;
+}
+
+function setPredictionRecordType(type) {
+  const next = type === 'beidan' ? 'beidan' : 'football';
+  if (predictionRecordType === next && activeTab === 'predictions') return;
+  predictionRecordType = next;
+  predictionDateFilter = '';
+  predictionCalendarMonth = '';
+  predictionsPage = 1;
+  loadPredictions();
+}
+
+function openBeidanPredictionRecords() {
+  predictionRecordType = 'beidan';
+  predictionDateFilter = '';
+  predictionCalendarMonth = '';
+  predictionsPage = 1;
+  switchTab('predictions');
+}
+
+function renderPredictionDateToolbar(records) {
+  return `<div class="prediction-date-toolbar">
+    <span class="prediction-date-label">比赛日期</span>
+    <div class="prediction-calendar-wrap">
+      <button id="prediction-date-trigger" type="button" class="prediction-date-trigger" onclick="togglePredictionCalendar(event)" aria-haspopup="dialog" aria-expanded="false">
+        <span>${predictionDateFilter ? esc(predictionDateFilter) : '年 / 月 / 日'}</span><span class="prediction-date-trigger-icon" aria-hidden="true">▣</span>
+      </button>
+      <div id="prediction-calendar-popover" class="prediction-calendar-popover" role="dialog" aria-label="选择比赛日期" onclick="event.stopPropagation()" hidden></div>
+    </div>
+    <button type="button" class="prediction-date-action" onclick="setPredictionDateToday()">今天</button>
+    ${predictionDateFilter ? `<button type="button" class="prediction-date-action" onclick="setPredictionDateFilter('')">查看全部</button>` : ''}
+    <span class="prediction-date-result">${predictionDateFilter ? `${esc(predictionDateFilter)} · ${records.length} 场` : `全部日期 · ${records.length} 场`}</span>
+  </div>`;
+}
+
+function preparePredictionCalendar(records) {
+  const dates = [...new Set(records.map(predictionRecordDateKey).filter(Boolean))].sort((a, b) => b.localeCompare(a));
+  predictionAvailableDates = dates;
+  predictionDateCounts = records.reduce((counts, record) => {
+    const date = predictionRecordDateKey(record);
+    if (date) counts[date] = (counts[date] || 0) + 1;
+    return counts;
+  }, {});
+  const anchor = predictionDateFilter || dates[0] || new Date().toISOString().slice(0, 10);
+  if (!predictionCalendarMonth || predictionDateFilter) predictionCalendarMonth = anchor.slice(0, 7);
+}
+
+function beidanMarketSummary(section, labels = {}) {
+  const ranked = Object.entries(section?.probabilities || {}).filter(([, value]) => Number.isFinite(Number(value))).sort((a, b) => Number(b[1]) - Number(a[1]));
+  return {
+    available: Boolean(section && (ranked.length || section.prediction)),
+    pick: labels[section?.prediction] || section?.prediction || (ranked[0] ? labels[ranked[0][0]] || ranked[0][0] : ''),
+    detail: ranked.map(([key, value]) => `${esc(labels[key] || key)} ${(Number(value) * 100).toFixed(1)}%`).join(' · '),
+  };
+}
+
+function beidanHitMark(value) {
+  return value === true ? '✅' : value === false ? '❌' : '';
+}
+
+async function loadBeidanPredictionRecords() {
+  const app = document.getElementById('app-predictions');
+  const data = await fetchJson('/api/beidan/records');
+  if (data.error) throw new Error(data.error);
+  const allRecords = data.result?.records || [];
+  const sync = data.result?.sync || {};
+  preparePredictionCalendar(allRecords);
+  const records = predictionDateFilter ? allRecords.filter(record => predictionRecordDateKey(record) === predictionDateFilter) : allRecords;
+  predictionExportData = {
+    schema_version: 'beidan-prediction-export-v1', exported_at: new Date().toISOString(),
+    record_count: allRecords.length, settled_count: allRecords.filter(record => record.settled).length,
+    sync_status: sync, records: allRecords,
+  };
+
+  let html = renderPredictionRecordTypeTabs();
+  html += `<div class="card model-health"><h3>🔄 北单自动赛果同步</h3><div class="status-grid">
+    <div class="status-item"><span class="status-dot">✅</span><div><div class="status-name">已回填</div><div class="status-desc">${sync.settled || 0} 场</div></div></div>
+    <div class="status-item"><span class="status-dot">⏳</span><div><div class="status-name">待同步</div><div class="status-desc">${sync.pending_sync || 0} 场</div></div></div>
+    <div class="status-item"><span class="status-dot">↻</span><div><div class="status-name">重试中</div><div class="status-desc">${sync.retry || 0} 场</div></div></div>
+    <div class="status-item"><span class="status-dot">${sync.failed ? '⚠️' : '✅'}</span><div><div class="status-name">同步失败</div><div class="status-desc">${sync.failed || 0} 场</div></div></div>
+  </div></div>`;
+  html += `<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px">
+    <button type="button" onclick="exportPredictionRecords()" style="flex:1;min-width:150px;padding:10px;background:var(--accent);color:#fff;border:1px solid var(--accent);border-radius:8px;font-size:14px;cursor:pointer">⬇️ 一键导出 JSON</button>
+    <button type="button" onclick="triggerBeidanSync(event)" style="flex:1;min-width:150px;padding:10px;background:var(--card2);color:var(--text);border:1px solid var(--line);border-radius:8px;font-size:14px;cursor:pointer">🔁 立即同步一次</button>
+  </div>`;
+  html += renderPredictionDateToolbar(records);
+  html += `<div class="section-title">📋 北单预测记录（共 ${records.length} 条）</div>`;
+
+  const totalPages = Math.max(1, Math.ceil(records.length / PREDICTIONS_PAGE_SIZE));
+  predictionsPage = Math.max(1, Math.min(predictionsPage, totalPages));
+  const pageStart = (predictionsPage - 1) * PREDICTIONS_PAGE_SIZE;
+  const pageRecords = records.slice(pageStart, pageStart + PREDICTIONS_PAGE_SIZE);
+  const pageEnd = pageStart + pageRecords.length;
+  if (records.length > PREDICTIONS_PAGE_SIZE) html += renderPredictionsPager(records.length, predictionsPage, totalPages, pageStart + 1, pageEnd);
+  if (!records.length) {
+    html += '<div class="card"><div class="status" style="padding:20px">暂无北单预测记录。打开北单页面后，系统会自动保存赛前预测。</div></div>';
+  } else {
+    const statusMap = { pending: ['等待自动同步', 'var(--muted)'], ready: ['准备同步', 'var(--warn)'], synced: ['已回填', 'var(--accent2)'], retry: ['重试中', 'var(--warn)'], failed: ['同步失败', 'var(--away)'], ignored: ['已隐藏', 'var(--muted)'] };
+    pageRecords.forEach((record, idx) => {
+      const status = statusMap[record.sync_status] || statusMap.pending;
+      const spf = beidanMarketSummary(record.spf);
+      const rqspf = beidanMarketSummary(record.rqspf);
+      const zjq = beidanMarketSummary(record.zjq);
+      const handicap = String(record.handicap ?? '').replace(/[()（）]/g, '');
+      html += `<div class="card" style="${idx ? 'margin-top:8px' : ''}"><div style="display:flex;justify-content:space-between;align-items:center;gap:10px">
+        <div><div style="font-weight:600;font-size:15px">${record.match_num ? `<span style="display:inline-block;margin-right:7px;padding:2px 6px;border-radius:5px;background:rgba(68,147,248,.14);color:#93c5fd;font-size:12px">${esc(record.match_num)}</span>` : ''}${esc(record.home || '')} vs ${esc(record.away || '')}</div><div style="color:var(--muted);font-size:12px;margin-top:2px">${esc(record.league || '')} · ${esc(record.match_time || record.date || '')}</div></div>
+        <div style="color:${status[1]};font-size:13px;font-weight:500">${status[0]}</div></div>
+        <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--line);font-size:13px">
+          ${spf.available ? `<div><span style="color:var(--muted)">胜平负预测：</span><b>${esc(spf.pick)}</b>${spf.detail ? ` · ${spf.detail}` : ''} ${beidanHitMark(record.hit_spf)}</div>` : ''}
+          ${rqspf.available ? `<div style="margin-top:4px"><span style="color:var(--muted)">让球胜平负${handicap ? `（主队 ${esc(handicap)}）` : ''}预测：</span><b>${esc(rqspf.pick)}</b>${rqspf.detail ? ` · ${rqspf.detail}` : ''} ${beidanHitMark(record.hit_rqspf)}</div>` : ''}
+          ${zjq.available ? `<div style="margin-top:4px"><span style="color:var(--muted)">总进球预测：</span><b>${esc(zjq.pick)}</b>${zjq.detail ? ` · ${zjq.detail}` : ''} ${beidanHitMark(record.hit_zjq)}</div>` : ''}
+          ${record.settled ? `<div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:7px"><div><span style="color:var(--muted)">赛后比分：</span><b style="color:var(--accent2)">${esc(record.actual_score || '-')}</b></div><div><span style="color:var(--muted)">实际胜平负：</span>${esc(record.actual_spf || '-')}</div>${record.actual_rqspf ? `<div><span style="color:var(--muted)">实际让球赛果：</span>${esc(record.actual_rqspf)}</div>` : ''}${record.actual_zjq ? `<div><span style="color:var(--muted)">实际总进球：</span>${esc(record.actual_zjq)}</div>` : ''}</div>` : ''}
+          ${record.sync_status === 'failed' ? `<div style="margin-top:6px;color:var(--away)">失败原因：${esc(record.last_sync_error || '未找到赛果')}</div>` : ''}
+        </div></div>`;
+    });
+    if (records.length > PREDICTIONS_PAGE_SIZE) html += renderPredictionsPager(records.length, predictionsPage, totalPages, pageStart + 1, pageEnd);
+  }
+  app.innerHTML = html;
+}
+
 async function loadPredictions() {
   const app = document.getElementById('app-predictions');
   app.innerHTML = `<div class="status"><span class="spinner"></span>正在加载预测记录…</div>`;
   
   try {
+    if (predictionRecordType === 'beidan') {
+      await loadBeidanPredictionRecords();
+      return;
+    }
     // 预测记录是主数据；同步状态和诊断只是辅助卡片。辅助接口失败时也必须
     // 展示已保存记录，不能因为当前没有赛程或诊断暂不可用把历史一起隐藏。
     const optionalResult = async promise => {
@@ -7935,7 +8068,8 @@ async function loadPredictions() {
     const settledAt = sync.last_settled_at || '';
     const syncStamp = formatSyncStamp(settledAt);
     
-    let html = auxiliaryWarnings.length
+    let html = renderPredictionRecordTypeTabs();
+    html += auxiliaryWarnings.length
       ? `<div class="note" style="margin-bottom:12px">${auxiliaryWarnings.map(esc).join(' · ')}；以下预测记录仍可正常查看。</div>`
       : '';
 
@@ -8135,10 +8269,15 @@ async function loadPredictions() {
 
 async function exportPredictionRecords() {
   let payload;
+  if (predictionRecordType === 'beidan' && predictionExportData) {
+    payload = predictionExportData;
+  }
   try {
-    const data = await fetchJson('/api/predictions/export');
-    if (!data.result) throw new Error(data.error || '导出接口未返回数据');
-    payload = data.result;
+    if (!payload) {
+      const data = await fetchJson('/api/predictions/export');
+      if (!data.result) throw new Error(data.error || '导出接口未返回数据');
+      payload = data.result;
+    }
   } catch (error) {
     alert('导出失败：' + error.message);
     return;
@@ -8149,11 +8288,33 @@ async function exportPredictionRecords() {
   const link = document.createElement('a');
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   link.href = url;
-  link.download = `football-predictions-${stamp}.json`;
+  link.download = `${predictionRecordType === 'beidan' ? 'beidan' : 'football'}-predictions-${stamp}.json`;
   document.body.appendChild(link);
   link.click();
   link.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+async function triggerBeidanSync(clickEvent) {
+  const btn = clickEvent?.currentTarget;
+  const originalText = btn?.textContent || '';
+  if (btn) {
+    btn.textContent = '同步中...';
+    btn.disabled = true;
+  }
+  try {
+    const data = await fetchJson('/api/beidan/sync', { method: 'POST' });
+    if (!data.result) throw new Error(data.error || '未知错误');
+    alert(data.result.message || '北单同步完成');
+    loadPredictions();
+  } catch (error) {
+    alert('北单同步失败：' + error.message);
+  } finally {
+    if (btn) {
+      btn.textContent = originalText;
+      btn.disabled = false;
+    }
+  }
 }
 
 async function triggerSync() {

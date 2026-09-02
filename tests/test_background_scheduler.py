@@ -144,13 +144,15 @@ class Kl8RegistrationTests(_Base):
                          ['kl8_history_backfill', 'kl8_strategy_verification'])
 
     def test_all_periodic_tasks_fit_the_worker_budget(self):
-        """六个周期任务：kl8 三个 + 篮球采样 + 足球两个，每个长期占一个 worker。"""
+        """七个周期任务：kl8 三个 + 篮球 + 足球两个 + 北单回填。"""
         from src.football.result_sync import register_football_tasks
+        from src.beidan.settling import register_beidan_tasks
 
         self._register()
         background.submit_periodic('basketball_odds_tracking', lambda: None, 900)
         register_football_tasks(background.submit_periodic)
-        self.assertEqual(background.task_count(), 6)
+        register_beidan_tasks(background.submit_periodic)
+        self.assertEqual(background.task_count(), 7)
         self.assertLess(background.task_count(), background.MAX_WORKERS,
                         '周期任务占满 worker，一次性任务将永远排不上队')
 

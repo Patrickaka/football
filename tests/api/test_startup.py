@@ -62,8 +62,8 @@ class BackgroundTasks(unittest.TestCase):
         self.addCleanup(background.reset)
         background.reset()
 
-    def test_the_three_families_all_register(self):
-        """kl8、篮球采样、足球回填——**三族缺一都是静默降级**。"""
+    def test_the_four_families_all_register(self):
+        """kl8、篮球采样、足球与北单回填——**四族缺一都是静默降级**。"""
         startup.register_background_tasks()
         self.assertGreater(background.task_count(), 0)
         self.assertTrue(background.is_running())

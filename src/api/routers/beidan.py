@@ -51,3 +51,15 @@ async def value_bets(date: Optional[str] = None, source: str = 'zgzcw',
 async def history(limit: int = 200):
     """历史推荐汇总。"""
     return await run_blocking(service.beidan_history_payload, {'limit': [limit]})
+
+
+@router.get('/records')
+async def records():
+    """完整预测记录。"""
+    return await run_blocking(service.beidan_records_payload)
+
+
+@router.post('/sync')
+async def sync_results():
+    """手动触发赛果回填。"""
+    return await run_blocking(service.beidan_sync_payload)

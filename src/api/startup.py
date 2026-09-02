@@ -43,7 +43,7 @@ def run_startup_maintenance():
 
 
 def register_background_tasks():
-    """登记三族周期任务，登记完再统一启动调度器。
+    """登记四族周期任务，登记完再统一启动调度器。
 
     迁移前它们分散在三处（kl8 用 APScheduler、篮球采样自建调度器、
     另有裸线程），没有任何一个地方能回答「现在后台在跑什么」。
@@ -80,6 +80,13 @@ def register_background_tasks():
         register_football_tasks(background.submit_periodic)
     except Exception as exc:
         log.warning('登记足球后台任务失败: %s', exc)
+
+    try:
+        from src.beidan.settling import register_beidan_tasks
+
+        register_beidan_tasks(background.submit_periodic)
+    except Exception as exc:
+        log.warning('登记北单赛果回填任务失败: %s', exc)
 
     try:
         background.start()

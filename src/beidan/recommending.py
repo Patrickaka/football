@@ -123,9 +123,12 @@ def _compact_beidan_record(match, source, professional_snapshot=None):
         'home': match.get('home'),
         'away': match.get('away'),
         'handicap': match.get('handicap'),
+        'model_version': BEIDAN_VERSION,
         'created_at': datetime.now().isoformat(timespec='seconds'),
         'updated_at': datetime.now().isoformat(timespec='seconds'),
         'settled': False,
+        'sync_status': 'pending',
+        'sync_attempts': 0,
         'professional_snapshot': professional_snapshot,
         'spf': {
             'prediction': spf.get('prediction'),
@@ -175,12 +178,20 @@ def save_beidan_prediction_snapshot(result):
         compact = _compact_beidan_record(
             match, result.get('source'), professional_snapshot=professional_snapshot,
         )
+        previous = by_key.get(key, {})
+        if previous:
+            compact['created_at'] = previous.get('created_at') or compact['created_at']
+            for field in (
+                'sync_status', 'sync_attempts', 'last_sync_at', 'last_sync_error',
+                'next_sync_at', 'settled_at', 'actual_score', 'actual_spf',
+                'actual_rqspf', 'actual_zjq', 'hit_spf', 'hit_rqspf', 'hit_zjq',
+            ):
+                if field in previous:
+                    compact[field] = previous[field]
         if key in by_key and by_key[key].get('settled'):
             compact['settled'] = True
             compact['actual'] = by_key[key].get('actual')
             compact['settlement'] = by_key[key].get('settlement')
-            compact['created_at'] = by_key[key].get('created_at') or compact['created_at']
-        previous = by_key.get(key, {})
         layers = list(previous.get('market_layers') or [])
         snapshot = compact.pop('market_snapshot')
         signature = json.dumps(

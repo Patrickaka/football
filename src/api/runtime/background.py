@@ -21,13 +21,13 @@ from src.foundation.tasks import TaskScheduler
 log = logging.getLogger('api.runtime.background')
 
 # 每个周期任务会长期占住一个 worker，所以这个数必须大于周期任务总数，
-# 否则一次性任务永远排不上队。当前六个：kl8 三个 + 篮球采样一个
-# + 足球的赛后回填与时间分层扫描。加足球那两个之前这里是 6，正好等于任务数
+# 否则一次性任务永远排不上队。当前七个：kl8 三个 + 篮球采样一个
+# + 足球的赛后回填与时间分层扫描 + 北单赛果回填。加足球那两个之前这里是 6，正好等于任务数
 # ——`TaskScheduler.start()` 只会告警、不会拒绝，一次性任务从此排不上队。
 MAX_WORKERS = 8
 
 # 周期任务首轮之间错开多久。**这台机器上冻死过两次**，两次都紧跟在
-# `systemctl restart` 之后：重启把所有缓存清零，六个周期任务同时开跑，
+# `systemctl restart` 之后：重启把所有缓存清零，七个周期任务同时开跑，
 # 内存被吃穿到连 sshd 都 fork 不出来（云监控上 Available 归零、
 # 监控 agent 自己也断了上报）。
 #

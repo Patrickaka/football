@@ -128,3 +128,30 @@ def beidan_history_payload(params):
     except Exception as e:
         log.error('北单预测记录获取失败', exc_info=True)
         return {'error': f'北单预测记录获取失败: {str(e)}'}
+
+
+def beidan_records_payload():
+    """获取北单完整预测记录及自动回填状态。"""
+    try:
+        from src.beidan.settling import (
+            get_beidan_prediction_records, get_beidan_sync_status_summary,
+        )
+        records = get_beidan_prediction_records()
+        return {'result': {
+            'records': records,
+            'count': len(records),
+            'sync': get_beidan_sync_status_summary(records),
+        }}
+    except Exception as e:
+        log.error('北单完整预测记录获取失败', exc_info=True)
+        return {'error': f'北单预测记录获取失败: {str(e)}'}
+
+
+def beidan_sync_payload():
+    """手动触发一轮北单赛果回填。"""
+    try:
+        from src.beidan.settling import sync_beidan_results
+        return {'result': sync_beidan_results()}
+    except Exception as e:
+        log.error('北单赛果同步失败', exc_info=True)
+        return {'error': f'北单赛果同步失败: {str(e)}'}

@@ -48,6 +48,8 @@ from .schedules import (
 from .settling import (
     calculate_implied_probability, _actual_spf_from_record, _actual_zjq_from_record, _actual_bifen_from_record, _actual_rqspf_from_record,
     apply_beidan_history_calibration, _beidan_record_key, _load_beidan_history, _save_beidan_history,
+    get_beidan_prediction_records, get_beidan_sync_status_summary,
+    sync_beidan_results, register_beidan_tasks,
 )
 from .quality import (
     assess_recommendation_quality, UPSET_MED_FAV_MAX, UPSET_MED_GAP_MAX, UPSET_MED_MASS_MIN, UPSET_HIGH_FAV_MAX,
