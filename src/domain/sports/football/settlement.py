@@ -10,6 +10,7 @@
 """
 
 import hashlib
+import html as html_lib
 import json
 import logging
 import math
@@ -223,7 +224,17 @@ def _parse_live_row_final_score(row: str) -> Optional[str]:
 
 def _parse_live_row_score(row: str, home: str, away: str) -> Optional[str]:
     """从 live.500.com 单行比赛记录提取终场比分"""
-    if home not in row or away not in row:
+    if not str(home or '').strip() or not str(away or '').strip():
+        return None
+
+    page_home = _live_row_team_name(row, 'mainName')
+    page_away = _live_row_team_name(row, 'clientName')
+    structured_names = bool(page_home and page_away)
+    if structured_names:
+        if not (_result_team_names_match(home, page_home)
+                and _result_team_names_match(away, page_away)):
+            return None
+    elif home not in row or away not in row:
         return None
 
     score = _parse_live_row_final_score(row)
@@ -233,6 +244,11 @@ def _parse_live_row_score(row: str, home: str, away: str) -> Optional[str]:
     fid_m = re.search(r'fid="(\d+)"', row)
     if fid_m:
         # 行内已有 fid，直接解析比分列，避免重复请求
+        return None
+
+    # 兼容没有 mainName/clientName 标记的旧页面。模糊匹配依赖结构化队名，
+    # 不在整段 HTML 上找简称，避免同城球队被误配。
+    if structured_names:
         return None
 
     home_idx = row.find(home)
@@ -254,6 +270,49 @@ def _parse_live_row_score(row: str, home: str, away: str) -> Optional[str]:
             if score:
                 return score
     return None
+
+
+def _live_row_team_name(row: str, class_name: str) -> str:
+    match = re.search(
+        rf'<span[^>]*class=["\'][^"\']*\b{re.escape(class_name)}\b[^"\']*["\'][^>]*>'
+        r'(.*?)</span>',
+        row or '', re.IGNORECASE | re.DOTALL,
+    )
+    if not match:
+        return ''
+    return html_lib.unescape(re.sub(r'<[^>]+>', '', match.group(1))).strip()
+
+
+def _normalize_result_team_name(value: str) -> str:
+    text = html_lib.unescape(str(value or '')).casefold()
+    text = re.sub(r'\[[^\]]*\]|【[^】]*】', '', text)
+    text = text.replace('足球俱乐部', '').replace('俱乐部', '').replace('fc', '')
+    return re.sub(r'[\W_]+', '', text, flags=re.UNICODE)
+
+
+_RESULT_TEAM_NAME_AFFIXES = frozenset({
+    # 500 完场页与北单源实际出现的俱乐部前后缀差异。只接受整段差异，
+    # 不做任意子串命中，避免把“安德莱联队”误认成“安德莱”。
+    'aik', 'ktp', '合', '队', '基', '罗姆', '万塔', '斯', '斯塔德',
+})
+
+
+def _result_team_names_match(expected: str, actual: str) -> bool:
+    """跨站队名容忍 FC 及已确认的俱乐部前后缀差异。"""
+    expected = _normalize_result_team_name(expected)
+    actual = _normalize_result_team_name(actual)
+    if not expected or not actual:
+        return False
+    if expected == actual:
+        return True
+    shorter, longer = sorted((expected, actual), key=len)
+    if len(shorter) < 2:
+        return False
+    if longer.startswith(shorter):
+        return longer[len(shorter):] in _RESULT_TEAM_NAME_AFFIXES
+    if longer.endswith(shorter):
+        return longer[:-len(shorter)] in _RESULT_TEAM_NAME_AFFIXES
+    return False
 
 
 def _is_valid_match_id(match_id: str) -> bool:

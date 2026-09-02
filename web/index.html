@@ -7998,6 +7998,7 @@ async function loadBeidanPredictionRecords() {
           ${rqspf.available ? `<div style="margin-top:4px"><span style="color:var(--muted)">让球胜平负${handicap ? `（主队 ${esc(handicap)}）` : ''}预测：</span><b>${esc(rqspf.pick)}</b>${rqspf.detail ? ` · ${rqspf.detail}` : ''} ${beidanHitMark(record.hit_rqspf)}</div>` : ''}
           ${zjq.available ? `<div style="margin-top:4px"><span style="color:var(--muted)">总进球预测：</span><b>${esc(zjq.pick)}</b>${zjq.detail ? ` · ${zjq.detail}` : ''} ${beidanHitMark(record.hit_zjq)}</div>` : ''}
           ${record.settled ? `<div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:7px"><div><span style="color:var(--muted)">赛后比分：</span><b style="color:var(--accent2)">${esc(record.actual_score || '-')}</b></div><div><span style="color:var(--muted)">实际胜平负：</span>${esc(record.actual_spf || '-')}</div>${record.actual_rqspf ? `<div><span style="color:var(--muted)">实际让球赛果：</span>${esc(record.actual_rqspf)}</div>` : ''}${record.actual_zjq ? `<div><span style="color:var(--muted)">实际总进球：</span>${esc(record.actual_zjq)}</div>` : ''}</div>` : ''}
+          ${record.sync_status === 'retry' ? `<div style="margin-top:6px;color:var(--warn)">重试原因：${esc(record.last_sync_error || '未找到赛果')}${record.next_sync_at ? ` · 下次 ${esc(record.next_sync_at.replace('T', ' ').slice(0, 16))}` : ''}</div>` : ''}
           ${record.sync_status === 'failed' ? `<div style="margin-top:6px;color:var(--away)">失败原因：${esc(record.last_sync_error || '未找到赛果')}</div>` : ''}
         </div></div>`;
     });

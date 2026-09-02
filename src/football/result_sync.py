@@ -2090,10 +2090,47 @@ def _fetch_live_html(search_date: str) -> str:
     return fetch_html(f'https://live.500.com/?e={search_date}')
 
 
+def _fetch_finished_html(search_date: str) -> str:
+    """抓取指定自然日的全部完场比赛，而不是仅限竞彩场次。"""
+    from . import fetch as fetch_html
+    return fetch_html(f'https://live.500.com/wanchang.php?e={search_date}')
+
+
+def _finished_query_dates(match_time: str) -> List[str]:
+    """完场页按实际开球自然日归档；兼容跨午夜记录偏差一天。"""
+    match_dt = _parse_match_datetime(match_time)
+    if not match_dt:
+        return []
+    return [
+        (match_dt.date() + timedelta(days=offset)).strftime('%Y-%m-%d')
+        for offset in (0, -1, 1)
+    ]
+
+
 
 
 def _fetch_live_score_by_fid(match_id: str, match_time: str) -> Optional[str]:
     """在 live.500.com 按 fid 查找赛果，日期动态推算"""
+    for search_date in _finished_query_dates(match_time):
+        try:
+            html = _fetch_finished_html(search_date)
+        except Exception as e:
+            log.debug(f"完场页面抓取失败 e={search_date}: {e}")
+            continue
+
+        row_m = re.search(
+            rf'<tr[^>]*(?:\bid|\bfid)=["\'](?:a)?{re.escape(match_id)}["\'][^>]*>.*?</tr>',
+            html,
+            re.DOTALL,
+        )
+        if row_m:
+            score = _parse_live_row_final_score(row_m.group(0))
+            if score:
+                log.info(
+                    f"通过完场页面(fid)抓取赛果: match_id={match_id}, "
+                    f"e={search_date} -> {score}")
+                return score
+
     for search_date in _live_query_dates(match_time):
         try:
             html = _fetch_live_html(search_date)
@@ -2124,6 +2161,26 @@ def fetch_result_by_team_and_date(home: str, away: str, match_time: str) -> Opti
     第二优先：通过球队名和比赛时间在 live.500.com 模糊匹配抓取赛果
     """
     try:
+        # `/?e=` 是竞彩销售日页面，只包含少量竞彩场次；北单历史覆盖的赛事
+        # 远多于竞彩。先查按自然日归档的完场页，才不会把真实完赛误判成无赛果。
+        for search_date in _finished_query_dates(match_time):
+            try:
+                html = _fetch_finished_html(search_date)
+            except Exception as e:
+                log.debug(f"完场页面抓取失败 e={search_date}: {e}")
+                continue
+
+            for row in re.finditer(r'<tr[^>]*>.*?</tr>', html, re.DOTALL):
+                score = _parse_live_row_score(row.group(0), home, away)
+                if score:
+                    log.info(
+                        f"通过完场页面(球队)抓取赛果: {home} vs {away}, "
+                        f"e={search_date} -> {score}")
+                    result = _parse_score_string(score)
+                    if result:
+                        result['source'] = 'live_team'
+                    return result
+
         for search_date in _live_query_dates(match_time):
             try:
                 html = _fetch_live_html(search_date)

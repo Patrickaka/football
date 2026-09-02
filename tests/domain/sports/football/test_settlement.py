@@ -175,6 +175,49 @@ class SettleDueGate(unittest.TestCase):
         self.assertFalse(settlement._is_match_settle_due('', 180, NOW))
 
 
+class FinishedScoreTeamMatching(unittest.TestCase):
+
+    ROW = '''
+    <tr id="a1320957">
+      <td><span class="mainName">KTP科特卡</span></td>
+      <td><div class="pk"><a class="clt1">0</a><span>-</span>
+          <a class="clt3">3</a></div></td>
+      <td><span class="clientName">PK35万塔</span></td>
+    </tr>
+    '''
+
+    def test_cross_site_abbreviations_still_match_the_finished_row(self):
+        self.assertEqual(
+            settlement._parse_live_row_score(
+                self.ROW, '科特卡', 'Pk-35万塔'),
+            '0-3',
+        )
+
+    def test_fc_prefix_does_not_prevent_a_match(self):
+        row = self.ROW.replace('KTP科特卡', '萨尔茨堡').replace('PK35万塔', '米亚尔比')
+        self.assertEqual(
+            settlement._parse_live_row_score(row, 'FC萨尔茨堡', '米亚尔比'),
+            '0-3',
+        )
+
+    def test_similar_but_different_teams_are_not_accepted(self):
+        self.assertIsNone(
+            settlement._parse_live_row_score(
+                self.ROW, '科特卡', 'PK35万塔联队'),
+        )
+
+    def test_reversed_teams_are_not_accepted(self):
+        self.assertIsNone(
+            settlement._parse_live_row_score(
+                self.ROW, 'PK35万塔', 'KTP科特卡'),
+        )
+
+    def test_empty_team_name_does_not_match_the_first_finished_row(self):
+        self.assertIsNone(
+            settlement._parse_live_row_score(self.ROW, '', ''),
+        )
+
+
 class MlFusionEligibility(unittest.TestCase):
 
     PASSING = {'overall': {'sample_count': 150,
