@@ -36,7 +36,7 @@ log = logging.getLogger('domain.football.scoring')
 
 
 # 迁移当时 config.py 的真实取值（原样搬来）
-SCORE_1X2_MARKET_ANCHOR_STRENGTH = 0.75
+SCORE_1X2_MARKET_ANCHOR_STRENGTH = 1.0
 MAX_GOALS = 7
 AVG_LEAGUE_GOAL = 1.35
 SUPREMACY_CONFLICT_GAP = 0.75
@@ -649,6 +649,32 @@ def _joint_market_state(asian: Dict, euro: Dict, total: Dict) -> Dict:
     }
 
 
+def _restore_outcome_mass(matrix: Dict, reference: Dict) -> Dict:
+    """把每个胜平负分组的质量放回 `reference` 的边际，只保留组内的比分形状。
+
+    胜平负质量在上游已锚到去水收盘价，亚盘与大小球的公平价约束只许改
+    比分形状；没有这一步，亚盘那条约束会把主推方向从市场推开。
+    """
+    target = {'H': 0.0, 'D': 0.0, 'A': 0.0}
+    current = {'H': 0.0, 'D': 0.0, 'A': 0.0}
+    for (home, away), probability in reference.items():
+        target[_score_result_code(home, away)] += probability
+    for (home, away), probability in matrix.items():
+        current[_score_result_code(home, away)] += probability
+    scale = {
+        key: target[key] / current[key] if current[key] > 0 else 0.0
+        for key in target
+    }
+    restored = {
+        (home, away): probability * scale[_score_result_code(home, away)]
+        for (home, away), probability in matrix.items()
+    }
+    total = sum(restored.values())
+    if total <= 0:
+        return matrix
+    return {score: probability / total for score, probability in restored.items()}
+
+
 def _apply_joint_market_state(candidates, asian: Dict, euro: Dict, total: Dict):
     """Softly fit one score matrix to the closing Asian and O/U prices.
 
@@ -780,6 +806,7 @@ def _apply_joint_market_state(candidates, asian: Dict, euro: Dict, total: Dict):
         state.update({'applied': False, 'reason': 'missing_closing_market_prices'})
         return rows, state
 
+    matrix = _restore_outcome_mass(matrix, before_matrix)
     adjusted = sorted(matrix.items(), key=lambda item: -item[1])
     expected_before = sum(sum(score) * probability for score, probability in before_matrix.items())
     home_mass_before = sum(
@@ -797,6 +824,7 @@ def _apply_joint_market_state(candidates, asian: Dict, euro: Dict, total: Dict):
         'expected_goals_after': expected_after,
         'home_win_before': home_mass_before,
         'home_win_after': home_mass_after,
+        'preserved_1x2': True,
     })
     return adjusted, state
 
@@ -883,11 +911,14 @@ def _adjust_score_probs_with_total_movement(score_probs: Dict[str, float], total
 
 def _anchor_score_candidates_to_1x2(candidates, euro,
                                     strength=SCORE_1X2_MARKET_ANCHOR_STRENGTH):
-    """Partially anchor final score marginals to de-vigged closing 1X2 odds.
+    """Anchor final score marginals to de-vigged closing 1X2 odds.
 
     Every upstream score transform is free to improve the within-outcome score
-    shape.  This guard only limits aggregate H/D/A drift; a 0.75 geometric
-    anchor leaves 25% of the team, Asian-market and context signal intact.
+    shape; this guard only controls aggregate H/D/A mass.  Strength 1.0 makes
+    the marginals equal the market: without team data the model's departures
+    from the closing price carry no information (719 settled matches, the
+    market won 24 of 58 disagreements against the model's 17), so any lower
+    strength must be re-justified with the same replay before it is tuned.
     """
     rows = []
     current = {'home': 0.0, 'draw': 0.0, 'away': 0.0}
@@ -1049,8 +1080,11 @@ def _implied_total_mean(line: float, p_over: float) -> float:
 
     关键：盘口线是 over/under 的平衡点（≈中位数），而总进球分布右偏，均值 > 中位数。
     过去把分布均值直接锚到盘口线，系统性压低了期望总进球（405 场实测：模型对 75%
-    的比赛预测「小球」，真实 over 率却约 48%）。这里解 P(Poisson(m) > line) = p_over
-    得到 skew-aware 的期望 m，作为进球分布的正确锚点。
+    的比赛预测「小球」，真实 over 率却约 48%）。
+
+    反推交给 `markets.implied_total_goals`：进球分布的锚点必须与比分矩阵的 λ 来自
+    同一个函数，整数线 / 四分线 / 平均线上两者才会锚到同一个总进球。极端 p_over
+    与超高线会被那边的 IMPLIED_TOTAL_PROB_CLAMP / IMPLIED_TOTAL_BOUNDS 截断。
     """
     try:
         line = float(line)
@@ -1059,16 +1093,7 @@ def _implied_total_mean(line: float, p_over: float) -> float:
         return None
     if not (0.0 < p_over < 1.0):
         return None
-    k = int(math.floor(line))  # over 表示 total >= k+1
-    lo, hi = 0.3, 7.0
-    for _ in range(50):
-        mid = (lo + hi) / 2.0
-        p_le = sum(math.exp(-mid) * mid ** i / math.factorial(i) for i in range(k + 1))
-        if (1.0 - p_le) < p_over:
-            lo = mid
-        else:
-            hi = mid
-    return (lo + hi) / 2.0
+    return implied_total_goals(line, p_over)
 
 
 def _anchor_goal_dist_to_total_line(goal_dist: Dict, total: Dict, max_theta: float = 0.60) -> Tuple[Dict[int, float], Dict]:

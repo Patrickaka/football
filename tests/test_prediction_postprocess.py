@@ -368,7 +368,8 @@ class PredictionPostprocessTests(unittest.TestCase):
         self.assertLess(after, before)
         self.assertAlmostEqual(sum(adjusted.values()), 1.0)
 
-    def test_joint_market_state_raises_home_win_and_high_score_mass(self):
+    def test_joint_market_state_raises_high_score_mass_but_keeps_home_win(self):
+        """公平价约束只改比分形状：期望进球跟着大小球走，胜平负质量原样保留。"""
         candidates = [
             ((0, 0), .15), ((1, 0), .20), ((0, 1), .18),
             ((1, 1), .20), ((2, 0), .10), ((0, 2), .08),
@@ -389,7 +390,8 @@ class PredictionPostprocessTests(unittest.TestCase):
 
         self.assertTrue(meta['applied'])
         self.assertEqual(meta['method'], 'maximum_entropy_fair_price_constraint')
-        self.assertGreater(meta['home_win_after'], meta['home_win_before'])
+        self.assertTrue(meta['preserved_1x2'])
+        self.assertAlmostEqual(meta['home_win_after'], meta['home_win_before'], places=9)
         self.assertGreater(meta['expected_goals_after'], meta['expected_goals_before'])
         self.assertAlmostEqual(sum(prob for _, prob in adjusted), 1.0)
 

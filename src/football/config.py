@@ -27,7 +27,7 @@ FOOTBALL_PREDICTION_LOGIC_VERSION = '2026-09-01-sporttery-hkjc-fusion-v35'
 # their share from 40% to 80% improved the pooled high-confidence proxy from
 # 61.67% to 62.55%; the model retains 20% for team/Asian/context information.
 LOTTERY_OFFICIAL_ODDS_WEIGHT = 0.80
-SCORE_1X2_MARKET_ANCHOR_STRENGTH = 0.75
+from ..domain.sports.football.scoring import SCORE_1X2_MARKET_ANCHOR_STRENGTH
 ACTIONABLE_1X2_MIN_PROBABILITY = 0.65
 ACTIONABLE_1X2_MIN_MARGIN = 0.10
 

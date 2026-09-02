@@ -22,7 +22,7 @@ import json
 import pathlib
 import unittest
 
-from src.domain.sports.football import scoring, scoring_model as sm
+from src.domain.sports.football import markets, scoring, scoring_model as sm
 from tests.domain.golden import as_comparable
 
 FIXTURES = pathlib.Path(__file__).resolve().parents[3] / 'fixtures'
@@ -82,6 +82,20 @@ class GoalDistributionAnchoring(unittest.TestCase):
 
     def test_an_all_zero_distribution_does_not_divide_by_zero(self):
         self.assertEqual(sum(scoring._normalize_goal_dist({0: 0.0, 1: 0.0}).values()), 0.0)
+
+    def test_the_implied_mean_uses_the_same_push_aware_inversion_as_markets(self):
+        """进球分布的锚点与比分矩阵的 λ 必须由同一个反推函数给出。
+
+        这里原本是另一份独立二分：整数线按「total >= floor(line)+1」算、不剔除
+        走水、四分线取 floor——3.0 线在 p_over=0.5 时给 3.672（markets 修正后是
+        3.159），比分矩阵与进球分布会在同一场比赛上锚到两个不同的总进球。
+        """
+        for line in (2.0, 2.25, 2.69, 3.0, 3.25):
+            with self.subTest(line=line):
+                self.assertAlmostEqual(
+                    scoring._implied_total_mean(line, 0.5),
+                    markets.implied_total_goals(line, 0.5), places=4)
+        self.assertAlmostEqual(scoring._implied_total_mean(3.0, 0.5), 3.1594, places=3)
 
     def test_the_implied_mean_rises_with_the_over_probability(self):
         low = scoring._implied_total_mean(2.5, 0.30)
@@ -156,12 +170,29 @@ class OneXTwoAnchorStrength(unittest.TestCase):
             with self.subTest(key=key):
                 self.assertAlmostEqual(after[key], before[key], places=9)
 
-    def test_the_default_strength_is_three_quarters(self):
+    def test_the_default_strength_is_full_market_alignment(self):
+        """默认强度 1.0：胜平负边际就是去水收盘价。
+
+        719 场线上记录里模型与市场分歧的 58 场，模型对 17、市场对 24；模型相对
+        市场在真实结果上的概率增量均值 −0.002。0.75 留下的 25% 自由度只在
+        制造噪声，全量命中率因此比市场低约 1 个点。
+        """
         default = scoring._anchor_score_candidates_to_1x2(self.CANDIDATES, self.EURO)[0]
         self.assertEqual(default, scoring._anchor_score_candidates_to_1x2(
-            self.CANDIDATES, self.EURO, strength=0.75)[0])
+            self.CANDIDATES, self.EURO, strength=1.0)[0])
         self.assertNotEqual(default, scoring._anchor_score_candidates_to_1x2(
-            self.CANDIDATES, self.EURO, strength=0.3)[0])
+            self.CANDIDATES, self.EURO, strength=0.75)[0])
+        margins = self._margins(default)
+        for key, market_key in (('H', 'home'), ('D', 'draw'), ('A', 'away')):
+            with self.subTest(key=key):
+                self.assertAlmostEqual(margins[key], self.EURO['close'][market_key], places=9)
+
+    def test_the_adapter_layer_reexports_the_same_constant(self):
+        """config.py 不许再持有第二份数值：改一处另一处不跟着变是判据 11 的形状。"""
+        from src.football import config
+        self.assertEqual(config.SCORE_1X2_MARKET_ANCHOR_STRENGTH,
+                         scoring.SCORE_1X2_MARKET_ANCHOR_STRENGTH)
+        self.assertEqual(scoring.SCORE_1X2_MARKET_ANCHOR_STRENGTH, 1.0)
 
 
 class HeatFilterWeights(unittest.TestCase):
@@ -283,6 +314,33 @@ class MarketStateAgreement(unittest.TestCase):
         adjusted = scoring._apply_joint_market_state(
             candidates, self.ASIAN, self.EURO, self.TOTAL)
         self.assertIsNotNone(adjusted)
+
+    @staticmethod
+    def _outcome_mass(candidates):
+        mass = {'H': 0.0, 'D': 0.0, 'A': 0.0}
+        for (h, a), p in candidates:
+            mass[scoring._score_result_code(h, a)] += p
+        total = sum(mass.values())
+        return {k: v / total for k, v in mass.items()}
+
+    def test_the_joint_state_only_reshapes_within_each_outcome(self):
+        """亚盘/大小球的公平价约束只许改比分形状，不许动胜平负质量。
+
+        胜平负质量在上一步已经锚到去水收盘价；这里再按亚盘公平价倾斜会把
+        它带偏（719 场回放：翻转主推 5 场，翻转后 0 对、市场 3 对）。
+        """
+        matrix = sm.build_score_matrix(1.5, 1.1, 7, -0.11)
+        candidates = sorted(matrix.items(), key=lambda kv: -kv[1])
+        adjusted, meta = scoring._apply_joint_market_state(
+            candidates, self.ASIAN, self.EURO, self.TOTAL)
+        self.assertTrue(meta.get('applied'), meta)
+        self.assertTrue(meta['asian_constraint'].get('applied'), meta)
+        self.assertNotEqual(dict(adjusted), dict(candidates))
+        before, after = self._outcome_mass(candidates), self._outcome_mass(adjusted)
+        for key in ('H', 'D', 'A'):
+            with self.subTest(key=key):
+                self.assertAlmostEqual(after[key], before[key], places=9)
+        self.assertAlmostEqual(meta['home_win_after'], meta['home_win_before'], places=9)
 
 
 class HalfFullProbabilityShapes(unittest.TestCase):

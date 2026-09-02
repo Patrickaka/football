@@ -37,6 +37,7 @@ EURO_HANDICAP_K = 1.8
 MOMENTUM_SHIFT_SCALE = 1.8
 MOMENTUM_SHIFT_CLAMP = 0.45
 POISSON_TAIL_MAX_GOALS = 30
+QUARTERS_PER_GOAL = 4              # 大小球盘口以 0.25 球为格点
 IMPLIED_TOTAL_BOUNDS = (0.3, 6.5)
 IMPLIED_TOTAL_ITERS = 48
 IMPLIED_TOTAL_PROB_CLAMP = (0.02, 0.98)
@@ -556,18 +557,63 @@ def poisson_pmf(k, lam):
     return math.exp(-lam) * lam ** k / math.factorial(k)
 
 
-def poisson_tail_over(lam_total, line, max_goals=POISSON_TAIL_MAX_GOALS):
-    """P(总进球 > line)；四分盘按相邻两个半球盘各半权重"""
-    frac = round((line * 4) % 4)
-    if frac in (1, 3):
-        return 0.5 * poisson_tail_over(lam_total, line - 0.25, max_goals) \
-             + 0.5 * poisson_tail_over(lam_total, line + 0.25, max_goals)
-    # 盘口线为负时这一项恒为 1——进球数不可能是负的。不夹这一下，k_min 会是
-    # 负数，range 的第一个 k 就让 math.factorial 抛
-    # 「factorial() not defined for negative values」，整条大小球链路挂掉。
-    # 线上一直有这个坑，只是 test_score_prediction 那族把它 skip 掉了。
-    k_min = max(0, math.floor(line + 0.501))
-    return min(1.0, sum(poisson_pmf(k, lam_total) for k in range(k_min, max_goals)))
+def _settlement_lines(line):
+    """把 0.25 格点上的盘口线拆成结算线：整数与半球各一条，n+0.25 → (n, n+0.5)，n+0.75 → (n+0.5, n+1)。"""
+    quarters = round(line * QUARTERS_PER_GOAL)
+    base, remainder = divmod(quarters, QUARTERS_PER_GOAL)
+    if remainder == 1:
+        return (float(base), base + 0.5)
+    if remainder == 3:
+        return (base + 0.5, base + 1.0)
+    return (quarters / QUARTERS_PER_GOAL,)
+
+
+def _fair_over_probability_on_grid(pmf, line):
+    """P(大球 | 不走水)：赢的本金份额 ÷ (总份额 − 走水退回的份额)，本金按结算线均分。
+
+    整数结算线在 X 恰好等于它时退本金，既不算赢也不算输；去水后的市场概率
+    正是按这个口径定价的。`pmf` 在 max_goals 处截断，所以总份额按其实际质量计。
+    """
+    total_mass = sum(pmf)
+    won = 0.0
+    refunded = 0.0
+    lines = _settlement_lines(line)
+    for settlement_line in lines:
+        threshold = math.floor(settlement_line)
+        first_winning = threshold + 1
+        won += sum(pmf[first_winning:])
+        if settlement_line == threshold and threshold < len(pmf):
+            refunded += pmf[threshold]
+    at_risk = total_mass * len(lines) - refunded
+    if at_risk <= 0:
+        # λ→0 且线为 0 时全部走水，条件概率无定义，按「不可能输」处理
+        return 1.0
+    return min(1.0, won / at_risk)
+
+
+def fair_over_probability(lam_total, line, max_goals=POISSON_TAIL_MAX_GOALS):
+    """公平赔率口径的大球概率 P(大球 | 不走水)，总进球服从 Poisson(lam_total)。
+
+    半球线是普通尾概率；整数线剔除走水质量后条件化；四分线按两半本金各自的
+    结算规则折算。非格点线（多家公司盘口的平均值，如 2.69）按相邻两个格点
+    线性插值：连续、对线单调不增、对 λ 单调递增（二分反推的前提）。
+    """
+    if line < 0:
+        # 进球数非负，任何负线都必然打出大球
+        return 1.0
+    pmf = [poisson_pmf(k, lam_total) for k in range(max_goals)]
+    grid_step = 1.0 / QUARTERS_PER_GOAL
+    lower = math.floor(line / grid_step) * grid_step
+    weight = (line - lower) / grid_step
+    lower_prob = _fair_over_probability_on_grid(pmf, lower)
+    if weight < 1e-9:
+        return lower_prob
+    upper_prob = _fair_over_probability_on_grid(pmf, lower + grid_step)
+    return (1.0 - weight) * lower_prob + weight * upper_prob
+
+
+# 历史名字：它返回的不是原始尾概率 P(X > line)，而是上面的 P(大球 | 不走水)
+poisson_tail_over = fair_over_probability
 
 
 def implied_total_goals(line, p_over, tol=1e-4, *,
@@ -584,7 +630,7 @@ def implied_total_goals(line, p_over, tol=1e-4, *,
     lo, hi = bounds
     for _ in range(iters):
         mid = (lo + hi) / 2
-        if poisson_tail_over(mid, line, max_goals) < p_over:
+        if fair_over_probability(mid, line, max_goals) < p_over:
             lo = mid
         else:
             hi = mid

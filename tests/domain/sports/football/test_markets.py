@@ -427,5 +427,83 @@ class PoissonTailHandlesNegativeLines(unittest.TestCase):
             self.assertGreaterEqual(higher, lower)
 
 
+class PoissonTailHandlesPushAndQuarterLines(unittest.TestCase):
+    """整数线要按「不走水」条件化，四分线要按两半注各自的结算规则折算。
+
+    原实现 `k_min = floor(line + 0.501)` 把 3.0 当 2.5 算（多算了 X=3 这一格
+    的走水质量），2.75 又拆成 2.5 与 3.0 各半——于是 2.5 / 2.75 / 3.0 三条线
+    在 p_over=0.5 时反推出同一个 implied_total（2.674）。线上 719 场实测：
+    预测总进球均值 2.49，市场线 2.67，实际 2.94；0-0 概率被高估三成。
+
+    公平赔率对应的大球概率（X ~ Poisson，n = floor(line)）：
+      半球 n+0.5 : P(X>=n+1)
+      整数 n     : P(X>=n+1) / (1 - P(X=n))
+      n+0.25     : P(X>=n+1) / (1 - 0.5*P(X=n))
+      n+0.75     : (P(X>=n+2) + 0.5*P(X=n+1)) / (1 - 0.5*P(X=n+1))
+    数值用独立脚本按上面的公式算出，不是从实现里抄的。
+    """
+
+    def test_integer_line_is_conditioned_on_no_push(self):
+        """λ=2.5、线 3.0：P(X>=4)/(1-P(X=3)) = 0.308334，而不是 P(X>=3)=0.456。"""
+        self.assertAlmostEqual(markets.poisson_tail_over(2.5, 3.0), 0.308334, places=5)
+        self.assertAlmostEqual(markets.poisson_tail_over(2.5, 2.0), 0.613580, places=5)
+
+    def test_quarter_lines_follow_the_split_stake_settlement(self):
+        """2.25 与 2.75 各自有独立的折算，不再等于相邻半球线的简单平均。"""
+        self.assertAlmostEqual(markets.poisson_tail_over(2.5, 2.25), 0.523305, places=5)
+        self.assertAlmostEqual(markets.poisson_tail_over(2.5, 2.75), 0.391108, places=5)
+
+    def test_half_lines_keep_the_plain_tail(self):
+        self.assertAlmostEqual(markets.poisson_tail_over(2.5, 2.5), 0.456187, places=5)
+        self.assertAlmostEqual(markets.poisson_tail_over(2.5, 3.5), 0.242424, places=5)
+
+    def test_implied_total_is_strictly_increasing_across_quarter_steps(self):
+        """同一个 p_over 下，线每高 0.25，反推出的 λ 必须严格更高。"""
+        totals = [markets.implied_total_goals(line, 0.5)
+                  for line in (2.0, 2.25, 2.5, 2.75, 3.0, 3.25, 3.5)]
+        for lower, higher in zip(totals, totals[1:]):
+            self.assertLess(lower + 0.15, higher)
+
+    def test_implied_total_for_a_whole_line_sits_above_the_line(self):
+        """泊松右偏，均值高于「五五开」的线：3.0 线反推 3.159，2.0 线反推 2.156。"""
+        self.assertAlmostEqual(markets.implied_total_goals(3.0, 0.5), 3.1594, places=3)
+        self.assertAlmostEqual(markets.implied_total_goals(2.0, 0.5), 2.1559, places=3)
+        self.assertAlmostEqual(markets.implied_total_goals(2.75, 0.5), 2.9082, places=3)
+
+
+class PoissonTailInterpolatesOffGridLines(unittest.TestCase):
+    """线上的大小球线大多不在 0.25 格点上（500.com 平均值行：2.29 / 2.69 / 3.44）。
+
+    原实现按 round((line*4)%4) 分流，2.69 被归到四分线分支后按 2.25 的口径算，
+    反推出的 λ 反而比 2.5 线还低；2.44 落进半球分支被当 1.5 线。非格点线是多家
+    公司盘口的平均，语义上介于相邻两个格点之间，所以按相邻格点线性插值：
+    连续、单调，格点上与精确公式一致。
+    """
+
+    def test_off_grid_line_sits_between_its_neighbouring_grid_lines(self):
+        """2.69 = 0.24·tail(2.5) + 0.76·tail(2.75)。"""
+        lower = markets.poisson_tail_over(2.5, 2.5)
+        upper = markets.poisson_tail_over(2.5, 2.75)
+        expected = 0.24 * lower + 0.76 * upper
+        self.assertAlmostEqual(markets.poisson_tail_over(2.5, 2.69), expected, places=6)
+        self.assertLess(upper, markets.poisson_tail_over(2.5, 2.69))
+        self.assertLess(markets.poisson_tail_over(2.5, 2.69), lower)
+
+    def test_production_lines_are_monotonic_in_the_line(self):
+        """线上真实出现过的线，从低到高，大球概率必须单调不增。"""
+        lines = (2.0, 2.29, 2.31, 2.44, 2.5, 2.51, 2.69, 2.71, 2.75, 2.8, 3.0, 3.13, 3.25, 3.4, 3.44, 3.5)
+        probs = [markets.poisson_tail_over(2.5, line) for line in lines]
+        for higher, lower in zip(probs, probs[1:]):
+            self.assertGreater(higher, lower)
+
+    def test_implied_total_tracks_production_lines(self):
+        """同样的线序列，反推出的 λ 严格递增，且 2.69 线不再低于 2.5 线。"""
+        lines = (2.29, 2.44, 2.5, 2.51, 2.69, 2.8, 3.13, 3.44)
+        totals = [markets.implied_total_goals(line, 0.5) for line in lines]
+        for lower, higher in zip(totals, totals[1:]):
+            self.assertLess(lower, higher)
+        self.assertGreater(markets.implied_total_goals(2.69, 0.5), markets.implied_total_goals(2.5, 0.5) + 0.15)
+
+
 if __name__ == '__main__':
     unittest.main()
