@@ -103,7 +103,8 @@ class Routing(unittest.TestCase):
 
     EXPECTED = {'/api/beidan', '/api/beidan/matches',
                 '/api/beidan/value', '/api/beidan/history',
-                '/api/beidan/records', '/api/beidan/sync'}
+                '/api/beidan/records', '/api/beidan/sync',
+                '/api/beidan/sync/status'}
 
     def test_all_beidan_routes_exist(self):
         """清单取自 OpenAPI schema——`app.routes` 看不到 `include_router`

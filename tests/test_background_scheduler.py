@@ -218,6 +218,21 @@ class FootballTaskRegistrationTests(_Base):
         self.assertFalse(hasattr(module, 'start_background_sync'))
 
 
+class BeidanTaskRegistrationTests(_Base):
+
+    def test_backlog_catchup_runs_every_ten_minutes(self):
+        from src.beidan.settling import register_beidan_tasks
+
+        calls = []
+        names = register_beidan_tasks(
+            lambda name, fn, interval: calls.append((name, fn, interval)) or True,
+        )
+
+        self.assertEqual(names, ['beidan_result_sync'])
+        self.assertEqual(calls[0][0], 'beidan_result_sync')
+        self.assertEqual(calls[0][2], 600)
+
+
 class StaggerWiringTests(_Base):
     """`background` 要把错开值真的传给调度器。
 

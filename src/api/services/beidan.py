@@ -148,10 +148,20 @@ def beidan_records_payload():
 
 
 def beidan_sync_payload():
-    """手动触发一轮北单赛果回填。"""
+    """手动触发后台全量北单赛果回填。"""
     try:
-        from src.beidan.settling import sync_beidan_results
-        return {'result': sync_beidan_results()}
+        from src.beidan.settling import start_beidan_sync_job
+        return {'result': start_beidan_sync_job()}
     except Exception as e:
         log.error('北单赛果同步失败', exc_info=True)
         return {'error': f'北单赛果同步失败: {str(e)}'}
+
+
+def beidan_sync_status_payload():
+    """查询手动北单全量同步进度。"""
+    try:
+        from src.beidan.settling import get_beidan_sync_job_status
+        return {'result': get_beidan_sync_job_status()}
+    except Exception as e:
+        log.error('北单赛果同步状态获取失败', exc_info=True)
+        return {'error': f'北单赛果同步状态获取失败: {str(e)}'}

@@ -47,7 +47,7 @@ from .schedules import (
     fetch_beidan_bifen, fetch_beidan_bqc, fetch_beidan_zjq,
 )
 from .settling import (
-    _actual_rqspf_from_record, _actual_zjq_from_record, _beidan_record_key, _load_beidan_history, _save_beidan_history, apply_beidan_history_calibration, calculate_implied_probability,
+    _actual_rqspf_from_record, _actual_zjq_from_record, _beidan_record_key, _load_beidan_history, _save_beidan_history, _BEIDAN_HISTORY_UPDATE_LOCK, apply_beidan_history_calibration, calculate_implied_probability,
 )
 from .quality import (
     assess_recommendation_quality,
@@ -160,6 +160,12 @@ def _compact_beidan_record(match, source, professional_snapshot=None):
 
 
 def save_beidan_prediction_snapshot(result):
+    """并发安全地合并一批预测快照。"""
+    with _BEIDAN_HISTORY_UPDATE_LOCK:
+        return _save_beidan_prediction_snapshot_locked(result)
+
+
+def _save_beidan_prediction_snapshot_locked(result):
     if not isinstance(result, dict) or 'error' in result:
         return {'saved': 0, 'total': 0}
 

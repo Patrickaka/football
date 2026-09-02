@@ -63,3 +63,9 @@ async def records():
 async def sync_results():
     """手动触发赛果回填。"""
     return await run_blocking(service.beidan_sync_payload)
+
+
+@router.get('/sync/status')
+async def sync_status():
+    """手动赛果回填任务进度。"""
+    return await run_blocking(service.beidan_sync_status_payload)

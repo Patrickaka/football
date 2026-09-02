@@ -8305,8 +8305,20 @@ async function triggerBeidanSync(clickEvent) {
   try {
     const data = await fetchJson('/api/beidan/sync', { method: 'POST' });
     if (!data.result) throw new Error(data.error || '未知错误');
-    alert(data.result.message || '北单同步完成');
-    loadPredictions();
+    let job = data.result;
+    while (job.running) {
+      if (btn) {
+        const processed = Number(job.processed || 0);
+        const total = Number(job.total || 0);
+        btn.textContent = total > 0 ? `同步中 ${processed}/${total}...` : '正在准备全量同步...';
+      }
+      await new Promise(resolve => setTimeout(resolve, 3000));
+      const status = await fetchJson('/api/beidan/sync/status');
+      if (!status.result) throw new Error(status.error || '无法获取同步进度');
+      job = status.result;
+    }
+    alert(job.message || '北单同步完成');
+    await loadPredictions();
   } catch (error) {
     alert('北单同步失败：' + error.message);
   } finally {
