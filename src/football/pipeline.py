@@ -663,24 +663,31 @@ def _analyze_match_impl(match, force_refresh=False):
             single_odds_task = pool.submit(_parsing_mod.fetch_single_company_odds, mid)
         finally:
             pool.shutdown(wait=False)
-        # 解析顺序与串行版一致，保证失败时抛出的仍是最先失败那一环的错误
         try:
-            yazhi_raw = yazhi_task.result()
-            asian = analyze_asian(yazhi_raw)
-            log.debug(f"亚盘数据获取成功: keys={list(asian.keys())}")
-        except Exception as e:
-            raise ValueError(f"亚盘数据获取失败: {e}")
-        try:
-            euro_raw = euro_task.result()
-            euro = analyze_euro(euro_raw)
-        except Exception as e:
-            raise ValueError(f"欧赔数据获取/分析失败: {e}")
-        try:
-            daxiao_raw = daxiao_task.result()
-            total = analyze_total(daxiao_raw)
-        except Exception as e:
-            raise ValueError(f"大小球数据获取失败: {e}")
-        team = team_task.result()
+            # 解析顺序与串行版一致，保证失败时抛出的仍是最先失败那一环的错误
+            try:
+                yazhi_raw = yazhi_task.result()
+                asian = analyze_asian(yazhi_raw)
+                log.debug(f"亚盘数据获取成功: keys={list(asian.keys())}")
+            except Exception as e:
+                raise ValueError(f"亚盘数据获取失败: {e}")
+            try:
+                euro_raw = euro_task.result()
+                euro = analyze_euro(euro_raw)
+            except Exception as e:
+                raise ValueError(f"欧赔数据获取/分析失败: {e}")
+            try:
+                daxiao_raw = daxiao_task.result()
+                total = analyze_total(daxiao_raw)
+            except Exception as e:
+                raise ValueError(f"大小球数据获取失败: {e}")
+            team = team_task.result()
+        except BaseException:
+            # 这一场已经判失败了，剩下几路抓取纯属白打；而失败往往正是源站
+            # 在限流，继续打只会加重。等它们收尾再把异常抛出去，否则线程会
+            # 挂在调用方生命周期之外继续发请求。
+            pool.shutdown(wait=True)
+            raise
     if team:
         team['league_profile'] = league_profile
     

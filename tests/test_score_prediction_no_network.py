@@ -19,6 +19,7 @@ import urllib.request
 from unittest import mock
 
 import tests.test_score_prediction as suite
+from src.football import parsing as fb_parsing
 
 
 def _wait_for_odds_threads(timeout=15.0):
@@ -42,10 +43,14 @@ class AnalysisNeverEscapesToTheRealNetwork(unittest.TestCase):
             calls.append(getattr(target, 'full_url', target))
             raise AssertionError('测试期间发起了真实网络请求')
 
-        with mock.patch.object(urllib.request, 'urlopen', side_effect=_refuse):
-            # 夹具里没有这个 match_id，亚盘那一环必然失败，走的正是泄漏路径。
+        # 直接让亚盘那一环抛错，走的正是泄漏路径。
+        # 不用「夹具里没有的 match_id」来间接制造失败——那条件不稳，
+        # 实测偶尔不抛，用例就退化成什么都没测。
+        with mock.patch.object(urllib.request, 'urlopen', side_effect=_refuse), \
+             mock.patch.object(fb_parsing, 'fetch_yazhi',
+                               side_effect=ValueError('亚盘页 404')):
             with self.assertRaises(Exception):
-                suite._analyze_offline('9999999')
+                suite._analyze_offline(suite.FIXTURE_MATCH_ID)
             self.assertTrue(_wait_for_odds_threads(), '线程池线程未在超时内结束')
 
         self.assertEqual(calls, [], f'泄漏了真实请求: {calls[:5]}')
