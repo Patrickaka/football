@@ -272,6 +272,13 @@ def _complete_offered_lottery_predictions(
     return predicted_1x2, predicted_rqspf, resolved_handicap
 
 
+def _lottery_match_key(match_num, match_time):
+    """竞彩编号+开赛时间构成的跨源业务键；任一为空则不可用于对齐。"""
+    num = str(match_num or '').replace(' ', '')
+    when = str(match_time or '').strip()
+    return (num, when) if num and when else None
+
+
 class PredictionHistory:
     """预测历史记录管理器"""
 
@@ -321,6 +328,42 @@ class PredictionHistory:
         """添加预测记录（并发安全入口）"""
         with self._records_lock:
             return self._add_prediction(*args, **kwargs)
+
+    def _find_existing_record(self, match_id: str, match_num: str,
+                              match_time: str) -> Optional[Dict]:
+        """先按 match_id 找，再按竞彩编号+开赛时间找。
+
+        换源会整体改写 match_id 的命名空间（500 的数字 fid → 竞彩官网的
+        `sporttery_*`），只认 match_id 会给同一场比赛再建一条记录，页面上
+        就成了同场两条、赛果与竞彩玩法各在一条上。竞彩编号+开赛时间是两个
+        源都稳定的业务键，队名与联赛名则两边写法不一致，不能用来对齐。
+        """
+        for record in self.records:
+            if record.get('match_id') == match_id:
+                return record
+        key = _lottery_match_key(match_num, match_time)
+        if key is None:
+            return None
+        for record in self.records:
+            if _lottery_match_key(
+                    record.get('match_num'), record.get('match_time')) == key:
+                return record
+        return None
+
+    @staticmethod
+    def _register_alias_match_id(record: Dict, match_id: str) -> bool:
+        """把跨源命中的新 match_id 记成别名，返回是否是新增的别名。
+
+        身份先到先得：改写 match_id 就得删旧行，反而多一种不一致。
+        """
+        if not match_id or record.get('match_id') == match_id:
+            return False
+        aliases = list(record.get('alias_match_ids') or [])
+        if match_id in aliases:
+            return False
+        aliases.append(match_id)
+        record['alias_match_ids'] = aliases
+        return True
 
     def _add_prediction(self, match_id: str, league: str, home: str, away: str,
                        match_time: str, predicted_scores: Dict[str, float],
@@ -394,97 +437,101 @@ class PredictionHistory:
                 predicted_rqspf = {}
 
         # 检查是否已存在
-        for record in self.records:
-            if record.get('match_id') == match_id:
-                # 跳过无变化的重复写入：缓存命中时同一场比赛会被反复「预测」，
-                # 但内容与时间层其实一字未变。此时直接返回，不写库、不更新时间戳，
-                # 消灭每请求整表重写的写入风暴。
-                layer = infer_time_layer(match_time)
-                new_sig = _prediction_content_sig(
-                    predicted_scores, predicted_1x2, asian, total_line,
-                    odds_data, predicted_half_full, model_version,
-                    professional_snapshot,
-                    lottery_handicap=lottery_handicap,
-                    predicted_rqspf=predicted_rqspf,
-                )
-                existing_layers = record.get('time_layers') or {}
-                if (
-                    new_sig is not None
-                    and record.get('_pred_sig') == new_sig
-                    and existing_layers.get(layer) is not None
-                    and not record.get('settled')
-                    and (not match_num or record.get('match_num') == match_num)
-                ):
-                    return {'saved': False, 'persistence_backend': 'unchanged'}
+        existing = self._find_existing_record(match_id, match_num, match_time)
+        if existing is not None:
+            record = existing
+            newly_aliased = self._register_alias_match_id(record, match_id)
+            # 跳过无变化的重复写入：缓存命中时同一场比赛会被反复「预测」，
+            # 但内容与时间层其实一字未变。此时直接返回，不写库、不更新时间戳，
+            # 消灭每请求整表重写的写入风暴。
+            layer = infer_time_layer(match_time)
+            new_sig = _prediction_content_sig(
+                predicted_scores, predicted_1x2, asian, total_line,
+                odds_data, predicted_half_full, model_version,
+                professional_snapshot,
+                lottery_handicap=lottery_handicap,
+                predicted_rqspf=predicted_rqspf,
+            )
+            existing_layers = record.get('time_layers') or {}
+            if (
+                new_sig is not None
+                and record.get('_pred_sig') == new_sig
+                and existing_layers.get(layer) is not None
+                and not record.get('settled')
+                and (not match_num or record.get('match_num') == match_num)
+                and not newly_aliased
+            ):
+                return {'saved': False, 'persistence_backend': 'unchanged'}
 
-                # 更新现有记录
-                update_data = {
-                    'predicted_scores': predicted_scores,
-                    'predicted_1x2': predicted_1x2,
-                    'asian': asian,
-                    'total_line': total_line,
-                    'updated_at': datetime.now().isoformat(),
-                    'odds_snapshot': odds_data,
-                    'model_version': model_version,
-                    'decision_snapshot': _audited_decision_snapshot(
-                        predicted_1x2, professional_snapshot,
-                    ),
-                    'professional_snapshot': professional_snapshot,
-                    '_pred_sig': new_sig,
-                }
-                if match_num:
-                    update_data['match_num'] = match_num
-                if predicted_half_full:
-                    update_data['predicted_half_full'] = predicted_half_full
-                # 添加影子预测字段
-                if base_1x2 is not None:
-                    update_data['base_1x2'] = base_1x2
-                if ml_1x2 is not None:
-                    update_data['ml_1x2'] = ml_1x2
-                if ml_model_version:
-                    update_data['ml_model_version'] = ml_model_version
-                update_data['ml_available'] = ml_available
-                if ml_feature_snapshot:
-                    update_data['ml_feature_snapshot'] = ml_feature_snapshot
-                update_data['lottery_handicap'] = lottery_handicap
-                update_data['predicted_rqspf'] = predicted_rqspf
-                if goal_count:
-                    update_data['goal_count'] = goal_count
-                record.update(update_data)
+            # 更新现有记录
+            update_data = {
+                'league': league,
+                'predicted_scores': predicted_scores,
+                'predicted_1x2': predicted_1x2,
+                'asian': asian,
+                'total_line': total_line,
+                'updated_at': datetime.now().isoformat(),
+                'odds_snapshot': odds_data,
+                'model_version': model_version,
+                'decision_snapshot': _audited_decision_snapshot(
+                    predicted_1x2, professional_snapshot,
+                ),
+                'professional_snapshot': professional_snapshot,
+                '_pred_sig': new_sig,
+            }
+            if match_num:
+                update_data['match_num'] = match_num
+            if predicted_half_full:
+                update_data['predicted_half_full'] = predicted_half_full
+            # 添加影子预测字段
+            if base_1x2 is not None:
+                update_data['base_1x2'] = base_1x2
+            if ml_1x2 is not None:
+                update_data['ml_1x2'] = ml_1x2
+            if ml_model_version:
+                update_data['ml_model_version'] = ml_model_version
+            update_data['ml_available'] = ml_available
+            if ml_feature_snapshot:
+                update_data['ml_feature_snapshot'] = ml_feature_snapshot
+            update_data['lottery_handicap'] = lottery_handicap
+            update_data['predicted_rqspf'] = predicted_rqspf
+            if goal_count:
+                update_data['goal_count'] = goal_count
+            record.update(update_data)
 
-                # 更新对应时间层的预测
-                if 'time_layers' not in record:
-                    record['time_layers'] = {}
-                record['time_layers']['final'] = predicted_scores  # 始终更新最终预测
-                # 只在该层为None时才更新（保留更早时间点的预测）
-                if record['time_layers'].get(layer) is None:
-                    record['time_layers'][layer] = predicted_scores
+            # 更新对应时间层的预测
+            if 'time_layers' not in record:
+                record['time_layers'] = {}
+            record['time_layers']['final'] = predicted_scores  # 始终更新最终预测
+            # 只在该层为None时才更新（保留更早时间点的预测）
+            if record['time_layers'].get(layer) is None:
+                record['time_layers'][layer] = predicted_scores
 
-                # 更新赔率分层记录
-                if 'odds_layers' not in record:
-                    record['odds_layers'] = {}
-                record['odds_layers'][layer] = odds_data
-                record['odds_layers']['final'] = odds_data
+            # 更新赔率分层记录
+            if 'odds_layers' not in record:
+                record['odds_layers'] = {}
+            record['odds_layers'][layer] = odds_data
+            record['odds_layers']['final'] = odds_data
 
-                record['market_timeline'], market_snapshot = _append_market_timeline(
-                    record.get('market_timeline'),
-                    match_time=match_time,
-                    layer=layer,
-                    odds_data=odds_data,
-                    predicted_1x2=predicted_1x2,
-                    predicted_rqspf=predicted_rqspf,
-                    model_version=model_version,
-                    professional_snapshot=professional_snapshot,
-                )
-                if market_snapshot and market_snapshot.get('is_prematch'):
-                    record['last_prematch_odds_snapshot'] = odds_data
-                    record['last_prematch_snapshot_at'] = market_snapshot['captured_at']
-                    if layer in {'T-15min', 'final'}:
-                        record['closing_odds_snapshot'] = odds_data
-                        record['closing_odds_source'] = 'last_observed_prematch_proxy'
+            record['market_timeline'], market_snapshot = _append_market_timeline(
+                record.get('market_timeline'),
+                match_time=match_time,
+                layer=layer,
+                odds_data=odds_data,
+                predicted_1x2=predicted_1x2,
+                predicted_rqspf=predicted_rqspf,
+                model_version=model_version,
+                professional_snapshot=professional_snapshot,
+            )
+            if market_snapshot and market_snapshot.get('is_prematch'):
+                record['last_prematch_odds_snapshot'] = odds_data
+                record['last_prematch_snapshot_at'] = market_snapshot['captured_at']
+                if layer in {'T-15min', 'final'}:
+                    record['closing_odds_snapshot'] = odds_data
+                    record['closing_odds_source'] = 'last_observed_prematch_proxy'
 
-                backend = self._save_record(record)
-                return {'saved': True, 'persistence_backend': backend}
+            backend = self._save_record(record)
+            return {'saved': True, 'persistence_backend': backend}
         
         # 新增记录
         # 时间分层预测记录
