@@ -3213,6 +3213,7 @@ document.addEventListener('keydown', event => {
 // 首屏默认展示所有已完成分析。生产门禁可能让当天全部比赛都落入观察/观望，
 // 默认“精选”会形成“接口已有数据、页面却像空白”的误导。
 let footballQualityFilter = 'all';
+let footballSessionFilter = '';
 let footballSort = 'time';
 let footballPage = 1;
 let footballPageSize = 12;
@@ -3632,6 +3633,45 @@ function getFootballResultTier(item) {
   };
 }
 
+function footballMatchSessionKey(item) {
+  // 主列表条目是 {match:{num,time}}，记录页是 {match_num,match_time}，
+  // 归一到同一个形状后复用同一套期次推导，两个页面才不会各算各的。
+  const match = item?.match || {};
+  return predictionSessionKey({ match_num: match.num, match_time: match.time });
+}
+
+function footballMatchPassesSessionFilter(item) {
+  if (!footballSessionFilter) return true;
+  return footballMatchSessionKey(item) === footballSessionFilter;
+}
+
+function setFootballSessionFilter(value) {
+  footballSessionFilter = value || '';
+  footballPage = 1;
+  renderFootballPredictions(allPredictions);
+  requestAnimationFrame(scrollToFootballResults);
+}
+
+function renderFootballSessionButtons(results) {
+  const counts = (results || []).reduce((acc, item) => {
+    const session = footballMatchSessionKey(item);
+    if (session) acc[session] = (acc[session] || 0) + 1;
+    return acc;
+  }, {});
+  const sessions = Object.keys(counts).sort((a, b) => b.localeCompare(a));
+  if (sessions.length < 2) return '';
+  const button = (value, label, count) =>
+    `<button onclick="setFootballSessionFilter('${value}')" class="tb-btn ${footballSessionFilter === value ? 'tb-active' : ''}">${label}${count === null ? '' : ` ${count}`}</button>`;
+  return `<div class="toolbar-group">
+        <span class="toolbar-label">期次</span>
+        <div class="toolbar-buttons">
+          ${button('', '全部', null)}
+          ${sessions.map(session => button(session, esc(predictionSessionLabel(session)), counts[session])).join('')}
+        </div>
+      </div>
+      <div class="toolbar-divider"></div>`;
+}
+
 function footballMatchPassesFilter(item) {
   if (footballQualityFilter === 'all') return true;
   if (footballQualityFilter === 'upset') return item?.result?.upset?.alert === true;
@@ -3783,6 +3823,7 @@ function renderFootballPredictions(results) {
       <button onclick="loadMatches()" class="tb-refresh">🔄 刷新</button>
     </div>
     <div class="toolbar-row">
+      ${renderFootballSessionButtons(results)}
       <div class="toolbar-group">
         <span class="toolbar-label">排序</span>
         <div class="toolbar-buttons">
@@ -3824,7 +3865,7 @@ function renderFootballPredictions(results) {
     const m = item.match || {};
     return (`${m.home || ''}${m.away || ''}${m.league || ''}${m.num || ''}`).toLowerCase().includes(kw);
   };
-  const visibleResults = results.filter(footballMatchPassesFilter).filter(keywordMatch);
+  const visibleResults = results.filter(footballMatchPassesSessionFilter).filter(footballMatchPassesFilter).filter(keywordMatch);
   const totalPages = Math.max(1, Math.ceil(visibleResults.length / footballPageSize));
   if (footballPage > totalPages) footballPage = totalPages;
   const pageStart = (footballPage - 1) * footballPageSize;

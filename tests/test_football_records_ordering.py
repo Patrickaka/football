@@ -45,10 +45,10 @@ def _extract_const(name):
     return match.group(0)
 
 
-def _run_js(expression):
+def _run_js(expression, extra_functions=()):
     source = '\n'.join(
         [_extract_const('PREDICTION_WEEKDAYS')]
-        + [_extract_function(name) for name in EXPORTED]
+        + [_extract_function(name) for name in (*EXPORTED, *extra_functions)]
         + [f'console.log(JSON.stringify({expression}));']
     )
     completed = subprocess.run(
@@ -172,3 +172,34 @@ class PredictionToolbarWiring(unittest.TestCase):
     def test_session_options_are_labelled_with_the_weekday(self):
         self.assertIn('predictionSessionLabel(', HTML.split(
             'function renderPredictionDateToolbar(', 1)[1])
+
+
+@unittest.skipIf(NODE is None, 'node 不可用')
+class FootballScheduleSessionFilter(unittest.TestCase):
+    """主列表的条目是 {match: {num, time}}，与记录页字段名不同，需要适配。"""
+
+    def _session(self, num, time):
+        item = {'match': {'num': num, 'time': time, 'home': 'H', 'away': 'A'}}
+        return _run_js('footballMatchSessionKey(%s)' % json.dumps(item),
+                       extra_functions=('footballMatchSessionKey',))
+
+    def test_schedule_item_maps_onto_the_same_session_key(self):
+        year = 2026
+        self.assertEqual(self._session('周三010', '09-03 02:45'), f'{year}-09-02')
+
+    def test_schedule_item_without_a_number_falls_back_to_its_date(self):
+        self.assertEqual(self._session(None, '09-02 21:00'), '2026-09-02')
+
+
+class FootballScheduleToolbarWiring(unittest.TestCase):
+
+    def test_visible_results_are_filtered_by_session(self):
+        self.assertIn('.filter(footballMatchPassesSessionFilter)', HTML)
+
+    def test_toolbar_offers_a_session_picker(self):
+        self.assertIn('function setFootballSessionFilter(', HTML)
+        self.assertIn('onclick="setFootballSessionFilter(', HTML)
+
+    def test_session_buttons_are_labelled_with_the_weekday(self):
+        toolbar = HTML.split('function renderFootballSessionButtons(', 1)[1]
+        self.assertIn('predictionSessionLabel(', toolbar)
