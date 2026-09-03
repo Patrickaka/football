@@ -7,6 +7,8 @@ import json
 import os
 import pathlib
 import sys
+import threading
+import time
 import unittest
 import urllib.error
 from unittest import mock
@@ -65,6 +67,24 @@ def _fake_fetch_json(url, *args, **kwargs):
     raise urllib.error.HTTPError(url, 404, 'Not Found', {}, None)
 
 
+def _drain_odds_threads(timeout=15.0):
+    """等 analyze_match 的线程池跑完，**必须在 mock 窗口内调用**。
+
+    `analyze_match` 并发发起五组抓取后就 `pool.shutdown(wait=False)`；
+    亚盘/欧赔/大小球任一失败会立刻向上抛，此时 `fetch_team_strength` 与
+    `fetch_single_company_odds` 两个线程还在跑。不等它们，`with` 一退出
+    补丁就没了，那两个线程直接打到真的 500.com——把源站打到限流之后，
+    后面用例的抓取跟着失败，全量并行下就随机冒出
+    「亚盘数据获取失败: ... got 'NoneType'」，而单跑本文件永远是绿的。
+    """
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if not any(t.name.startswith('FootballOdds') and t.is_alive()
+                   for t in threading.enumerate()):
+            return
+        time.sleep(0.05)
+
+
 def _analyze_offline(match_id=FIXTURE_MATCH_ID):
     """跑完整 analyze_match，但一个请求都不出网。
 
@@ -75,7 +95,10 @@ def _analyze_offline(match_id=FIXTURE_MATCH_ID):
              'league': '英超', 'time': '08-28 20:00'}
     with mock.patch.object(fb_fetching, 'fetch', side_effect=_fake_fetch), \
          mock.patch.object(fb_fetching, 'fetch_json', side_effect=_fake_fetch_json):
-        return analyze_match(match, force_refresh=True)
+        try:
+            return analyze_match(match, force_refresh=True)
+        finally:
+            _drain_odds_threads()
 
 
 class TestHandicapConversion(unittest.TestCase):
