@@ -2553,6 +2553,7 @@ let predictionsPage = 1;
 const PREDICTIONS_PAGE_SIZE = 20;
 let predictionRecordType = 'football';
 let predictionDateFilter = '';
+let predictionSortAscending = true;
 let predictionCalendarMonth = '';
 let predictionAvailableDates = [];
 let predictionDateCounts = {};
@@ -7637,6 +7638,55 @@ function startSyncStampTimer() {
   syncStampTimer = setInterval(() => updateSyncStampAges(), 60000);
 }
 
+const PREDICTION_WEEKDAYS = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
+
+function predictionMatchNumParts(record) {
+  const num = String(record?.match_num || '').replace(/\s/g, '');
+  const parsed = num.match(/^(周[一二三四五六日])(\d{1,3})$/);
+  return parsed ? { weekday: parsed[1], seq: Number(parsed[2]) } : null;
+}
+
+function predictionSessionKey(record) {
+  const date = predictionRecordDateKey(record);
+  const parts = predictionMatchNumParts(record);
+  if (!date || !parts) return date;
+  // 竞彩把凌晨场算进前一天的期次：09-03 02:45 的比赛编号是「周三」而 09-03 是周四。
+  // 从比赛日往回找周几对得上的那天，最多回退六天。
+  const base = new Date(`${date}T00:00:00`);
+  for (let back = 0; back < 7; back++) {
+    const probe = new Date(base.getFullYear(), base.getMonth(), base.getDate() - back);
+    if (PREDICTION_WEEKDAYS[probe.getDay()] === parts.weekday) {
+      const month = String(probe.getMonth() + 1).padStart(2, '0');
+      const day = String(probe.getDate()).padStart(2, '0');
+      return `${probe.getFullYear()}-${month}-${day}`;
+    }
+  }
+  return date;
+}
+
+function predictionSessionLabel(sessionKey) {
+  if (!sessionKey) return '未知期次';
+  const parsed = new Date(`${sessionKey}T00:00:00`);
+  if (Number.isNaN(parsed.getTime())) return sessionKey;
+  return `${sessionKey.slice(5)} ${PREDICTION_WEEKDAYS[parsed.getDay()]}`;
+}
+
+function sortPredictionRecords(records, ascending) {
+  const direction = ascending ? 1 : -1;
+  return [...(records || [])].sort((left, right) => {
+    // 期次恒定新→旧：正序/倒序切的是期内编号，不是把上个月翻到最前面。
+    const leftSession = predictionSessionKey(left) || '';
+    const rightSession = predictionSessionKey(right) || '';
+    if (leftSession !== rightSession) return rightSession.localeCompare(leftSession);
+    const leftNum = predictionMatchNumParts(left);
+    const rightNum = predictionMatchNumParts(right);
+    if (leftNum && rightNum) return (leftNum.seq - rightNum.seq) * direction;
+    if (leftNum) return -1;
+    if (rightNum) return 1;
+    return String(right?.match_time || '').localeCompare(String(left?.match_time || ''));
+  });
+}
+
 function predictionRecordDateKey(record) {
   const directDate = String(record?.date || '').trim();
   if (/^\d{4}-\d{2}-\d{2}$/.test(directDate)) return directDate;
@@ -7647,6 +7697,12 @@ function predictionRecordDateKey(record) {
   if (!shortDate) return '';
   const createdYear = String(record?.created_at || '').match(/^(\d{4})/);
   return `${createdYear ? createdYear[1] : new Date().getFullYear()}-${shortDate[1]}`;
+}
+
+function togglePredictionSortOrder() {
+  predictionSortAscending = !predictionSortAscending;
+  predictionsPage = 1;
+  loadPredictions();
 }
 
 function setPredictionDateFilter(value) {
@@ -7908,25 +7964,25 @@ function openBeidanPredictionRecords() {
 
 function renderPredictionDateToolbar(records) {
   return `<div class="prediction-date-toolbar">
-    <span class="prediction-date-label">比赛日期</span>
+    <span class="prediction-date-label">比赛期次</span>
     <div class="prediction-calendar-wrap">
       <button id="prediction-date-trigger" type="button" class="prediction-date-trigger" onclick="togglePredictionCalendar(event)" aria-haspopup="dialog" aria-expanded="false">
-        <span>${predictionDateFilter ? esc(predictionDateFilter) : '年 / 月 / 日'}</span><span class="prediction-date-trigger-icon" aria-hidden="true">▣</span>
+        <span>${predictionDateFilter ? esc(predictionSessionLabel(predictionDateFilter)) : '选择期次'}</span><span class="prediction-date-trigger-icon" aria-hidden="true">▣</span>
       </button>
-      <div id="prediction-calendar-popover" class="prediction-calendar-popover" role="dialog" aria-label="选择比赛日期" onclick="event.stopPropagation()" hidden></div>
+      <div id="prediction-calendar-popover" class="prediction-calendar-popover" role="dialog" aria-label="选择比赛期次" onclick="event.stopPropagation()" hidden></div>
     </div>
     <button type="button" class="prediction-date-action" onclick="setPredictionDateToday()">今天</button>
     ${predictionDateFilter ? `<button type="button" class="prediction-date-action" onclick="setPredictionDateFilter('')">查看全部</button>` : ''}
-    <span class="prediction-date-result">${predictionDateFilter ? `${esc(predictionDateFilter)} · ${records.length} 场` : `全部日期 · ${records.length} 场`}</span>
+    <span class="prediction-date-result">${predictionDateFilter ? `${esc(predictionSessionLabel(predictionDateFilter))} · ${records.length} 场` : `全部期次 · ${records.length} 场`}</span>
   </div>`;
 }
 
 function preparePredictionCalendar(records) {
-  const dates = [...new Set(records.map(predictionRecordDateKey).filter(Boolean))].sort((a, b) => b.localeCompare(a));
+  const dates = [...new Set(records.map(predictionSessionKey).filter(Boolean))].sort((a, b) => b.localeCompare(a));
   predictionAvailableDates = dates;
   predictionDateCounts = records.reduce((counts, record) => {
-    const date = predictionRecordDateKey(record);
-    if (date) counts[date] = (counts[date] || 0) + 1;
+    const session = predictionSessionKey(record);
+    if (session) counts[session] = (counts[session] || 0) + 1;
     return counts;
   }, {});
   const anchor = predictionDateFilter || dates[0] || new Date().toISOString().slice(0, 10);
@@ -7953,7 +8009,7 @@ async function loadBeidanPredictionRecords() {
   const allRecords = data.result?.records || [];
   const sync = data.result?.sync || {};
   preparePredictionCalendar(allRecords);
-  const records = predictionDateFilter ? allRecords.filter(record => predictionRecordDateKey(record) === predictionDateFilter) : allRecords;
+  const records = predictionDateFilter ? allRecords.filter(record => predictionSessionKey(record) === predictionDateFilter) : allRecords;
   predictionExportData = {
     schema_version: 'beidan-prediction-export-v1', exported_at: new Date().toISOString(),
     record_count: allRecords.length, settled_count: allRecords.filter(record => record.settled).length,
@@ -8048,9 +8104,12 @@ async function loadPredictions() {
     if (!predictionCalendarMonth || predictionDateFilter) {
       predictionCalendarMonth = calendarAnchor.slice(0, 7);
     }
-    const records = predictionDateFilter
-      ? allRecords.filter(record => predictionRecordDateKey(record) === predictionDateFilter)
-      : allRecords;
+    const records = sortPredictionRecords(
+      predictionDateFilter
+        ? allRecords.filter(record => predictionSessionKey(record) === predictionDateFilter)
+        : allRecords,
+      predictionSortAscending,
+    );
     const diagnostics = diagnosticsData.result || {};
     const auxiliaryWarnings = [
       syncStatus.error ? `同步状态暂不可用：${syncStatus.error}` : '',
@@ -8143,19 +8202,21 @@ async function loadPredictions() {
     
     // ── 预测记录列表 ──
     html += `<div class="prediction-date-toolbar">
-      <span class="prediction-date-label">比赛日期</span>
+      <span class="prediction-date-label">比赛期次</span>
       <div class="prediction-calendar-wrap">
         <button id="prediction-date-trigger" type="button" class="prediction-date-trigger"
           onclick="togglePredictionCalendar(event)" aria-haspopup="dialog" aria-expanded="false">
-          <span>${predictionDateFilter ? esc(predictionDateFilter) : '年 / 月 / 日'}</span>
+          <span>${predictionDateFilter ? esc(predictionSessionLabel(predictionDateFilter)) : '选择期次'}</span>
           <span class="prediction-date-trigger-icon" aria-hidden="true">▣</span>
         </button>
         <div id="prediction-calendar-popover" class="prediction-calendar-popover" role="dialog"
-          aria-label="选择比赛日期" onclick="event.stopPropagation()" hidden></div>
+          aria-label="选择比赛期次" onclick="event.stopPropagation()" hidden></div>
       </div>
       <button type="button" class="prediction-date-action" onclick="setPredictionDateToday()">今天</button>
       ${predictionDateFilter ? `<button type="button" class="prediction-date-action" onclick="setPredictionDateFilter('')">查看全部</button>` : ''}
-      <span class="prediction-date-result">${predictionDateFilter ? `${esc(predictionDateFilter)} · ${records.length} 场` : `全部日期 · ${records.length} 场`}</span>
+      <button type="button" class="prediction-date-action" onclick="togglePredictionSortOrder()"
+        title="按赛事编号排序">编号 ${predictionSortAscending ? '↑' : '↓'}</button>
+      <span class="prediction-date-result">${predictionDateFilter ? `${esc(predictionSessionLabel(predictionDateFilter))} · ${records.length} 场` : `全部期次 · ${records.length} 场`}</span>
     </div>`;
     html += `<div class="section-title">📋 预测记录（共 ${records.length} 条）</div>`;
     
