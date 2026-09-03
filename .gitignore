@@ -39,6 +39,7 @@ data/kl8_history.json
 data/ssq_history.json
 data/ssq_history_full.json
 data/kl8_recalculations/
+data/kl8_settlements/
 data/kl8_snapshots/
 
 # 运行时生成的分析报告
