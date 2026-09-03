@@ -284,6 +284,24 @@ def fetch_zgzcw_cs_history(match_id):
     return {'history': []}
 
 
+def fetch_zgzcw_finished_results():
+    """中国足彩网单场页上的已完场比分，按 newplayid / 行号索引。
+
+    与赛程同页同源：抓一次覆盖整页完场比赛，不必为每条记录单独发请求。
+    """
+    try:
+        html = fetch_zgzcw(ZGZCW_DANCHANG_URL, referer=ZGZCW_DANCHANG_URL)
+    except Exception as exc:
+        log.warning('抓取中国足彩网完场比分失败: %s', exc)
+        return {}
+    if not html:
+        log.warning('中国足彩网完场比分页返回为空')
+        return {}
+    results = _parsing.parse_zgzcw_finished_results(html)
+    log.info('中国足彩网完场比分: %d 个索引', len(results))
+    return results
+
+
 def fetch_beidan_schedule(date=None, source='jczq'):
     """500.com 的赛程。解析在领域层，**时钟由这一层注入**。"""
     if date is None:

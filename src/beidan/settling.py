@@ -22,6 +22,7 @@ from .config import (
 # 按玩法名挑一个提取器。旧名字全部保住——`__init__.py` 导出了它们，
 # `recommending` 按名字导入。
 
+from .fetching import fetch_zgzcw_finished_results
 from src.domain.sports.beidan import handicap as _handicap
 from src.domain.sports.beidan import settlement as _settlement
 
@@ -249,12 +250,20 @@ def _mark_beidan_sync_failure(record, error, now=None):
         ).isoformat(timespec='seconds')
 
 
-def _sync_result_for_record(record, match_time, fetch_by_id, fetch_by_team):
+def _sync_result_for_record(record, match_time, fetch_by_id, fetch_by_team,
+                            finished_map=None):
     """按记录来源选择有效的赛果查询顺序。
 
     500.com 的 dc/jczq 赛程 ID 可以直接查 shuju 页面；okooo 与 zgzcw 的数字
     是各自站内 ID，拿它拼 500.com URL 只会制造一场一次的无效请求。
+
+    中国足彩网单场页的完场比分排在最前：北单赛程本来就抓自那张页，按同一个
+    ID 对齐没有队名歧义，也不用赌 500.com 收不收录这场。
     """
+    hit = (finished_map or {}).get(str(record.get('match_id') or ''))
+    if hit and hit.get('score'):
+        return {'score': hit['score'], 'source': 'zgzcw_finished'}
+
     source = str(record.get('source') or '').lower()
     if source in ('okooo', 'zgzcw'):
         return fetch_by_team(
@@ -317,6 +326,13 @@ def _sync_beidan_results_locked(fetch_by_id=None, fetch_by_team=None, now=None,
         fetch_by_id = fetch_by_id or fetch_result_by_match_id
         fetch_by_team = fetch_by_team or fetch_result_by_team_and_date
 
+    finished_map = {}
+    try:
+        finished_map = fetch_zgzcw_finished_results() or {}
+    except Exception as exc:
+        # 源站抖动只该让这一轮少一条捷径，不该把整轮回填带崩。
+        log.warning('中国足彩网完场比分不可用，本轮回退 500.com: %s', exc)
+
     records = _load_beidan_history()
     ready = [
         r for r in records
@@ -333,7 +349,7 @@ def _sync_beidan_results_locked(fetch_by_id=None, fetch_by_team=None, now=None,
         result = None
         try:
             result = _sync_result_for_record(
-                record, match_time, fetch_by_id, fetch_by_team,
+                record, match_time, fetch_by_id, fetch_by_team, finished_map,
             )
             if result and _settle_beidan_record(
                     record, result.get('score'), result.get('source'), now=now):
