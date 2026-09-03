@@ -961,8 +961,16 @@ class PredictionHistory:
                     # 计算 ML 评估指标
                     record['evaluation'] = evaluate_ml_prediction(record)
                     
-                    # 更新各模块
-                    if _is_result_quality_usable(record):
+                    # 更新各模块。跨源重复记录（换源期间同一场比赛留下的另一条）
+                    # 的派生库已由先结算的那条写过，再灌一次会让 ELO 多走一步、
+                    # 校准与盘口库多收一份同场样本。
+                    if record.get('skip_training_ingest'):
+                        log.info(
+                            "跨源重复记录，仅回填赛果不重复灌入派生库: "
+                            f"{record.get('home')} vs {record.get('away')} "
+                            f"match_id={record.get('match_id')}"
+                        )
+                    elif _is_result_quality_usable(record):
                         self._update_calibrator(record)
                         self._update_market_db(record)
                         self._update_score_frequency_db(record)
@@ -1996,12 +2004,10 @@ def auto_sync_results():
         match_time = record.get('match_time', '')
         league = record.get('league', '')
 
-        if not _is_valid_match_id(match_id):
-            log.debug(f"跳过非数字 match_id 的同步: {home} vs {away} ({match_id})")
-            continue
-        
         try:
-            # 三层兜底抓取赛果
+            # 三层兜底抓取赛果。非 500 数字 fid（如竞彩官网的 sporttery_*）在
+            # fetch_result_by_match_id 内部直接返回 None，落到队名+日期兜底，
+            # 不能在这里整条跳过——那会让这些记录永远停在「准备同步」。
             result = fetch_result_by_match_id(match_id, match_time)
             if not result:
                 result = fetch_result_by_team_and_date(home, away, match_time)
