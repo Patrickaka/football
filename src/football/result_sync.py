@@ -2031,10 +2031,11 @@ def sync_results():
 
 def auto_sync_results():
     """
-    自动同步比赛结果（三层兜底）
-    1. 第一优先：match_id 对应赛果页面
-    2. 第二优先：主队 + 客队 + 比赛日期模糊匹配
-    3. 第三优先：放弃自动同步，标记 failed
+    自动同步比赛结果（逐层兜底）
+    1. 竞彩官网记录（sporttery_*）：按 matchId 查官网开奖接口
+    2. 500 数字 fid：match_id 对应赛果页面
+    3. 主队 + 客队 + 比赛日期模糊匹配
+    4. 都没有：记一次失败，按退避重试，超过 5 次标记 failed
     """
     ready = _global_history.get_ready_to_sync()
     
@@ -2052,18 +2053,23 @@ def auto_sync_results():
         league = record.get('league', '')
 
         try:
-            # 三层兜底抓取赛果。非 500 数字 fid（如竞彩官网的 sporttery_*）在
+            # 竞彩官网来的记录（sporttery_*）先按 matchId 查官网开奖接口：
+            # 竞彩简称与 500 的队名经常对不上（迈季宽广/迈季迈阿宽广），
+            # 队名兜底对这些场次永远失败。非 500 数字 fid 在
             # fetch_result_by_match_id 内部直接返回 None，落到队名+日期兜底，
             # 不能在这里整条跳过——那会让这些记录永远停在「准备同步」。
-            result = fetch_result_by_match_id(match_id, match_time)
+            result = fetch_result_by_sporttery_id(match_id, match_time)
+            if not result:
+                result = fetch_result_by_match_id(match_id, match_time)
             if not result:
                 result = fetch_result_by_team_and_date(home, away, match_time)
-            
+
             if result:
                 if _global_history.update_result(
                     match_id,
                     result['score'],
                     result['result'],
+                    actual_half_score=result.get('half_score'),
                     source=result.get('source'),
                 ):
                     synced += 1
@@ -2207,6 +2213,70 @@ def _fetch_live_score_by_fid(match_id: str, match_time: str) -> Optional[str]:
     return None
 
 
+
+
+SPORTTERY_ID_PREFIX = 'sporttery_'
+
+
+def _sporttery_fetch_json(url: str, referer: str = None) -> Dict:
+    from .fetching import fetch_json
+    return fetch_json(url, referer=referer)
+
+
+def _fetch_sporttery_results(begin_date: str, end_date: str) -> Dict[str, Dict]:
+    """拉取日期窗口内竞彩官网的全部完场赛果，翻完所有分页后按 matchId 合并。
+
+    底层 fetch 带 TTL 缓存，同一轮同步里同一天的几十场只会真正请求一次。
+    """
+    from .sporttery import (
+        SPORTTERY_RESULT_REFERER, parse_sporttery_results, sporttery_result_url,
+    )
+
+    merged: Dict[str, Dict] = {}
+    page_no = 1
+    while True:
+        payload = _sporttery_fetch_json(
+            sporttery_result_url(begin_date, end_date, page_no=page_no),
+            referer=SPORTTERY_RESULT_REFERER,
+        )
+        merged.update(parse_sporttery_results(payload))
+        pages = int((payload.get('value') or {}).get('pages') or 1)
+        if page_no >= pages:
+            return merged
+        page_no += 1
+
+
+def fetch_result_by_sporttery_id(match_id: str, match_time: str) -> Optional[Dict]:
+    """竞彩官网来的记录按 matchId 查官网开奖接口，主客队名完全不参与。
+
+    日期窗口取比赛日前后各一天：接口按 matchDate 归档，跨午夜场次两边
+    的记法可能差一天。
+    """
+    match_id = str(match_id or '')
+    if not match_id.startswith(SPORTTERY_ID_PREFIX):
+        return None
+    sporttery_id = match_id[len(SPORTTERY_ID_PREFIX):]
+    match_dt = _parse_match_datetime(match_time)
+    if not sporttery_id or not match_dt:
+        return None
+
+    window = [
+        (match_dt.date() + timedelta(days=offset)).strftime('%Y-%m-%d')
+        for offset in (-1, 1)
+    ]
+    hit = _fetch_sporttery_results(window[0], window[1]).get(sporttery_id)
+    if not hit:
+        return None
+    result = _parse_score_string(hit['score'])
+    if not result:
+        return None
+    result['half_score'] = hit.get('half_score')
+    result['source'] = 'sporttery'
+    log.info(
+        f"通过竞彩官网开奖接口抓取赛果: {match_id} "
+        f"{hit.get('match_num')} -> {hit['score']}"
+    )
+    return result
 
 
 def fetch_result_by_team_and_date(home: str, away: str, match_time: str) -> Optional[Dict]:

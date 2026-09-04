@@ -41,6 +41,8 @@ def test_sporttery_record_settles_through_team_and_date_fallback():
 
     with mock.patch.object(result_sync, '_global_history', history), \
          mock.patch.object(
+             result_sync, 'fetch_result_by_sporttery_id', return_value=None), \
+         mock.patch.object(
              result_sync, 'fetch_result_by_team_and_date',
              return_value=team_result) as by_team:
         summary = result_sync.auto_sync_results()
@@ -56,6 +58,8 @@ def test_sporttery_record_never_hits_the_500_analysis_page():
     history = _history_with(_sporttery_record())
 
     with mock.patch.object(result_sync, '_global_history', history), \
+         mock.patch.object(
+             result_sync, 'fetch_result_by_sporttery_id', return_value=None), \
          mock.patch.object(result_sync, '_fetch_match_html') as analysis_page, \
          mock.patch.object(result_sync, '_fetch_live_score_by_fid') as by_fid, \
          mock.patch.object(
@@ -71,6 +75,8 @@ def test_sporttery_record_without_any_result_is_counted_as_failed():
     history = _history_with(_sporttery_record())
 
     with mock.patch.object(result_sync, '_global_history', history), \
+         mock.patch.object(
+             result_sync, 'fetch_result_by_sporttery_id', return_value=None), \
          mock.patch.object(
              result_sync, 'fetch_result_by_team_and_date', return_value=None):
         summary = result_sync.auto_sync_results()

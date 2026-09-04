@@ -715,6 +715,10 @@ def _is_match_settle_due(match_time: str, minutes: int = 180, now: datetime = No
     return now >= match_dt + timedelta(minutes=minutes)
 
 
+#: 按比赛 ID 精确对齐、无需队名比对的赛果来源。
+_OFFICIAL_RESULT_SOURCES = frozenset({'live_fid', 'sporttery'})
+
+
 def _assess_result_quality(record: Dict,
                            actual_score: str,
                            actual_result: str,
@@ -745,8 +749,9 @@ def _assess_result_quality(record: Dict,
         reasons.append('not_settle_due')
         score -= 0.70
 
+    # 竞彩官网开奖接口按 matchId 对齐，没有队名歧义，与 500 的 fid 同级。
     source = source or 'unknown'
-    if source == 'live_fid':
+    if source in _OFFICIAL_RESULT_SOURCES:
         score += 0.05
     elif source == 'live_team':
         score -= 0.05
@@ -756,7 +761,8 @@ def _assess_result_quality(record: Dict,
         reasons.append('unknown_source')
         score -= 0.15
 
-    if actual_score in {'0-0', '1-1'} and source not in {'live_fid', 'live_team'}:
+    if (actual_score in {'0-0', '1-1'}
+            and source not in _OFFICIAL_RESULT_SOURCES | {'live_team'}):
         reasons.append('low_information_score_without_live_source')
         score -= 0.18
 

@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Dict, List
 
 
@@ -128,3 +129,61 @@ def parse_sporttery_calculator(payload: Dict) -> List[Dict]:
                 ),
             })
     return converted
+
+
+SPORTTERY_RESULT_URL = (
+    'https://webapi.sporttery.cn/gateway/uniform/football/'
+    'getUniformMatchResultV1.qry'
+)
+SPORTTERY_RESULT_REFERER = SPORTTERY_BASE + '/jc/zqsgkj/'
+# 接口对 pageSize 的上限就是 100，传更大也按 100 返回。
+SPORTTERY_RESULT_PAGE_SIZE = 100
+
+
+def sporttery_result_url(begin_date: str, end_date: str, page_no: int = 1) -> str:
+    """竞彩官网「足球赛果开奖」页调用的接口，按比赛日期窗口分页。"""
+    return (
+        f'{SPORTTERY_RESULT_URL}?matchBeginDate={begin_date}'
+        f'&matchEndDate={end_date}&leagueId='
+        f'&pageSize={SPORTTERY_RESULT_PAGE_SIZE}&pageNo={int(page_no)}'
+        '&isFix=0&matchPage=1&pcOrWap=1'
+    )
+
+
+def _section_score(value) -> str | None:
+    text = str(value or '').strip()
+    if not re.fullmatch(r'\d{1,2}:\d{1,2}', text):
+        return None
+    return text.replace(':', '-')
+
+
+def parse_sporttery_results(payload: Dict) -> Dict[str, Dict]:
+    """把开奖接口 JSON 转成 {竞彩 matchId: 赛果}。
+
+    未开赛的场次根本不会出现在这个接口里，出现了且 `sectionsNo999` 是合法
+    比分就是完场。`poolStatus` 不作为门槛：单关未开售的场次它是空串，
+    但比分照样是真的（奥斯纳 vs 拜仁 1:4）。
+    """
+    if not isinstance(payload, dict):
+        raise ValueError('sporttery result response is not an object')
+    if str(payload.get('errorCode')) != '0' or not payload.get('success'):
+        raise ValueError(
+            'sporttery result error: '
+            + str(payload.get('errorMessage') or 'unknown')
+        )
+    value = payload.get('value') or {}
+    results = {}
+    for raw in (value.get('matchResult') or []):
+        if not isinstance(raw, dict):
+            continue
+        sporttery_id = str(raw.get('matchId') or '').strip()
+        score = _section_score(raw.get('sectionsNo999'))
+        if not (sporttery_id and score):
+            continue
+        results[sporttery_id] = {
+            'score': score,
+            'half_score': _section_score(raw.get('sectionsNo1')),
+            'match_num': str(raw.get('matchNumStr') or '').replace(' ', ''),
+            'match_date': str(raw.get('matchDate') or '').strip(),
+        }
+    return results
