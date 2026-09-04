@@ -121,6 +121,13 @@ class ManualRecalculationContext(unittest.TestCase):
             },
             'select_6': {'numbers': [1, 2, 3, 4, 5, 6]},
             'fu_shi_7': {'top7_numbers': [1, 2, 3, 4, 5, 6, 7]},
+            'fu_shi_7_recalculation_chain': {'records': [{
+                'excluded_numbers': [1, 2, 3, 4, 5, 6, 7],
+                'select6_round': {
+                    'numbers': [7, 8, 9, 10, 11, 12],
+                    'excluded_numbers': [1, 2, 3, 4, 5, 6],
+                },
+            }]},
         }
         analyzer = mock.Mock()
         analyzer.history_data = [{'issue': based_on_issue}]
@@ -165,8 +172,16 @@ class ManualRecalculationContext(unittest.TestCase):
                     **source_params,
                     'play_type': ['fu_shi_7'], 'numbers': ['21'],
                 })
+                service.kl8_exclude_recalculate_payload({
+                    **source_params,
+                    'play_type': ['fu_shi_7'], 'numbers': ['1,2,3,4,5,6,7'],
+                })
 
-        select6_call, fushi7_call = analyzer.recalculate_play_excluding.call_args_list
+        select6_call, fushi7_call, linked_call = analyzer.recalculate_play_excluding.call_args_list
+        self.assertEqual(linked_call.kwargs['record_context']['select6_round'], {
+            'numbers': [7, 8, 9, 10, 11, 12],
+            'excluded_numbers': [1, 2, 3, 4, 5, 6],
+        })
         self.assertEqual(select6_call.args[:2], ('select_6', [20]))
         self.assertEqual(fushi7_call.args[:2], ('fu_shi_7', [21]))
         self.assertEqual(select6_call.kwargs['record_context'], {

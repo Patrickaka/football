@@ -472,15 +472,24 @@ def kl8_exclude_recalculate_payload(params):
                 or current_play.get('top11_numbers')
                 or []
             ) if isinstance(current_play, dict) else []
+            record_context = {
+                'source_snapshot_id': source_snapshot_id,
+                'source_version': source_version,
+                'generation_mode': 'manual',
+                'initial_numbers': initial_numbers,
+            }
+            if play_type == 'fu_shi_7':
+                # 手动逐轮剔除时复用自动链的选6基准，避免同一排除集算出不同号码。
+                chain = current.get('fu_shi_7_recalculation_chain') or {}
+                for row in chain.get('records') or []:
+                    if set(row.get('excluded_numbers') or []) == set(exclude_numbers):
+                        if row.get('select6_round'):
+                            record_context['select6_round'] = row['select6_round']
+                        break
             result = analyzer.recalculate_play_excluding(
                 play_type,
                 exclude_numbers,
-                record_context={
-                    'source_snapshot_id': source_snapshot_id,
-                    'source_version': source_version,
-                    'generation_mode': 'manual',
-                    'initial_numbers': initial_numbers,
-                },
+                record_context=record_context,
             )
             return {'result': result}
     except Exception as e:

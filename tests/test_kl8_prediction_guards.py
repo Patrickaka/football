@@ -630,8 +630,13 @@ class KL8PredictionGuardTests(unittest.TestCase):
             KL8Analyzer.build_pool_by_strategy = lambda self, strategy, pool_size=20: {
                 'selected': ranked_numbers, 'candidates': candidates, 'votes': {},
             }
+            select6_chain = analyzer.generate_exclude_recalculation_chain(
+                'select_6', sorted(ranked_numbers[:6]),
+                source_snapshot_id='select6-chain-snapshot',
+            )
             chain = analyzer.generate_exclude_recalculation_chain(
                 'fu_shi_7', initial, source_snapshot_id='fushi7-chain-snapshot',
+                linked_select6_chain=select6_chain,
             )
             seen = set(initial)
             for row in chain['records']:
@@ -639,9 +644,18 @@ class KL8PredictionGuardTests(unittest.TestCase):
                     self.assertEqual(set(row['excluded_numbers']), seen)
                     self.assertEqual(len(row['numbers']), 7)
                     self.assertFalse(seen.intersection(row['numbers']))
+                    source = select6_chain['records'][row['round'] - 1]
+                    kept = set(source['numbers']) - seen
+                    self.assertTrue(kept.issubset(row['numbers']))
+                    self.assertEqual(set(row['replaced_numbers']), set(source['numbers']) & seen)
+                    available = [n for n in ranked_numbers if n not in seen and n not in kept]
+                    self.assertEqual(set(row['numbers']), kept | set(available[:7 - len(kept)]))
                     manual = analyzer.recalculate_play_excluding(
                         'fu_shi_7', sorted(seen),
-                        record_context={'source_snapshot_id': 'fushi7-manual-snapshot'},
+                        record_context={
+                            'source_snapshot_id': 'fushi7-manual-snapshot',
+                            'select6_round': row['select6_round'],
+                        },
                     )
                     self.assertEqual(manual['top7_numbers'], row['numbers'])
                     self.assertEqual(manual['next_exclude_numbers'], row['numbers'])
@@ -656,7 +670,7 @@ class KL8PredictionGuardTests(unittest.TestCase):
         self.assertEqual(chain['terminal']['required_count'], 7)
         self.assertEqual(set(chain['terminal']['excluded_numbers']), seen)
         stored = kl8_module.list_exclude_recalculations()
-        terminal = [row for row in stored if row['status'] == 'exhausted']
+        terminal = [row for row in stored if row['status'] == 'exhausted' and row['play_type'] == 'fu_shi_7']
         self.assertEqual(len(terminal), 1)
         self.assertEqual(terminal[0]['round'], 11)
         self.assertEqual(set(terminal[0]['excluded_numbers']), seen)
@@ -696,6 +710,18 @@ class KL8PredictionGuardTests(unittest.TestCase):
         self.assertEqual(len(stored), 1)
         self.assertEqual(stored[0]['status'], 'exhausted')
         self.assertEqual(stored[0]['numbers'], [])
+
+    def test_fushi7_preserves_same_round_core_and_replaces_only_repeats(self):
+        from src.kl8.analyzer import _fushi7_from_select6
+
+        core = [26, 41, 68, 71, 74, 79]
+        ranked = [(n, 100 - i) for i, n in enumerate([8, 13, *core, 36])]
+        unchanged, extra = _fushi7_from_select6(core, ranked)
+        self.assertEqual(unchanged, [8, 26, 41, 68, 71, 74, 79])
+        self.assertEqual(extra, 8)
+        repaired, extra = _fushi7_from_select6(core, ranked, [8, 26])
+        self.assertEqual(repaired, [13, 36, 41, 68, 71, 74, 79])
+        self.assertEqual(extra, 36)
 
     def test_fushi7_recalculation_stops_when_select6_has_no_strategy(self):
         analyzer = KL8Analyzer.__new__(KL8Analyzer)
@@ -1110,6 +1136,7 @@ class KL8PredictionGuardTests(unittest.TestCase):
         self.assertEqual([item['play_type'] for item in captured], ['select_6', 'fu_shi_7'])
         self.assertEqual(captured[0]['initial_numbers'], result['select_6']['numbers'])
         self.assertEqual(captured[1]['initial_numbers'], result['fu_shi_7']['top7_numbers'])
+        self.assertIs(captured[1]['linked_select6_chain'], result['select_6_recalculation_chain'])
         self.assertTrue(all(
             item['source_snapshot_id'] == 'auto-chain-id'
             for item in captured

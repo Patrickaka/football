@@ -64,25 +64,29 @@ KL8_BIG_SMALL_THRESHOLD = 40  # 大于 40 为大；40 本身算小
 def _fushi7_from_select6(
     select6_numbers: List[int],
     ranked_candidates: List[Tuple[int, float]],
+    excluded_numbers: Optional[List[int]] = None,
 ) -> Tuple[List[int], Optional[int]]:
     """用选6的同一排名补出选5复式7码。
 
     选6的6个号码是已经过完整策略与形态约束选定的主推，不能为了
-    复式玩法再排一次名。第7个号只能是选6候选排名中第一个尚未入选的
-    号码。返回值仍按号码升序供展示，同时单独返回补位号便于审计。
+    复式玩法再排一次名。若主号已在复式之前的轮次出现，只替换这些号；
+    替换和第7码均按选6候选排名依次补齐。返回升序号码和最后的补位号。
     """
     base = _clean_pick_numbers(select6_numbers, 6)
     if not base:
         return [], None
 
-    selected = set(base)
+    excluded = set(excluded_numbers or [])
+    selected = set(base) - excluded
     for candidate in ranked_candidates or []:
         try:
             number = int(candidate[0])
         except (TypeError, ValueError, IndexError):
             continue
-        if 1 <= number <= KL8_NUM_RANGE and number not in selected:
-            return sorted([*base, number]), number
+        if 1 <= number <= KL8_NUM_RANGE and number not in selected and number not in excluded:
+            selected.add(number)
+            if len(selected) == 7:
+                return sorted(selected), number
     return [], None
 
 
@@ -1077,9 +1081,15 @@ class KL8Analyzer:
             return result
 
         if play_type == 'fu_shi_7':
+            # 自动轨迹以选6同轮为基准，只替换复式前面轮次已用过的号。
+            linked = (record_context or {}).get('select6_round') or {}
+            select6_excluded = linked.get('excluded_numbers', excluded)
             select6_result, candidates = self._calculate_select_recalculation(
-                'select_6', excluded,
+                'select_6', select6_excluded,
             )
+            if linked.get('numbers'):
+                select6_result['numbers'] = list(linked['numbers'])
+            candidates = [(n, score) for n, score in candidates if n not in excluded]
             if (
                 select6_result.get('error')
                 and 'remaining_count' not in select6_result
@@ -1101,7 +1111,7 @@ class KL8Analyzer:
                 return result
 
             core_numbers, supplemental_number = _fushi7_from_select6(
-                select6_result.get('numbers', []), candidates,
+                select6_result.get('numbers', []), candidates, excluded,
             )
             if len(core_numbers) != 7:
                 result = {
@@ -1146,6 +1156,7 @@ class KL8Analyzer:
                 fushi_cfg['numbers_field']: core_numbers,
                 'core_numbers': core_numbers,
                 'select_6_numbers': select6_result['numbers'],
+                'replaced_numbers': sorted(set(select6_result['numbers']) & set(excluded)),
                 'next_exclude_numbers': core_numbers,
                 'supplemental_number': supplemental_number,
                 'ranking_source': 'select_6',
@@ -1353,6 +1364,8 @@ class KL8Analyzer:
                 'required_count': result.get('required_count'),
                 'strategy_id': result.get('strategy_id', ''),
                 'selection_mode': (result.get('quality') or {}).get('selection_mode', ''),
+                'select6_round': context.get('select6_round'),
+                'replaced_numbers': result.get('replaced_numbers', []),
                 'created_at': time.strftime('%Y-%m-%dT%H:%M:%S'),
                 'version': source_version,
             }
@@ -1399,6 +1412,7 @@ class KL8Analyzer:
         max_rounds: int = 20,
         source_snapshot_id: str = '',
         source_version: str = '',
+        linked_select6_chain: Optional[Dict] = None,
     ) -> Dict:
         """Automatically replay cumulative exclusions until no full pick remains."""
         current = sorted({int(n) for n in (initial_numbers or []) if 1 <= int(n) <= KL8_NUM_RANGE})
@@ -1422,10 +1436,23 @@ class KL8Analyzer:
         exhausted = None
         for round_number in range(1, max(1, max_rounds) + 1):
             excluded.update(current)
+            round_context = {**record_context, 'round': round_number}
+            if play_type == 'fu_shi_7' and linked_select6_chain is not None:
+                linked_records = linked_select6_chain.get('records') or []
+                if round_number > len(linked_records):
+                    terminal = linked_select6_chain.get('terminal')
+                    if not terminal:
+                        break
+                    round_context['select6_round'] = terminal
+                else:
+                    round_context['select6_round'] = {
+                        key: linked_records[round_number - 1][key]
+                        for key in ('numbers', 'excluded_numbers')
+                    }
             result = self.recalculate_play_excluding(
                 play_type,
                 sorted(excluded),
-                record_context={**record_context, 'round': round_number},
+                record_context=round_context,
             )
             if result.get('error'):
                 exhausted = {
@@ -1938,6 +1965,7 @@ class KL8Analyzer:
             results['snapshot_file'] = snapshot_name
             source_snapshot_id = Path(snapshot_name).stem.replace('snapshot_', '', 1)
             select6_numbers = results.get('select_6', {}).get('numbers', [])
+            select6_chain = None
             if len(select6_numbers) == 6:
                 select6_chain = self.generate_exclude_recalculation_chain(
                     'select_6',
@@ -1947,20 +1975,21 @@ class KL8Analyzer:
                 )
                 results['select_6_recalculation_chain'] = select6_chain
 
-            # 复式单独累计排除每轮全部7码（含补位号），直到不足7码。
+            # 按选6同轮保留未重复号码，替换已用号后补足7码，直到不足7码。
             # 重算记录绑定本次正式快照，预测记录接口会按 source_snapshot_id
             # 自动归入对应期次，不混入同一期其他模型版本的轨迹。
             fushi7_numbers = (
                 results.get('fu_shi_7', {}).get('top7_numbers')
                 or results.get('fu_shi_7', {}).get('core_numbers', [])
             )
-            if len(fushi7_numbers) == FUSHI_CONFIG['fu_shi_7']['pool_size']:
+            if len(fushi7_numbers) == FUSHI_CONFIG['fu_shi_7']['pool_size'] and select6_chain:
                 results['fu_shi_7_recalculation_chain'] = (
                     self.generate_exclude_recalculation_chain(
                         'fu_shi_7',
                         fushi7_numbers,
                         source_snapshot_id=source_snapshot_id,
                         source_version=KL8_PREDICTOR_VERSION,
+                        linked_select6_chain=select6_chain,
                     )
                 )
 
