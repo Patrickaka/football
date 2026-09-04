@@ -3214,6 +3214,8 @@ document.addEventListener('keydown', event => {
 // 默认“精选”会形成“接口已有数据、页面却像空白”的误导。
 let footballQualityFilter = 'all';
 let footballSessionFilter = '';
+// 期次默认跟着"今天"走，用户点过任一期次（含"全部"）后就固定住，不再被自动改写。
+let footballSessionFilterPinned = false;
 let footballSort = 'time';
 let footballPage = 1;
 let footballPageSize = 12;
@@ -3640,6 +3642,21 @@ function footballMatchSessionKey(item) {
   return predictionSessionKey({ match_num: match.num, match_time: match.time });
 }
 
+function todaySessionKey() {
+  // 期次键按本地日期生成（predictionSessionKey 同样用本地时间），
+  // 不能用 toISOString：北京时间凌晨会被算成 UTC 的前一天。
+  const now = new Date();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  return `${now.getFullYear()}-${month}-${day}`;
+}
+
+function defaultFootballSessionFilter(results) {
+  const sessions = new Set((results || []).map(footballMatchSessionKey).filter(Boolean));
+  const today = todaySessionKey();
+  return sessions.has(today) ? today : '';
+}
+
 function footballMatchPassesSessionFilter(item) {
   if (!footballSessionFilter) return true;
   return footballMatchSessionKey(item) === footballSessionFilter;
@@ -3647,6 +3664,7 @@ function footballMatchPassesSessionFilter(item) {
 
 function setFootballSessionFilter(value) {
   footballSessionFilter = value || '';
+  footballSessionFilterPinned = true;
   footballPage = 1;
   renderFootballPredictions(allPredictions);
   requestAnimationFrame(scrollToFootballResults);
@@ -3790,6 +3808,7 @@ function getLotteryLinkedSelections(lottery) {
 
 function renderFootballPredictions(results) {
   allPredictions = results;
+  if (!footballSessionFilterPinned) footballSessionFilter = defaultFootballSessionFilter(results);
   let html = '';
 
   searchWrap.innerHTML = '';
