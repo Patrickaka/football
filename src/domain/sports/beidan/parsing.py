@@ -620,6 +620,39 @@ def parse_zgzcw_goals_company_history(html):
     return _zgzcw_company_history(html, 'goals')
 
 
+def parse_zgzcw_finished_results(html):
+    """中国足彩网足球单场页 → 已完场比赛的终场比分。
+
+    北单赛程本来就抓自这张页，完场那几行的比分格（``wh-5``）直接写着终场
+    比分，且带着与赛程同一个 ``newplayid``。按 ID 对齐没有队名歧义——
+    绕道 500.com 按队名找，跨站命名差一个字就永远找不到。
+
+    同时按 ``newplayid`` 与行号索引：记录里存的可能是其中任意一个。
+    """
+    results = {}
+    for attrs, row in _ZGZCW_ROW.findall(html or ''):
+        row_id = _zgzcw_attr(attrs, 'id', '')
+        if not row_id.startswith('tr_'):
+            continue
+        home, away = _zgzcw_team(row, 'wh-4'), _zgzcw_team(row, 'wh-6')
+        if not (home and away):
+            continue
+        score = _TAG.sub('', _zgzcw_cell(row, 'wh-5')[1]).strip()
+        parsed = re.search(r'(\d+)\s*[:\-]\s*(\d+)', score)
+        if not parsed:
+            continue
+        entry = {
+            'score': f'{parsed.group(1)}-{parsed.group(2)}',
+            'home': home,
+            'away': away,
+        }
+        analysis = re.search(r'\bnewplayid=["\'](\d+)["\']', row, re.I)
+        if analysis:
+            results[analysis.group(1)] = entry
+        results[row_id[3:]] = entry
+    return results
+
+
 def parse_zgzcw_schedule(html, date=None):
     """中国足彩网足球单场页 → 未完结比赛列表。
 

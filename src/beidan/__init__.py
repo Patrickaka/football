@@ -32,7 +32,7 @@ from .modeling import (
     match_target_total, match_lambdas, parse_beidan_handicap, rqspf_probs_from_score_probs,
 )
 from .fetching import (
-    fetch, fetch_json, fetch_zgzcw, fetch_zgzcw_schedule,
+    fetch, fetch_json, fetch_zgzcw, fetch_zgzcw_finished_results, fetch_zgzcw_schedule,
     fetch_zgzcw_asian_history, fetch_zgzcw_goals_history,
     fetch_zgzcw_cs_history, fetch_beidan_schedule, fetch_jczq_schedule,
     fetch_zqdc_schedule,

@@ -297,8 +297,32 @@ _RESULT_TEAM_NAME_AFFIXES = frozenset({
 })
 
 
+def _within_one_edit(shorter: str, longer: str) -> bool:
+    """两个名字之间至多一次增、删或改。
+
+    **只给三字以上的名字这份预算**：两字名放一个字等于只比一个字，
+    「曼城/曼联」「雷丁/雷恩」「国安/泰安」会被并成同一支队。
+    """
+    if len(shorter) < 3 or len(longer) - len(shorter) > 1:
+        return False
+    if len(shorter) == len(longer):
+        return sum(1 for left, right in zip(shorter, longer) if left != right) <= 1
+    index = 0
+    while index < len(shorter) and shorter[index] == longer[index]:
+        index += 1
+    return shorter[index:] == longer[index + 1:]
+
+
 def _result_team_names_match(expected: str, actual: str) -> bool:
-    """跨站队名容忍 FC 及已确认的俱乐部前后缀差异。"""
+    """跨站队名容忍 FC、已确认的俱乐部前后缀，以及一个字的写法差异。
+
+    北单来源（zgzcw/okooo）与 500.com 的差异大量落在**词中间**——
+    曼斯菲德/曼斯菲尔德、基马诺克/基尔马诺克、莱斯特城/莱切斯特城——
+    前后缀白名单结构上就接不住，这些场次的赛果因此永远回填不上。
+
+    放宽一个字的安全边界不在这里，而在调用方：`_parse_live_row_score`
+    要求主客队**同时**匹配同一行才认，单边像不算数。
+    """
     expected = _normalize_result_team_name(expected)
     actual = _normalize_result_team_name(actual)
     if not expected or not actual:
@@ -308,11 +332,11 @@ def _result_team_names_match(expected: str, actual: str) -> bool:
     shorter, longer = sorted((expected, actual), key=len)
     if len(shorter) < 2:
         return False
-    if longer.startswith(shorter):
-        return longer[len(shorter):] in _RESULT_TEAM_NAME_AFFIXES
-    if longer.endswith(shorter):
-        return longer[:-len(shorter)] in _RESULT_TEAM_NAME_AFFIXES
-    return False
+    if longer.startswith(shorter) and longer[len(shorter):] in _RESULT_TEAM_NAME_AFFIXES:
+        return True
+    if longer.endswith(shorter) and longer[:-len(shorter)] in _RESULT_TEAM_NAME_AFFIXES:
+        return True
+    return _within_one_edit(shorter, longer)
 
 
 def _is_valid_match_id(match_id: str) -> bool:
