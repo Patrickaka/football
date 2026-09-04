@@ -1060,10 +1060,13 @@ class KL8PredictionGuardTests(unittest.TestCase):
         select6_numbers = set(result['select_6']['numbers'])
         fushi7_numbers = set(result['fu_shi_7']['top7_numbers'])
         self.assertTrue(select6_numbers.issubset(fushi7_numbers))
+        reserved = set(result['fu_shi_7']['reserved_select6_first_round'])
+        self.assertEqual(len(reserved), 6)
+        self.assertFalse(fushi7_numbers & reserved)
         expected_supplement = next(
             number
             for number, _ in result['all_candidate_pools']['select_6']['candidates']
-            if number not in select6_numbers
+            if number not in select6_numbers and number not in reserved
         )
         self.assertEqual(
             result['fu_shi_7']['supplemental_number'],
@@ -1153,6 +1156,51 @@ class KL8PredictionGuardTests(unittest.TestCase):
             result['fu_shi_7_recalculation_chain']['generation_mode'],
             'automatic',
         )
+
+    def test_fushi7_first_round_keeps_all_six_numbers_without_repeating_round_zero(self):
+        from unittest.mock import patch
+
+        analyzer = KL8Analyzer.__new__(KL8Analyzer)
+        analyzer.history_data = [_record(i) for i in range(80, 0, -1)]
+        analyzer.using_simulated_data = False
+        analyzer.history_file = ''
+        analyzer._data_mtime = 0
+        analyzer.statistics = {}
+        analyzer.update_statistics()
+        # 截图中的第0轮及第1轮：原补位68会抢占选6第1轮。
+        primary = [5, 32, 34, 46, 52, 67]
+        first_six = [26, 41, 68, 71, 74, 79]
+        ranked = primary + [68, 26, 41, 71, 74, 79, 8, 13]
+        ranked += [n for n in range(1, 81) if n not in ranked]
+        candidates = [(n, float(100 - i)) for i, n in enumerate(ranked)]
+        with patch.object(kl8_config, 'VERIFY_ONLY_MODE', False), \
+                patch.object(KL8Analyzer, 'build_pool_by_strategy', return_value={
+                    'selected': ranked, 'candidates': candidates, 'votes': {},
+                }), \
+                patch.object(KL8Analyzer, '_save_prediction_snapshot',
+                             return_value='snapshot_first-round-aligned.json'):
+            result = analyzer.predict_all()
+            select6_chain = result['select_6_recalculation_chain']['records']
+            fushi_chain = result['fu_shi_7_recalculation_chain']
+            self.assertEqual(result['select_6']['numbers'], primary)
+            self.assertEqual(select6_chain[0]['numbers'], first_six)
+            self.assertEqual(result['fu_shi_7']['top7_numbers'], sorted(primary + [8]))
+            self.assertEqual(fushi_chain['records'][0]['numbers'], sorted(first_six + [13]))
+            self.assertEqual(fushi_chain['records'][0]['replaced_numbers'], [])
+            seen = set(result['fu_shi_7']['top7_numbers'])
+            for row, source in zip(fushi_chain['records'], select6_chain):
+                self.assertFalse(seen & set(row['numbers']))
+                self.assertTrue((set(source['numbers']) - seen).issubset(row['numbers']))
+                manual = analyzer.recalculate_play_excluding(
+                    'fu_shi_7', sorted(seen), record_context={
+                        'source_snapshot_id': 'first-round-aligned',
+                        'select6_round': row['select6_round'],
+                    },
+                )
+                self.assertEqual(manual['top7_numbers'], row['numbers'])
+                seen.update(row['numbers'])
+            self.assertTrue(fushi_chain['exhausted'])
+            self.assertEqual(fushi_chain['terminal']['remaining_count'], 3)
 
     def test_snapshot_records_select6_and_exactly_seven_fushi_numbers(self):
         analyzer = KL8Analyzer.__new__(KL8Analyzer)

@@ -1676,15 +1676,22 @@ class KL8Analyzer:
             pool_size = fushi_cfg['pool_size']
             base_pick = fushi_cfg['base_pick']
 
-            # 选5复式7码不是一套独立猜号策略。它必须完整保留选6主推，
-            # 并从选6的同一候选排名中取第一个未入选号码作为第7个号。
+            # 复式第0轮保留选6主推；补位预留选6第1轮的全部6码，
+            # 避免第0轮先用掉其中一个号，导致复式第1轮无法完整对应。
             if fushi_key == 'fu_shi_7':
                 select6_result = results.get('select_6', {})
                 select6_numbers = select6_result.get('numbers', [])
                 select6_candidates = select_candidate_rankings.get('select_6', [])
+                first_round_numbers = []
+                if len(select6_numbers) == 6:
+                    first_round, _ = self._calculate_select_recalculation(
+                        'select_6', select6_numbers,
+                    )
+                    first_round_numbers = first_round.get('numbers') or []
                 core_numbers, supplemental_number = _fushi7_from_select6(
                     select6_numbers,
                     select6_candidates,
+                    excluded_numbers=first_round_numbers,
                 )
                 linked_strategy = dict(resolved_strategies.get('select_6', {}))
                 linked_strategy['ranking_source'] = 'select_6'
@@ -1728,6 +1735,7 @@ class KL8Analyzer:
                     numbers_field: core_numbers,
                     'core_numbers': core_numbers,
                     'select_6_numbers': sorted(select6_numbers),
+                    'reserved_select6_first_round': first_round_numbers,
                     'supplemental_number': supplemental_number,
                     'ranking_source': 'select_6',
                     'shape_profile': _shape_profile(
