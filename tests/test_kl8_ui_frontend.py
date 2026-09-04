@@ -63,14 +63,14 @@ class KL8VisualShell(unittest.TestCase):
         self.assertIn('max-height: min(92dvh, 860px);', HTML)
         self.assertIn('grid-template-areas: "issue date" "balls balls";', HTML)
 
-    def test_fushi7_recalculation_excludes_only_its_linked_select6_core(self):
-        self.assertIn(
-            "recalculationNumbers: r.fu_shi_7?.select_6_numbers || r.select_6?.numbers || []",
+    def test_fushi7_recalculation_excludes_all_seven_numbers(self):
+        self.assertNotIn(
+            "recalculationNumbers: r.fu_shi_7?.select_6_numbers",
             HTML,
         )
         self.assertEqual(
             HTML.count(
-                'result.next_exclude_numbers || result.select_6_numbers || newNumbers'
+                'option.currentRecalculationNumbers = newNumbers;'
             ),
             2,
         )

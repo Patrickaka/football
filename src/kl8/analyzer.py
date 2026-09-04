@@ -1036,10 +1036,7 @@ class KL8Analyzer:
         return {
             'play_type': play_type,
             'numbers': numbers,
-            # The client uses this field as the next cumulative-exclusion unit.
-            # For ordinary plays it is the result itself; fu_shi_7 overrides it
-            # with the linked select-6 core so its seventh supplement is not
-            # incorrectly killed on the next round.
+            # Exclude the entire current pick on the next round.
             'next_exclude_numbers': numbers,
             'excluded_numbers': excluded,
             'candidates': candidates[:12],
@@ -1149,7 +1146,7 @@ class KL8Analyzer:
                 fushi_cfg['numbers_field']: core_numbers,
                 'core_numbers': core_numbers,
                 'select_6_numbers': select6_result['numbers'],
-                'next_exclude_numbers': select6_result['numbers'],
+                'next_exclude_numbers': core_numbers,
                 'supplemental_number': supplemental_number,
                 'ranking_source': 'select_6',
                 'excluded_numbers': excluded,
@@ -1444,103 +1441,6 @@ class KL8Analyzer:
 
         return {
             'play_type': play_type,
-            'generated_rounds': len(generated),
-            'generation_mode': 'automatic',
-            'records': generated,
-            'exhausted': exhausted is not None,
-            'terminal': exhausted,
-        }
-
-    def generate_fushi7_recalculation_chain_from_select6(
-        self,
-        select6_chain: Dict,
-        initial_numbers: List[int],
-        max_rounds: int = 20,
-        source_snapshot_id: str = '',
-        source_version: str = '',
-    ) -> Dict:
-        """按选6杀号链的每轮排除条件生成对应的7码复式记录。
-
-        这里不允许复式玩法自己累计排除7个号码。每一轮都复用选6记录的
-        ``excluded_numbers``，再由 :meth:`recalculate_play_excluding` 使用
-        选6策略选出同轮6码并顺序补1码，因此两条记录链可以逐轮对齐。
-        """
-        required = FUSHI_CONFIG['fu_shi_7']['pool_size']
-        current = sorted(_clean_pick_numbers(initial_numbers, required))
-        if len(current) != required:
-            return {'error': f'fu_shi_7 初始号码必须为{required}个'}
-        if not isinstance(select6_chain, dict):
-            return {'error': '选6杀号链无效'}
-
-        record_context = {
-            'source_snapshot_id': source_snapshot_id,
-            'source_version': source_version or KL8_PREDICTOR_VERSION,
-            'generation_mode': 'automatic',
-            'initial_numbers': current,
-        }
-        generated = []
-        exhausted = None
-        select6_records = select6_chain.get('records') or []
-        last_round = 0
-        for fallback_round, select6_record in enumerate(
-            select6_records[:max(1, max_rounds)], start=1,
-        ):
-            try:
-                round_number = max(
-                    1,
-                    int(select6_record.get('round') or fallback_round),
-                )
-            except (TypeError, ValueError):
-                round_number = fallback_round
-            last_round = max(last_round, round_number)
-            excluded = select6_record.get('excluded_numbers') or []
-            result = self.recalculate_play_excluding(
-                'fu_shi_7',
-                excluded,
-                record_context={**record_context, 'round': round_number},
-            )
-            if result.get('error'):
-                exhausted = {
-                    'excluded_numbers': result.get('excluded_numbers', excluded),
-                    'remaining_count': result.get('remaining_count'),
-                    'required_count': result.get('required_count', required),
-                }
-                break
-
-            fushi_numbers = result.get('top7_numbers') or result.get('core_numbers') or []
-            select6_numbers = select6_record.get('numbers') or []
-            if not set(select6_numbers).issubset(fushi_numbers):
-                exhausted = {
-                    'excluded_numbers': result.get('excluded_numbers', excluded),
-                    'remaining_count': len(fushi_numbers),
-                    'required_count': required,
-                    'reason': 'select6_linkage_mismatch',
-                }
-                break
-            generated.append(result.get('recalculation_record') or {})
-
-        # 选6已无法再生成6码时，复式7码必然也无法补齐；复用相同的终止
-        # 排除条件落一条 exhausted 记录，使两条自动轨迹的结束点一致。
-        select6_terminal = select6_chain.get('terminal')
-        if exhausted is None and isinstance(select6_terminal, dict):
-            terminal_excluded = select6_terminal.get('excluded_numbers') or []
-            terminal_result = self.recalculate_play_excluding(
-                'fu_shi_7',
-                terminal_excluded,
-                record_context={**record_context, 'round': last_round + 1},
-            )
-            if terminal_result.get('error'):
-                exhausted = {
-                    'excluded_numbers': terminal_result.get(
-                        'excluded_numbers', terminal_excluded
-                    ),
-                    'remaining_count': terminal_result.get('remaining_count'),
-                    'required_count': terminal_result.get('required_count', required),
-                }
-
-        return {
-            'play_type': 'fu_shi_7',
-            'linked_play_type': 'select_6',
             'generated_rounds': len(generated),
             'generation_mode': 'automatic',
             'records': generated,
@@ -2038,7 +1938,6 @@ class KL8Analyzer:
             results['snapshot_file'] = snapshot_name
             source_snapshot_id = Path(snapshot_name).stem.replace('snapshot_', '', 1)
             select6_numbers = results.get('select_6', {}).get('numbers', [])
-            select6_chain = None
             if len(select6_numbers) == 6:
                 select6_chain = self.generate_exclude_recalculation_chain(
                     'select_6',
@@ -2048,21 +1947,17 @@ class KL8Analyzer:
                 )
                 results['select_6_recalculation_chain'] = select6_chain
 
-            # 选5复式7码与选6使用相同的“第0轮主推 → 累计杀号重算”记录模式。
+            # 复式单独累计排除每轮全部7码（含补位号），直到不足7码。
             # 重算记录绑定本次正式快照，预测记录接口会按 source_snapshot_id
             # 自动归入对应期次，不混入同一期其他模型版本的轨迹。
             fushi7_numbers = (
                 results.get('fu_shi_7', {}).get('top7_numbers')
                 or results.get('fu_shi_7', {}).get('core_numbers', [])
             )
-            if (
-                len(fushi7_numbers) == FUSHI_CONFIG['fu_shi_7']['pool_size']
-                and isinstance(select6_chain, dict)
-                and not select6_chain.get('error')
-            ):
+            if len(fushi7_numbers) == FUSHI_CONFIG['fu_shi_7']['pool_size']:
                 results['fu_shi_7_recalculation_chain'] = (
-                    self.generate_fushi7_recalculation_chain_from_select6(
-                        select6_chain,
+                    self.generate_exclude_recalculation_chain(
+                        'fu_shi_7',
                         fushi7_numbers,
                         source_snapshot_id=source_snapshot_id,
                         source_version=KL8_PREDICTOR_VERSION,

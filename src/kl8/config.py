@@ -18,7 +18,7 @@ from src.common.logger import setup_logger
 log = setup_logger('kl8')
 
 
-KL8_PREDICTOR_VERSION = "kl8-v10.14-select6-linked-fushi7"
+KL8_PREDICTOR_VERSION = "kl8-v10.15-fushi7-cumulative-exclusion"
 
 # ─── v9.2: 只显示已验证策略模式 ───
 # 正式策略优先；尚未通过验证时继续输出玩法专属的动态参考策略，供持续

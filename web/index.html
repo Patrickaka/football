@@ -6385,9 +6385,6 @@ function getKL8ExcludeOptions() {
       key: 'fu_shi_7',
       label: '选5复式7码',
       numbers: r.fu_shi_7?.top7_numbers || r.fu_shi_7?.core_numbers || [],
-      // 7码复式由选6主号顺序补1码而来；后续杀号必须只累计选6的6个
-      // 主号，否则补充号会被多杀一次，下一轮就会与选6轨迹分叉。
-      recalculationNumbers: r.fu_shi_7?.select_6_numbers || r.select_6?.numbers || [],
       resultField: 'top7_numbers',
     },
   ].filter(item => item.numbers && item.numbers.length > 0);
@@ -7023,7 +7020,7 @@ async function runKL8KillRecalculate() {
     }
 
     option.currentNumbers = newNumbers;
-    option.currentRecalculationNumbers = result.next_exclude_numbers || result.select_6_numbers || newNumbers;
+    option.currentRecalculationNumbers = newNumbers;
     option.excludedNumbers = result.excluded_numbers || excludeNumbers;
     option.manualKillNumbers = manualKillNumbers;
     option.initialized = true;
@@ -7092,7 +7089,7 @@ async function runKL8ExcludeRecalculate() {
       throw new Error(`${option.label} 候选号码不足，已停止输出新结果`);
     }
     option.currentNumbers = newNumbers;
-    option.currentRecalculationNumbers = result.next_exclude_numbers || result.select_6_numbers || newNumbers;
+    option.currentRecalculationNumbers = newNumbers;
     option.excludedNumbers = result.excluded_numbers || excludeNumbers;
     option.round = (option.round || 0) + 1;
     const candidates = (result.candidates || []).map(item => Array.isArray(item) ? item[0] : item).slice(0, 12);
