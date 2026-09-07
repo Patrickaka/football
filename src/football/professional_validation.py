@@ -19,6 +19,7 @@ from ..domain.sports.football.validation import (  # noqa: F401
     _rqspf_actual,
     _rqspf_odds,
     blend_record_with_market,
+    chronological_fold_bounds,
     evaluate_rqspf_records,
     evaluate_strategy,
     multiclass_metrics,

@@ -22,7 +22,7 @@ if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
 from src.football.ml_feature_schema import audit_feature_payload, get_feature_names
-from src.football.professional_validation import walk_forward_evaluate
+from src.football.professional_validation import chronological_fold_bounds, walk_forward_evaluate
 
 
 DATA = os.path.join(ROOT, 'data')
@@ -72,7 +72,9 @@ def load_samples():
     path = os.path.join(DATA, 'ml_training_data.jsonl')
     with open(path, encoding='utf-8') as handle:
         samples = [json.loads(line) for line in handle if line.strip()]
-    samples.sort(key=lambda sample: (sample['match_date'], sample['match_id']))
+    samples.sort(key=lambda sample: (str(sample.get('match_date') or ''), str(sample.get('match_id') or '')))
+    if not samples:
+        raise RuntimeError('not enough dated samples for chronological validation')
     audit = audit_feature_payload(samples[0]['features'])
     if not audit['complete']:
         raise RuntimeError(f'feature contract failed: {audit}')
@@ -80,6 +82,14 @@ def load_samples():
 
 
 def generate_oos_predictions(samples, prices, warmup, fold_size):
+    samples = sorted(samples, key=lambda sample: (
+        str(sample.get('match_date') or ''), str(sample.get('match_id') or ''),
+    ))
+    boundaries = chronological_fold_bounds(
+        [row.get('match_date') for row in samples], warmup, fold_size,
+    )
+    if not boundaries:
+        return []
     try:
         from catboost import CatBoostClassifier
     except ImportError as exc:
@@ -88,9 +98,9 @@ def generate_oos_predictions(samples, prices, warmup, fold_size):
     names = get_feature_names()
     labels = {'H': 0, 'D': 1, 'A': 2}
     output = []
-    for start in range(warmup, len(samples), fold_size):
+    for start, stop in boundaries:
         train = samples[:start]
-        test = samples[start:start + fold_size]
+        test = samples[start:stop]
         x_train = np.asarray([[row['features'][name] for name in names] for row in train], dtype=float)
         y_train = np.asarray([labels[row['target']['result']] for row in train])
         x_test = np.asarray([[row['features'][name] for name in names] for row in test], dtype=float)
@@ -117,7 +127,10 @@ def generate_oos_predictions(samples, prices, warmup, fold_size):
                 'probabilities': {'H': float(probs[0]), 'D': float(probs[1]), 'A': float(probs[2])},
                 **price,
             })
-        print(f'fold train={len(train)} test={len(test)} oos_total={len(output)}')
+        print(
+            f"fold train={len(train)} through={train[-1]['match_date']} "
+            f"test={len(test)} from={test[0]['match_date']} oos_total={len(output)}"
+        )
     return output
 
 
@@ -144,9 +157,12 @@ def main():
         test_size=args.fold_size,
         min_training_bets=30,
     )
+    if not report['out_of_sample_n']:
+        raise RuntimeError('not enough distinct dates for threshold validation')
     report['audit'] = {
-        'model_split': 'expanding chronological window',
-        'threshold_split': 'earlier out-of-sample predictions only',
+        'model_split': 'expanding chronological window; whole-date boundaries',
+        'threshold_split': 'earlier out-of-sample dates only; whole-date boundaries',
+        'date_grouped': True,
         'market_residual_guard': (
             'residual weight selected on earlier OOS predictions only; '
             'fallback to market probabilities when residual improvement is unproven'

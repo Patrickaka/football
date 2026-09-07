@@ -14,6 +14,7 @@ import json
 import logging
 from datetime import datetime
 
+from src.domain.sports.basketball.parsing import _date_from_time, _kickoff
 from src.domain.sports.basketball.repository import PredictionRecordRepository
 
 log = logging.getLogger('domain.basketball.records')
@@ -124,7 +125,7 @@ class PredictionRecorder:
     # ---------- 写入 ----------
 
     def save(self, date, results, version=''):
-        """按 (date, match_id) 覆盖当天的记录，已结算的赛果保留。
+        """赛前可刷新，开赛后冻结预测与盘口，已结算记录整体保留。
 
         数据源有时只返回半份赛程，若按当天整段重写，已经打完并结算的场次
         会连同赛果一起消失——那是不可恢复的丢失，比赛已经结束了。
@@ -132,17 +133,21 @@ class PredictionRecorder:
         records = self._store.load()
         index = {(r.get('date'), r.get('match_id')): i
                  for i, r in enumerate(records) if r.get('match_id')}
-        created_at = self._now().isoformat()
+        now = self._now()
+        created_at = now.isoformat()
 
         for item in results:
-            record = build_record(date, item.get('match', {}), item, version,
-                                  created_at)
-            position = index.get((date, record['match_id']))
+            match = item.get('match', {})
+            position = index.get((date, match.get('id', '')))
+            if position is not None and records[position].get('result') is not None:
+                continue
+            if _has_started(match, date, now):
+                continue
+            record = build_record(date, match, item, version, created_at)
             if position is None:
                 index[(date, record['match_id'])] = len(records)
                 records.append(record)
             else:
-                record['result'] = records[position].get('result')
                 records[position] = record
 
         self._store.save(records[-self._max_records:])
@@ -195,7 +200,8 @@ class PredictionRecorder:
         fed = 0
         if not result['calibration_fed']:
             fed = self._feed_one(target)
-            result['calibration_fed'] = True
+            result['calibration_fed'] = fed is not None
+            fed = fed or 0
             target['result'] = result
 
         self._store.save(records)
@@ -211,7 +217,10 @@ class PredictionRecorder:
             result = record.get('result')
             if not result or result.get('calibration_fed'):
                 continue
-            fed += self._feed_one(record)
+            samples = self._feed_one(record)
+            if samples is None:
+                continue
+            fed += samples
             result['calibration_fed'] = True
             record['result'] = result
             dirty = True
@@ -225,6 +234,9 @@ class PredictionRecorder:
         if self._elo is None:
             return False
         try:
+            refresh = getattr(self._elo, 'refresh', None)
+            if callable(refresh):
+                refresh()
             self._elo.update_ratings(
                 record.get('home', ''), record.get('away', ''),
                 int(home_score), int(away_score),
@@ -238,6 +250,16 @@ class PredictionRecorder:
         """把一条已结算记录喂给校准器。走盘与未评估的玩法一律跳过。"""
         if self._calibrator is None:
             return 0
+
+        refresh = getattr(self._calibrator, 'refresh', None)
+        if callable(refresh):
+            try:
+                refresh()
+            except Exception as exc:
+                # 读失败后不能拿旧快照写库，也不能丢掉本次已成功的 Elo 标记。
+                # None 表示可重试，0 则表示没有需要投喂的玩法。
+                log.warning('结算校准样本读取失败，等待重试: %s', exc)
+                return None
 
         result = record.get('result') or {}
         hits = evaluate_markets(record, result.get('home_score', 0),
@@ -257,6 +279,15 @@ class PredictionRecorder:
         if fed:
             self._calibrator.save()
         return fed
+
+
+def _has_started(match, date, now):
+    """状态或已知开赛时间任一表明开赛，就不能再写入赛前样本。"""
+    if match.get('status') in ('in_progress', 'finished'):
+        return True
+    event_date = match.get('date') or _date_from_time(match.get('time'), date)
+    kickoff = _kickoff({**match, 'date': event_date})
+    return kickoff is not None and kickoff <= now
 
 
 def _find_by_match_id(records, match_id):

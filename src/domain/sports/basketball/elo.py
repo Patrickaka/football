@@ -81,7 +81,7 @@ LEAGUE_NAME_ALIASES = {
 
 
 def _resolve_league_lookup(league: str, table: dict, default):
-    """按完整匹配 → 子串包含 → 别名 解析联赛表项。"""
+    """完整匹配优先，其次取最长的联赛名/别名，避免 WNBA 误命中 NBA。"""
     if not isinstance(league, str):
         league = str(league) if league else ''
     text = league.strip()
@@ -89,12 +89,13 @@ def _resolve_league_lookup(league: str, table: dict, default):
         return default
     if text in table:
         return table[text]
-    for key, val in table.items():
-        if key and key in text:
-            return val
-    for alias, canon in LEAGUE_NAME_ALIASES.items():
-        if alias in text and canon in table:
-            return table[canon]
+    candidates = dict(table)
+    candidates.update({alias: table[canon]
+                       for alias, canon in LEAGUE_NAME_ALIASES.items()
+                       if canon in table})
+    for key in sorted(candidates, key=len, reverse=True):
+        if key and key.casefold() in text.casefold():
+            return candidates[key]
     return default
 
 
@@ -137,22 +138,12 @@ def _sanitize_team_name(team_name: str) -> Optional[str]:
 
 def _get_k_factor(league: str) -> float:
     """获取 K 因子"""
-    if not isinstance(league, str):
-        league = str(league) if league else ''
-    for key, val in BB_K_FACTORS.items():
-        if key in league:
-            return val
-    return 24.0  # 默认
+    return float(_resolve_league_lookup(league, BB_K_FACTORS, 24.0))
 
 
 def _get_league_weight(league: str) -> float:
     """获取联赛权重系数"""
-    if not isinstance(league, str):
-        league = str(league) if league else ''
-    for key, val in BB_LEAGUE_WEIGHTS.items():
-        if key in league:
-            return val
-    return 1.0
+    return float(_resolve_league_lookup(league, BB_LEAGUE_WEIGHTS, 1.0))
 
 
 def _mov_multiplier(margin: float, league: str = '') -> float:
@@ -201,7 +192,7 @@ class BasketballELORatingSystem:
         self._store = store
         self._load()
 
-    def _load(self):
+    def _load(self, raise_on_error=False):
         """从 foundation/store 加载 ELO 数据"""
         try:
             if self._store is None:
@@ -227,6 +218,8 @@ class BasketballELORatingSystem:
             logger.info(f"篮球 ELO 已加载 {len(self.ratings)} 支球队")
         except Exception as e:
             logger.error(f"加载篮球 ELO 失败: {e}")
+            if raise_on_error:
+                raise
             self.ratings = {}
             self.history = {}
             self.recent_form = {}
@@ -248,6 +241,16 @@ class BasketballELORatingSystem:
             self.ratings.pop(key, None)
             self.history.pop(key, None)
             self.recent_form.pop(key, None)
+
+    def refresh(self):
+        """每批预测前同步已结算评分；离线纯内存实例保留自身状态。"""
+        if self._store is not None:
+            previous = self.ratings, self.history, self.recent_form
+            try:
+                self._load(raise_on_error=True)
+            except Exception:
+                self.ratings, self.history, self.recent_form = previous
+                raise
 
     def _save(self):
         """保存到 foundation/store"""
@@ -289,7 +292,8 @@ class BasketballELORatingSystem:
             'event': 'initialized'
         }]
         self.recent_form[team] = []
-        self._save()
+        # 查询未知球队只在内存初始化。预测实例可能持有旧快照，此时整表
+        # 回写会抹掉结算器刚更新的评分；只有真实赛果更新才持久化。
 
     def _expected_score(self, rating_a: float, rating_b: float) -> float:
         """计算 A 队预期胜率"""

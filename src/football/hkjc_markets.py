@@ -157,6 +157,7 @@ def parse_hkjc_matches(payload: Dict) -> List[Dict]:
         raw_handicap = _line_value((hdc_line or {}).get('condition'))
         # HKJC: 负数表示主队让；本项目：正数表示主队让。
         asian = ({
+            'odds_format': 'decimal',
             'handicap': -raw_handicap,
             'home_odds': hdc_odds['H'],
             'away_odds': hdc_odds['A'],
@@ -164,6 +165,7 @@ def parse_hkjc_matches(payload: Dict) -> List[Dict]:
             else None)
         total_line = _line_value((hil_line or {}).get('condition'))
         total = ({
+            'odds_format': 'decimal',
             'line': total_line,
             'over_odds': hil_odds['H'],
             'under_odds': hil_odds['L'],

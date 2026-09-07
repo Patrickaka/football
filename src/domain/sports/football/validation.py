@@ -8,12 +8,51 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from datetime import date
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 
 LABELS = ('H', 'D', 'A')
 
 RQSPF_LABELS = ('让胜', '让平', '让负')
+
+
+def chronological_fold_bounds(
+    ordered_dates: Sequence[str], initial_train: int, test_size: int,
+) -> List[Tuple[int, int]]:
+    """Return expanding test slices whose boundaries never split a date.
+
+    Historical inputs have dates, not verified kickoff/settlement timestamps.
+    A completed match on the test date therefore cannot safely train a model
+    for another match on that date. Counts are minimum targets: extend both
+    the warmup and every test fold to include their final calendar day.
+    """
+    if (not isinstance(initial_train, int) or isinstance(initial_train, bool)
+            or initial_train <= 0):
+        raise ValueError('initial_train must be a positive integer')
+    if (not isinstance(test_size, int) or isinstance(test_size, bool)
+            or test_size <= 0):
+        raise ValueError('test_size must be a positive integer')
+    try:
+        dates = [date.fromisoformat(value) for value in ordered_dates]
+    except (TypeError, ValueError) as exc:
+        raise ValueError('every evaluation record requires a valid ISO date') from exc
+    if any(previous > current for previous, current in zip(dates, dates[1:])):
+        raise ValueError('evaluation dates must be ordered chronologically')
+
+    def end_of_date(target: int) -> int:
+        stop = min(target, len(dates))
+        while stop < len(dates) and dates[stop] == dates[stop - 1]:
+            stop += 1
+        return stop
+
+    folds = []
+    start = end_of_date(initial_train)
+    while start < len(dates):
+        stop = end_of_date(start + test_size)
+        folds.append((start, stop))
+        start = stop
+    return folds
 
 def normalize_probabilities(values: Dict[str, float]) -> Dict[str, float]:
     clean = {label: max(0.0, float(values.get(label, 0.0) or 0.0)) for label in LABELS}
@@ -276,16 +315,18 @@ def walk_forward_evaluate(
     test_size: int,
     min_training_bets: int = 30,
 ) -> Dict:
-    """Expanding-window evaluation with thresholds frozen before each test fold."""
-    ordered = sorted(records, key=lambda record: (record.get('date', ''), record.get('match_id', '')))
+    """Freeze residuals and thresholds using dates strictly before each fold."""
+    ordered = sorted(records, key=lambda record: (
+        str(record.get('date') or ''), str(record.get('match_id') or ''),
+    ))
+    boundaries = chronological_fold_bounds(
+        [record.get('date') for record in ordered], initial_train, test_size,
+    )
     folds = []
     out_of_sample: List[Dict] = []
     raw_out_of_sample: List[Dict] = []
-    start = initial_train
-    while start < len(ordered):
-        raw_test = ordered[start:start + test_size]
-        if not raw_test:
-            break
+    for start, stop in boundaries:
+        raw_test = ordered[start:stop]
         residual = select_market_residual_weight(ordered[:start])
         residual_weight = residual['weight']
         training = [
@@ -301,6 +342,7 @@ def walk_forward_evaluate(
         )
         folds.append({
             'train_n': start,
+            'train_end': ordered[start - 1]['date'],
             'test_n': len(test),
             'test_start': test[0].get('date'),
             'test_end': test[-1].get('date'),
@@ -317,7 +359,6 @@ def walk_forward_evaluate(
             copied['_fold_min_edge'] = selected['min_edge']
             out_of_sample.append(copied)
         raw_out_of_sample.extend(raw_test)
-        start += test_size
 
     # Settle each OOS fold using its frozen threshold, then aggregate cashflows.
     aggregate_parts = [
@@ -355,6 +396,7 @@ def walk_forward_evaluate(
     ]
     return {
         'method': 'expanding-window-walk-forward',
+        'date_grouped': True,
         'out_of_sample_n': len(out_of_sample),
         'folds': folds,
         'raw_model_metrics': multiclass_metrics(raw_out_of_sample),

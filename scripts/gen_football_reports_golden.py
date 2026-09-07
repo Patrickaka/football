@@ -166,8 +166,15 @@ def entries():
     for equity in ([1, 2, 1.5, 3, 0.5], [], [1], [3, 2, 1]):
         yield from _y('professional_validation', '_max_drawdown', str(equity), equity)
     for train, test in ((20, 10), (40, 20)):
-        yield from _y('professional_validation', 'walk_forward_evaluate', f'{train}/{test}',
-            SPF_RECORDS, train, test)
+        # SPF_RECORDS 没有 date，不能再把按列表顺序切分的结果称为时间验证。
+        # 这两条冻结“明确拒绝缺日期”的契约；合法日期的分组边界另有专用测试。
+        # 在 try 外分配一次 key，预期异常不会使这两项错误递增为 #2。
+        key = _key('professional_validation.walk_forward_evaluate', f'{train}/{test}')
+        try:
+            value = validation.walk_forward_evaluate(SPF_RECORDS, train, test)
+        except ValueError as exc:
+            value = describe_exception(exc)
+        yield key, _serialisable(value)
     yield from _y('professional_validation', '_normalize_labeled', '-', dict(PROBS), ('H', 'D', 'A'))
 
     # ---- readiness ----

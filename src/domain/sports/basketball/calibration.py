@@ -54,7 +54,7 @@ class BasketballCalibrator:
         self._store = store
         self._load()
 
-    def _load(self):
+    def _load(self, raise_on_error=False):
         """从 foundation/store 加载校准数据"""
         try:
             if self._store is None:
@@ -66,6 +66,8 @@ class BasketballCalibrator:
             logger.info(f"篮球校准器已加载 {len(self.stats)} 个分桶")
         except Exception as e:
             logger.error(f"加载篮球校准数据失败: {e}")
+            if raise_on_error:
+                raise
             self.stats = {}
 
     def save(self):
@@ -76,6 +78,16 @@ class BasketballCalibrator:
             self._store.save(self.stats)
         except Exception as e:
             logger.error(f"保存篮球校准数据失败: {e}")
+
+    def refresh(self):
+        """同步其他结算实例保存的样本；无存储的离线校准器不重置。"""
+        if self._store is not None:
+            previous = self.stats
+            try:
+                self._load(raise_on_error=True)
+            except Exception:
+                self.stats = previous
+                raise
 
     def _bucket_key(self, bet_type: str, league: str, confidence: str, level: int) -> str:
         """

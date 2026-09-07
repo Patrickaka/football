@@ -25,6 +25,7 @@ from . import fetching as _fetching_mod
 
 from ..domain.sports.football.analysis_result import build_analysis_result
 from ..domain.sports.football.market_anchoring import anchor_candidates_to_market
+from ..domain.sports.football.policy import select_top_score_candidates
 from .config import (
     ACTIONABLE_1X2_MIN_MARGIN, ACTIONABLE_1X2_MIN_PROBABILITY, AVG_LEAGUE_GOAL, BAYESIAN_CALIBRATION_AVAILABLE, CACHE_AVAILABLE, DYNAMIC_ELO_AVAILABLE, DYNAMIC_WEIGHTS_AVAILABLE, FOOTBALL_PREDICTION_LOGIC_VERSION, LOTTERY_OFFICIAL_ODDS_WEIGHT, MAX_GOALS, SIMILAR_MARKET_AVAILABLE, STEAM_MOVE_AVAILABLE, calibrate_predictions, get_cache, get_calibrator, get_dynamic_weights, set_cache, similar_market_match, steam_move_detector,
 )
@@ -629,6 +630,8 @@ def _analyze_match_impl(match, force_refresh=False):
             }
         yazhi_raw = asian_raw
         daxiao_raw = total_raw
+        asian_raw['odds_format'] = 'decimal'
+        total_raw['odds_format'] = 'decimal'
         asian = analyze_asian(asian_raw)
         euro = analyze_euro(euro_raw)
         total = analyze_total(total_raw)
@@ -1150,53 +1153,14 @@ def _analyze_match_impl(match, force_refresh=False):
         except Exception as e:
             log.warning(f"相似盘口匹配失败: {e}")
 
-    # 判断球队实力差距：通过亚盘让球判断
-    handicap = abs(asian.get('handicap', 0))
-    is_clear_favorite = handicap >= 1.0  # 让球>=1球视为强弱分明
-    favor = asian.get('favor', 'home')
-    
-    # 动态评估爆冷可能性
-    upset_risk = _evaluate_upset_risk(asian, euro, team)
-    
-    # 根据爆冷风险决定最大冷门数量
-    # 风险高：允许1个冷门；风险中：允许1个冷门；风险低：不允许冷门
-    max_upsets = 0
-    if upset_risk >= 0.4:
-        max_upsets = 1  # 爆冷风险较高，允许1个冷门提示
-    elif is_clear_favorite:
-        max_upsets = 0  # 强弱分明且无爆冷迹象，不给出冷门
-    
-    # “最高概率比分”必须保持真实概率顺序。此前为了展示不同比赛剧本而
-    # 重排这里，会把较低概率比分挤进 Top5，历史样本中 Top5 命中率由
-    # 52.48% 降至 50.44%。多样化剧本仍由 analyst.score_strategy 单独提供，
-    # 不再混入可结算、可回测的概率排名。
-    display_candidates = candidates
-    filtered_candidates = []
-    upset_count = 0
-    
-    for (h, a), prob in display_candidates:
-        # 检查是否是冷门
-        diff = h - a
-        is_upset = False
-        if favor == 'home' and diff < 0:
-            is_upset = True  # 主队让球但客队赢
-        elif favor == 'away' and diff > 0:
-            is_upset = True  # 客队让球但主队赢
-        
-        # 根据爆冷风险限制冷门数量
-        if is_upset:
-            if upset_count >= max_upsets:
-                continue
-            upset_count += 1
-        
-        filtered_candidates.append(((h, a), prob))
-        if len(filtered_candidates) >= 5:
-            break
+    # Top5 按最终概率排序，不能再按亚盘热门方向删除反向高概率比分。
+    # 冷门提示和不同比赛剧本由独立的 upset / analyst 字段提供。
+    top_score_candidates = select_top_score_candidates(candidates, limit=5)
     
     # 更新比分冷热计算：使用赔率隐含概率 vs 模型概率
     top_scores = [
         _score_entry(h, a, prob, score_heat_label(h, a, prob, league_profile, euro_odds_for_heat))
-        for (h, a), prob in filtered_candidates
+        for (h, a), prob in top_score_candidates
     ]
     recommend = []
     value_bets = []

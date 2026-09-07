@@ -80,13 +80,17 @@ def _fetch_avg_page(match_id, page):
 def fetch_yazhi(match_id):
     """抓取亚盘数据。平均值行格式: 初水位 初让球 初水位 终水位 终让球 终水位"""
     html, nums = _fetch_avg_page(match_id, 'yazhi')
-    return _p.yazhi_from_page(html, nums)
+    market = _p.yazhi_from_page(html, nums)
+    market['odds_format'] = 'hong_kong'
+    return market
 
 
 def fetch_daxiao(match_id):
     """抓取大小球数据。平均值行盘口线为纯数字，第一组为初盘、第二组为终盘"""
     _, nums = _fetch_avg_page(match_id, 'daxiao')
-    return _p.daxiao_from_avg_numbers(nums)
+    market = _p.daxiao_from_avg_numbers(nums)
+    market['odds_format'] = 'hong_kong'
+    return market
 
 
 def fetch_ouzhi(match_id):
@@ -121,6 +125,9 @@ def fetch_single_company_odds(match_id):
             if company == 'Bet365':
                 log.debug("Bet365 亚盘原始数据: %s", asian_row)
             result[key] = _p.company_odds_to_markets(asian_row, total_row)
+            if result[key]:
+                for market in result[key].values():
+                    market['odds_format'] = 'hong_kong'
 
         log.debug(
             "独赔数据抓取完成: Bet365=%s, Pinnacle=%s",

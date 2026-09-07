@@ -557,11 +557,20 @@ def _common_score_overheat_factor(h: int, a: int, prob: float, total_line: float
     return max(0.78, factor)
 
 
+def _has_observed_market(market) -> bool:
+    """Legacy untagged markets remain supported; explicit proxies are not quotes."""
+    return (
+        isinstance(market, dict) and bool(market)
+        and market.get('source') not in {'model_proxy', 'unavailable'}
+        and market.get('source_matched') is not False
+    )
+
+
 def _total_market_tempo_signal(total: Dict) -> Dict:
     """Return a conservative tempo signal from O/U line and water movement."""
-    total = total or {}
+    total = total if _has_observed_market(total) else {}
     try:
-        close_line = float(get_close_total_line(total))
+        close_line = float(get_close_total_line(total, default=None))
     except (TypeError, ValueError):
         close_line = None
 
@@ -606,8 +615,8 @@ def _total_market_tempo_signal(total: Dict) -> Dict:
 
 def _joint_market_state(asian: Dict, euro: Dict, total: Dict) -> Dict:
     """Combine handicap, water, 1X2 and O/U movement into one market state."""
-    asian = asian or {}
-    euro = euro or {}
+    asian = asian if _has_observed_market(asian) else {}
+    euro = euro if _has_observed_market(euro) else {}
     tempo = _total_market_tempo_signal(total)
 
     try:
@@ -688,6 +697,9 @@ def _apply_joint_market_state(candidates, asian: Dict, euro: Dict, total: Dict):
     rows = list(candidates or [])
     if not rows:
         return rows, {'applied': False, 'reason': 'empty_distribution'}
+    asian = asian if _has_observed_market(asian) else {}
+    euro = euro if _has_observed_market(euro) else {}
+    total = total if _has_observed_market(total) else {}
     state = _joint_market_state(asian, euro, total)
 
     matrix = {}
@@ -920,6 +932,8 @@ def _anchor_score_candidates_to_1x2(candidates, euro,
     market won 24 of 58 disagreements against the model's 17), so any lower
     strength must be re-justified with the same replay before it is tuned.
     """
+    if not _has_observed_market(euro):
+        return candidates, {'applied': False, 'reason': 'missing_market_probabilities'}
     rows = []
     current = {'home': 0.0, 'draw': 0.0, 'away': 0.0}
     for score, probability in candidates or []:
@@ -991,6 +1005,8 @@ def _anchor_score_candidates_to_goal_mean(candidates, total, max_shift=0.60):
     total_prob = sum(row[1] for row in rows)
     if total_prob <= 0:
         return candidates, {'applied': False, 'reason': 'empty_distribution'}
+    if not _has_observed_market(total):
+        return candidates, {'applied': False, 'reason': 'missing_observed_total_market'}
     rows = [(score, p / total_prob, goals, outcome) for score, p, goals, outcome in rows]
     expected_before = sum(p * goals for _, p, goals, _ in rows)
 
@@ -1000,9 +1016,11 @@ def _anchor_score_candidates_to_goal_mean(candidates, total, max_shift=0.60):
         target = None
     if target is None:
         try:
-            target = float(get_close_total_line(total or {}))
+            target = float(get_close_total_line(total, default=None))
         except (TypeError, ValueError):
-            target = expected_before
+            return candidates, {'applied': False, 'reason': 'missing_total_target'}
+    if not math.isfinite(target) or target <= 0:
+        return candidates, {'applied': False, 'reason': 'invalid_total_target'}
     requested_target = target
     # A fixed 0.60-goal cap was too restrictive when exact-score/history
     # calibration collapsed a genuinely high O/U market back near two goals.
@@ -1325,13 +1343,17 @@ def _adjust_half_full_with_market_context(half_full_time: Dict,
     if not isinstance(rows, list):
         return half_full_time
 
-    asian = asian or {}
-    total = total or {}
+    asian = asian if _has_observed_market(asian) else {}
+    total = total if _has_observed_market(total) else {}
     try:
-        handicap = float(asian.get('handicap') or 0.0)
+        handicap = float(asian.get('handicap'))
+        if not math.isfinite(handicap):
+            handicap = None
     except (TypeError, ValueError):
-        handicap = 0.0
-    favor = asian.get('favor') or ('home' if handicap > 0 else 'away' if handicap < 0 else 'even')
+        handicap = None
+    favor = asian.get('favor') or (
+        'home' if handicap is not None and handicap > 0 else
+        'away' if handicap is not None and handicap < 0 else 'even')
     tempo_info = _total_market_tempo_signal(total)
     try:
         total_line = float(tempo_info.get('line') if tempo_info.get('line') is not None else get_close_total_line(total))
@@ -1339,8 +1361,10 @@ def _adjust_half_full_with_market_context(half_full_time: Dict,
         total_line = 2.5
 
     tempo = tempo_info.get('signal', 0.0)
+    if handicap is None and abs(tempo) < 1e-12:
+        return half_full_time
 
-    depth = abs(handicap)
+    depth = abs(handicap) if handicap is not None else None
     adjusted_rows = []
     for row in rows:
         code = row.get('code')
@@ -1371,13 +1395,13 @@ def _adjust_half_full_with_market_context(half_full_time: Dict,
             if total_line <= 2.0 and half_res != 'D':
                 factor *= 1.0 - strength * 0.18 * slow
 
-        if depth >= 1.0 and favor in {'home', 'away'}:
+        if depth is not None and depth >= 1.0 and favor in {'home', 'away'}:
             fav_res = 'H' if favor == 'home' else 'A'
             if code == f'{fav_res}{fav_res}':
                 factor *= 1.0 + strength * min(1.0, depth / 1.5)
             elif full_res != fav_res and half_res != 'D':
                 factor *= 1.0 - strength * 0.45
-        elif depth <= 0.25:
+        elif depth is not None and depth <= 0.25:
             if half_res == 'D':
                 factor *= 1.0 + strength * 0.35
             if full_res == 'D':
@@ -1416,6 +1440,9 @@ def _adjust_half_full_with_market_context(half_full_time: Dict,
 
 
 def _assess_market_data_quality(asian: Dict, euro: Dict, total: Dict) -> Dict:
+    asian = asian if _has_observed_market(asian) else {}
+    euro = euro if _has_observed_market(euro) else {}
+    total = total if _has_observed_market(total) else {}
     score = 1.0
     reasons = []
 

@@ -45,6 +45,8 @@ class HkjcMarketTests(unittest.TestCase):
         match = parse_hkjc_matches(payload)[0]
         self.assertEqual(match['asian_current']['handicap'], 0.25)
         self.assertEqual(match['asian_current']['home_odds'], 1.79)
+        self.assertEqual(match['asian_current']['odds_format'], 'decimal')
+        self.assertEqual(match['total_current']['odds_format'], 'decimal')
         self.assertEqual(match['total_current']['line'], 2.75)
         self.assertEqual(match['had_odds']['平'], 3.50)
         self.assertEqual(match['updated_at'], '2026-09-01T10:02:00+08:00')

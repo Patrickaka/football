@@ -135,10 +135,30 @@ def _as_float(value):
 
 
 def _date_from_time(match_time, date):
-    """时间单元格带月日（`08-27 07:00`），年份从请求日期取。"""
-    if match_time and len(match_time) >= 5:
-        return f'{date[:4]}-{match_time[:5]}'
-    return date
+    """行内只有月日时取离请求日期最近的合法年份，支持跨年赛程。"""
+    text = str(match_time or '').strip()
+    full_date = re.match(r'^(\d{4}-\d{2}-\d{2})(?:[ T]|$)', text)
+    if full_date:
+        return full_date.group(1)
+    month_day = re.match(r'^(\d{2})-(\d{2})(?:\s|$)', text)
+    if not month_day:
+        return date
+    try:
+        anchor = datetime.strptime(date, '%Y-%m-%d')
+    except (ValueError, TypeError):
+        return date
+    month, day = map(int, month_day.groups())
+    candidates = []
+    # ±4 同时容纳闰日；普通赛程实际只会选择本年或相邻年份。
+    for year in range(max(1, anchor.year - 4), min(9999, anchor.year + 4) + 1):
+        try:
+            candidates.append(datetime(year, month, day))
+        except ValueError:
+            continue
+    if not candidates:
+        return ''
+    closest = min(candidates, key=lambda candidate: abs(candidate - anchor))
+    return closest.strftime('%Y-%m-%d')
 
 
 def annotate_status(matches, now):

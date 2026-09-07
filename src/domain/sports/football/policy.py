@@ -133,6 +133,16 @@ def blend_score_matrices(primary, secondary, secondary_weight: float = 0.50):
     }
     return normalize_score_matrix(blended)
 
+def select_top_score_candidates(candidates, limit: int = 5):
+    """Keep the most probable exact scores, independent of the favourite label.
+
+    Scenario diversity and upset warnings must not displace a higher-probability
+    score from the fixed-size list used by the page and settlement records.
+    Probabilities retain their full-distribution meaning, without renormalizing.
+    """
+    return sorted(candidates or [], key=lambda item: -item[1])[:max(0, limit)]
+
+
 def select_diverse_score_scenarios(candidates, limit: int = 5):
     """Rank display scenarios without changing the underlying probabilities.
 

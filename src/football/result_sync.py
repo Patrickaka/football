@@ -100,7 +100,7 @@ _live_query_dates = _st._live_query_dates
 
 log = logging.getLogger('football')
 
-PRODUCTION_MODEL_VERSION = 'football-v2026.08.20-audited-upset-gated-11'
+PRODUCTION_MODEL_VERSION = _st.PRODUCTION_MODEL_VERSION
 # 3,504-match chronological validation (2024/25 -> 2025/26): the 0.65 gate
 # held 76.86% -> 77.82% accuracy at 19.98% -> 15.70% coverage.  Margin 0.10
 # remains explicit for auditability; at a normalized 65% top probability the

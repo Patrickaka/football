@@ -55,6 +55,23 @@ def remove_vig(o1, o2, o3=None):
     return p1 / total, p2 / total, p3 / total
 
 
+def _remove_two_way_market_vig(o1, o2, odds_format='decimal'):
+    """按来源声明的赔率格式去水，避免把不含本金的香港水位当欧赔。
+
+    500 的 0.8 水位对应十进制赔率 1.8；HKJC 直接提供 1.8。
+    高水也可能大于 1，所以不使用数值大小猜格式。未标记的旧接口
+    保持原有十进制口径；抓取适配层负责声明真实来源格式。
+    """
+    if odds_format == 'hong_kong':
+        o1, o2 = float(o1), float(o2)
+        if not all(math.isfinite(value) and value > 0 for value in (o1, o2)):
+            raise ValueError('invalid Hong Kong market water')
+        return remove_vig(o1 + 1.0, o2 + 1.0)
+    if odds_format != 'decimal':
+        raise ValueError(f'unsupported market odds format: {odds_format}')
+    return remove_vig(o1, o2)
+
+
 def handicap_trend_text(open_hcap, close_hcap, eps=HANDICAP_TREND_EPS):
     """让球走势的文字描述"""
     dh = close_hcap - open_hcap
@@ -137,8 +154,9 @@ def analyze_asian(data, *,
     else:
         water_trend, water_direction = "水位基本稳定", 'stable'
 
-    hp_o, ap_o = remove_vig(op['home_odds'], op['away_odds'])
-    hp_c, ap_c = remove_vig(cl['home_odds'], cl['away_odds'])
+    odds_format = data.get('odds_format', 'decimal')
+    hp_o, ap_o = _remove_two_way_market_vig(op['home_odds'], op['away_odds'], odds_format)
+    hp_c, ap_c = _remove_two_way_market_vig(cl['home_odds'], cl['away_odds'], odds_format)
 
     diff_range, diff_desc = _handicap_expectation(hcap)
 
@@ -156,6 +174,7 @@ def analyze_asian(data, *,
         close_prob_label = {'home': hp_c, 'away': ap_c}
 
     return {
+        **({'odds_format': odds_format} if 'odds_format' in data else {}),
         'handicap': hcap,
         'open_handicap': open_hcap,
         'handicap_change': dh,
@@ -505,8 +524,9 @@ def analyze_total(data, *,
     op, cl = data['open'], data['close']
     line, open_line = cl['line'], op['line']
 
-    po_o, pu_o = remove_vig(op['over_odds'], op['under_odds'])
-    po_c, pu_c = remove_vig(cl['over_odds'], cl['under_odds'])
+    odds_format = data.get('odds_format', 'decimal')
+    po_o, pu_o = _remove_two_way_market_vig(op['over_odds'], op['under_odds'], odds_format)
+    po_c, pu_c = _remove_two_way_market_vig(cl['over_odds'], cl['under_odds'], odds_format)
 
     dl = line - open_line
     if dl > line_eps:
@@ -530,6 +550,7 @@ def analyze_total(data, *,
     open_implied = implied_total_goals(op['line'], po_o, **implied_kwargs)
 
     return {
+        **({'odds_format': odds_format} if 'odds_format' in data else {}),
         'open_line': open_line, 'close_line': line,
         'line_change': dl,
         'line_trend': line_trend,

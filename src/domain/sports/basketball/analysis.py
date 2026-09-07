@@ -17,6 +17,7 @@ import logging
 import math
 
 from src.domain.sports.basketball import movement as mv
+from src.domain.sports.basketball.elo import _resolve_league_lookup
 
 log = logging.getLogger('domain.basketball.analysis')
 
@@ -114,6 +115,16 @@ class BasketballAnalyzer:
     def __init__(self, elo=None, calibrator=None):
         self._elo = elo
         self._calibrator = calibrator
+
+    def refresh_learning_state(self):
+        """仅在整批预测缓存未命中时读取学习状态，不在逐场/逐玩法时读库。"""
+        for component in (self._elo, self._calibrator):
+            refresh = getattr(component, 'refresh', None)
+            if callable(refresh):
+                try:
+                    refresh()
+                except Exception as exc:
+                    log.warning('篮球学习状态读取失败，保留上次成功快照: %s', exc)
 
     # ---------- 胜负 ----------
 
@@ -354,7 +365,7 @@ def _unavailable(reason, first_key, second_key, **extra):
 
 
 def _profile(league):
-    return LEAGUE_PROFILES.get(league, {})
+    return _resolve_league_lookup(league, LEAGUE_PROFILES, {})
 
 
 def _blend(base, other, weight):

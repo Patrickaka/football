@@ -224,7 +224,7 @@ class SettledResultPreservationTests(_Base):
         self._recorder().save('2026-08-27', [ANALYSIS], 'v2')
         refreshed = self.store.load()[0]
         self.assertEqual(refreshed['result'], self.RESULT)
-        self.assertEqual(refreshed['version'], 'v2', '记录本身没被刷新')
+        self.assertEqual(refreshed['version'], 'v1', '赛后刷新不能替换赛前模型版本')
 
     def test_partial_schedule_does_not_drop_other_matches(self):
         """数据源常常只返回半份赛程。整段重写会把没返回的那些一起抹掉。"""

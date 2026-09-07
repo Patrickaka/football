@@ -22,7 +22,7 @@ from src.domain.sports.basketball import movement as mv
 
 log = logging.getLogger('domain.basketball.prediction')
 
-PREDICTION_VERSION = '2026-08-20-water-reverse-v3'
+PREDICTION_VERSION = '2026-09-07-learning-state-v4'
 BET_TYPES = ('spf', 'rqspf', 'dx')
 DEFAULT_SOURCE = '500'
 
@@ -75,16 +75,19 @@ class PredictionService:
         """
         return self._fetch_matches(date or self._today(), source)
 
-    @staticmethod
-    def _cache_key(date, bet_types, source, use_movement):
+    def _cache_key(self, date, bet_types, source, use_movement):
         """玩法排序后入 key：顺序不同但内容相同的请求算同一件事。"""
         types = ','.join(sorted(bet_types))
-        return f'{CACHE_KEY_PREFIX}:{date}:{source}:{types}:{int(bool(use_movement))}'
+        return (f'{CACHE_KEY_PREFIX}:{self._version}:{date}:{source}:'
+                f'{types}:{int(bool(use_movement))}')
 
     def _compute(self, date, bet_types, source, use_movement):
         matches, actual_source = self._fetch_matches_with_source(date, source)
         movement_map = self._fetch_movements(
             matches, actual_source, date, use_movement)
+        refresh = getattr(self._analyzer, 'refresh_learning_state', None)
+        if matches and callable(refresh):
+            refresh()
         results = [self._analyze_match(match, movement_map.get(match.get('id')),
                                        bet_types)
                    for match in matches]
@@ -140,7 +143,7 @@ class PredictionService:
             result[bet_type] = (analyzers[bet_type](match, movement.get(bet_type))
                                 if bet_type in bet_types else None)
 
-        if match.get('status') == 'in_progress':
+        if match.get('status') in ('in_progress', 'finished'):
             _mark_already_started(result)
         result['market_analysis'] = mv.describe_market_movement(movement, result)
         return result
