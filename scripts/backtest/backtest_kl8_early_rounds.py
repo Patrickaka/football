@@ -13,18 +13,24 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from scripts.backtest.backtest_kl8_select6_chain import _paired_summary
-from src.kl8 import (KL8Analyzer, resolve_play_strategy, _adaptive_repeat_cap,
+from src.kl8 import (KL8Analyzer, VALIDATION_CANDIDATES, resolve_play_strategy, _adaptive_repeat_cap,
                      _select_final_candidate_pool, _enforce_minimum_repeats)
 from src.kl8.analyzer import _fushi7_from_select6
 
 
-def slate():
+def slate(expanded=False):
     baseline = resolve_play_strategy('select_6', allow_reference=True)
     result = {'current': baseline}
     for mode in ('shape_balanced', 'repeat_follow', 'low_repeat'):
         candidate = deepcopy(baseline)
         candidate['exclusion_selection_mode'] = mode
         result[mode] = candidate
+    if expanded:
+        for name in ('select6_balanced_100', 'select6_repeat_follow_75',
+                     'select6_hot_balanced_150', 'transition_repeat_150_cap4'):
+            candidate = deepcopy(VALIDATION_CANDIDATES[name])
+            candidate['pool_diversify'] = False
+            result[name] = candidate
     return result
 
 
@@ -103,6 +109,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--history', default='data/kl8_history.json')
     parser.add_argument('--periods', type=int, default=100, help='periods per chronological slice')
+    parser.add_argument('--offset', type=int, default=0, help='skip newest draws to audit a separate historical interval')
+    parser.add_argument('--expanded', action='store_true', help='also compare fixed alternative feature rankings')
     parser.add_argument('--output', default='reports/kl8_early_rounds_audit.json')
     args = parser.parse_args()
     opener = gzip.open if args.history.endswith('.gz') else open
@@ -110,7 +118,7 @@ def main():
         doc = json.load(handle)
     raw = sorted(doc['results'] if isinstance(doc, dict) else doc,
                  key=lambda row: row['issue'], reverse=True)
-    if args.periods < 2 or len(raw) < 2 * args.periods + 150:
+    if args.offset < 0 or args.periods < 2 or len(raw) < args.offset + 2 * args.periods + 150:
         parser.error('need positive slices and at least 150 older training draws')
     if len({row['issue'] for row in raw}) != len(raw):
         parser.error('duplicate issues')
@@ -120,11 +128,12 @@ def main():
             type(n) is not int or not 1 <= n <= 80 for n in numbers
         ):
             parser.error(f'invalid draw: {row["issue"]}')
-    strategies = slate()
-    validation = run_slice(raw, range(args.periods, args.periods * 2), strategies)
+    strategies = slate(expanded=args.expanded)
+    validation = run_slice(raw, range(args.offset + args.periods, args.offset + args.periods * 2), strategies)
     winner = max(strategies, key=lambda name: summarize(validation[name])['objective'])
     print(f'locked winner: {winner}', flush=True)
-    final = run_slice(raw, range(args.periods), {n: strategies[n] for n in dict.fromkeys(['current', winner])})
+    final = run_slice(raw, range(args.offset, args.offset + args.periods),
+                      {n: strategies[n] for n in dict.fromkeys(['current', winner])})
     comparison = _paired_summary([objective(a) - objective(b)
                                   for a, b in zip(final[winner], final['current'])])
     primary_guard = all(
@@ -134,6 +143,9 @@ def main():
     )
     report = {
         'history_source': args.history,
+        'offset': args.offset,
+        'holdout_issues': [raw[args.offset + args.periods - 1]['issue'], raw[args.offset]['issue']],
+        'validation_issues': [raw[args.offset + 2 * args.periods - 1]['issue'], raw[args.offset + args.periods]['issue']],
         'latest_issue': raw[0]['issue'], 'periods_per_slice': args.periods,
         'locked_winner': winner, 'strategies': strategies,
         'validation': {n: summarize(r) for n, r in validation.items()},
