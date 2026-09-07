@@ -2773,8 +2773,258 @@ body.ui-shell {
   .probability-value strong { font-size: 12px; }
 }
 </style>
+<style id="professional-match-board">
+/* Hallmark · structure: match comparison board · theme: inherited midnight
+ * Pre-emit critique: P4 H4 E4 S4 R4 V4 */
+body.ui-shell {
+  --board-bg: #0e131a; --board-surface: #161e28; --board-inset: #111821;
+  --board-line: #2a3543; --board-hover: #44576b; --board-ink: #eef3f7;
+  --board-muted: #a3b0c1; --board-dim: #8292a7; --board-accent: var(--sport-accent);
+  --board-accent-soft: #20352f; --board-alert: #e6b477; --board-alert-bg: #241f19;
+  --board-font: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --board-number-font: "Segoe UI", "Arial", sans-serif;
+  --bg: var(--board-bg); --text: var(--board-ink); --muted: var(--board-muted);
+  font-family: var(--board-font); font-size: 14px;
+}
+body.ui-shell[data-module="basketball"] { --board-accent-soft: #362b20; }
+body.ui-shell[data-module="kl8"] { --board-accent-soft: #33232c; }
+.icon-library { position: absolute; width: 0; height: 0; overflow: clip; }
+.ui-icon { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; flex: 0 0 auto; }
+.ui-shell .wrap { width: calc(100% - 264px); max-width: 1440px !important; margin: 0 32px 0 232px !important; }
+.ui-shell .app-sidebar { width: 200px; padding: 28px 14px 24px; background: var(--board-inset); border-color: var(--board-line); }
+.ui-shell .brand { margin-inline: 6px; margin-bottom: 46px; font-size: 18px; gap: 10px; }
+.ui-shell .brand-symbol { width: 34px; height: 36px; border-radius: 9px; font-size: 25px; }
+.ui-shell .nav-caption { padding-inline: 12px; color: var(--board-dim); }
+.ui-shell .tabs .tab { min-height: 56px; padding: 10px 12px !important; border-radius: 7px !important; gap: 11px; }
+.ui-shell .tabs .tab .module-icon { width: 20px; height: 20px; filter: none; }
+.ui-shell .tabs .tab small { font-size: 9px; letter-spacing: .04em; }
+.ui-shell .workspace-bar { min-height: 48px; color: var(--board-muted); border-color: var(--board-line); font-size: 11px; }
+.ui-shell .page-heading { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 20px; min-height: 0 !important; padding: 20px 0 18px !important; }
+.ui-shell .page-heading h1 { grid-column: 1; grid-row: 1; font-size: 28px !important; margin: 0 !important; line-height: 1.35 !important; letter-spacing: -.025em !important; }
+.ui-shell .page-heading p { grid-column: 1; margin: 0 !important; font-size: 12px !important; line-height: 1.7 !important; }
+.ui-shell .page-eyebrow { grid-column: 2; grid-row: 1; align-self: center; font-size: 10px; color: var(--board-dim); letter-spacing: .12em; }
+.ui-shell .sport-overview { gap: 0; padding: 14px 0; margin-bottom: 18px; border-color: var(--board-line); }
+.ui-shell .overview-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 2px 20px; padding: 0 24px; }
+.ui-shell .overview-label { font-size: 12px; color: var(--board-muted); }
+.ui-shell .overview-value { grid-column: 2; grid-row: 1 / 3; margin: 0; font-size: 28px; line-height: 1.2; font-family: var(--board-number-font); }
+.ui-shell .overview-detail { color: var(--board-dim); font-size: 10px; }
+.ui-shell .sport-panel .sport-toolbar { padding: 0; margin-bottom: 10px; border: 0; background: transparent; border-radius: 0; }
+.ui-shell .sport-panel .toolbar-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.ui-shell .sport-panel .toolbar-row + .toolbar-row { margin-top: 12px; padding-top: 0; border: 0; }
+.ui-shell .sport-panel .search-group { max-width: 500px; margin-right: auto; }
+.search-field { position: relative; min-width: 0; }
+.search-field > .ui-icon { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); color: var(--board-dim); pointer-events: none; }
+.ui-shell .sport-panel .search { min-height: 38px; margin: 0 !important; padding: 8px 12px 8px 38px !important; border-radius: 6px !important; background: var(--board-inset) !important; border-color: var(--board-line) !important; font-size: 12px !important; }
+.ui-shell .sport-panel .tb-refresh { display: inline-flex; justify-content: center; align-items: center; gap: 7px; min-height: 38px; padding: 7px 12px; border-radius: 6px; background: var(--board-surface); border-color: var(--board-line); color: var(--board-muted); }
+.ui-shell .sport-panel .tb-refresh.refresh-primary { background: var(--board-accent-soft); color: var(--board-accent); border-color: var(--board-accent-soft); }
+.ui-shell .sport-panel .tb-refresh .ui-icon { width: 15px; height: 15px; }
+.ui-shell .sport-panel .filter-row { gap: 14px; padding-bottom: 0; border-bottom: 1px solid var(--board-line); }
+.ui-shell .sport-panel .toolbar-buttons { display: flex; padding: 2px; background: var(--board-inset); border-color: var(--board-line); border-radius: 5px; gap: 0; }
+.ui-shell .sport-panel .tb-btn { min-height: 32px; padding: 5px 11px; color: var(--board-muted); font-size: 12px; }
+.ui-shell .sport-panel .quality-tabs { border: 0; background: none; padding: 0; gap: 18px; }
+.ui-shell .sport-panel .quality-tabs .tb-btn { position: relative; border: 0; border-bottom: 2px solid transparent; border-radius: 0; padding: 10px 1px; min-height: 40px; background: none; }
+.ui-shell .sport-panel .quality-tabs .tb-active { color: var(--board-accent); background: none; border-bottom-color: var(--board-accent); }
+.ui-shell .sort-group { margin-left: auto; }
+.ui-shell .results-shortcut .loaded-count { display: none; }
+.ui-shell .results-shortcut .tb-btn { color: var(--board-dim); font-size: 11px; }
+.ui-shell .session-row { padding-bottom: 8px !important; }
+.board-guidance { display: flex; align-items: center; gap: 7px; color: var(--board-dim); font-size: 11px; margin: 8px 0 12px; line-height: 1.8; }
+.board-guidance .ui-icon { width: 14px; height: 14px; }
+.board-alert { display: flex; align-items: center; gap: 9px; padding: 8px 12px; border: 1px solid var(--board-alert-bg); border-radius: 6px; background: var(--board-alert-bg); color: var(--board-alert); font-size: 11px; margin-bottom: 8px; }
+.board-alert b { font-weight: 600; }
+.board-alert .alert-explanation { color: var(--board-muted); }
+.board-alert .tb-btn { margin-left: auto; padding: 3px 6px !important; min-height: 26px !important; color: var(--board-alert) !important; }
+.board-results-bar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 12px 0 0; }
+.ui-shell .board-results-bar .status { padding: 0 !important; margin: 0; background: none; border: 0; font-size: 11px; color: var(--board-dim); }
+.ui-shell .sport-panel .board-results-bar .pager { margin: 0 0 0 auto; padding: 0; gap: 5px; }
+.ui-shell .sport-panel .pager button, .ui-shell .sport-panel .pager select { padding: 4px 8px; min-height: 30px; font-size: 11px; background: transparent; border-color: var(--board-line); }
+.ui-shell .sport-panel .pager button:disabled { display: none; }
+.ui-shell .sport-panel .pager .page-info { color: var(--board-dim); font-size: 11px; }
+.ui-shell .sport-panel .league-group { display: block; }
+.ui-shell .sport-panel .league-title { margin: 22px 0 12px; font-size: 13px; gap: 9px; }
+.league-caption { font-size: 11px; font-weight: 400; color: var(--board-dim); }
+.ui-shell .sport-panel .sport-match-card { display: grid !important; grid-template-columns: 230px minmax(0, 1fr); gap: 0 24px; padding: 24px !important; margin-bottom: 14px; border-radius: 10px; background: var(--board-surface); border-color: var(--board-line) !important; }
+.ui-shell .sport-panel .sport-match-card:hover { background: var(--board-surface); border-color: var(--board-hover) !important; }
+.ui-shell .sport-panel .football-match-card { grid-template-rows: auto 1fr auto; }
+.ui-shell .sport-panel .fixture-heading { grid-column: 1; grid-row: 1; border: 0; padding: 0 !important; margin: 0; }
+.ui-shell .fixture-meta { justify-content: flex-start; gap: 8px; margin-bottom: 20px; font-size: 11px; line-height: 1.6; color: var(--board-dim); }
+.ui-shell .fixture-meta span:first-child { color: var(--board-muted); }
+.ui-shell .fixture-meta span + span::before { content: '·'; margin-right: 8px; }
+.ui-shell .fixture-teams { display: flex; flex-direction: column; align-items: stretch; gap: 12px; margin-bottom: 16px; }
+.ui-shell .fixture-team, .ui-shell .fixture-team:last-child { flex-direction: row; text-align: left; gap: 10px; }
+.ui-shell .fixture-team strong { font-size: 21px; line-height: 1.45; font-weight: 600; letter-spacing: -.025em; text-wrap: balance; }
+.ui-shell .fixture-vs { display: none; }
+.team-side { display: grid; place-items: center; flex: 0 0 auto; width: 22px; height: 22px; font-size: 10px; border: 1px solid var(--board-line); border-radius: 4px; color: var(--board-dim); font-weight: 400; }
+.fixture-time { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; color: var(--board-dim); font-size: 11px; font-variant-numeric: tabular-nums; }
+.fixture-time .ui-icon { width: 13px; height: 13px; }
+.ui-shell .fixture-status { margin-top: 18px; gap: 8px; font-size: 11px; }
+.ui-shell .fixture-completeness { flex-basis: 100%; margin: 2px 0 0; font-size: 10px; color: var(--board-dim); }
+.ui-shell .decision-badge { font-size: 10px; padding: 2px 6px; background: var(--board-inset); }
+.ui-shell .decision-badge.selected { color: var(--board-accent); background: var(--board-accent-soft); }
+.ui-shell .fixture-downgrade { font-size: 10px; color: var(--board-alert); }
+.ui-shell #panel-football .football-compact-summary { grid-column: 2; grid-row: 1 / span 3; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0; padding-left: 24px !important; border-left: 1px solid var(--board-line) !important; min-width: 0; align-content: start; }
+.ui-shell .market-section-heading { grid-column: 1 / -1; margin: 0 0 18px; }
+.ui-shell .market-section-heading h3 { font-size: 10px; color: var(--board-dim); font-weight: 400; }
+.ui-shell .market-section-heading > span { font-size: 10px; color: var(--board-dim); }
+.ui-shell .market-row { order: 1; min-width: 0; padding: 0 16px 20px; border: 0; border-left: 1px solid var(--board-line); display: flex; flex-direction: column; }
+.ui-shell .market-row:first-of-type { border-left: 0; padding-left: 0; }
+.ui-shell .market-row:last-of-type { padding-right: 0; }
+.ui-shell .market-name { font-size: 13px; font-weight: 600; }
+.ui-shell .market-verdict { min-height: 54px; padding-top: 8px; }
+.ui-shell .market-decision { font-size: 11px; flex-wrap: wrap; }
+.ui-shell .market-candidate { font-size: 10px; margin-top: 3px; }
+.ui-shell .market-distribution { margin-top: 12px; display: flex; flex-direction: column; }
+.ui-shell .probability-strip { gap: 12px; }
+.ui-shell .probability-value { flex-direction: column; align-items: flex-start; gap: 4px; font-size: 11px; }
+.ui-shell .probability-value strong { font-family: var(--board-number-font); font-size: clamp(16px, 1.55vw, 23px); font-weight: 600; letter-spacing: -.035em; line-height: 1.35; }
+.ui-shell .probability-track { height: 3px; margin-top: 8px; background: var(--board-line); }
+.ui-shell .probability-track i { background: var(--board-dim); }
+.ui-shell .probability-outcome.is-pick .probability-track i { background: var(--board-accent); }
+.ui-shell .distribution-caption { order: 2; font-size: 10px; color: var(--board-dim); margin-top: 8px; }
+.ui-shell .football-score-reference { grid-column: 1 / -1; order: 3; display: flex; align-items: center; gap: 18px; padding: 12px 0 !important; border-block: 1px solid var(--board-line) !important; }
+.ui-shell .score-section-heading { max-width: 86px; font-size: 11px; line-height: 1.6; color: var(--board-dim); margin: 0; }
+.ui-shell .score-options { flex: 1; gap: 18px; }
+.ui-shell .football-score-reference .score-option { min-height: 0 !important; padding: 0 !important; background: none; border-radius: 0 !important; }
+.ui-shell .score-value { font-size: 19px; justify-content: flex-start; gap: 8px; }
+.ui-shell .score-value span { font-size: 10px; }
+.ui-shell .score-settlement { font-size: 10px; margin-top: 1px; }
+.ui-shell .match-context { grid-column: 1 / -1; order: 4; margin: 6px 0 0; font-size: 11px; }
+.ui-shell .market-evidence { grid-column: 1 / -1; order: 5; margin: 0; font-size: 11px; }
+.ui-shell .market-evidence summary { min-height: 32px; }
+.ui-shell .draw-cover-note { grid-column: 1 / -1; order: 2; color: var(--board-alert); font-size: 11px; padding-bottom: 12px; }
+.ui-shell .fixture-alert { grid-column: 1; grid-row: 2; align-self: start; margin-top: 14px; font-size: 10px; }
+.ui-shell .sport-panel .fixture-actions { grid-column: 1; grid-row: 3; padding-top: 12px; margin-top: 16px; border-top: 1px solid var(--board-line) !important; gap: 14px; }
+.ui-shell .sport-panel .fixture-actions .bayes-report-btn { min-height: 28px; padding: 0; font-size: 11px; color: var(--board-muted); gap: 6px; }
+.ui-shell .fixture-actions .ui-icon { width: 14px; height: 14px; }
+.ui-shell .fixture-actions .bayes-report-btn + .bayes-report-btn { margin-left: 0; }
+.ui-shell .sport-panel .basketball-market-grid { grid-column: 2; grid-row: 1; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); align-content: start; gap: 0; padding: 0 0 0 24px !important; border: 0 !important; border-left: 1px solid var(--board-line) !important; background: none !important; border-radius: 0 !important; min-width: 0; }
+.ui-shell .sport-panel .basketball-market { order: 1; padding: 0 18px 22px; border: 0; border-left: 1px solid var(--board-line); }
+.ui-shell .sport-panel .basketball-market:first-of-type { border-left: 0; padding-left: 0; }
+.ui-shell .sport-panel .basketball-market:last-of-type { padding-right: 0; }
+.ui-shell .basketball-market .market-row-heading { min-height: 47px; display: flex; flex-direction: column; align-items: flex-start; gap: 3px; }
+.ui-shell .basketball-market .probability-value strong { font-size: 27px; }
+.ui-shell .outcome-odds { font-size: 10px; margin-top: 9px; color: var(--board-dim); }
+.ui-shell .basketball-market-context { grid-column: 1 / -1; order: 3; margin: 0; padding-top: 8px; border-top: 1px solid var(--board-line); }
+.ui-shell .sport-match-card > .analysis-card, .ui-shell .sport-match-card > .sport-analysis-card { grid-column: 1 / -1; }
+@media (min-width: 1730px) { .ui-shell .wrap { margin-left: calc(200px + (100vw - 200px - 1440px) / 2) !important; } }
+@media (max-width: 1199px) {
+  .ui-shell .app-sidebar { width: 176px; padding-inline: 12px; }
+  .ui-shell .brand { font-size: 16px; gap: 7px; }
+  .ui-shell .wrap { width: calc(100% - 224px); margin: 0 24px 0 200px !important; }
+  .ui-shell .sport-panel .sport-match-card { grid-template-columns: 180px minmax(0, 1fr); padding: 20px !important; gap: 0 18px; }
+  .ui-shell .fixture-team strong { font-size: 18px; }
+  .ui-shell #panel-football .football-compact-summary, .ui-shell .sport-panel .basketball-market-grid { padding-left: 18px !important; }
+  .ui-shell .market-row { padding-inline: 10px; }
+  .ui-shell .probability-strip { gap: 6px; }
+  .ui-shell .probability-value strong { font-size: 16px; }
+  .ui-shell .basketball-market .probability-value strong { font-size: 21px; }
+  .ui-shell .sport-panel .basketball-market { padding-inline: 10px; }
+  .ui-shell .results-shortcut { display: none; }
+  .ui-shell .overview-item { gap: 0 12px; padding-inline: 18px; }
+}
+@media (max-width: 1023px) {
+  .ui-shell .sport-panel .sport-match-card { display: flex !important; gap: 0; }
+  .ui-shell .fixture-teams { display: grid; grid-template-columns: minmax(0, 1fr) 20px minmax(0, 1fr); align-items: center; }
+  .ui-shell .fixture-vs { display: block; }
+  .ui-shell .fixture-team:last-child { flex-direction: row-reverse; text-align: right; }
+  .ui-shell .fixture-meta { margin-bottom: 14px; }
+  .ui-shell .fixture-status { margin-top: 12px; }
+  .ui-shell .fixture-completeness { flex-basis: auto; margin-left: auto; }
+  .ui-shell #panel-football .football-compact-summary, .ui-shell .sport-panel .basketball-market-grid { border-left: 0 !important; border-top: 1px solid var(--board-line) !important; padding: 18px 0 0 !important; margin-top: 18px !important; }
+  .ui-shell .probability-value strong { font-size: 21px; }
+  .ui-shell .overview-detail { display: none; }
+  .ui-shell .overview-value { font-size: 24px; }
+  .ui-shell .fixture-alert { width: 100%; }
+}
+@media (max-width: 768px) {
+  .ui-shell .wrap { width: auto; margin: 0 16px !important; }
+  .ui-shell .workspace-bar { min-height: 45px; font-size: 10px; gap: 8px; }
+  .ui-shell .workspace-separator { padding-inline: 5px; }
+  .ui-shell .page-heading { display: block; padding: 20px 0 16px !important; }
+  .ui-shell .page-heading h1 { font-size: 25px !important; margin-bottom: 7px; }
+  .ui-shell .page-heading p { font-size: 11px !important; line-height: 1.7; }
+  .ui-shell .page-eyebrow { display: none; }
+  .ui-shell .sport-overview { margin-bottom: 16px; padding: 13px 0; }
+  .ui-shell .overview-item { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; padding-inline: 16px; }
+  .ui-shell .overview-label { font-size: 10px; }
+  .ui-shell .overview-value { font-size: 25px; }
+  .ui-shell .sport-panel .sport-toolbar .toolbar-row:first-child { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+  .ui-shell .sport-panel .search-group { width: 100%; max-width: none; }
+  .ui-shell .sport-panel .tb-refresh { margin: 0 !important; min-height: 36px; font-size: 11px; }
+  .ui-shell .sport-panel .sport-toolbar .toolbar-row + .toolbar-row { gap: 8px 12px; }
+  .ui-shell .sport-panel .quality-group { width: 100% !important; }
+  .ui-shell .sport-panel .quality-tabs { width: 100% !important; justify-content: space-between; gap: 12px; }
+  .ui-shell .sport-panel .quality-tabs .tb-btn { font-size: 12px; padding: 8px 5px; }
+  .ui-shell .sort-group { margin-left: 0; }
+  .ui-shell .sport-panel .sort-group .tb-btn { min-height: 29px; padding: 4px 10px; font-size: 10px; }
+  .ui-shell .sport-panel .filter-row { padding-bottom: 10px; }
+  .ui-shell .board-results-bar .sport-pager { display: flex; flex-wrap: wrap; width: auto; margin-left: 0 !important; }
+  .ui-shell .board-results-bar .sport-pager select { width: auto; min-width: 0; flex: 0 0 auto; }
+  .ui-shell .board-results-bar .sport-pager .page-info { min-width: 0; width: auto; flex: 0 0 auto; order: 0; }
+  .board-results-bar { gap: 8px; margin-top: 14px; }
+  .board-guidance { font-size: 10px; align-items: flex-start; }
+  .board-guidance .ui-icon { margin-top: 3px; }
+  .board-alert { padding: 7px 9px; font-size: 11px; gap: 7px; }
+  .board-alert .alert-explanation { display: none; }
+  .ui-shell .sport-panel .sport-match-card { padding: 18px !important; }
+  .ui-shell .sport-panel .league-title { margin-top: 18px; }
+  .ui-shell .fixture-team strong { font-size: 18px; }
+  .ui-shell .fixture-teams { gap: 8px; }
+  .ui-shell .market-row { padding-inline: 12px; }
+  .ui-shell .bottom-nav { background: var(--board-inset); border-color: var(--board-line); }
+  .ui-shell .bottom-nav-item.active { background: var(--board-accent-soft); }
+  .ui-shell .bottom-nav-item .ui-icon { width: 20px; height: 20px; }
+  .ui-shell .score-options { gap: 10px; }
+}
+@media (max-width: 599px) {
+  .ui-shell #panel-football .football-compact-summary, .ui-shell .sport-panel .basketball-market-grid { display: flex; flex-direction: column; }
+  .ui-shell .market-section-heading { margin-bottom: 4px; }
+  .ui-shell .market-row { padding: 16px 0 !important; border-left: 0; border-bottom: 1px solid var(--board-line); display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0 8px; }
+  .ui-shell .market-row-heading { align-self: start; padding-top: 2px; }
+  .ui-shell .market-verdict { padding: 0; min-height: 0; text-align: right; }
+  .ui-shell .market-distribution { grid-column: 1 / -1; margin-top: 14px; }
+  .ui-shell .probability-value { flex-direction: row; align-items: baseline; justify-content: space-between; font-size: 11px; }
+  .ui-shell .probability-value strong { font-size: 19px; }
+  .ui-shell .probability-strip { gap: 18px; }
+  .ui-shell .distribution-caption { font-size: 10px; }
+  .ui-shell .football-score-reference { display: block; border-top: 0 !important; padding: 16px 0 !important; }
+  .ui-shell .score-section-heading { max-width: none; margin-bottom: 12px; }
+  .ui-shell .score-value { font-size: 22px; flex-wrap: wrap; gap: 5px; }
+  .ui-shell .score-settlement { font-size: 10px; }
+  .ui-shell .sport-panel .basketball-market { padding: 18px 0 !important; border-left: 0; border-bottom: 1px solid var(--board-line); }
+  .ui-shell .basketball-market .market-row-heading { min-height: 0; flex-direction: row; align-items: center; }
+  .ui-shell .basketball-market .probability-value strong { font-size: 26px; }
+  .ui-shell .basketball-market-context { margin-top: 12px; padding: 0; border: 0; }
+  .ui-shell .fixture-team strong { font-size: 16px; }
+  .team-side { width: 19px; height: 20px; font-size: 9px; }
+  .ui-shell .fixture-team { gap: 6px; }
+}
+@media (max-width: 374px) {
+  .ui-shell .wrap { margin-inline: 12px !important; }
+  .ui-shell .sport-panel .sport-match-card { padding: 14px !important; }
+  .ui-shell .fixture-team strong { font-size: 14px; }
+  .ui-shell .fixture-completeness { flex-basis: 100%; margin-left: 0; }
+  .ui-shell .probability-strip { gap: 12px; }
+  .ui-shell .probability-value strong { font-size: 17px; }
+  .ui-shell .market-name { font-size: 12px; }
+  .ui-shell .market-decision { font-size: 10px; gap: 4px; }
+  .ui-shell .sport-panel .tb-refresh { gap: 5px; }
+}
+</style>
 </head>
 <body class="ui-shell">
+<svg class="icon-library" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+  <symbol id="icon-football" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="m12 7 4 3-1.5 4.5h-5L8 10l4-3Zm0-4v4m9 2-5 1m2 9-3.5-4.5m-8.5 4L9.5 14.5M3 9l5 1"/></symbol>
+  <symbol id="icon-basketball" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3v18M6 5.3c6 4 6 9.4 0 13.4M18 5.3c-6 4-6 9.4 0 13.4"/></symbol>
+  <symbol id="icon-numbers" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="5"/><circle cx="8" cy="8" r=".8"/><circle cx="16" cy="8" r=".8"/><circle cx="12" cy="12" r=".8"/><circle cx="8" cy="16" r=".8"/><circle cx="16" cy="16" r=".8"/></symbol>
+  <symbol id="icon-search" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4.5 4.5"/></symbol>
+  <symbol id="icon-refresh" viewBox="0 0 24 24"><path d="M20 7v5h-5M4 17v-5h5M6.1 6a8 8 0 0 1 13.7 5M4.2 13a8 8 0 0 0 13.7 5"/></symbol>
+  <symbol id="icon-records" viewBox="0 0 24 24"><path d="M8 3H5v18h14V3h-3M8 8h8M8 12h8M8 16h5"/><rect x="8" y="2" width="8" height="4" rx="1"/></symbol>
+  <symbol id="icon-audit" viewBox="0 0 24 24"><path d="m12 3 8 3v6c0 5-8 9-8 9s-8-4-8-9V6l8-3Z"/><path d="m8 12 3 3 5-6"/></symbol>
+  <symbol id="icon-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v6m0-11v1"/></symbol>
+  <symbol id="icon-alert" viewBox="0 0 24 24"><path d="m12 3 10 18H2L12 3Zm0 6v5m0 3v1"/></symbol>
+  <symbol id="icon-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+</svg>
 <div class="wrap">
   <div class="workspace-bar"><span>预测助手 <span class="workspace-separator">/</span> 赛事与数据</span><span id="workspace-date"></span></div>
   <header class="page-heading">
@@ -2786,9 +3036,9 @@ body.ui-shell {
     <a class="brand" href="#football" onclick="switchTab('football'); return false;" aria-label="预测助手首页"><span class="brand-symbol" aria-hidden="true">P<span>·</span></span><span>预测助手<small>DATA & INSIGHT</small></span></a>
     <div class="nav-caption">分析工作台</div>
     <div class="tabs" role="tablist" aria-label="选择分析模块">
-      <button id="tab-football" type="button" class="tab active" data-tab="football" role="tab" aria-selected="true" aria-controls="panel-football"><span class="module-icon" aria-hidden="true">⚽</span><span>足球分析<small>Football</small></span><span class="nav-arrow" aria-hidden="true">↗</span></button>
-      <button id="tab-basketball" type="button" class="tab" data-tab="basketball" role="tab" aria-selected="false" aria-controls="panel-basketball" tabindex="-1"><span class="module-icon" aria-hidden="true">🏀</span><span>篮球分析<small>Basketball</small></span><span class="nav-arrow" aria-hidden="true">↗</span></button>
-      <button id="tab-kl8" type="button" class="tab" data-tab="kl8" role="tab" aria-selected="false" aria-controls="panel-kl8" tabindex="-1"><span class="module-icon" aria-hidden="true">◉</span><span>快乐8<small>Numbers</small></span><span class="nav-arrow" aria-hidden="true">↗</span></button>
+      <button id="tab-football" type="button" class="tab active" data-tab="football" role="tab" aria-selected="true" aria-controls="panel-football"><svg class="module-icon ui-icon" aria-hidden="true"><use href="#icon-football"/></svg><span>足球分析<small>Football</small></span><span class="nav-arrow" aria-hidden="true">›</span></button>
+      <button id="tab-basketball" type="button" class="tab" data-tab="basketball" role="tab" aria-selected="false" aria-controls="panel-basketball" tabindex="-1"><svg class="module-icon ui-icon" aria-hidden="true"><use href="#icon-basketball"/></svg><span>篮球分析<small>Basketball</small></span><span class="nav-arrow" aria-hidden="true">›</span></button>
+      <button id="tab-kl8" type="button" class="tab" data-tab="kl8" role="tab" aria-selected="false" aria-controls="panel-kl8" tabindex="-1"><svg class="module-icon ui-icon" aria-hidden="true"><use href="#icon-numbers"/></svg><span>快乐8<small>Numbers</small></span><span class="nav-arrow" aria-hidden="true">›</span></button>
     </div>
     <div class="sidebar-footer"><span class="sidebar-divider"></span><b>让数据更清晰</b><p>查看分析 · 回顾记录 · 理性判断</p></div>
   </aside>
@@ -2813,15 +3063,15 @@ body.ui-shell {
 <!-- 移动端底部固定导航 -->
 <nav class="bottom-nav" id="bottom-nav">
   <button type="button" class="bottom-nav-item active" data-tab="football" aria-label="足球分析">
-    <span class="nav-icon">⚽</span>
+    <svg class="nav-icon ui-icon" aria-hidden="true"><use href="#icon-football"/></svg>
     <span>足球</span>
   </button>
   <button type="button" class="bottom-nav-item" data-tab="basketball" aria-label="篮球分析">
-    <span class="nav-icon">🏀</span>
+    <svg class="nav-icon ui-icon" aria-hidden="true"><use href="#icon-basketball"/></svg>
     <span>篮球</span>
   </button>
   <button type="button" class="bottom-nav-item" data-tab="kl8" aria-label="快乐8">
-    <span class="nav-icon">🎱</span>
+    <svg class="nav-icon ui-icon" aria-hidden="true"><use href="#icon-numbers"/></svg>
     <span>快乐8</span>
   </button>
 </nav>
@@ -3820,11 +4070,12 @@ function renderWebMarketRecommendation(label, state, pick, probabilityText = '')
   const candidate = isAbstain && (pick || state?.pick)
     ? `<span class="market-candidate">模型候选 ${esc(pick || state.pick)}</span>` : '';
   const status = ['selected', 'watch', 'abstain'].includes(state?.status) ? state.status : 'abstain';
-  return `<section class="market-row" aria-label="${esc(label)}">
-    <div class="market-row-heading"><span class="market-name">${esc(label)}</span>
+  return `<section class="market-row" data-status="${status}" aria-label="${esc(label)}">
+    <div class="market-row-heading"><span class="market-name">${esc(label)}</span></div>
+    <div class="market-verdict">
       <span class="market-decision"><span class="decision-badge ${status}">${esc(state?.label || '观望')}</span><strong>${esc(decision)}</strong></span>
+      ${candidate}
     </div>
-    ${candidate}
     ${probabilityText ? `<div class="market-distribution">${probabilityText}</div>` : ''}
   </section>`;
 }
@@ -4122,7 +4373,11 @@ function renderSportOverview(items) {
 }
 
 function renderFixtureTeams(home, away) {
-  return `<div class="fixture-teams"><div class="fixture-team"><span class="team-monogram" aria-hidden="true">${esc([...String(home || '?')].slice(0, 2).join(''))}</span><strong>${esc(home)}</strong></div><span class="fixture-vs">VS</span><div class="fixture-team"><span class="team-monogram away-monogram" aria-hidden="true">${esc([...String(away || '?')].slice(0, 2).join(''))}</span><strong>${esc(away)}</strong></div></div>`;
+  return `<div class="fixture-teams"><div class="fixture-team"><span class="team-side">主</span><strong>${esc(home)}</strong></div><span class="fixture-vs" aria-hidden="true">VS</span><div class="fixture-team"><span class="team-side">客</span><strong>${esc(away)}</strong></div></div>`;
+}
+
+function uiIcon(name) {
+  return `<svg class="ui-icon" aria-hidden="true"><use href="#icon-${name}"></use></svg>`;
 }
 
 function renderFootballPredictions(results) {
@@ -4139,19 +4394,22 @@ function renderFootballPredictions(results) {
   
   html += `<div class="sport-toolbar-shell sport-toolbar football-toolbar">
     <div class="toolbar-row">
-      <div class="toolbar-group" style="flex:1;min-width:200px">
-        <span class="toolbar-label">搜索</span>
-        <div style="flex:1">
+      <div class="toolbar-group search-group" style="flex:1;min-width:200px">
+        <div class="search-field" style="flex:1">
+          ${uiIcon('search')}
           <input type="search" id="search" class="search" placeholder="搜索球队、联赛或场次编号" aria-label="搜索足球比赛"
             value="${esc(listFilter || '')}" 
             style="width:100%;padding:8px 12px;border-radius:8px;border:1px solid rgba(44,58,78,0.5);background:rgba(0,0,0,0.2);color:var(--text);font-size:13px"
           />
         </div>
       </div>
-      <div class="toolbar-divider"></div>
-      <div class="toolbar-group">
-        <span class="toolbar-label">筛选</span>
-        <div class="toolbar-buttons">
+      <button onclick="switchTab('predictions')" class="tb-refresh">${uiIcon('records')}预测记录</button>
+      <button onclick="openFootballProfessionalModal()" class="tb-refresh">${uiIcon('audit')}专业验证</button>
+      <button onclick="loadMatches()" class="tb-refresh refresh-primary">${uiIcon('refresh')}刷新</button>
+    </div>
+    <div class="toolbar-row filter-row">
+      <div class="toolbar-group quality-group">
+        <div class="toolbar-buttons quality-tabs" aria-label="赛事筛选">
           <button onclick="setFootballQualityFilter('all')" class="tb-btn ${footballQualityFilter === 'all' ? 'tb-active' : ''}">全部</button>
           <button onclick="setFootballQualityFilter('selected')" class="tb-btn ${footballQualityFilter === 'selected' ? 'tb-active' : ''}">精选</button>
           <button onclick="setFootballQualityFilter('watch')" class="tb-btn ${footballQualityFilter === 'watch' ? 'tb-active' : ''}">观察</button>
@@ -4159,25 +4417,18 @@ function renderFootballPredictions(results) {
           <button onclick="setFootballQualityFilter('abstain')" class="tb-btn ${footballQualityFilter === 'abstain' ? 'tb-active' : ''}">观望</button>
         </div>
       </div>
-      <div class="toolbar-divider"></div>
-      <button onclick="switchTab('predictions')" class="tb-refresh">📋 预测记录</button>
-      <button onclick="openFootballProfessionalModal()" class="tb-refresh">🧪 专业验证</button>
-      <button onclick="loadMatches()" class="tb-refresh">🔄 刷新</button>
-    </div>
-    <div class="toolbar-row">
-      ${renderFootballSessionButtons(results)}
-      <div class="toolbar-group">
-        <span class="toolbar-label">排序</span>
+      <div class="toolbar-group sort-group">
         <div class="toolbar-buttons">
           <button onclick="setFootballSort('time')" class="tb-btn ${footballSort === 'time' ? 'tb-active' : ''}">按时间</button>
           <button onclick="setFootballSort('league')" class="tb-btn ${footballSort === 'league' ? 'tb-active' : ''}">按联赛</button>
         </div>
       </div>
-      <div class="toolbar-group" style="margin-left:auto">
-        <span style="font-size:12px;color:var(--accent2)">已加载 ${results.length} 场</span>
+      <div class="toolbar-group results-shortcut">
+        <span class="loaded-count">已加载 ${results.length} 场</span>
         <button type="button" class="tb-btn" onclick="scrollToFootballResults()">↓ 查看比赛</button>
       </div>
     </div>
+    ${renderFootballSessionButtons(results) ? `<div class="toolbar-row session-row">${renderFootballSessionButtons(results)}</div>` : ''}
   </div>`;
 
   if (footballAnalysisProgress?.active) {
@@ -4213,17 +4464,15 @@ function renderFootballPredictions(results) {
   const pageStart = (footballPage - 1) * footballPageSize;
   const pageResults = visibleResults.slice(pageStart, pageStart + footballPageSize);
 
-  html += `<div style="margin:0 0 12px;padding:9px 11px;background:rgba(59,130,246,.10);border-left:3px solid #3b82f6;border-radius:7px;font-size:12px;color:var(--muted)">
-    推荐说明：精选项已通过历史验证筛选；观察与观望项仅供参考。
-  </div>`;
+  html += `<div class="board-guidance">${uiIcon('info')}<span>精选项已通过历史验证筛选；观察与观望项仅供参考。</span></div>`;
   const footballUpsetCount = results.filter(item => item?.result?.upset?.alert === true).length;
   if (footballUpsetCount) {
-    html += `<div style="margin:0 0 12px;padding:8px 10px;background:rgba(245,158,11,.10);border-left:3px solid #f59e0b;border-radius:7px;font-size:12px;color:var(--muted)">
-      🚨 已识别 ${footballUpsetCount} 场防冷信号；冷门方向属于独立观察层，不与正路精选混算。
-      <button class="tb-btn" style="margin-left:6px" onclick="setFootballQualityFilter('upset')">查看防冷场次</button>
+    html += `<div class="board-alert">
+      ${uiIcon('alert')}<span><b>${footballUpsetCount} 场防冷信号</b><span class="alert-explanation"> · 冷门方向独立观察，不与正路精选混算</span></span>
+      <button class="tb-btn" onclick="setFootballQualityFilter('upset')">查看场次 ↗</button>
     </div>`;
   }
-  html += `<div id="football-results-start" class="status" style="padding:4px 0 12px;font-size:13px;scroll-margin-top:12px">共 ${results.length} 场比赛，筛选后 ${visibleResults.length} 场，第 ${footballPage}/${totalPages} 页</div>`;
+  html += `<div class="board-results-bar"><div id="football-results-start" class="status" style="scroll-margin-top:12px">共 ${results.length} 场比赛，筛选后 ${visibleResults.length} 场</div>`;
 
   const footballPagerHtml = `<div class="pager sport-pager">
     <button onclick="setFootballPage(1)" ${footballPage <= 1 ? 'disabled' : ''}>首页</button>
@@ -4235,7 +4484,7 @@ function renderFootballPredictions(results) {
       ${[8, 12, 20, 50].map(size => `<option value="${size}" ${footballPageSize === size ? 'selected' : ''}>每页 ${size}</option>`).join('')}
     </select>
   </div>`;
-  html += footballPagerHtml;
+  html += footballPagerHtml + '</div>';
 
   if (!visibleResults.length) {
     html += `<div class="status">${kw ? '没有匹配的比赛' : '当前筛选下暂无主推，下方仍提供比分参考'}</div>`;
@@ -4255,11 +4504,12 @@ function renderFootballPredictions(results) {
     const resultTier = getFootballResultTier(item);
     const reportUrl = m.bayes_report_url ? apiPrefix() + m.bayes_report_url : '';
 
-    let itemHtml = `<div class="match sport-match-card football-match-card" style="display:block;padding:12px">
+    let itemHtml = `<div class="match sport-match-card football-match-card" data-tier="${resultTier.tier}" style="display:block;padding:12px">
       <div class="fixture-heading" style="display:flex;justify-content:space-between;align-items:flex-start">
         <div class="fixture-identity" style="flex:1">
-          <div class="fixture-meta"><span>${esc(m.num || m.league || '足球赛事')}</span><span>${esc(m.time || '时间待定')}</span></div>
+          <div class="fixture-meta"><span>${esc(m.num || '足球赛事')}</span><span>${esc(m.league || '')}</span></div>
           ${renderFixtureTeams(m.home, m.away)}
+          <div class="fixture-time">${uiIcon('clock')}${esc(m.time || '时间待定')}</div>
           <div class="fixture-status">
             <span class="decision-badge ${resultTier.tier}">${esc(resultTier.label)}</span>
             <span class="fixture-pick">${esc(resultTier.market)} ${esc(resultTier.prediction)} <b>${(resultTier.probability * 100).toFixed(0)}%</b></span>
@@ -4376,12 +4626,16 @@ function renderFootballPredictions(results) {
         ? getGoalDistributionFromCandidates(r.model.candidates)
         : [];
       if (compactFootballView && (standardPrediction || marketCards.some(card => card.handicap))) {
-        const compactProbLine = (probabilities, keys) => renderProbabilityStrip(probabilities, keys);
+        const compactProbLine = (probabilities, keys) => {
+          const gate = keys.includes('让胜') ? resultTier.markets.rqspf : resultTier.markets.spf;
+          return renderProbabilityStrip(probabilities, keys, null, gate.status === 'selected' ? gate.pick : '');
+        };
         const handicapCard = marketCards.find(card => card.handicap);
         const compactGoals = compactGoalDist.slice(0, 3);
-        const compactGoalText = compactGoals.map(goal =>
-          `${esc(goal.label || goal.goals + '球')} ${(Number(goal.probability || 0) * 100).toFixed(1)}%`
-        ).join(' · ') || '暂无';
+        const compactGoalText = compactGoals.length ? renderProbabilityStrip(
+          Object.fromEntries(compactGoals.map(goal => [goal.label || goal.goals + '球', Number(goal.probability || 0)])),
+          compactGoals.map(goal => goal.label || goal.goals + '球')
+        ) : '<span class="empty-reference">暂无进球数分布</span>';
         const compactScoreHtml = getFootballTopScoreReferences(r, 3).map((scoreItem, index) => {
           const score = scoreItem.score;
           const probability = scoreItem.probability;
@@ -4412,9 +4666,9 @@ function renderFootballPredictions(results) {
             ${standardPrediction ? `欧赔基准：${esc(euroPrediction)} · ` : '竞彩胜平负未开售 · '}亚盘方向：${esc(asianDirection)}
           </div></details>
           ${standardPrediction ? renderWebMarketRecommendation('胜平负', spfGateState, spfGateState.pick || selectedStandard, compactProbLine(standardPrediction.probs, ['胜','平','负'])) : ''}
-          ${standardPrediction?.selectionProfile?.mode === 'draw_cover' && spfGateState.status !== 'abstain' ? '<div style="font-size:11px;color:#f59e0b;margin-top:4px">⚠️ 模型分布提示防平，仅作辅助参考</div>' : ''}
+          ${standardPrediction?.selectionProfile?.mode === 'draw_cover' && spfGateState.status !== 'abstain' ? '<div class="draw-cover-note">模型分布提示防平，仅作辅助参考</div>' : ''}
           ${handicapCard ? renderWebMarketRecommendation(`让球胜平负（${Number(lotteryHandicap) > 0 ? '+' : ''}${lotteryHandicap}）`, rqspfGateState, rqspfGateState.pick || selectedHandicap, compactProbLine(handicapCard.prediction.probs, ['让胜','让平','让负'])) : ''}
-          ${renderWebMarketRecommendation('大小球', totalGateState, totalDirection, `比分矩阵进球数分布：${compactGoalText}`)}
+          ${renderWebMarketRecommendation('大小球', totalGateState, totalDirection, `<span class="distribution-caption">比分矩阵进球数分布</span>${compactGoalText}`)}
           <div class="football-score-reference">
             <div class="score-section-heading">比分参考 Top3（非主推）</div>
             <div class="score-options">${compactScoreHtml || '<span class="empty-reference">暂无比分分布</span>'}</div>
@@ -4550,8 +4804,8 @@ function renderFootballPredictions(results) {
       }
 
       itemHtml += `<div class="fixture-actions">
-        <button type="button" class="bayes-report-btn" onclick="openFootballEvidenceModal('${esc(m.match_id || r.match?.match_id || '')}')">🔎 证据审计 <span aria-hidden="true">↗</span></button>
-        ${reportUrl ? `<button type="button" class="bayes-report-btn" onclick="openBayesModal('${esc(reportUrl)}', '${esc(m.home)} vs ${esc(m.away)}')">📊 深度报告 <span aria-hidden="true">↗</span></button>` : ''}
+        <button type="button" class="bayes-report-btn" onclick="openFootballEvidenceModal('${esc(m.match_id || r.match?.match_id || '')}')">${uiIcon('audit')}证据审计 <span aria-hidden="true">↗</span></button>
+        ${reportUrl ? `<button type="button" class="bayes-report-btn" onclick="openBayesModal('${esc(reportUrl)}', '${esc(m.home)} vs ${esc(m.away)}')">${uiIcon('records')}深度报告 <span aria-hidden="true">↗</span></button>` : ''}
       </div></div>`;
       return itemHtml;
     }
@@ -4563,7 +4817,7 @@ function renderFootballPredictions(results) {
         return timeA.localeCompare(timeB, 'zh-CN');
       });
       const pageItems = sortedItems.slice(pageStart, pageStart + footballPageSize);
-      html += `<div class="league-group"><div class="league-title">⏱️ 按时间排序</div>`;
+      html += `<div class="league-group"><div class="league-title">赛事看板 <span class="league-caption">按时间排序</span></div>`;
       pageItems.forEach(item => {
         html += renderMatchItem(item);
       });
@@ -7074,9 +7328,9 @@ function renderBasketball(result) {
   
   html += `<div class="sport-toolbar-shell sport-toolbar basketball-toolbar">
     <div class="toolbar-row">
-      <div class="toolbar-group" style="flex:1;min-width:220px">
-        <span class="toolbar-label">搜索</span>
-        <div style="flex:1">
+      <div class="toolbar-group search-group" style="flex:1;min-width:220px">
+        <div class="search-field" style="flex:1">
+          ${uiIcon('search')}
           <input type="search" id="basketball-search" class="search"
             aria-label="搜索篮球比赛"
             placeholder="搜索球队、联赛"
@@ -7090,7 +7344,7 @@ function renderBasketball(result) {
         <button onclick="switchBasketballSource('zgzcw')" class="tb-btn ${basketballSource === 'zgzcw' ? 'tb-active' : ''}">中国足彩网</button>
         <button onclick="switchBasketballSource('500')" class="tb-btn ${basketballSource === '500' ? 'tb-active' : ''}">500</button>
       </div>
-      <button onclick="loadBasketball(true)" class="tb-refresh">🔄 刷新</button>
+      <button onclick="loadBasketball(true)" class="tb-refresh refresh-primary">${uiIcon('refresh')}刷新</button>
     </div>
   </div>`;
   
@@ -7108,7 +7362,7 @@ function renderBasketball(result) {
   const visibleMatches = filteredMatches.slice(pageStart, pageStart + basketballPageSize);
   const srcLabel = result.source === 'zgzcw' ? '中国足彩网' : (result.source || basketballSource || 'zgzcw');
   
-  html += `<div class="status" style="padding:4px 0 12px;font-size:13px">数据源 ${esc(srcLabel)}${result.version ? ' · ' + esc(result.version) : ''} · 共 ${result.total_matches || filteredMatches.length} 场，筛选后 ${filteredMatches.length} 场，第 ${basketballPage}/${totalPages} 页</div>`;
+  html += `<div class="board-results-bar"><div class="status">数据源 ${esc(srcLabel)}${result.version ? ' · ' + esc(result.version) : ''} · 共 ${result.total_matches || filteredMatches.length} 场，筛选后 ${filteredMatches.length} 场</div>`;
   
   const pagerHtml = `<div class="pager sport-pager">
     <button onclick="setBasketballPage(1)" ${basketballPage <= 1 ? 'disabled' : ''}>首页</button>
@@ -7121,7 +7375,7 @@ function renderBasketball(result) {
     </select>
   </div>`;
   // 顶部翻页
-  html += pagerHtml;
+  html += pagerHtml + '</div>';
 
   if (!visibleMatches.length) {
     html += `<div class="status">${basketballSearchFilter ? '没有匹配的比赛' : '当前筛选下暂无推荐'}</div>`;
@@ -7144,12 +7398,12 @@ function renderBasketball(result) {
           <div class="fixture-identity" style="flex:1">
             <div class="fixture-meta"><span>${esc(m.league || '篮球赛事')}</span><span>赛前分析</span></div>
             ${renderFixtureTeams(m.home, m.away)}
-            <div style="font-size:13px;color:var(--muted)">
-              ${esc(m.time || '')}
+            <div class="fixture-time">
+              ${uiIcon('clock')}${esc(m.time || '')}
               ${m.status === 'in_progress' ? '<span style="margin-left:8px;color:#f59e0b">已开赛 · 仅展示赛前盘口</span>' : ''}
             </div>
           </div>
-        </div>`;
+        </div><div class="basketball-market-grid">`;
 
         const marketAnalysis = m.market_analysis || {};
         if (marketAnalysis.available) {
@@ -7216,6 +7470,7 @@ function renderBasketball(result) {
           html += '</div>';
         }
         
+        html += '</div>';
         if (m.analysis) {
           html += renderAnalysisCard(m.analysis, 'basketball');
         }

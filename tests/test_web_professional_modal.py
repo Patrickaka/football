@@ -18,7 +18,10 @@ class WebProfessionalModalTests(unittest.TestCase):
             html,
         )
         self.assertIn("openFootballEvidenceModal", html)
-        self.assertIn("🔎 证据审计", html)
+        self.assertRegex(
+            html,
+            r'<button\b[^>]*onclick="openFootballEvidenceModal\([^"]*"[^>]*>[^<]*证据审计',
+        )
         self.assertIn("deriveFootballEvidence", html)
 
     def test_web_recommendations_use_accuracy_gates(self):
