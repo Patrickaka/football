@@ -3011,6 +3011,202 @@ body.ui-shell[data-module="kl8"] { --board-accent-soft: #33232c; }
   .ui-shell .sport-panel .tb-refresh { gap: 5px; }
 }
 </style>
+<style id="daylight-workspace">
+/* Hallmark · macrostructure: existing match board · tone: daylight workbench
+ * Surface-only refinement: warm paper, clear ink, restrained module accents.
+ * Pre-emit critique: P4 H4 E4 S4 R5 V4 */
+body.ui-shell {
+  --color-paper: oklch(97% .008 160);
+  --color-surface: oklch(99.7% .003 160);
+  --color-inset: oklch(95% .012 160);
+  --color-sidebar: oklch(96% .017 160);
+  --color-rule: oklch(87% .017 160);
+  --color-control-rule: oklch(65% .028 160);
+  --color-ink: oklch(27% .025 160);
+  --color-muted: oklch(47% .025 160);
+  --color-dim: oklch(51% .022 160);
+  --color-positive: oklch(43% .095 165);
+  --color-positive-soft: oklch(93% .033 165);
+  --color-warning: oklch(47% .11 65);
+  --color-warning-soft: oklch(96% .027 80);
+  --color-danger: oklch(48% .16 23);
+  --color-danger-soft: oklch(96% .018 23);
+  --color-info: oklch(46% .105 245);
+  --color-info-soft: oklch(95% .019 245);
+  --color-rose: oklch(48% .15 5);
+  --color-rose-soft: oklch(96% .016 5);
+  --color-basketball: oklch(47% .115 55);
+  --color-on-accent: oklch(99.7% .003 160);
+  --color-overlay: oklch(25% .025 160 / .3);
+  --shadow-surface: 0 3px 16px oklch(27% .025 160 / .045);
+  --shadow-popover: 0 18px 48px oklch(27% .025 160 / .14);
+  --board-bg: var(--color-paper); --board-surface: var(--color-surface);
+  --board-inset: var(--color-inset); --board-line: var(--color-rule);
+  --board-hover: var(--color-control-rule); --board-ink: var(--color-ink);
+  --board-muted: var(--color-muted); --board-dim: var(--color-dim);
+  --board-accent: var(--accent); --board-accent-soft: var(--color-positive-soft);
+  --board-alert: var(--color-warning); --board-alert-bg: var(--color-warning-soft);
+  --bg: var(--color-paper); --bg2: var(--color-inset);
+  --card: var(--color-surface); --card2: var(--color-inset);
+  --line: var(--color-rule); --border: var(--color-rule);
+  --text: var(--color-ink); --muted: var(--color-muted);
+  --accent: var(--color-positive); --accent2: var(--accent);
+  --warn: var(--color-warning); --home: var(--color-info);
+  --draw: var(--color-dim); --away: var(--color-danger);
+  --sport-accent: var(--accent) !important;
+  --sport-secondary: var(--color-info) !important;
+  --sport-surface: var(--color-surface) !important;
+  --sport-line: var(--color-rule) !important;
+  background: linear-gradient(180deg, var(--color-sidebar), var(--color-paper) 440px) !important;
+  background-attachment: fixed !important;
+  color: var(--color-ink); color-scheme: light;
+}
+body.ui-shell[data-module="basketball"] {
+  --accent: var(--color-basketball); --accent2: var(--accent);
+  --board-accent-soft: var(--color-warning-soft);
+}
+body.ui-shell[data-module="kl8"] {
+  --accent: var(--color-rose); --accent2: var(--accent);
+  --board-accent-soft: var(--color-rose-soft);
+}
+.ui-shell .sport-panel { --bg2: var(--color-inset); --border: var(--color-rule); }
+.ui-shell .app-sidebar { background: var(--color-sidebar); border-color: var(--color-rule); }
+.ui-shell .brand, .ui-shell .page-heading h1, .ui-shell .fixture-team strong,
+.ui-shell .overview-value, .ui-shell .card h3, .ui-shell .section-title { color: var(--color-ink); }
+.ui-shell .brand-symbol { background: var(--color-positive); color: var(--color-on-accent); }
+.ui-shell .brand small, .ui-shell .sidebar-footer, .ui-shell .sidebar-footer b,
+.ui-shell .workspace-separator, .ui-shell #workspace-date,
+.ui-shell .overview-value span { color: var(--color-dim); }
+.ui-shell .sidebar-divider { background: var(--color-control-rule); }
+.ui-shell .tabs .tab { color: var(--color-muted) !important; }
+.ui-shell .tabs .tab small, .ui-shell .tabs .tab.active small { color: var(--color-dim); }
+.ui-shell .tabs .tab:hover { background: var(--color-surface) !important; }
+.ui-shell[data-module] .tabs .tab.active {
+  background: var(--color-surface) !important; color: var(--accent) !important;
+  border-color: var(--color-rule) !important;
+  box-shadow: inset 3px 0 var(--accent), var(--shadow-surface) !important;
+}
+.ui-shell .sport-overview { background: var(--color-surface); border: 1px solid var(--color-rule); border-radius: 10px; }
+.ui-shell .overview-item:first-child { padding-left: 24px; }
+.ui-shell .overview-item:first-child .overview-value { color: var(--accent); }
+.ui-shell .sport-panel .league-title { color: var(--color-ink); }
+.ui-shell .sport-panel .league-title::after { background: var(--color-rule); }
+.ui-shell .sport-panel .sport-match-card, .ui-shell .card, .ui-shell .edu {
+  background: var(--color-surface); border-color: var(--color-rule) !important;
+  box-shadow: var(--shadow-surface);
+}
+.ui-shell .sport-panel .sport-match-card:hover { box-shadow: var(--shadow-surface); }
+.ui-shell .sport-panel .sport-match-card > div:not(:first-child) { border-color: var(--color-rule); }
+.ui-shell .sport-panel .search {
+  background: var(--color-surface) !important; color: var(--color-ink) !important;
+  border-color: var(--color-control-rule) !important;
+}
+.ui-shell input::placeholder, .ui-shell .sport-panel .search::placeholder { color: var(--color-dim); }
+.ui-shell .sport-panel :is(.tb-btn, .tb-refresh, .bayes-report-btn):hover {
+  background: var(--color-inset); color: var(--accent); border-color: var(--color-control-rule); box-shadow: none;
+}
+.ui-shell .sport-panel .tb-btn.tb-active { background: var(--color-surface); color: var(--color-ink); }
+.ui-shell .sport-panel .quality-tabs .tb-btn.tb-active { background: transparent; color: var(--accent); }
+.ui-shell .sport-panel .date-value, .ui-shell .team-monogram, .ui-shell .away-monogram {
+  background: var(--color-inset); border-color: var(--color-rule); color: var(--color-muted);
+}
+.ui-shell .sport-panel :is(.pager button, .pager select) { color: var(--color-muted); background: var(--color-surface); }
+.ui-shell .sport-panel .sport-analysis-card {
+  background: var(--board-accent-soft) !important; border-color: var(--color-rule) !important;
+  border-left-color: var(--accent) !important;
+}
+.ui-shell #panel-basketball .sport-match-card > div[style*="background:var(--bg2)"] {
+  background: var(--color-inset) !important; border-color: var(--color-rule);
+}
+.ui-shell .status.error { background: var(--color-danger-soft); color: var(--color-danger); border-color: var(--color-danger); }
+.ui-shell :is(.highlight, .rec) { background: var(--board-accent-soft); }
+.ui-shell :is(.status-item.sync-stamp, .diag-panel, .pro-metric) { background: var(--color-inset); border-color: var(--color-rule); }
+.ui-shell .pro-status { background: var(--color-warning-soft); border-color: var(--color-rule); }
+.ui-shell .pro-status.ready { background: var(--color-positive-soft); }
+.ui-shell .pro-gate { color: var(--color-warning); background: var(--color-warning-soft); }
+.ui-shell .pro-status.ready .pro-gate, .ui-shell .pro-check.ok { color: var(--color-positive); background: var(--color-positive-soft); }
+.ui-shell .pro-check { color: var(--color-danger); background: var(--color-danger-soft); }
+.ui-shell :is(.pro-modal-backdrop, .kl8-modal-backdrop, .bayes-modal-backdrop) { background: var(--color-overlay); backdrop-filter: blur(4px); }
+.ui-shell :is(.pro-modal-window, .kl8-modal-window, .prediction-calendar-popover, .bayes-modal) {
+  background: var(--color-surface); color: var(--color-ink); border-color: var(--color-rule); box-shadow: var(--shadow-popover);
+}
+.ui-shell :is(.pro-modal-close, .bayes-modal-close, .kl8-modal-close) { background: var(--color-inset); color: var(--color-muted); }
+.ui-shell :is(.pro-modal-close, .bayes-modal-close, .kl8-modal-close):hover { background: var(--board-accent-soft); color: var(--accent); }
+.ui-shell .bayes-modal-header { background: var(--color-inset); border-color: var(--color-rule); color: var(--color-ink); }
+.ui-shell .prediction-date-toolbar { background: var(--color-surface); border-color: var(--color-rule); box-shadow: var(--shadow-surface); }
+.ui-shell .prediction-date-trigger { background: var(--color-surface); border-color: var(--color-control-rule); color-scheme: light; }
+.ui-shell :is(.prediction-date-trigger-icon, .prediction-calendar-nav), .ui-shell .prediction-date-label::before { color: var(--color-info); }
+.ui-shell :is(.prediction-calendar-nav, .prediction-date-action) { background: var(--color-inset); }
+.ui-shell :is(.prediction-date-trigger:hover, .prediction-date-trigger[aria-expanded="true"], .prediction-date-action:hover,
+  .prediction-calendar-day:hover:not(:disabled), .prediction-calendar-nav:hover:not(:disabled)) {
+  background: var(--color-info-soft); color: var(--color-info); border-color: var(--color-info);
+}
+.ui-shell .prediction-calendar-day.has-records::after { background: var(--color-info); }
+.ui-shell .prediction-calendar-day.selected { background: var(--color-info); border-color: var(--color-info); color: var(--color-on-accent); }
+.ui-shell .prediction-calendar-day.selected::after { background: var(--color-on-accent); }
+.ui-shell .kl8-dashboard {
+  --kl8-red: var(--color-rose); --kl8-red-deep: var(--color-rose);
+  --kl8-blue: var(--color-info); --kl8-green: var(--color-positive); --kl8-amber: var(--color-warning);
+  --kl8-surface: var(--color-surface); --kl8-surface-2: var(--color-inset); --kl8-border: var(--color-rule);
+}
+.ui-shell .kl8-hero { background: var(--color-rose-soft); border-color: var(--color-rule); }
+.ui-shell .kl8-hero h2 { color: var(--color-ink); }
+.ui-shell .kl8-hero h2 strong { color: var(--color-rose); }
+.ui-shell .kl8-hero h2 span { color: var(--color-muted); }
+.ui-shell :is(.kl8-eyebrow, .kl8-panel-kicker) { color: var(--color-rose); }
+.ui-shell .kl8-eyebrow::before { background: var(--color-rose); }
+.ui-shell .kl8-disclaimer { color: var(--color-muted); background: var(--color-info-soft); border-color: var(--color-rule); }
+.ui-shell .kl8-disclaimer b { color: var(--color-info); }
+.ui-shell :is(.kl8-inline-warning, .kl8-shape-chip.warn .shape-v) { color: var(--color-warning); }
+.ui-shell .kl8-shape-chip.good .shape-v { color: var(--color-positive); }
+.ui-shell :is(.kl8-panel-count, .kl8-soft-badge, .kl8-state-copy, .kl8-probability-line, .kl8-inline-note,
+  .kl8-action-copy span, .kl8-record-play > span) { color: var(--color-muted); }
+.ui-shell .kl8-select-card:hover { transform: none; box-shadow: var(--shadow-surface); border-color: var(--color-control-rule); }
+.ui-shell .kl8-select-card, .ui-shell .kl8-fushi-card { --kl8-card-accent: var(--color-rose); }
+.ui-shell .kl8-state-card.backfill { --state-accent: var(--color-info); }
+.ui-shell .kl8-state-card.verifying { --state-accent: var(--color-warning); }
+.ui-shell .kl8-state-card.failed { --state-accent: var(--color-danger); }
+.ui-shell .kl8-state-card::before { box-shadow: none; }
+.ui-shell .kl8-progress-bar { background: var(--color-positive); box-shadow: none; }
+.ui-shell :is(.kl8-hero-copy, .kl8-strategy-line, .kl8-state-title, .kl8-meta-label, .kl8-select-desc,
+  .kl8-select-sub, .kl8-panel-subtitle, .kl8-action-copy, .kl8-shape-chip, .kl8-meta-chip) { color: var(--color-muted); }
+.ui-shell :is(.kl8-meta-value, .kl8-state-value, .kl8-select-title, .kl8-fushi-header,
+  .shape-v, .kl8-action-copy strong, .kl8-panel-title, .kl8-record-title, .kl8-pick-title, .kl8-modal-title) { color: var(--color-ink); }
+.ui-shell :is(.kl8-panel, .kl8-state-card, .kl8-select-card, .kl8-meta-card, .kl8-pick-card,
+  .kl8-record-card, .kl8-action-dock) { background: var(--color-surface); border-color: var(--color-rule); box-shadow: var(--shadow-surface); }
+.ui-shell :is(.kl8-meta-item, .kl8-combo-item, .kl8-shape-chip, .kl8-quality-note) {
+  background: var(--color-inset); border-color: var(--color-rule); color: var(--color-muted);
+}
+.ui-shell :is(.kl8-fushi-note, .kl8-status-pill, .kl8-state-banner) { background: var(--color-warning-soft); color: var(--color-warning); border-color: var(--color-rule); }
+.ui-shell .kl8-ball, .ui-shell .kl8-ball.highlight-ball,
+.ui-shell .kl8-draw-balls .kl8-ball.small-ball.highlight-ball {
+  background: var(--color-rose); color: var(--color-on-accent); border-color: var(--color-rose); box-shadow: none;
+}
+.ui-shell .kl8-draw-balls .kl8-ball.small-ball { background: var(--color-inset); color: var(--color-ink); border-color: var(--color-rule); }
+.ui-shell .kl8-draw-balls .kl8-ball.small-ball.highlight-ball { background: var(--color-rose); color: var(--color-on-accent); }
+.ui-shell .kl8-refresh-btn { background: var(--color-rose-soft); border-color: var(--color-rule); color: var(--color-rose); box-shadow: none; }
+.ui-shell .kl8-refresh-btn.action-warn { background: var(--color-warning-soft); color: var(--color-warning); }
+.ui-shell .kl8-refresh-btn.action-danger { background: var(--color-danger-soft); color: var(--color-danger); }
+.ui-shell .kl8-refresh-btn.action-info { background: var(--color-info-soft); color: var(--color-info); }
+.ui-shell .kl8-refresh-btn.action-success { background: var(--color-positive-soft); color: var(--color-positive); }
+.ui-shell .kl8-refresh-btn.action-muted { background: var(--color-inset); color: var(--color-muted); }
+.ui-shell .kl8-refresh-btn:hover { background: var(--color-inset); border-color: var(--color-control-rule); box-shadow: none; transform: none; }
+.ui-shell .kl8-refresh-btn:focus-visible { outline-color: var(--accent); }
+.ui-shell .kl8-modal-body .search { background: var(--color-surface) !important; color: var(--color-ink) !important; border-color: var(--color-control-rule) !important; }
+.ui-shell .kl8-record-card:has(input:checked) { background: var(--color-warning-soft); border-color: var(--color-warning); }
+.ui-shell .kl8-record-badge { color: var(--color-positive); background: var(--color-positive-soft); }
+.ui-shell .kl8-record-badge.pending { color: var(--color-muted); background: var(--color-inset); }
+.ui-shell #kl8-exclude-options .kl8-select-card:has(input:checked) { --kl8-card-accent: var(--color-warning); background: var(--color-warning-soft); border-color: var(--color-warning); }
+.ui-shell #kl8-kill-options .kl8-select-card:has(input:checked) { --kl8-card-accent: var(--color-danger); background: var(--color-danger-soft); border-color: var(--color-danger); }
+.ui-shell .bottom-nav { background: var(--color-surface) !important; border-color: var(--color-rule); box-shadow: var(--shadow-surface); }
+.ui-shell .bottom-nav-item { color: var(--color-muted); }
+.ui-shell .bottom-nav-item.active { color: var(--accent); background: var(--board-accent-soft); }
+.ui-shell #disclaimer, .ui-shell .disclaimer { color: var(--color-dim); border-color: var(--color-rule); }
+@media (max-width: 768px) {
+  .ui-shell .overview-item:first-child { padding-left: 16px; }
+  .ui-shell .prediction-calendar-popover { max-width: calc(100vw - 48px); }
+}
+</style>
 </head>
 <body class="ui-shell">
 <svg class="icon-library" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
@@ -3527,7 +3723,7 @@ function renderFootballProfessionalStatus(status) {
   if (status.available === false || status.error) {
     return `<div class="card pro-status">
       <div class="pro-head"><div><h3>🧪 专业验证与生产门控</h3>
-        <div class="status-desc" style="color:#f59e0b">数据读取失败，不代表样本为0场</div>
+        <div class="status-desc" style="color:var(--color-warning)">数据读取失败，不代表样本为0场</div>
       </div><span class="pro-gate">⚠ 暂不可用</span></div>
       <div class="note">原因：${esc(status.error || status.reason || '专业验证接口暂时不可用')}。请刷新或检查服务版本，系统不会用0场和横杠冒充验证结果。</div>
     </div>`;
@@ -3567,10 +3763,10 @@ function renderFootballProfessionalStatus(status) {
       ${status.baseline_version ? `<div class="status-desc">基线 ${esc(status.baseline_version)} · ${esc(status.generated_at || '时间未知')} · ${(status.source || status.validation_source) === 'bundled_audited_baseline' ? '随代码发布' : '运行时报告'}</div>` : ''}
     </div><span class="pro-gate">${ready ? '✓ 可进入生产验证' : '⚠ 仅研究展示，禁止正式投注'}</span></div>
     <div class="pro-metrics">
-      ${metric('模型 / 市场 LogLoss', `${fmtNum(model.logloss, 3)} / ${fmtNum(market.logloss, 3)}`, Number(model.logloss) < Number(market.logloss) ? '#4ade80' : '#fca5a5')}
-      ${metric('样本外 ROI', strategy.roi == null ? '-' : `${(Number(strategy.roi) * 100).toFixed(2)}%`, Number(strategy.roi) > 0 ? '#4ade80' : '#fca5a5')}
-      ${metric('平均 CLV', strategy.mean_clv == null ? '-' : `${(Number(strategy.mean_clv) * 100).toFixed(2)}%`, Number(strategy.mean_clv) > 0 ? '#4ade80' : '#fca5a5')}
-      ${metric('最大回撤', strategy.max_drawdown_units == null ? '-' : `${fmtNum(strategy.max_drawdown_units, 2)} 单位`, '#fbbf24')}
+      ${metric('模型 / 市场 LogLoss', `${fmtNum(model.logloss, 3)} / ${fmtNum(market.logloss, 3)}`, Number(model.logloss) < Number(market.logloss) ? 'var(--color-positive)' : 'var(--color-danger)')}
+      ${metric('样本外 ROI', strategy.roi == null ? '-' : `${(Number(strategy.roi) * 100).toFixed(2)}%`, Number(strategy.roi) > 0 ? 'var(--color-positive)' : 'var(--color-danger)')}
+      ${metric('平均 CLV', strategy.mean_clv == null ? '-' : `${(Number(strategy.mean_clv) * 100).toFixed(2)}%`, Number(strategy.mean_clv) > 0 ? 'var(--color-positive)' : 'var(--color-danger)')}
+      ${metric('最大回撤', strategy.max_drawdown_units == null ? '-' : `${fmtNum(strategy.max_drawdown_units, 2)} 单位`, 'var(--color-warning)')}
     </div>
     <div class="pro-checks">${Object.entries(checkLabels).map(([key,label]) =>
       `<span class="pro-check ${checks[key] ? 'ok' : ''}">${checks[key] ? '✓' : '✗'} ${esc(label)}</span>`).join('')}
@@ -3578,11 +3774,11 @@ function renderFootballProfessionalStatus(status) {
     <div class="note" style="margin-top:10px">当前结论：${esc(status.status_label || '-')}。高命中率不等于盈利，正式推荐必须同时通过概率、ROI 与 CLV 门槛。</div>
     ${monitoring.schema_version ? `<details open style="margin-top:12px"><summary style="cursor:pointer;color:var(--accent2);font-weight:600">生产预测闭环监控</summary>
       <div class="pro-metrics" style="margin-top:8px">
-        ${metric('胜平负独立样本', `${spfMonitoring.n || 0} 场`, '#93c5fd')}
-        ${metric('让球独立样本', `${rqspfMonitoring.n || 0} 场`, Number(rqspfMonitoring.n) >= 100 ? '#4ade80' : '#fbbf24')}
-        ${metric('防冷预警兑现', upsetMonitoring.alert_precision == null ? `${upsetMonitoring.n || 0} 场待积累` : `${(Number(upsetMonitoring.alert_precision) * 100).toFixed(1)}% / ${upsetMonitoring.n}场`, upsetMonitoring.production_ready ? '#4ade80' : '#fbbf24')}
-        ${metric('收盘赔率覆盖', `${(Number(marketTiming.closing_odds_coverage || 0) * 100).toFixed(1)}%`, marketTiming.clv_ready ? '#4ade80' : '#fca5a5')}
-        ${metric('赔率时点覆盖', `${(Number(marketTiming.timed_snapshot_coverage || 0) * 100).toFixed(1)}%`, Number(marketTiming.timed_snapshot_coverage) >= .8 ? '#4ade80' : '#fbbf24')}
+        ${metric('胜平负独立样本', `${spfMonitoring.n || 0} 场`, 'var(--color-info)')}
+        ${metric('让球独立样本', `${rqspfMonitoring.n || 0} 场`, Number(rqspfMonitoring.n) >= 100 ? 'var(--color-positive)' : 'var(--color-warning)')}
+        ${metric('防冷预警兑现', upsetMonitoring.alert_precision == null ? `${upsetMonitoring.n || 0} 场待积累` : `${(Number(upsetMonitoring.alert_precision) * 100).toFixed(1)}% / ${upsetMonitoring.n}场`, upsetMonitoring.production_ready ? 'var(--color-positive)' : 'var(--color-warning)')}
+        ${metric('收盘赔率覆盖', `${(Number(marketTiming.closing_odds_coverage || 0) * 100).toFixed(1)}%`, marketTiming.clv_ready ? 'var(--color-positive)' : 'var(--color-danger)')}
+        ${metric('赔率时点覆盖', `${(Number(marketTiming.timed_snapshot_coverage || 0) * 100).toFixed(1)}%`, Number(marketTiming.timed_snapshot_coverage) >= .8 ? 'var(--color-positive)' : 'var(--color-warning)')}
       </div>
       <div class="pro-checks">
         <span class="pro-check ${!drift.detected ? 'ok' : ''}">${drift.detected ? '✗' : '✓'} ${drift.detected ? '检测到模型漂移' : '暂未检测到显著漂移'}</span>
@@ -3602,7 +3798,7 @@ function renderFootballProfessionalStatus(status) {
           <thead><tr><th>联赛</th><th>状态</th><th>总样本</th><th>阈值</th><th>训练命中</th><th>后段命中</th><th>说明</th></tr></thead>
           <tbody>${leagueRows.map(([league, policy]) => `<tr>
             <td>${esc(league)}</td>
-            <td style="color:${policy.supported ? '#4ade80' : '#fbbf24'}">${policy.supported ? '✓ 已放行' : '观望'}</td>
+            <td style="color:${policy.supported ? 'var(--color-positive)' : 'var(--color-warning)'}">${policy.supported ? '✓ 已放行' : '观望'}</td>
             <td>${Number(policy.sample_count || 0)}</td>
             <td>${policy.minimum_probability == null ? '-' : `${(Number(policy.minimum_probability) * 100).toFixed(0)}%`}</td>
             <td>${policy.training?.accuracy == null ? '-' : `${(Number(policy.training.accuracy) * 100).toFixed(1)}% / ${Number(policy.training.sample_count || 0)}场`}</td>
@@ -3612,7 +3808,7 @@ function renderFootballProfessionalStatus(status) {
     </details>` : ''}
     ${capabilities.length ? `<details style="margin-top:12px"><summary style="cursor:pointer;color:var(--accent2);font-weight:600">已具备的专业能力（${capabilities.length}项）</summary>
       <div class="note">${capabilities.map(item => `✓ ${esc(item)}`).join('<br>')}</div></details>` : ''}
-    ${gaps.length ? `<details open style="margin-top:12px"><summary style="cursor:pointer;color:#fbbf24;font-weight:600">距离专业生产系统的差距（${gaps.length}项）</summary>
+    ${gaps.length ? `<details open style="margin-top:12px"><summary style="cursor:pointer;color:var(--color-warning);font-weight:600">距离专业生产系统的差距（${gaps.length}项）</summary>
       <div style="margin-top:8px">${gaps.map(item => `<div class="diag-panel" style="margin-top:6px">
         <div class="diag-title">${esc(item.priority || '')} · ${esc(item.name || '')}</div>
         <div class="diag-line">${esc(item.action || '')}</div>
@@ -4315,7 +4511,7 @@ function renderFootballScoreReferencePanel(results) {
     if (!scores.length) return '';
     const scoreHtml = scores.map((scoreItem, index) => {
       const settlement = getFootballScoreSettlement(scoreItem.score, handicap);
-      return `<span style="display:inline-block;margin:2px 5px 2px 0;padding:4px 7px;border-radius:5px;background:${index === 0 ? 'rgba(59,130,246,.14)' : 'var(--bg)'};color:${index === 0 ? '#3b82f6' : 'var(--text)'}">
+      return `<span style="display:inline-block;margin:2px 5px 2px 0;padding:4px 7px;border-radius:5px;background:${index === 0 ? 'rgba(59,130,246,.14)' : 'var(--bg)'};color:${index === 0 ? 'var(--color-info)' : 'var(--text)'}">
         <b>${esc(scoreItem.score)}</b> <span style="font-size:10px;color:var(--muted)">${(scoreItem.probability * 100).toFixed(1)}%${settlement ? ` · ${esc(settlement)}` : ''}</span>
       </span>`;
     }).join('');
@@ -4326,7 +4522,7 @@ function renderFootballScoreReferencePanel(results) {
   }).filter(Boolean).join('');
   if (!rows) return '';
   return `<div class="football-score-reference-panel" style="margin:10px 0 14px;padding:10px 12px;background:var(--card);border:1px solid var(--line);border-radius:9px">
-    <div style="font-size:13px;color:#3b82f6;font-weight:bold">⚽ 全部场次比分参考 Top3</div>
+    <div style="font-size:13px;color:var(--color-info);font-weight:bold">⚽ 全部场次比分参考 Top3</div>
     <div style="font-size:10px;color:var(--muted);margin:2px 0 5px">独立于精选门禁展示，不作主推；括号外为比分概率，后缀为胜平负/让球结算。</div>
     ${rows}
   </div>`;
@@ -4399,7 +4595,7 @@ function renderFootballPredictions(results) {
           ${uiIcon('search')}
           <input type="search" id="search" class="search" placeholder="搜索球队、联赛或场次编号" aria-label="搜索足球比赛"
             value="${esc(listFilter || '')}" 
-            style="width:100%;padding:8px 12px;border-radius:8px;border:1px solid rgba(44,58,78,0.5);background:rgba(0,0,0,0.2);color:var(--text);font-size:13px"
+            style="width:100%;padding:8px 12px;border-radius:8px;border:1px solid rgba(44,58,78,0.5);background:var(--color-inset);color:var(--text);font-size:13px"
           />
         </div>
       </div>
@@ -4433,7 +4629,7 @@ function renderFootballPredictions(results) {
 
   if (footballAnalysisProgress?.active) {
     const progress = footballAnalysisProgress;
-    html += `<div class="status" style="padding:8px 0 12px;font-size:12px;color:#3b82f6">
+    html += `<div class="status" style="padding:8px 0 12px;font-size:12px;color:var(--color-info)">
       <span class="spinner"></span>正在并发分析剩余比赛（${progress.completed}/${progress.total}）；已完成结果先行展示。
     </div>`;
   }
@@ -4528,7 +4724,7 @@ function renderFootballPredictions(results) {
           const score = s.score || (s.home != null && s.away != null ? `${s.home}-${s.away}` : '-');
           const prob = s.prob || s.probability || 0;
           const settlement = getFootballScoreSettlement(score, lotteryHandicap);
-          itemHtml += `<div style="flex:1;text-align:center;padding:6px;border-radius:6px${isTop1 ? ';background:#3b82f620;color:#3b82f6;font-weight:bold' : ';background:var(--bg)'}">
+          itemHtml += `<div style="flex:1;text-align:center;padding:6px;border-radius:6px${isTop1 ? ';background:#3b82f620;color:var(--color-info);font-weight:bold' : ';background:var(--bg)'}">
             <div style="font-size:14px">${esc(score)}</div>
             <div style="font-size:11px;color:var(--muted)">${(prob * 100).toFixed(1)}%</div>
             ${settlement ? `<div style="font-size:10px;color:var(--muted);margin-top:2px">${esc(settlement)}</div>` : ''}
@@ -4540,10 +4736,10 @@ function renderFootballPredictions(results) {
 
       const upset = r.upset;
       if (upset && upset.alert) {
-        const uColor = upset.level === 'high' ? '#ef4444' : '#f59e0b';
+        const uColor = upset.level === 'high' ? 'var(--color-danger)' : 'var(--color-warning)';
         const renderScenario = (label, candidates, color) => {
           if (!candidates || !candidates.length) return '';
-          const chips = candidates.slice(0, 2).map(c => `<span style="display:inline-block;padding:2px 7px;margin:2px 4px 2px 0;background:${color}18;color:${color};border-radius:5px;font-size:12px;font-weight:bold">${esc(c.score)}<span style="font-weight:normal;color:var(--muted)"> ${esc(c.result || '')} ${((c.probability || 0) * 100).toFixed(1)}%</span></span>`).join('');
+          const chips = candidates.slice(0, 2).map(c => `<span style="display:inline-block;padding:2px 7px;margin:2px 4px 2px 0;background:color-mix(in srgb, ${color} 9%, transparent);color:${color};border-radius:5px;font-size:12px;font-weight:bold">${esc(c.score)}<span style="font-weight:normal;color:var(--muted)"> ${esc(c.result || '')} ${((c.probability || 0) * 100).toFixed(1)}%</span></span>`).join('');
           return `<div style="margin-top:4px"><span style="display:inline-block;min-width:58px;color:var(--muted)">${label}</span>${chips}</div>`;
         };
         const drawCandidates = upset.draw_candidates || (upset.candidates || []).filter(c => c.scenario === 'draw_cover');
@@ -4554,14 +4750,14 @@ function renderFootballPredictions(results) {
           <span class="disclosure-arrow" aria-hidden="true">⌄</span></summary><div class="alert-details">
           ${upset.recommended_cover ? `<div style="margin-top:4px;color:${uColor};font-weight:bold">防冷方向：${esc(upset.recommended_cover)}</div>` : ''}
           ${upset.signals?.length ? `<div style="margin-top:3px;color:var(--muted)">依据：${upset.signals.slice(0, 4).map(esc).join('；')}</div>` : ''}
-          ${renderScenario('真正爆冷', outrightCandidates, '#ef4444')}
-          ${renderScenario('防冷平局', drawCandidates, '#f59e0b')}
+          ${renderScenario('真正爆冷', outrightCandidates, 'var(--color-danger)')}
+          ${renderScenario('防冷平局', drawCandidates, 'var(--color-warning)')}
         </div></details>`;
       }
 
       if (upset && upset.confident) {
-        itemHtml += `<div style="margin-top:8px;padding:7px 8px;background:var(--bg2);border-left:3px solid #22c55e;border-radius:6px;font-size:12px">
-          <span style="color:#22c55e;font-weight:bold">✅ 热门稳胆</span>
+        itemHtml += `<div style="margin-top:8px;padding:7px 8px;background:var(--bg2);border-left:3px solid var(--color-positive);border-radius:6px;font-size:12px">
+          <span style="color:var(--color-positive);font-weight:bold">✅ 热门稳胆</span>
           <span style="color:var(--muted)"> · ${esc(upset.favorite || '')} ${((upset.favorite_prob || 0) * 100).toFixed(0)}% 领先次选 ${((upset.gap || 0) * 100).toFixed(0)}% · 真实冷门率约 30%</span>
         </div>`;
       }
@@ -4690,13 +4886,13 @@ function renderFootballPredictions(results) {
               ? card.prediction.preds : [card.prediction.pred]);
           const isPred = selectedPredictions.includes(key);
           const colors = {
-            '胜': '#ef4444', '平': '#f59e0b', '负': '#22c55e',
-            '让胜': '#ef4444', '让平': '#f59e0b', '让负': '#22c55e'
+            '胜': 'var(--color-danger)', '平': 'var(--color-warning)', '负': 'var(--color-positive)',
+            '让胜': 'var(--color-danger)', '让平': 'var(--color-warning)', '让负': 'var(--color-positive)'
           };
-          itemHtml += `<div style="flex:1;text-align:center;padding:6px;border-radius:6px${isPred ? `;background:${colors[key]}20;color:${colors[key]};font-weight:bold` : ''}">
+          itemHtml += `<div style="flex:1;text-align:center;padding:6px;border-radius:6px${isPred ? `;background:color-mix(in srgb, ${colors[key]} 12%, transparent);color:${colors[key]};font-weight:bold` : ''}">
             <div>${key}</div>
             <div style="font-size:11px;color:var(--muted)">${probabilityAvailable ? `${(prob * 100).toFixed(0)}%` : '—'}</div>
-            ${odd ? `<div style="font-size:10px;color:#3b82f6">中国足彩网 ${Number(odd).toFixed(2)}</div>` : ''}
+            ${odd ? `<div style="font-size:10px;color:var(--color-info)">中国足彩网 ${Number(odd).toFixed(2)}</div>` : ''}
           </div>`;
         });
         itemHtml += '</div>';
@@ -4708,28 +4904,28 @@ function renderFootballPredictions(results) {
           const marginalValue = Number(card.prediction.marginalProbs?.[sourceKey] || 0);
           const marketWeight = Math.round(Number(card.prediction.marketWeight || 0) * 100);
           itemHtml += card.prediction.conditional
-            ? `<div style="font-size:10px;color:#93c5fd;margin-top:6px">
+            ? `<div style="font-size:10px;color:var(--color-info);margin-top:6px">
                 ${esc(sourceKey)}：在“不让球${esc(linkedSelections?.primaryPrediction || '')}”条件下 ${(fusedValue * 100).toFixed(0)}% · 独立让球综合概率 ${(marginalValue * 100).toFixed(0)}%（比分模型 ${(modelValue * 100).toFixed(0)}% / 中国足彩网去水 ${(marketValue * 100).toFixed(0)}%）
               </div>`
-            : `<div style="font-size:10px;color:#93c5fd;margin-top:6px">
+            : `<div style="font-size:10px;color:var(--color-info);margin-top:6px">
                 ${esc(sourceKey)}：比分模型 ${(modelValue * 100).toFixed(0)}% · 中国足彩网赔率去水 ${(marketValue * 100).toFixed(0)}% · 综合 ${(fusedValue * 100).toFixed(0)}%（赔率权重 ${marketWeight}%）
               </div>`;
         }
         itemHtml += '</div>';
         if (!card.handicap && card.prediction.selectionProfile?.mode === 'draw_cover') {
-          itemHtml += `<div style="font-size:11px;color:#f59e0b;margin-top:6px">⚠️ 平局与首选概率差距较小：严格单选为 ${esc(card.prediction.pred)}，覆盖建议为 ${(card.prediction.preds || []).map(esc).join('/')}</div>`;
+          itemHtml += `<div style="font-size:11px;color:var(--color-warning);margin-top:6px">⚠️ 平局与首选概率差距较小：严格单选为 ${esc(card.prediction.pred)}，覆盖建议为 ${(card.prediction.preds || []).map(esc).join('/')}</div>`;
         }
       });
       if (!compactFootballView && linkedSelections && marketCards.length > 1) {
         const compatibleText = linkedSelections.compatibleHandicapPredictions?.join('/')
           || linkedSelections.handicapPredictions.join('/');
-        itemHtml += `<div style="margin-top:6px;padding:7px 9px;border:1px solid rgba(59,130,246,.35);background:rgba(59,130,246,.08);border-radius:7px;font-size:12px;color:#93c5fd">
+        itemHtml += `<div style="margin-top:6px;padding:7px 9px;border:1px solid rgba(59,130,246,.35);background:rgba(59,130,246,.08);border-radius:7px;font-size:12px;color:var(--color-info)">
           🔗 先看胜平负：<b>${esc(linkedSelections.primaryPrediction)} ⇒ 让球兼容 ${esc(compatibleText)} ⇒ 首选 ${esc(linkedSelections.handicapPredictions[0])}</b>
           <span style="color:var(--muted)">（让球百分比为该胜平负方向下的条件分析）</span>
         </div>`;
       }
       if (!compactFootballView && r.model?.joint_market_state?.applied) {
-        itemHtml += `<div style="margin-top:6px;font-size:11px;color:#06b6d4">
+        itemHtml += `<div style="margin-top:6px;font-size:11px;color:var(--color-info)">
           📈 胜平负、让球胜平负和进球数已统一应用亚盘水位/大小球变化修正
         </div>`;
       }
@@ -4771,7 +4967,7 @@ function renderFootballPredictions(results) {
         itemHtml += '<div style="display:flex;gap:8px">';
         goalsTop3.forEach((goalItem, idx) => {
           const isTop1 = idx === 0;
-          itemHtml += `<div style="flex:1;text-align:center;padding:6px;border-radius:6px${isTop1 ? ';background:#06b6d420;color:#06b6d4;font-weight:bold' : ';background:var(--bg)'}">
+          itemHtml += `<div style="flex:1;text-align:center;padding:6px;border-radius:6px${isTop1 ? ';background:#06b6d420;color:var(--color-info);font-weight:bold' : ';background:var(--bg)'}">
             <div style="font-size:13px">${esc(goalItem.label || goalItem.goals + '球')}</div>
             <div style="font-size:11px;color:var(--muted)">${(goalItem.probability * 100).toFixed(1)}%</div>
           </div>`;
@@ -4784,10 +4980,10 @@ function renderFootballPredictions(results) {
       const an = r.analysis;
       if (!compactFootballView && an) {
         const sp = an.score_picks || [];
-        const spColors = { '首推': '#3b82f6', '次选': '#94a3b8', '防冷': (an.upset_alert ? '#f59e0b' : '#94a3b8') };
+        const spColors = { '首推': 'var(--color-info)', '次选': 'var(--color-muted)', '防冷': (an.upset_alert ? 'var(--color-warning)' : 'var(--color-muted)') };
         const spChips = sp.map(p => {
-          const c = spColors[p.type] || '#94a3b8';
-          return `<span style="display:inline-block;padding:3px 8px;margin:3px 5px 0 0;background:${c}18;color:${c};border-radius:6px;font-size:12px;font-weight:bold">${esc(p.type)} ${esc(p.score)} <span style="font-weight:normal;color:var(--muted)">${Math.round((p.probability || 0) * 100)}%</span></span>`;
+          const c = spColors[p.type] || 'var(--color-muted)';
+          return `<span style="display:inline-block;padding:3px 8px;margin:3px 5px 0 0;background:color-mix(in srgb, ${c} 9%, transparent);color:${c};border-radius:6px;font-size:12px;font-weight:bold">${esc(p.type)} ${esc(p.score)} <span style="font-weight:normal;color:var(--muted)">${Math.round((p.probability || 0) * 100)}%</span></span>`;
         }).join('');
         const g = an.goals || {};
         const ou = g.direction ? `${g.direction} ${Math.round((g.direction_prob || 0) * 100)}%` : '';
@@ -4796,8 +4992,8 @@ function renderFootballPredictions(results) {
         itemHtml += `<div style="margin-top:8px;padding:8px 10px;background:var(--bg2);border-left:3px solid var(--accent);border-radius:8px">
           <div style="font-size:12px;color:var(--muted);margin-bottom:4px">🧠 赛果分析 <span style="color:var(--muted)">· 置信 ${(an.confidence * 100).toFixed(0)}%</span></div>
           <div style="font-size:13px;margin-bottom:5px">${esc(an.verdict)}</div>
-          ${an.lottery_verdict ? `<div style="font-size:12px;color:#3b82f6;margin-bottom:5px">${esc(an.lottery_verdict)}</div>` : ''}
-          ${an.open_match ? `<div style="font-size:11px;color:#f59e0b;margin-bottom:5px">⚖️ 势均力敌·比分开放：胜平负接近，比分看区间即可，主看进球数/大小球/BTTS</div>` : ''}
+          ${an.lottery_verdict ? `<div style="font-size:12px;color:var(--color-info);margin-bottom:5px">${esc(an.lottery_verdict)}</div>` : ''}
+          ${an.open_match ? `<div style="font-size:11px;color:var(--color-warning);margin-bottom:5px">⚖️ 势均力敌·比分开放：胜平负接近，比分看区间即可，主看进球数/大小球/BTTS</div>` : ''}
           <div style="margin-bottom:5px">${spChips}</div>
           <div style="font-size:12px;color:var(--muted)">⚽ ${goalTxt}${ou ? ' · ' + ou : ''}${bttsTxt ? ' · ' + bttsTxt : ''}${an.upset_alert ? ' · ⚠️ 防冷' : ''}</div>
         </div>`;
@@ -5563,7 +5759,7 @@ function renderResult(r) {
     // 样本质量信息
     if (htfSampleInfo) {
       const si = htfSampleInfo;
-      const qualityColors = { high: '#2ea043', medium: '#d29922', low: '#db6161', none: '#6e7681' };
+      const qualityColors = { high: 'var(--color-positive)', medium: 'var(--color-warning)', low: 'var(--color-danger)', none: 'var(--color-muted)' };
       const qualityLabels = { high: '高', medium: '中', low: '低', none: '无' };
       
       html += `<div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--line)">`;
@@ -5641,7 +5837,7 @@ function renderResult(r) {
     // 样本质量信息（保留历史盘口参考）
     if (goalCount && goalCount.sample_info) {
       const si = goalCount.sample_info;
-      const qualityColors = { high: '#2ea043', medium: '#d29922', low: '#db6161', none: '#6e7681' };
+      const qualityColors = { high: 'var(--color-positive)', medium: 'var(--color-warning)', low: 'var(--color-danger)', none: 'var(--color-muted)' };
       const qualityLabels = { high: '高', medium: '中', low: '低', none: '无' };
       
       html += `<div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--line)">`;
@@ -6076,7 +6272,7 @@ function renderKL8(r) {
 
   // ── 状态3：已验证（至少一个玩法有validated策略）───
   if (signalStatus === 'validated') {
-    html += `<section class="kl8-state-card" style="--state-accent:#42d392"><div class="kl8-state-title">✓ 策略验证通过</div><div class="kl8-state-copy">当前启用策略已通过严格回测验证。</div></section>`;
+    html += `<section class="kl8-state-card" style="--state-accent:var(--color-positive)"><div class="kl8-state-title">✓ 策略验证通过</div><div class="kl8-state-copy">当前启用策略已通过严格回测验证。</div></section>`;
   }
 
   // 最近开奖结果（始终显示）
@@ -6106,19 +6302,19 @@ function renderKL8(r) {
   // ── 本期变化对比信息（仅在有已验证策略时显示）───
   const changeInfo = r.change_info || {};
   if (changeInfo.has_previous && signalStatus === 'validated') {
-    html += `<div class="card kl8-panel" style="padding:12px 15px;border-left:3px solid #63a4ff">`;
-    html += `<div style="font-size:13px;font-weight:600;margin-bottom:6px;color:#4493f8">📊 本期相较上期变化</div>`;
-    html += `<div style="font-size:11px;color:#8b949e;margin-bottom:8px">`;
+    html += `<div class="card kl8-panel" style="padding:12px 15px;border-left:3px solid var(--color-info)">`;
+    html += `<div style="font-size:13px;font-weight:600;margin-bottom:6px;color:var(--color-info)">📊 本期相较上期变化</div>`;
+    html += `<div style="font-size:11px;color:var(--color-muted);margin-bottom:8px">`;
     html += `本期基准: ${esc(changeInfo.current_based_on)} · 上期基准: ${esc(changeInfo.previous_based_on)}`;
     html += `</div>`;
     const poolChanges = changeInfo.pool_changes || {};
     if (poolChanges.changed === 0) {
-      html += `<div style="font-size:12px;color:#8b949e;margin-bottom:6px">候选池延续：当前数据更新后，前20排名未发生变化</div>`;
+      html += `<div style="font-size:12px;color:var(--color-muted);margin-bottom:6px">候选池延续：当前数据更新后，前20排名未发生变化</div>`;
     } else {
       html += `<div style="font-size:12px;margin-bottom:6px">`;
-      html += `<span style="color:#4493f8">候选池变化</span>: `;
-      html += `<span style="color:#da3633;font-weight:600">${poolChanges.changed}</span>`;
-      html += ` / <span style="color:#8b949e">${poolChanges.total_pool_size}</span>`;
+      html += `<span style="color:var(--color-info)">候选池变化</span>: `;
+      html += `<span style="color:var(--color-danger);font-weight:600">${poolChanges.changed}</span>`;
+      html += ` / <span style="color:var(--color-muted)">${poolChanges.total_pool_size}</span>`;
       html += ` 号号替换`;
       html += `</div>`;
     }
@@ -6128,12 +6324,12 @@ function renderKL8(r) {
       const pc = playChanges[key];
       if (!pc || pc.changed_count === 0) continue;
       html += `<div style="font-size:11px;margin-bottom:4px">`;
-      html += `<span style="color:#4493f8">选${st}</span>: `;
+      html += `<span style="color:var(--color-info)">选${st}</span>: `;
       if (pc.removed && pc.removed.length > 0) {
-        html += `<span style="color:#da3633">-${pc.removed.map(n=>String(n).padStart(2,'0')).join(',')}</span> `;
+        html += `<span style="color:var(--color-danger)">-${pc.removed.map(n=>String(n).padStart(2,'0')).join(',')}</span> `;
       }
       if (pc.added && pc.added.length > 0) {
-        html += `<span style="color:#2ea043">+${pc.added.map(n=>String(n).padStart(2,'0')).join(',')}</span>`;
+        html += `<span style="color:var(--color-positive)">+${pc.added.map(n=>String(n).padStart(2,'0')).join(',')}</span>`;
       }
       html += `</div>`;
     }
@@ -6141,18 +6337,18 @@ function renderKL8(r) {
       const fpc = playChanges[f.key];
       if (fpc && fpc.changed_count > 0) {
         html += `<div style="font-size:11px;margin-bottom:4px">`;
-        html += `<span style="color:#4493f8">${esc(f.label)}</span>: `;
+        html += `<span style="color:var(--color-info)">${esc(f.label)}</span>: `;
         if (fpc.removed && fpc.removed.length > 0) {
-          html += `<span style="color:#da3633">-${fpc.removed.map(n=>String(n).padStart(2,'0')).join(',')}</span> `;
+          html += `<span style="color:var(--color-danger)">-${fpc.removed.map(n=>String(n).padStart(2,'0')).join(',')}</span> `;
         }
         if (fpc.added && fpc.added.length > 0) {
-          html += `<span style="color:#2ea043">+${fpc.added.map(n=>String(n).padStart(2,'0')).join(',')}</span>`;
+          html += `<span style="color:var(--color-positive)">+${fpc.added.map(n=>String(n).padStart(2,'0')).join(',')}</span>`;
         }
         html += `</div>`;
       }
     }
-    html += `<div style="font-size:11px;color:#8b949e;margin-top:4px">变化原因: ${esc(changeInfo.change_reason || '数据更新')}</div>`;
-    html += `<div style="font-size:11px;margin-top:4px">置信等级: <span style="font-weight:600;color:${changeInfo.confidence_level==='低'?'#9a6700':'#2ea043'}">${esc(changeInfo.confidence_level || '低')}</span> · 策略状态: ${esc(changeInfo.strategy_status || '验证中')}</div>`;
+    html += `<div style="font-size:11px;color:var(--color-muted);margin-top:4px">变化原因: ${esc(changeInfo.change_reason || '数据更新')}</div>`;
+    html += `<div style="font-size:11px;margin-top:4px">置信等级: <span style="font-weight:600;color:${changeInfo.confidence_level==='低'?'var(--color-warning)':'var(--color-positive)'}">${esc(changeInfo.confidence_level || '低')}</span> · 策略状态: ${esc(changeInfo.strategy_status || '验证中')}</div>`;
     html += `</div>`;
   }
 
@@ -6166,7 +6362,7 @@ function renderKL8(r) {
 
     if (candidatePlays.length > 0) {
       html += `<div class="card kl8-panel" style="padding:14px 16px">`;
-      html += `<div style="font-size:13px;font-weight:600;margin-bottom:8px">候选号码池 <span style="font-size:11px;color:#8b949e">(按玩法独立展示)</span></div>`;
+      html += `<div style="font-size:13px;font-weight:600;margin-bottom:8px">候选号码池 <span style="font-size:11px;color:var(--color-muted)">(按玩法独立展示)</span></div>`;
       html += `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px">`;
       for (const play of candidatePlays) {
         const selectedSet = new Set(r[play.key]?.numbers || []);
@@ -6207,7 +6403,7 @@ function renderKL8(r) {
 
       const isRef = sel.prediction_mode === 'reference_unvalidated';
       const isCoverage = sel.baseline_type === 'fair_deterministic_coverage';
-      const borderColor = isRef ? '#f6bd55' : '#42d392';
+      const borderColor = isRef ? 'var(--color-warning)' : 'var(--color-positive)';
       const badgeText = isCoverage ? '公平覆盖' : (isRef ? '参考' : '已验证');
 
       // 主推号码：每个玩法只输出一组。
@@ -6232,7 +6428,7 @@ function renderKL8(r) {
       }
       html += `</div>`;
       const kl8WR = (kl8HypergeomPGe(st, winTh) * 100).toFixed(1);          // 单注参考率
-      html += `<div class="kl8-probability-line">中${esc(winTh)}+ 约 <b style="color:${kl8WR >= 15 ? '#42d392' : '#f6bd55'}">${esc(kl8WR)}%</b>/期 · 期望中 ${esc((sel.numbers.length * 0.25).toFixed(2))} 个</div>`;
+      html += `<div class="kl8-probability-line">中${esc(winTh)}+ 约 <b style="color:${kl8WR >= 15 ? 'var(--color-positive)' : 'var(--color-warning)'}">${esc(kl8WR)}%</b>/期 · 期望中 ${esc((sel.numbers.length * 0.25).toFixed(2))} 个</div>`;
       html += renderKL8ShapeProfile(sel.shape_profile, sel.numbers);
       if (sel.repeat_profile) {
         const actualRepeats = sel.numbers.filter(n => (r.statistics?.last_numbers || []).includes(n)).length;
@@ -6258,7 +6454,7 @@ function renderKL8(r) {
 
     const isRef = fushi.prediction_mode === 'reference_unvalidated';
     const isCoverage = fushi.baseline_type === 'fair_deterministic_coverage';
-    const border = isRef ? '#f6bd55' : '#42d392';
+    const border = isRef ? 'var(--color-warning)' : 'var(--color-positive)';
     const badge = isCoverage ? '公平覆盖' : (isRef ? '参考' : '已验证');
     const comboPick = fushi.combo_pick || (f.key === 'fu_shi_10_11' ? 10 : 5);
     const poolSize = fushi.pool_size || coreNumbers.length;
@@ -6271,7 +6467,7 @@ function renderKL8(r) {
     const fushiBasePick = f.comboPick || f.basePick || (f.key === 'fu_shi_10_11' ? 10 : 5);
     const fushiWinTh = fushiBasePick <= 4 ? 2 : (fushiBasePick <= 7 ? 3 : 5);
     const fushiExpWins = (fushi.total_combinations * kl8HypergeomPGe(fushiBasePick, fushiWinTh)).toFixed(1);
-    html += `<div class="kl8-fushi-summary">${esc(f.coreLabel)} · 每注中奖门槛中 ${esc(fushiWinTh)} 个 · 期望中奖注数约 <b style="color:#42d392">${esc(fushiExpWins)}</b> 注（共 ${esc(fushi.total_combinations)} 注）</div>`;
+    html += `<div class="kl8-fushi-summary">${esc(f.coreLabel)} · 每注中奖门槛中 ${esc(fushiWinTh)} 个 · 期望中奖注数约 <b style="color:var(--color-positive)">${esc(fushiExpWins)}</b> 注（共 ${esc(fushi.total_combinations)} 注）</div>`;
     html += `<div class="kl8-fushi-top7">`;
     for (const n of coreNumbers) {
       html += `<span class="kl8-ball highlight-ball" style="width:44px;height:44px;font-size:18px">${String(n).padStart(2,'0')}</span>`;
@@ -6412,7 +6608,7 @@ function renderKL8PerformanceSummary(performance) {
   if (!rows.length) return '';
   const cells = rows.map(stat => {
     const delta = Number(stat.hit_delta_vs_random || 0);
-    const color = delta > 0 ? '#2ea043' : delta < 0 ? '#f85149' : '#8b949e';
+    const color = delta > 0 ? 'var(--color-positive)' : delta < 0 ? 'var(--color-danger)' : 'var(--color-muted)';
     let line = `<span style="margin-right:18px">${esc(stat.label)}：实际均中 <b>${Number(stat.avg_hits || 0).toFixed(2)}</b>，随机 ${Number(stat.random_expected_hits || 0).toFixed(2)}，<b style="color:${color}">${delta >= 0 ? '+' : ''}${delta.toFixed(2)}</b></span>`;
     // v9.6: 同时展示多注组合层面的实际命中率
     const ms = stat.multi_slip;
@@ -6421,8 +6617,8 @@ function renderKL8PerformanceSummary(performance) {
     }
     return line;
   }).join('');
-  return `<div class="card kl8-panel" style="padding:12px 15px;border-left:3px solid #63a4ff">
-    <div style="font-size:12px;color:#8b949e;margin-bottom:5px">最近 ${esc(current.settled_count || available)} 期实际结算（与随机基线比较）</div>
+  return `<div class="card kl8-panel" style="padding:12px 15px;border-left:3px solid var(--color-info)">
+    <div style="font-size:12px;color:var(--color-muted);margin-bottom:5px">最近 ${esc(current.settled_count || available)} 期实际结算（与随机基线比较）</div>
     <div style="font-size:12px;line-height:1.7">${cells}</div>
   </div>`;
 }
@@ -6449,12 +6645,12 @@ function renderKL8MultiSlips(sel, st) {
   if (st >= 4) thresholds.push({ k: 4, label: '中4+', val: Number(coverage.at_least_one_ge4 || 0) * 100 });
   if (st >= 5) thresholds.push({ k: 5, label: '中5+', val: Number(coverage.at_least_one_ge5 || 0) * 100 });
   if (st >= 6) thresholds.push({ k: 6, label: '中6+', val: Number(coverage.at_least_one_ge6 || 0) * 100 });
-  const probLine = thresholds.map(t => `${t.label} <b style="color:#2ea043">${t.val.toFixed(1)}%</b>`).join(' · ');
+  const probLine = thresholds.map(t => `${t.label} <b style="color:var(--color-positive)">${t.val.toFixed(1)}%</b>`).join(' · ');
 
   let cards = '';
   slips.forEach((s, i) => {
     cards += `<div style="display:flex;align-items:center;gap:5px;margin-bottom:4px">`;
-    cards += `<span style="font-size:11px;color:#8b949e;min-width:34px">第${i + 1}组</span>`;
+    cards += `<span style="font-size:11px;color:var(--color-muted);min-width:34px">第${i + 1}组</span>`;
     for (const n of s) {
       cards += `<span class="kl8-ball highlight-ball" style="width:28px;height:28px;font-size:11px">${String(n).padStart(2,'0')}</span>`;
     }
@@ -6462,13 +6658,13 @@ function renderKL8MultiSlips(sel, st) {
   });
 
   return `<div style="margin-top:10px;border-top:1px dashed var(--line);padding-top:8px">
-    <div style="font-size:12px;font-weight:700;color:#4493f8;margin-bottom:5px">🎯 多注覆盖方案（${nSlips}组 × ${pick}码，打${playLabel}）</div>
-    <div style="font-size:11px;color:#8b949e;margin-bottom:7px;line-height:1.6">
+    <div style="font-size:12px;font-weight:700;color:var(--color-info);margin-bottom:5px">🎯 多注覆盖方案（${nSlips}组 × ${pick}码，打${playLabel}）</div>
+    <div style="font-size:11px;color:var(--color-muted);margin-bottom:7px;line-height:1.6">
       每组 ${pick} 个号打${playLabel} = C(${pick},${st})=${betsPerGroup} 注，共 ${nSlips} 组。v9.6 起采用“覆盖最大化”结构：12 组号码互不重复，最多覆盖 72/80 个号码，组间最大重复 ${esc(maxOverlap)} 个。
       按实际重叠结构模拟 ${esc(sims)} 次公平开奖，${playLabel} 组合层面：${probLine}。每期成本约 <b>${cost}</b> 元。
     </div>
     ${cards}
-    <div style="font-size:11px;color:#9a6700;margin-top:6px">⚠ 这是“多买几组”的覆盖率杠杆，不保证单组必中；单注期望命中仍为 ${(pick * 0.25).toFixed(2)} 个。请理性投注。</div>
+    <div style="font-size:11px;color:var(--color-warning);margin-top:6px">⚠ 这是“多买几组”的覆盖率杠杆，不保证单组必中；单注期望命中仍为 ${(pick * 0.25).toFixed(2)} 个。请理性投注。</div>
   </div>`;
 }
 
@@ -6614,7 +6810,7 @@ function renderKL8KillCards(selectedKey) {
     html += `<div class="kl8-select-title"><input type="radio" name="kl8-kill-play" value="${esc(item.key)}" ${checked ? 'checked' : ''} ${disabled ? 'disabled' : ''}> ${esc(item.label)}</div>`;
     html += `<div class="kl8-numbers-row" style="margin-top:8px">${renderKL8Balls(item.currentNumbers, 32)}</div>`;
     if (item.manualKillNumbers.length) {
-      html += `<div style="font-size:12px;color:#f85149;margin-top:8px">杀号: ${item.manualKillNumbers.map(n => String(n).padStart(2,'0')).join(', ')}</div>`;
+      html += `<div style="font-size:12px;color:var(--color-danger);margin-top:8px">杀号: ${item.manualKillNumbers.map(n => String(n).padStart(2,'0')).join(', ')}</div>`;
     }
     if (item.excludedNumbers.length) {
       html += `<div style="font-size:12px;color:var(--muted);margin-top:6px">累计排除: ${item.excludedNumbers.map(n => String(n).padStart(2,'0')).join(', ')}</div>`;
@@ -6812,7 +7008,7 @@ function renderKL8RecordsPage() {
     const to = Math.min(totalPages, kl8RecordsPage + 2);
     for (let p = from; p <= to; p++) {
       const active = p === kl8RecordsPage;
-      btns += `<button type="button" onclick="setKL8RecordsPage(${p})" style="padding:5px 9px;border:1px solid ${active ? '#2ea043' : 'var(--line)'};background:${active ? '#2ea043' : 'var(--card2)'};color:${active ? '#fff' : 'var(--text)'};border-radius:6px;cursor:pointer">${p}</button>`;
+      btns += `<button type="button" onclick="setKL8RecordsPage(${p})" style="padding:5px 9px;border:1px solid ${active ? 'var(--color-positive)' : 'var(--line)'};background:${active ? 'var(--color-positive)' : 'var(--card2)'};color:${active ? '#fff' : 'var(--text)'};border-radius:6px;cursor:pointer">${p}</button>`;
     }
     pager.innerHTML = `<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-top:14px">
       <div style="font-size:12px;color:var(--muted)">显示 ${pageRecords.length ? start + 1 : 0}-${start + pageRecords.length} / ${total} 条 · 第 ${kl8RecordsPage}/${totalPages} 页</div>
@@ -6855,7 +7051,7 @@ function renderKL8RecordCard(rec) {
     }
   }
   if (predHtml) {
-    html += `<div style="font-size:12px;color:#8b949e;margin:6px 0 2px">预测主推</div>${predHtml}`;
+    html += `<div style="font-size:12px;color:var(--color-muted);margin:6px 0 2px">预测主推</div>${predHtml}`;
   }
 
   const recalculations = Array.isArray(rec.exclude_recalculations) ? rec.exclude_recalculations : [];
@@ -6866,10 +7062,10 @@ function renderKL8RecordCard(rec) {
   for (const group of recalculationGroups) {
     const rounds = recalculations.filter(row => row.play_type === group.key);
     if (rounds.length) {
-      html += `<div style="font-size:12px;color:#d29922;margin:10px 0 4px">${group.label} · 主推为第0轮 → 累计删除后重新计算并保存</div>`;
+      html += `<div style="font-size:12px;color:var(--color-warning);margin:10px 0 4px">${group.label} · 主推为第0轮 → 累计删除后重新计算并保存</div>`;
       for (const row of rounds) {
         const exhausted = row.status === 'exhausted';
-        const hitText = row.hits === null || row.hits === undefined ? '' : ` · 命中 <b style="color:${row.hits >= 3 ? '#2ea043' : '#f85149'}">${esc(row.hits)}</b> 个`;
+        const hitText = row.hits === null || row.hits === undefined ? '' : ` · 命中 <b style="color:${row.hits >= 3 ? 'var(--color-positive)' : 'var(--color-danger)'}">${esc(row.hits)}</b> 个`;
         const numsText = exhausted
           ? `候选剩余 ${esc(row.remaining_count ?? 0)} 个，不足 ${esc(row.required_count ?? group.required)} 个，重算终止`
           : (row.numbers || []).map(p2).join(' ');
@@ -6882,7 +7078,7 @@ function renderKL8RecordCard(rec) {
   }
 
   if (settled) {
-    html += `<div style="font-size:12px;color:#8b949e;margin:10px 0 4px">开奖号码（第 ${esc(st.actual_issue || rec.target_issue)} 期）</div>`;
+    html += `<div style="font-size:12px;color:var(--color-muted);margin:10px 0 4px">开奖号码（第 ${esc(st.actual_issue || rec.target_issue)} 期）</div>`;
     html += `<div class="kl8-numbers-row">${renderKL8Balls(st.actual_numbers || [], 28)}</div>`;
 
     const ps = st.prize_settlement || {};
@@ -6901,7 +7097,7 @@ function renderKL8RecordCard(rec) {
     }
 
     const roi = st.cumulative_profit_roi || 0;
-    const roiColor = roi >= 0 ? '#2ea043' : '#f85149';
+    const roiColor = roi >= 0 ? 'var(--color-positive)' : 'var(--color-danger)';
     html += `<div style="margin-top:8px;font-size:13px;border-top:1px dashed var(--line);padding-top:8px">
       累计投注 <b>${st.cumulative_bet || 0}</b> 元 · 奖金 <b>${st.cumulative_prize || 0}</b> 元 ·
       ROI <b style="color:${roiColor}">${(roi * 100).toFixed(1)}%</b>
@@ -6981,9 +7177,9 @@ async function runKL8KillRecalculate() {
     const candidates = (result.candidates || []).map(item => Array.isArray(item) ? item[0] : item).slice(0, 12);
     refreshKL8KillCards(option.key);
 
-    let html = `<div class="kl8-select-card" style="border-color:#f85149">`;
+    let html = `<div class="kl8-select-card" style="border-color:var(--color-danger)">`;
     html += `<div class="kl8-select-title">${esc(option.label)} 杀号计算第 ${option.round} 次结果</div>`;
-    html += `<div style="font-size:12px;color:#f85149;margin-bottom:8px">杀号: ${manualKillNumbers.map(n => String(n).padStart(2,'0')).join(', ')}</div>`;
+    html += `<div style="font-size:12px;color:var(--color-danger);margin-bottom:8px">杀号: ${manualKillNumbers.map(n => String(n).padStart(2,'0')).join(', ')}</div>`;
     if (removeNow.length) {
       html += `<div style="font-size:12px;color:var(--muted);margin-bottom:8px">本次继续排除: ${removeNow.map(n => String(n).padStart(2,'0')).join(', ')}</div>`;
     }
@@ -7048,7 +7244,7 @@ async function runKL8ExcludeRecalculate() {
     const candidates = (result.candidates || []).map(item => Array.isArray(item) ? item[0] : item).slice(0, 12);
     refreshKL8ExcludeCards(option.key);
 
-    let html = `<div class="kl8-select-card" style="border-color:#d29922">`;
+    let html = `<div class="kl8-select-card" style="border-color:var(--color-warning)">`;
     html += `<div class="kl8-select-title">${esc(option.label)} 第 ${option.round} 次剔除后重算结果</div>`;
     html += `<div style="font-size:12px;color:var(--muted);margin-bottom:8px">本次剔除: ${removeNow.map(n => String(n).padStart(2,'0')).join(', ')}</div>`;
     html += `<div style="font-size:12px;color:var(--muted);margin-bottom:8px">累计剔除: ${option.excludedNumbers.map(n => String(n).padStart(2,'0')).join(', ')}</div>`;
@@ -7090,7 +7286,7 @@ function renderKL8ParameterSearch(result) {
     html += `<div class="note" style="margin-bottom:10px;color:var(--accent2);border-left:3px solid var(--accent2);padding-left:8px">⚠ ${esc(result.honest_note)}</div>`;
   }
   if (result.any_significant === false) {
-    html += `<div class="note" style="margin-bottom:10px;color:#8b949e">本轮无任一候选在验证段显著高于随机基线（与随机不可区分）——属公平摇奖的预期结果，排名仅供参考。</div>`;
+    html += `<div class="note" style="margin-bottom:10px;color:var(--color-muted)">本轮无任一候选在验证段显著高于随机基线（与随机不可区分）——属公平摇奖的预期结果，排名仅供参考。</div>`;
   }
   if (result.report_file) {
     html += `<div class="note" style="margin-bottom:10px">报告文件: ${esc(result.report_file)}</div>`;
@@ -7114,20 +7310,20 @@ function renderKL8ParameterSearch(result) {
     };
     // 公平摇奖下正 lift 多为噪声：仅当验证段显著高于随机才标绿，否则一律按噪声呈现(灰色)。
     const isSignificant = item.validation_is_significant === true;
-    const liftColor = isSignificant ? '#2ea043' : '#8b949e';
+    const liftColor = isSignificant ? 'var(--color-positive)' : 'var(--color-muted)';
     const noiseTag = (item.likely_noise !== false && !isSignificant)
-      ? `<span style="font-size:10px;color:#8b949e;border:1px solid #8b949e;border-radius:3px;padding:0 4px;margin-left:6px">≈随机噪声</span>`
+      ? `<span style="font-size:10px;color:var(--color-muted);border:1px solid var(--color-muted);border-radius:3px;padding:0 4px;margin-left:6px">≈随机噪声</span>`
       : '';
     html += `<div class="kl8-select-card" style="border-color:${liftColor}">`;
     html += `<div class="kl8-select-title">${esc(label)} · ${esc(item.candidate || '-')}${noiseTag}</div>`;
     html += `<div style="font-size:12px;color:var(--muted);margin-bottom:6px">score ${esc(item.score ?? '-')} · window ${esc(strategy.window_size || '-')} · 显著: ${isSignificant ? '是' : '否'}</div>`;
     html += `<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:12px">`;
-    html += `<div>命中率评分: <span style="color:#2ea043;font-weight:700">${valHitScore.toFixed(4)}</span></div>`;
-    html += `<div>封存命中率: <span style="color:${finalHitScore > 0 ? '#2ea043' : '#8b949e'};font-weight:700">${finalHitScore.toFixed(4)}</span></div>`;
+    html += `<div>命中率评分: <span style="color:var(--color-positive);font-weight:700">${valHitScore.toFixed(4)}</span></div>`;
+    html += `<div>封存命中率: <span style="color:${finalHitScore > 0 ? 'var(--color-positive)' : 'var(--color-muted)'};font-weight:700">${finalHitScore.toFixed(4)}</span></div>`;
     html += `<div style="grid-column:1/-1;color:var(--muted)">验证关键档: ${formatHitLifts(item.validation_hit_rate_lifts)}</div>`;
     html += `<div style="grid-column:1/-1;color:var(--muted)">封存关键档: ${formatHitLifts(item.final_test_hit_rate_lifts)}</div>`;
     html += `<div>验证Lift: <span style="color:${liftColor};font-weight:700">${valLift.toFixed(4)}</span></div>`;
-    html += `<div>封存Lift: <span style="color:${finalLift > 0 && isSignificant ? '#2ea043' : '#8b949e'};font-weight:700">${finalLift.toFixed(4)}</span></div>`;
+    html += `<div>封存Lift: <span style="color:${finalLift > 0 && isSignificant ? 'var(--color-positive)' : 'var(--color-muted)'};font-weight:700">${finalLift.toFixed(4)}</span></div>`;
     html += `<div>均值命中: ${esc(item.validation_mean_hits ?? '-')}</div>`;
     html += `<div>随机基线: ${esc(item.expected_random ?? '-')}</div>`;
     html += `<div>重号方向: ${esc(strategy.repeat_direction || 'neutral')}</div>`;
@@ -7222,7 +7418,7 @@ async function fetchKL8Data() {
 
     // Toast
     const toast = document.createElement('div');
-    toast.style.cssText = `position:fixed;bottom:30px;left:50%;transform:translateX(-50%);background:${success ? '#2ea043' : '#f85149'};color:white;padding:12px 24px;border-radius:8px;font-size:14px;z-index:1000;`;
+    toast.style.cssText = `position:fixed;bottom:30px;left:50%;transform:translateX(-50%);background:${success ? 'var(--color-positive)' : 'var(--color-danger)'};color:white;padding:12px 24px;border-radius:8px;font-size:14px;z-index:1000;`;
     toast.innerHTML = `${success ? '✅' : '❌'} ${message}${latestIssue ? ' · 最新期号: ' + latestIssue : ''}`;
     document.body.appendChild(toast);
     setTimeout(() => toast.remove(), 3000);
@@ -7335,7 +7531,7 @@ function renderBasketball(result) {
             aria-label="搜索篮球比赛"
             placeholder="搜索球队、联赛"
             value="${esc(basketballSearchFilter || '')}"
-            style="width:100%;margin-bottom:0;padding:8px 12px;border-radius:8px;border:1px solid rgba(44,58,78,0.5);background:rgba(0,0,0,0.2);color:var(--text);font-size:13px"
+            style="width:100%;margin-bottom:0;padding:8px 12px;border-radius:8px;border:1px solid rgba(44,58,78,0.5);background:var(--color-inset);color:var(--text);font-size:13px"
           />
         </div>
       </div>
@@ -7400,7 +7596,7 @@ function renderBasketball(result) {
             ${renderFixtureTeams(m.home, m.away)}
             <div class="fixture-time">
               ${uiIcon('clock')}${esc(m.time || '')}
-              ${m.status === 'in_progress' ? '<span style="margin-left:8px;color:#f59e0b">已开赛 · 仅展示赛前盘口</span>' : ''}
+              ${m.status === 'in_progress' ? '<span style="margin-left:8px;color:var(--color-warning)">已开赛 · 仅展示赛前盘口</span>' : ''}
             </div>
           </div>
         </div><div class="basketball-market-grid">`;
@@ -7410,7 +7606,7 @@ function renderBasketball(result) {
           html += `<details class="basketball-market-context"><summary><span>盘口变化分析</span><span class="context-state">${esc(marketAnalysis.verdict || '查看变化')} <span aria-hidden="true">⌄</span></span></summary>
             <div class="basketball-signals">${(marketAnalysis.signals || []).map(signal => {
               const flowState = signal.aligned_with_model === true ? '同向' : signal.aligned_with_model === false ? '反向' : '中性';
-              const flowColor = signal.aligned_with_model === true ? '#22c55e' : signal.aligned_with_model === false ? '#f59e0b' : 'var(--muted)';
+              const flowColor = signal.aligned_with_model === true ? 'var(--color-positive)' : signal.aligned_with_model === false ? 'var(--color-warning)' : 'var(--muted)';
               return `<span style="padding:4px 7px;border-radius:5px;background:var(--bg);font-size:11px">
                 ${esc(signal.summary || '')} · 强度 ${(Number(signal.strength || 0) * 100).toFixed(0)}%
                 ${signal.steam ? ' · 急速资金' : ''} · <b style="color:${flowColor}">${flowState}</b>
@@ -7439,7 +7635,7 @@ function renderBasketball(result) {
             const rqLine = rqWater.opening_line != null && rqWater.current_line != null
               ? `${esc(rqWater.opening_line)} → ${esc(rqWater.current_line)}` : '盘口历史不足';
             const rqWaterText = `主水 ${Number(rqWater.first_water_move || 0) >= 0 ? '+' : ''}${Number(rqWater.first_water_move || 0).toFixed(2)} · 客水 ${Number(rqWater.second_water_move || 0) >= 0 ? '+' : ''}${Number(rqWater.second_water_move || 0).toFixed(2)}`;
-            const rqInferenceColor = rqWater.actionable ? '#06b6d4' : '#f59e0b';
+            const rqInferenceColor = rqWater.actionable ? 'var(--color-info)' : 'var(--color-warning)';
             html += `<div style="margin-top:7px;font-size:11px;color:${rqInferenceColor}">
               💧 水位反推：${rqLine} · ${rqWaterText} · 指向 ${esc(rqWater.recommendation || '观望')}
               ${m.rqspf.movement_led ? ' · <b>已改判原模型</b>' : ''}
@@ -7460,7 +7656,7 @@ function renderBasketball(result) {
             const dxLine = dxWater.opening_line != null && dxWater.current_line != null
               ? `${esc(dxWater.opening_line)} → ${esc(dxWater.current_line)}` : '盘口历史不足';
             const dxWaterText = `大分水 ${Number(dxWater.first_water_move || 0) >= 0 ? '+' : ''}${Number(dxWater.first_water_move || 0).toFixed(2)} · 小分水 ${Number(dxWater.second_water_move || 0) >= 0 ? '+' : ''}${Number(dxWater.second_water_move || 0).toFixed(2)}`;
-            const dxInferenceColor = dxWater.actionable ? '#06b6d4' : '#f59e0b';
+            const dxInferenceColor = dxWater.actionable ? 'var(--color-info)' : 'var(--color-warning)';
             html += `<div style="margin-top:7px;font-size:11px;color:${dxInferenceColor}">
               💧 水位反推：${dxLine} · ${dxWaterText} · 指向 ${esc(dxWater.recommendation || '观望')}
               ${m.daxiao.movement_led ? ' · <b>已改判原模型</b>' : ''}
@@ -8093,7 +8289,7 @@ async function loadPredictions() {
         html += `<div class="card" style="${idx > 0 ? 'margin-top:8px' : ''}">
           <div style="display:flex;justify-content:space-between;align-items:center">
             <div>
-              <div style="font-weight:600;font-size:15px">${record.match_num ? `<span style="display:inline-block;margin-right:7px;padding:2px 6px;border-radius:5px;background:rgba(68,147,248,.14);color:#93c5fd;font-size:12px;vertical-align:1px">${esc(record.match_num)}</span>` : ''}${esc(record.home)} vs ${esc(record.away)}</div>
+              <div style="font-weight:600;font-size:15px">${record.match_num ? `<span style="display:inline-block;margin-right:7px;padding:2px 6px;border-radius:5px;background:rgba(68,147,248,.14);color:var(--color-info);font-size:12px;vertical-align:1px">${esc(record.match_num)}</span>` : ''}${esc(record.home)} vs ${esc(record.away)}</div>
               <div style="color:var(--muted);font-size:12px;margin-top:2px">${esc(record.league || '')} · ${esc(record.match_time || '')}</div>
             </div>
             <div style="text-align:right">
