@@ -1034,7 +1034,8 @@ class KL8Analyzer:
             candidates,
             pick_n,
             repeat_cap,
-            strategy.get('final_selection_mode', 'best_variant'),
+            strategy.get('exclusion_selection_mode',
+                         strategy.get('final_selection_mode', 'best_variant')),
         )
         numbers = sorted(num for num, _ in final_pool)
         return {
