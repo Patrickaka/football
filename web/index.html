@@ -2635,6 +2635,144 @@ body.ui-shell[data-module="kl8"] { --accent: #df718b; --accent2: #f49aaf; --spor
   .ui-shell *, .ui-shell *::before, .ui-shell *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; transition-duration: .01ms !important; }
 }
 </style>
+<style id="match-card-refinement">
+/* Hallmark · macrostructure: Workbench · theme: existing midnight · nav: side rail · enrichment: none
+ * Pre-emit critique: P4 H5 E4 S5 R5 V4 */
+html, body.ui-shell { overflow-x: clip; }
+body.ui-shell {
+  --color-card-rule: var(--line); --color-card-ink: var(--text); --color-card-muted: var(--muted);
+  --color-card-soft: var(--card2); --color-card-accent: var(--sport-accent);
+  --color-card-positive: var(--accent2); --color-card-warning: var(--warn);
+  --space-card-xs: 4px; --space-card-sm: 8px; --space-card-md: 12px; --space-card-lg: 20px;
+  --radius-card: 12px; --radius-control: 6px;
+  --ease-out: cubic-bezier(.16, 1, .3, 1);
+}
+.ui-shell .sport-overview { gap: 0; border-block: 1px solid var(--color-card-rule); padding-block: 18px; background: none; }
+.ui-shell .overview-item { background: none; border: 0; border-radius: 0; padding: 0 24px; }
+.ui-shell .overview-item + .overview-item { border-left: 1px solid var(--color-card-rule); }
+.ui-shell .overview-item:first-child { padding-left: 2px; }
+.ui-shell .overview-index { display: none; }
+.ui-shell .overview-value { font-size: 32px; line-height: 1.3; margin-block: 8px 5px; }
+.ui-shell .sport-panel .league-group { align-items: stretch; }
+.ui-shell .sport-panel .sport-match-card { display: flex !important; flex-direction: column; align-items: stretch; gap: 0; min-width: 0; cursor: default; padding: 20px !important; border-radius: var(--radius-card); }
+.ui-shell .sport-panel .fixture-heading { display: block !important; padding-bottom: 16px !important; margin-bottom: 0; }
+.ui-shell .fixture-meta { margin-bottom: 16px; justify-content: space-between; gap: 8px; }
+.ui-shell .fixture-meta span:first-child { font-variant-numeric: tabular-nums; }
+.ui-shell .fixture-teams { display: grid; grid-template-columns: minmax(0, 1fr) 24px minmax(0, 1fr); gap: 12px; margin-bottom: 16px; }
+.ui-shell .fixture-team { gap: 9px; }
+.ui-shell .fixture-team:last-child { flex-direction: row-reverse; text-align: right; }
+.ui-shell .fixture-team strong { font-size: 17px; line-height: 1.5; letter-spacing: 0; }
+.ui-shell .fixture-vs { text-align: center; font-size: 10px; color: var(--color-card-muted); }
+.ui-shell .team-monogram { width: 32px; height: 36px; font-size: 10px; border-radius: 8px; }
+.fixture-status { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; font-size: 11px; }
+.fixture-pick { color: var(--color-card-muted); }
+.fixture-pick b { color: var(--color-card-ink); font-weight: 600; }
+.fixture-completeness { margin-left: auto; color: var(--color-card-muted); white-space: nowrap; }
+.fixture-completeness b { margin-left: 3px; font-weight: 500; color: var(--color-card-ink); }
+.fixture-downgrade { font-size: 11px; margin-top: 8px; color: var(--color-card-warning); }
+.decision-badge { display: inline-flex; align-items: center; gap: 5px; padding: 2px 7px; border-radius: 4px; color: var(--color-card-muted); background: var(--color-card-soft); font-size: 10px; font-weight: 500; white-space: nowrap; line-height: 1.7; }
+.decision-badge::before { content: ''; width: 4px; height: 4px; border-radius: 50%; background: currentColor; }
+.decision-badge.selected { color: var(--color-card-positive); }
+.decision-badge.watch { color: var(--color-card-warning); }
+.ui-shell #panel-football .football-compact-summary { background: transparent !important; border: 0 !important; padding: 0 !important; border-radius: 0 !important; }
+.market-section-heading { display: flex; justify-content: space-between; align-items: center; margin-top: 18px; margin-bottom: 10px; }
+.market-section-heading h3 { font-size: 13px; font-weight: 600; color: var(--color-card-ink); margin: 0; }
+.market-section-heading > span, .market-caption { font-size: 10px; color: var(--color-card-muted); }
+.match-context, .basketball-market-context { font-size: 11px; margin-bottom: 3px; }
+.match-context summary, .basketball-market-context summary { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 6px; padding-block: 8px; cursor: pointer; list-style: none; color: var(--color-card-muted); }
+.context-state { color: var(--color-card-positive); white-space: nowrap; }
+.context-state.conflict { color: var(--color-card-warning); }
+.context-content { padding: 4px 0 12px; color: var(--color-card-muted); line-height: 1.8; }
+.market-row { padding: 12px 0; border-bottom: 1px solid var(--color-card-rule); }
+.market-row-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.market-name { color: var(--color-card-ink); font-size: 13px; font-weight: 600; }
+.market-decision { display: inline-flex; gap: 7px; align-items: center; font-size: 11px; }
+.market-decision strong { font-weight: 500; color: var(--color-card-muted); }
+.market-decision .selected + strong { color: var(--color-card-positive); }
+.market-candidate { display: block; font-size: 10px; color: var(--color-card-muted); margin-top: 4px; }
+.market-distribution { margin-top: 10px; color: var(--color-card-muted); font-size: 11px; line-height: 1.8; }
+.probability-strip { display: grid; grid-template-columns: repeat(var(--outcomes, 3), minmax(0, 1fr)); gap: 16px; }
+.probability-outcome { min-width: 0; }
+.probability-value { display: flex; align-items: baseline; justify-content: space-between; gap: 4px; font-size: 11px; }
+.probability-value > span { color: var(--color-card-muted); white-space: nowrap; }
+.probability-value strong { color: var(--color-card-ink); font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.probability-track { display: block; overflow: clip; height: 3px; margin-top: 7px; border-radius: 3px; background: var(--color-card-soft); }
+.probability-track i { display: block; height: 100%; background: var(--color-card-muted); border-radius: inherit; }
+.probability-outcome.is-pick .probability-value strong { color: var(--color-card-accent); }
+.probability-outcome.is-pick .probability-track i { background: var(--color-card-accent); }
+.outcome-odds { display: block; margin-top: 7px; color: var(--color-card-muted); font-size: 10px; font-variant-numeric: tabular-nums; }
+.ui-shell .football-score-reference { border: 0 !important; padding-top: 16px !important; margin-top: 0 !important; }
+.score-section-heading { font-size: 11px; color: var(--color-card-muted); margin-bottom: 10px; }
+.score-options { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.ui-shell .football-score-reference .score-option { padding: 10px; background: var(--bg2); border: 0 !important; border-radius: var(--radius-control) !important; }
+.score-value { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; column-gap: 4px; font-size: 20px; font-weight: 600; color: var(--color-card-ink); font-variant-numeric: tabular-nums; line-height: 1.4; }
+.score-value span { font-size: 10px; font-weight: 400; color: var(--color-card-muted); }
+.score-settlement { margin-top: 5px; font-size: 10px; color: var(--color-card-muted); }
+.empty-reference { grid-column: 1 / -1; font-size: 11px; color: var(--color-card-muted); }
+.market-evidence { margin-top: 14px; font-size: 11px; }
+.market-evidence summary { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 36px; list-style: none; cursor: pointer; color: var(--color-card-muted); }
+.market-evidence[open] summary > span { transform: rotate(45deg); }
+.evidence-content { padding: 4px 0 12px; }
+.evidence-row { padding: 8px 0; }
+.evidence-row strong { color: var(--color-card-ink); font-weight: 500; }
+.evidence-row p { color: var(--color-card-muted); margin-top: 4px; line-height: 1.8; }
+.evidence-row .evidence-validation { color: var(--sport-secondary); }
+.fixture-alert { margin-top: 12px; border-left: 2px solid var(--color-card-warning); padding-left: 10px; font-size: 11px; }
+.fixture-alert summary { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; min-height: 32px; cursor: pointer; list-style: none; }
+.disclosure-arrow { margin-left: auto; color: var(--color-card-muted); }
+.alert-details { padding-bottom: 10px; }
+.ui-shell .sport-panel .fixture-actions { display: flex; width: 100%; flex-wrap: wrap; gap: 12px; padding-top: 16px; margin-top: auto; align-self: auto; border: 0 !important; }
+.ui-shell .sport-panel .fixture-actions .bayes-report-btn { display: flex; align-items: center; gap: 12px; padding: 7px 0; color: var(--color-card-muted); background: transparent; border: 0; border-radius: 0; min-height: 34px; font-size: 11px; }
+.ui-shell .sport-panel .fixture-actions .bayes-report-btn:hover { color: var(--color-card-ink); background: none; transform: none; }
+.fixture-actions .bayes-report-btn + .bayes-report-btn { margin-left: auto; }
+.ui-shell .sport-panel .basketball-market { padding: 18px 0; border: 0; border-bottom: 1px solid var(--color-card-rule); }
+.basketball-market > .probability-strip { margin-top: 14px; }
+.basketball-market .probability-value strong { font-size: 20px; font-weight: 600; }
+.basketball-market-context { margin-top: 12px; }
+.basketball-market-context .context-state { color: var(--color-card-accent); white-space: normal; }
+.basketball-signals { display: grid; gap: 6px; padding-block: 8px; }
+.ui-shell summary::-webkit-details-marker { display: none; }
+.ui-shell summary:hover { color: var(--color-card-ink); }
+.ui-shell button, .ui-shell summary, .ui-shell select { -webkit-tap-highlight-color: transparent; }
+.ui-shell button, .ui-shell select { white-space: nowrap; }
+.ui-shell button:active { opacity: .8; }
+.ui-shell h1, .ui-shell h2, .ui-shell h3 { min-width: 0; overflow-wrap: anywhere; font-style: normal; }
+@media (min-width: 1536px) {
+  .ui-shell .wrap { max-width: 1280px !important; margin-left: calc(220px + (100vw - 220px - 1280px) / 2) !important; }
+}
+@media (max-width: 768px) {
+  .ui-shell .sport-panel .sport-toolbar .toolbar-row:first-child { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: end; gap: 8px; }
+  .ui-shell .sport-panel .sport-toolbar .toolbar-row:first-child > .toolbar-group { grid-column: 1 / -1; }
+  .ui-shell .sport-panel .sport-toolbar .toolbar-row:first-child > .tb-refresh { width: 100%; min-width: 0; padding: 8px 4px; font-size: 11px; }
+  .ui-shell .sport-panel .sport-toolbar .toolbar-row + .toolbar-row { flex-direction: row; flex-wrap: wrap; gap: 10px; }
+  .ui-shell .sport-panel .sport-toolbar .toolbar-row + .toolbar-row > .toolbar-group { flex-direction: row; align-items: center; width: auto; gap: 8px; }
+  .ui-shell .sport-panel .sport-toolbar .toolbar-row + .toolbar-row .toolbar-buttons { width: auto; }
+  .ui-shell #panel-basketball .basketball-toolbar .toolbar-group:nth-child(2) { grid-column: 1 / 3; }
+  .ui-shell #panel-basketball .basketball-toolbar .toolbar-row > .tb-refresh { grid-column: 3; min-height: 44px; }
+  .ui-shell .sport-panel .sport-match-card { padding: 16px !important; }
+  .ui-shell .sport-overview { padding-block: 14px; }
+  .ui-shell .overview-item { padding-inline: 12px; }
+  .ui-shell .overview-value { font-size: 26px; }
+  .ui-shell .fixture-teams { gap: 6px; grid-template-columns: minmax(0, 1fr) 18px minmax(0, 1fr); }
+  .ui-shell .fixture-team strong { font-size: 14px; }
+  .ui-shell .team-monogram { width: 27px; height: 31px; font-size: 9px; }
+  .ui-shell .fixture-team { gap: 6px; }
+  .fixture-status { gap: 6px; }
+  .fixture-completeness { font-size: 10px; }
+  .probability-strip { gap: 12px; }
+  .score-options { gap: 6px; }
+  .ui-shell .football-score-reference .score-option { padding: 8px; }
+  .score-value { font-size: 18px; }
+}
+@media (max-width: 374px) {
+  .ui-shell .wrap { margin-inline: 12px !important; }
+  .ui-shell .sport-panel .sport-match-card { padding: 12px !important; }
+  .ui-shell .team-monogram { display: none; }
+  .fixture-completeness { flex-basis: 100%; margin-top: 3px; }
+  .probability-value { flex-wrap: wrap; }
+  .probability-value strong { font-size: 12px; }
+}
+</style>
 </head>
 <body class="ui-shell">
 <div class="wrap">
@@ -3677,22 +3815,43 @@ function getAccuracyGatePresentation(gate, candidate, options = {}) {
 }
 
 function renderWebMarketRecommendation(label, state, pick, probabilityText = '') {
-  const colors = { selected: '#22c55e', watch: '#f59e0b', abstain: '#94a3b8' };
-  const color = colors[state?.status] || colors.abstain;
   const isAbstain = state?.status === 'abstain';
   const decision = isAbstain ? '不推荐' : (pick || state?.pick || '-');
   const candidate = isAbstain && (pick || state?.pick)
-    ? ` <span style="color:var(--muted)">(模型候选 ${esc(pick || state.pick)})</span>` : '';
-  const reason = state?.reasons?.length
-    ? `<div style="font-size:10px;color:var(--muted);margin:2px 0 0 58px">${esc(state.reasons.slice(0, 2).join('、'))}</div>` : '';
-  const validation = state?.validation
-    ? `<span style="font-size:10px;color:var(--muted)"> · ${esc(state.validation)}</span>` : '';
-  return `<div style="font-size:13px;margin-top:5px">
-    <span style="color:var(--muted)">${esc(label)}：</span>
-    <span style="color:${color};font-weight:bold">[${esc(state?.label || '观望')}] ${esc(decision)}</span>${candidate}
-    ${probabilityText ? `<span style="color:var(--muted)"> · ${probabilityText}</span>` : ''}${validation}
-    ${reason}
-  </div>`;
+    ? `<span class="market-candidate">模型候选 ${esc(pick || state.pick)}</span>` : '';
+  const status = ['selected', 'watch', 'abstain'].includes(state?.status) ? state.status : 'abstain';
+  return `<section class="market-row" aria-label="${esc(label)}">
+    <div class="market-row-heading"><span class="market-name">${esc(label)}</span>
+      <span class="market-decision"><span class="decision-badge ${status}">${esc(state?.label || '观望')}</span><strong>${esc(decision)}</strong></span>
+    </div>
+    ${candidate}
+    ${probabilityText ? `<div class="market-distribution">${probabilityText}</div>` : ''}
+  </section>`;
+}
+
+function renderProbabilityStrip(probabilities, keys, odds = null, selected = '') {
+  return `<div class="probability-strip" style="--outcomes:${keys.length}">${keys.map(key => {
+    const raw = probabilities?.[key];
+    const value = raw == null || raw === '' ? NaN : Number(raw);
+    const available = Number.isFinite(value) && value >= 0 && value <= 1;
+    const odd = Number(odds?.[key]);
+    return `<div class="probability-outcome${selected === key ? ' is-pick' : ''}">
+      <div class="probability-value"><span>${esc(key)}</span><strong>${available ? (value * 100).toFixed(1) + '%' : '—'}</strong></div>
+      <span class="probability-track" aria-hidden="true"><i style="width:${available ? value * 100 : 0}%"></i></span>
+      ${odds ? `<span class="outcome-odds">赔率 ${Number.isFinite(odd) && odd > 0 ? odd.toFixed(2) : '—'}</span>` : ''}
+    </div>`;
+  }).join('')}</div>`;
+}
+
+function renderMarketEvidence(markets) {
+  const rows = markets.filter(([, state]) => state && (state.validation || state.reasons?.length));
+  if (!rows.length) return '';
+  return `<details class="market-evidence"><summary>筛选依据与历史验证<span aria-hidden="true">＋</span></summary>
+    <div class="evidence-content">${rows.map(([label, state]) => `<div class="evidence-row"><strong>${esc(label)}</strong>
+      ${state.reasons?.length ? `<p>${state.reasons.map(esc).join('；')}</p>` : ''}
+      ${state.validation ? `<p class="evidence-validation">${esc(state.validation)}</p>` : ''}
+    </div>`).join('')}</div>
+  </details>`;
 }
 
 function getFootballResultTier(item) {
@@ -4094,7 +4253,6 @@ function renderFootballPredictions(results) {
     const lotteryHandicap = r.lottery?.handicap?.handicap;
     const cf = r.confidence;
     const resultTier = getFootballResultTier(item);
-    const tierColor = { selected: '#22c55e', watch: '#f59e0b', abstain: '#94a3b8' }[resultTier.tier];
     const reportUrl = m.bayes_report_url ? apiPrefix() + m.bayes_report_url : '';
 
     let itemHtml = `<div class="match sport-match-card football-match-card" style="display:block;padding:12px">
@@ -4102,17 +4260,12 @@ function renderFootballPredictions(results) {
         <div class="fixture-identity" style="flex:1">
           <div class="fixture-meta"><span>${esc(m.num || m.league || '足球赛事')}</span><span>${esc(m.time || '时间待定')}</span></div>
           ${renderFixtureTeams(m.home, m.away)}
-          ${cf && cf.score != null ? `<div style="font-size:12px;color:${cf.level === 'low' ? 'var(--muted)' : cf.level === 'high' ? 'var(--accent2)' : 'var(--warn)'};margin-top:2px">
-            📡 信息完整度 ${(cf.score * 100).toFixed(0)}%
-          </div>` : ''}
-          <div style="font-size:12px;color:${tierColor};margin-top:3px;font-weight:600">
-            ${esc(resultTier.label)} · ${esc(resultTier.market)} ${esc(resultTier.prediction)} ${(resultTier.probability * 100).toFixed(0)}%
-            ${resultTier.downgradeReasons.length ? `<span style="font-weight:normal;color:var(--muted)">（已降级：${esc(resultTier.downgradeReasons.join('、'))}）</span>` : ''}
+          <div class="fixture-status">
+            <span class="decision-badge ${resultTier.tier}">${esc(resultTier.label)}</span>
+            <span class="fixture-pick">${esc(resultTier.market)} ${esc(resultTier.prediction)} <b>${(resultTier.probability * 100).toFixed(0)}%</b></span>
+            ${cf && cf.score != null ? `<span class="fixture-completeness" title="📡 信息完整度">信息完整度 <b>${(cf.score * 100).toFixed(0)}%</b></span>` : ''}
           </div>
-        </div>
-        <div class="fixture-actions" style="margin-left:10px;flex-shrink:0;display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end">
-          <button class="bayes-report-btn" onclick="openFootballEvidenceModal('${esc(m.match_id || r.match?.match_id || '')}')">🔎 证据审计</button>
-          ${reportUrl ? `<button class="bayes-report-btn" onclick="openBayesModal('${esc(reportUrl)}', '${esc(m.home)} vs ${esc(m.away)}')">📊 深度报告</button>` : ''}
+          ${resultTier.downgradeReasons.length ? `<div class="fixture-downgrade">已降级 · ${esc(resultTier.downgradeReasons.join('、'))}</div>` : ''}
         </div>
       </div>`;
       
@@ -4145,14 +4298,15 @@ function renderFootballPredictions(results) {
         };
         const drawCandidates = upset.draw_candidates || (upset.candidates || []).filter(c => c.scenario === 'draw_cover');
         const outrightCandidates = upset.outright_candidates || (upset.candidates || []).filter(c => c.scenario === 'outright_upset');
-        itemHtml += `<div style="margin-top:8px;padding:7px 8px;background:var(--bg2);border-left:3px solid ${uColor};border-radius:6px;font-size:12px">
+        itemHtml += `<details class="fixture-alert"><summary>
           <span style="color:${uColor};font-weight:bold">${esc(upset.label)}</span>
           <span style="color:var(--muted)"> · 热门${esc(upset.favorite)} ${((upset.favorite_prob || 0) * 100).toFixed(0)}%</span>
+          <span class="disclosure-arrow" aria-hidden="true">⌄</span></summary><div class="alert-details">
           ${upset.recommended_cover ? `<div style="margin-top:4px;color:${uColor};font-weight:bold">防冷方向：${esc(upset.recommended_cover)}</div>` : ''}
           ${upset.signals?.length ? `<div style="margin-top:3px;color:var(--muted)">依据：${upset.signals.slice(0, 4).map(esc).join('；')}</div>` : ''}
           ${renderScenario('真正爆冷', outrightCandidates, '#ef4444')}
           ${renderScenario('防冷平局', drawCandidates, '#f59e0b')}
-        </div>`;
+        </div></details>`;
       }
 
       if (upset && upset.confident) {
@@ -4222,9 +4376,7 @@ function renderFootballPredictions(results) {
         ? getGoalDistributionFromCandidates(r.model.candidates)
         : [];
       if (compactFootballView && (standardPrediction || marketCards.some(card => card.handicap))) {
-        const compactProbLine = (probabilities, keys) => keys.map(key =>
-          `${key} ${(Number(probabilities?.[key] || 0) * 100).toFixed(1)}%`
-        ).join(' · ');
+        const compactProbLine = (probabilities, keys) => renderProbabilityStrip(probabilities, keys);
         const handicapCard = marketCards.find(card => card.handicap);
         const compactGoals = compactGoalDist.slice(0, 3);
         const compactGoalText = compactGoals.map(goal =>
@@ -4234,9 +4386,9 @@ function renderFootballPredictions(results) {
           const score = scoreItem.score;
           const probability = scoreItem.probability;
           const settlement = getFootballScoreSettlement(score, lotteryHandicap);
-          return `<div style="flex:1;min-width:82px;text-align:center;padding:6px 5px;border-radius:6px;background:${index === 0 ? 'rgba(59,130,246,.12)' : 'var(--bg)'}">
-            <div style="font-size:14px;font-weight:${index === 0 ? 'bold' : 'normal'};color:${index === 0 ? '#3b82f6' : 'var(--text)'}">${esc(score)}</div>
-            <div style="font-size:10px;color:var(--muted)">${(probability * 100).toFixed(1)}%${settlement ? ` · ${esc(settlement)}` : ''}</div>
+          return `<div class="score-option${index === 0 ? ' first-score' : ''}">
+            <div class="score-value">${esc(score)}<span>${(probability * 100).toFixed(1)}%</span></div>
+            ${settlement ? `<div class="score-settlement">${esc(settlement)}</div>` : ''}
           </div>`;
         }).join('');
         const asian = r.asian || r.odds_layers?.['T-24h']?.asian || {};
@@ -4254,21 +4406,20 @@ function renderFootballPredictions(results) {
         const totalDirection = accuracyGate.total_goals?.candidate === 'over' ? '大2.5'
           : accuracyGate.total_goals?.candidate === 'under' ? '小2.5' : '-';
         const correctionLabel = r.model?.joint_market_state?.applied ? ' · 已修正' : ' · 联合分析';
-        itemHtml += `<div class="football-compact-summary" style="margin-top:10px;padding:11px 12px;background:rgba(6,182,212,.08);border:1px solid rgba(6,182,212,.35);border-radius:8px">
-          <div style="font-size:12px;color:var(--sport-accent);font-weight:600;margin-bottom:7px">赛前综合判断 · 欧赔与亚盘水位${correctionLabel}</div>
-          <div style="font-size:11px;color:var(--muted);margin-bottom:7px">
+        itemHtml += `<div class="football-compact-summary">
+          <div class="market-section-heading"><h3>玩法分析</h3><span>赛前概率参考</span></div>
+          <details class="match-context"><summary><span>欧赔与亚盘水位${correctionLabel}</span><span class="context-state${r.model?.joint_market_state?.conflict ? ' conflict' : ''}">${r.model?.joint_market_state?.conflict ? '方向冲突' : '方向一致'} <span aria-hidden="true">⌄</span></span></summary><div class="context-content">
             ${standardPrediction ? `欧赔基准：${esc(euroPrediction)} · ` : '竞彩胜平负未开售 · '}亚盘方向：${esc(asianDirection)}
-            ${r.model?.joint_market_state?.conflict ? '<span style="color:var(--warn)"> · ⚠️ 欧亚方向冲突</span>' : '<span style="color:var(--accent2)"> · 方向一致</span>'}
-          </div>
+          </div></details>
           ${standardPrediction ? renderWebMarketRecommendation('胜平负', spfGateState, spfGateState.pick || selectedStandard, compactProbLine(standardPrediction.probs, ['胜','平','负'])) : ''}
           ${standardPrediction?.selectionProfile?.mode === 'draw_cover' && spfGateState.status !== 'abstain' ? '<div style="font-size:11px;color:#f59e0b;margin-top:4px">⚠️ 模型分布提示防平，仅作辅助参考</div>' : ''}
           ${handicapCard ? renderWebMarketRecommendation(`让球胜平负（${Number(lotteryHandicap) > 0 ? '+' : ''}${lotteryHandicap}）`, rqspfGateState, rqspfGateState.pick || selectedHandicap, compactProbLine(handicapCard.prediction.probs, ['让胜','让平','让负'])) : ''}
           ${renderWebMarketRecommendation('大小球', totalGateState, totalDirection, `比分矩阵进球数分布：${compactGoalText}`)}
-          <div class="football-score-reference" style="margin-top:9px;padding-top:8px;border-top:1px solid rgba(6,182,212,.22)">
-            <div style="font-size:11px;color:var(--muted);margin-bottom:5px">⚽ 比分参考 Top3（非主推）</div>
-            <div style="display:flex;gap:7px;flex-wrap:wrap">${compactScoreHtml || '<span style="font-size:11px;color:var(--muted)">暂无比分分布</span>'}</div>
+          <div class="football-score-reference">
+            <div class="score-section-heading">比分参考 Top3（非主推）</div>
+            <div class="score-options">${compactScoreHtml || '<span class="empty-reference">暂无比分分布</span>'}</div>
           </div>
-          <div style="font-size:11px;color:var(--muted);margin-top:7px">精选：通过历史验证筛选 · 观察：待验证 · 观望：暂不推荐</div>
+          ${renderMarketEvidence([['胜平负', spfGateState], ['让球胜平负', rqspfGateState], ['大小球', totalGateState]])}
         </div>`;
       }
       if (!compactFootballView) marketCards.forEach(card => {
@@ -4398,7 +4549,10 @@ function renderFootballPredictions(results) {
         </div>`;
       }
 
-      itemHtml += '</div>';
+      itemHtml += `<div class="fixture-actions">
+        <button type="button" class="bayes-report-btn" onclick="openFootballEvidenceModal('${esc(m.match_id || r.match?.match_id || '')}')">🔎 证据审计 <span aria-hidden="true">↗</span></button>
+        ${reportUrl ? `<button type="button" class="bayes-report-btn" onclick="openBayesModal('${esc(reportUrl)}', '${esc(m.home)} vs ${esc(m.away)}')">📊 深度报告 <span aria-hidden="true">↗</span></button>` : ''}
+      </div></div>`;
       return itemHtml;
     }
     
@@ -6999,12 +7153,8 @@ function renderBasketball(result) {
 
         const marketAnalysis = m.market_analysis || {};
         if (marketAnalysis.available) {
-          const levelColor = {
-            strong: '#22c55e', positive: '#3b82f6', warning: '#f59e0b', neutral: 'var(--muted)'
-          }[marketAnalysis.level] || 'var(--muted)';
-          html += `<div style="margin-top:8px;padding:8px;background:var(--bg2);border-left:3px solid ${levelColor};border-radius:7px">
-            <div style="font-size:12px;font-weight:700;color:${levelColor};margin-bottom:5px">📈 盘口变化分析 · ${esc(marketAnalysis.verdict || '')}</div>
-            <div style="display:flex;gap:6px;flex-wrap:wrap">${(marketAnalysis.signals || []).map(signal => {
+          html += `<details class="basketball-market-context"><summary><span>盘口变化分析</span><span class="context-state">${esc(marketAnalysis.verdict || '查看变化')} <span aria-hidden="true">⌄</span></span></summary>
+            <div class="basketball-signals">${(marketAnalysis.signals || []).map(signal => {
               const flowState = signal.aligned_with_model === true ? '同向' : signal.aligned_with_model === false ? '反向' : '中性';
               const flowColor = signal.aligned_with_model === true ? '#22c55e' : signal.aligned_with_model === false ? '#f59e0b' : 'var(--muted)';
               return `<span style="padding:4px 7px;border-radius:5px;background:var(--bg);font-size:11px">
@@ -7012,54 +7162,23 @@ function renderBasketball(result) {
                 ${signal.steam ? ' · 急速资金' : ''} · <b style="color:${flowColor}">${flowState}</b>
               </span>`;
             }).join('')}</div>
-          </div>`;
+          </details>`;
         }
         
         if (m.spf && !m.spf.error) {
-          html += '<div style="margin-top:8px;padding:8px;background:var(--bg2);border-radius:8px">';
-          html += '<div style="font-size:12px;color:var(--muted);margin-bottom:6px">🏀 胜负</div>';
+          html += '<div class="basketball-market">';
+          html += '<div class="market-row-heading"><span class="market-name">胜负</span><span class="market-caption">全场赛果</span></div>';
           if (m.spf.odds) {
-            html += '<div style="display:flex;gap:12px">';
-            const items = [
-              { key: '主胜', color: '#ef4444', pred: m.spf.prediction === '主胜' },
-              { key: '客胜', color: '#22c55e', pred: m.spf.prediction === '客胜' },
-            ];
-            items.forEach(item => {
-              const prob = m.spf.probabilities?.[item.key] || 0;
-              const odd = m.spf.odds?.[item.key] || '-';
-              html += `<div style="flex:1;text-align:center;padding:6px;border-radius:6px${item.pred ? `;background:${item.color}20;color:${item.color};font-weight:bold` : ''}">
-                <div>${item.key}</div>
-                <div style="font-size:11px;color:var(--muted)">${((prob || 0) * 100).toFixed(0)}%</div>
-                <div style="font-size:12px">${odd}</div>
-              </div>`;
-            });
-            html += '</div>';
+            html += renderProbabilityStrip(m.spf.probabilities, ['主胜', '客胜'], m.spf.odds, m.spf.prediction);
           }
           html += '</div>';
         }
         
         if (m.rqspf && !m.rqspf.error) {
-          html += '<div style="margin-top:8px;padding:8px;background:var(--bg2);border-radius:8px">';
-          html += '<div style="font-size:12px;color:var(--muted);margin-bottom:6px">🎯 让分胜负</div>';
-          if (m.rqspf.handicap) {
-            html += `<div style="font-size:12px;color:#3b82f6;margin-bottom:6px">让分：${esc(m.rqspf.handicap)}</div>`;
-          }
+          html += '<div class="basketball-market">';
+          html += `<div class="market-row-heading"><span class="market-name">让分胜负</span><span class="market-caption">让分：${m.rqspf.handicap != null ? esc(m.rqspf.handicap) : '—'}</span></div>`;
           if (m.rqspf.odds) {
-            html += '<div style="display:flex;gap:12px">';
-            const items = [
-              { key: '主胜', color: '#ef4444', pred: m.rqspf.prediction === '主胜' },
-              { key: '客胜', color: '#22c55e', pred: m.rqspf.prediction === '客胜' },
-            ];
-            items.forEach(item => {
-              const prob = m.rqspf?.probabilities?.[item.key] || 0;
-              const odd = m.rqspf.odds?.[item.key] || '-';
-              html += `<div style="flex:1;text-align:center;padding:6px;border-radius:6px${item.pred ? `;background:${item.color}20;color:${item.color};font-weight:bold` : ''}">
-                <div>${item.key}</div>
-                <div style="font-size:11px;color:var(--muted)">${((prob || 0) * 100).toFixed(0)}%</div>
-                <div style="font-size:12px">${odd}</div>
-              </div>`;
-            });
-            html += '</div>';
+            html += renderProbabilityStrip(m.rqspf.probabilities, ['主胜', '客胜'], m.rqspf.odds, m.rqspf.prediction);
           }
           const rqWater = m.rqspf.water_inference || {};
           if (rqWater.available) {
@@ -7077,27 +7196,10 @@ function renderBasketball(result) {
         }
         
         if (m.daxiao && !m.daxiao.error) {
-          html += '<div style="margin-top:8px;padding:8px;background:var(--bg2);border-radius:8px">';
-          html += '<div style="font-size:12px;color:var(--muted);margin-bottom:6px">📊 大小分</div>';
-          if (m.daxiao.total) {
-            html += `<div style="font-size:12px;color:#3b82f6;margin-bottom:6px">总分盘：${esc(m.daxiao.total)}</div>`;
-          }
+          html += '<div class="basketball-market">';
+          html += `<div class="market-row-heading"><span class="market-name">大小分</span><span class="market-caption">总分盘：${m.daxiao.total != null ? esc(m.daxiao.total) : '—'}</span></div>`;
           if (m.daxiao.odds) {
-            html += '<div style="display:flex;gap:12px">';
-            const items = [
-              { key: '大分', color: '#f59e0b', pred: m.daxiao.prediction === '大分' },
-              { key: '小分', color: '#8b5cf6', pred: m.daxiao.prediction === '小分' },
-            ];
-            items.forEach(item => {
-              const prob = m.daxiao.probabilities?.[item.key] || 0;
-              const odd = m.daxiao.odds?.[item.key] || '-';
-              html += `<div style="flex:1;text-align:center;padding:6px;border-radius:6px${item.pred ? `;background:${item.color}20;color:${item.color};font-weight:bold` : ''}">
-                <div>${item.key}</div>
-                <div style="font-size:11px;color:var(--muted)">${((prob || 0) * 100).toFixed(0)}%</div>
-                <div style="font-size:12px">${odd}</div>
-              </div>`;
-            });
-            html += '</div>';
+            html += renderProbabilityStrip(m.daxiao.probabilities, ['大分', '小分'], m.daxiao.odds, m.daxiao.prediction);
           }
           const dxWater = m.daxiao.water_inference || {};
           if (dxWater.available) {
