@@ -22,7 +22,7 @@ from urllib.parse import urlparse, parse_qs
 from pathlib import Path
 from src.common.paths import data_path
 from src.api.runtime import lazy_modules as _lazy_mod
-from src.api.runtime.lazy_modules import _import_backtest_modules, analyze_match, ensure_beidan_report, ensure_football_report, fetch_match_list, football_reportable_ids, get_match_list_status
+from src.api.runtime.lazy_modules import _import_backtest_modules, analyze_match, ensure_football_report, fetch_match_list, football_reportable_ids, get_match_list_status
 from src.api.runtime.jobs import _attach_bayes_report_url, _match_started, _trigger_football_analysis, _trigger_football_report_sync
 from src.api.runtime import jobs as _jobs_mod
 
@@ -42,9 +42,6 @@ def try_generate_report(rel: str):
         if rel.startswith('football_bayes_') and rel.endswith('.html'):
             mid = rel[len('football_bayes_'):-len('.html')]
             return ensure_football_report(mid)
-        if rel.startswith('beidan_bayes_') and rel.endswith('.html'):
-            mid = rel[len('beidan_bayes_'):-len('.html')]
-            return ensure_beidan_report(mid)
     except Exception as e:
         log.error('报告按需生成失败: %s', rel, exc_info=True)
     return None

@@ -51,21 +51,6 @@ class WebProfessionalModalTests(unittest.TestCase):
         self.assertIn("setFootballQualityFilter('upset')", html)
         self.assertIn("防冷方向：", html)
 
-    def test_beidan_web_hides_rejected_markets_from_primary_recommendations(self):
-        path = os.path.join(ROOT, 'web', 'index.html')
-        with open(path, encoding='utf-8') as handle:
-            html = handle.read()
-
-        self.assertIn("let beidanQualityFilter = 'selected';", html)
-        self.assertIn("getBeidanMarketRecommendation", html)
-        self.assertIn("admission.playable === true", html)
-        self.assertIn("让球胜平负尚缺独立样本外验证", html)
-        self.assertIn("大小球未通过跨赛季准确率门禁", html)
-        self.assertIn("精确进球数仅作模型分布参考", html)
-        self.assertIn("研究筛选模式", html)
-        self.assertIn("setBeidanQualityFilter('upset')", html)
-        self.assertIn("防冷预警兑现", html)
-
     def test_professional_status_falls_back_to_static_backtest(self):
         path = os.path.join(ROOT, 'web', 'index.html')
         with open(path, encoding='utf-8') as handle:
@@ -89,13 +74,9 @@ class WebProfessionalModalTests(unittest.TestCase):
         with open(path, encoding='utf-8') as handle:
             html = handle.read()
 
-        self.assertIn("types: 'spf,rqspf,zjq'", html)
         self.assertIn("if (m.rqspf && !m.rqspf.error)", html)
         self.assertIn("🎯 让球胜平负", html)
-        self.assertIn("已应用统一亚盘水位与大小球变化修正", html)
         self.assertIn("🎯 让球胜平负（主队", html)
-        self.assertIn("欧赔 + 亚盘水位模型证据（不作独立主推）", html)
-        self.assertIn("欧赔提供基础概率，亚盘升降盘与水位变化修正方向", html)
 
     def test_football_list_uses_compact_joint_market_summary(self):
         path = os.path.join(ROOT, 'web', 'index.html')

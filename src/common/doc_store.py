@@ -99,6 +99,19 @@ def load_all(table, order_by):
     return [json.loads(r['doc']) for r in rows]
 
 
+def load_one(table, key_col, key_value):
+    """按键读取单条 doc；不存在返回 None。MySQL 不可用时回落到本地快照。"""
+    try:
+        row = db.query_one(f"SELECT doc FROM {table} WHERE {key_col}=%s", (key_value,))
+    except Exception as e:
+        _record_degradation(table, e)
+        return next((r for r in _fallback_load_all(table) if r.get(key_col) == key_value), None)
+    if row is None or row.get('doc') is None:
+        return None
+    doc = row['doc']
+    return json.loads(doc) if isinstance(doc, str) else doc
+
+
 def _fallback_upsert_one(table, columns, row_values, key_cols):
     """MySQL 不可用时的单行 UPSERT 降级：按 key_cols 在 fallback JSON 中替换或追加。"""
     try:

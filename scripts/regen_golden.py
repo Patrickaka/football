@@ -151,60 +151,6 @@ print('全部生成完成')
 
 
 from tests.domain.golden import as_comparable
-# ---- beidan 概率建模 ----
-from scripts.gen_beidan_modeling_golden import entries as beidan_modeling_entries
-
-dump('beidan_modeling', {k: as_comparable(v) for k, v in beidan_modeling_entries()})
-
-
-# ---- beidan 推荐质量与爆冷判定 ----
-from scripts.gen_beidan_quality_golden import entries as beidan_quality_entries
-
-dump('beidan_quality', {k: as_comparable(v) for k, v in beidan_quality_entries()})
-
-
-# ---- beidan 盘口走势与因子 ----
-from scripts.gen_beidan_trends_golden import entries as beidan_trends_entries
-
-dump('beidan_trends', {k: as_comparable(v) for k, v in beidan_trends_entries()})
-
-
-# ---- beidan 联合市场状态 ----
-from scripts.gen_beidan_market_state_golden import entries as beidan_ms_entries
-
-dump('beidan_market_state', {k: as_comparable(v) for k, v in beidan_ms_entries()})
-
-
-# ---- beidan 赛果判定与历史校准 ----
-from scripts.gen_beidan_settlement_golden import entries as beidan_settlement_entries
-
-dump('beidan_settlement', {k: as_comparable(v) for k, v in beidan_settlement_entries()})
-
-
-# ---- beidan 赛果解读与组装 ----
-from scripts.gen_beidan_analysis_golden import entries as beidan_analysis_entries
-
-dump('beidan_analysis', {k: as_comparable(v) for k, v in beidan_analysis_entries()})
-
-
-# ---- beidan 四种玩法的推荐组装 ----
-from scripts.gen_beidan_recommendation_golden import entries as beidan_rec_entries
-
-dump('beidan_recommendation', {k: as_comparable(v) for k, v in beidan_rec_entries()})
-
-
-# ---- beidan 页面解析 ----
-from scripts.gen_beidan_parsing_golden import entries as beidan_parsing_entries
-
-dump('beidan_parsing', {k: as_comparable(v) for k, v in beidan_parsing_entries()})
-
-
-# ---- beidan 赛程解析 ----
-from scripts.gen_beidan_schedule_golden import entries as beidan_schedule_entries
-
-dump('beidan_schedule', {k: as_comparable(v) for k, v in beidan_schedule_entries()})
-
-
 # ---- football markets ----
 from scripts.gen_football_markets_golden import entries as football_markets_entries
 from tests.domain.golden import as_comparable as _as_comparable

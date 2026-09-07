@@ -88,42 +88,16 @@ def ensure_football_report(*args, **kwargs):
     return _get_bayes_report_module().ensure_football_report(*args, **kwargs)
 
 
-def ensure_beidan_report(*args, **kwargs):
-    return _get_bayes_report_module().ensure_beidan_report(*args, **kwargs)
-
-
 def football_reportable_ids(*args, **kwargs):
     return _get_bayes_report_module().football_reportable_ids(*args, **kwargs)
-
-
-def persist_beidan_recs(*args, **kwargs):
-    return _get_bayes_report_module().persist_beidan_recs(*args, **kwargs)
 
 
 def sync_football_reports(*args, **kwargs):
     return _get_bayes_report_module().sync_football_reports(*args, **kwargs)
 
 
-def sync_beidan_reports(*args, **kwargs):
-    return _get_bayes_report_module().sync_beidan_reports(*args, **kwargs)
-
-
 def refresh_football_cache_index(*args, **kwargs):
     return _get_bayes_report_module().refresh_football_cache_index(*args, **kwargs)
-
-
-def _load_beidan_helpers():
-    try:
-        from src.beidan import (
-            generate_beidan_recommendations,
-            find_value_bets,
-            summarize_beidan_history,
-        )
-        return generate_beidan_recommendations, find_value_bets, summarize_beidan_history
-    except ModuleNotFoundError as exc:
-        if exc.name == 'requests':
-            raise RuntimeError('北单模块需要安装 requests；其他页面可正常使用') from exc
-        raise
 
 
 backtest = None

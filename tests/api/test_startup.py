@@ -98,7 +98,7 @@ class BackgroundTasks(unittest.TestCase):
 
 class WarmupThreads(unittest.TestCase):
 
-    def test_all_three_warmups_point_at_real_functions(self):
+    def test_all_warmups_point_at_real_functions(self):
         """**按名字反射调用最容易写错模块路径**，而错了只会被 except
         吞成一条警告——预热静静地不再发生。
         """
@@ -114,14 +114,13 @@ class WarmupThreads(unittest.TestCase):
         with mock.patch('threading.Thread') as thread_class:
             thread_class.side_effect = lambda **kwargs: started.append(kwargs) or mock.MagicMock()
             startup.start_cache_warmups()
-        self.assertEqual(len(started), 3)
+        self.assertEqual(len(started), 2)
         for kwargs in started:
             with self.subTest(name=kwargs.get('name')):
                 self.assertTrue(kwargs['daemon'])
 
     def test_a_broken_warmup_does_not_stop_the_rest(self):
         with mock.patch('threading.Thread', side_effect=[RuntimeError('起不来'),
-                                                         mock.MagicMock(),
                                                          mock.MagicMock()]):
             startup.start_cache_warmups()
 

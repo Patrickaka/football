@@ -26,9 +26,8 @@ log = setup_logger('server')
 from .http_util import (
     _sanitize_json,
 )
-from .beidan_cache import beidan_cache_key, write_beidan_cache
 from .lazy_modules import (
-    KL8RollingBacktest, _load_beidan_helpers, analyze_match, data_path, ensure_football_report, fetch_match_list, football_reportable_ids, get_kl8_analyzer, refresh_football_cache_index, sync_beidan_reports, sync_football_reports,
+    KL8RollingBacktest, analyze_match, data_path, ensure_football_report, fetch_match_list, football_reportable_ids, get_kl8_analyzer, refresh_football_cache_index, sync_football_reports,
 )
 from . import lazy_modules as _lazy_mod
 
@@ -44,7 +43,6 @@ _REPORT_SYNC_LOCK = threading.Lock()
 _LAST_FOOTBALL_SYNC = 0.0
 
 
-_LAST_BEIDAN_SYNC = 0.0
 
 
 _REPORT_SYNC_INTERVAL = 30  # 秒
@@ -64,43 +62,6 @@ def _trigger_football_report_sync(mids):
         target=sync_football_reports, args=(list(mids),),
         daemon=True, name='ReportSyncFootball',
     ).start()
-
-
-def _trigger_beidan_report_sync(recs):
-    """对一批北单 rec 在后台线程里同步深度报告（无则生成、变盘则重生成）。"""
-    if not recs:
-        return
-    now = time.time()
-    with _REPORT_SYNC_LOCK:
-        global _LAST_BEIDAN_SYNC
-        if now - _LAST_BEIDAN_SYNC < _REPORT_SYNC_INTERVAL:
-            return
-        _LAST_BEIDAN_SYNC = now
-    threading.Thread(
-        target=sync_beidan_reports, args=(recs,),
-        daemon=True, name='ReportSyncBeidan',
-    ).start()
-
-
-def finalize_beidan_recs(recs):
-    """落盘北单 rec 并附上深度报告 URL，然后触发报告同步。
-
-    只能在「真正算出了新数据」时调用。这一步一次要写三百多个 JSON、
-    还会触发整批深度报告生成；此前它挂在每次请求上，北单变快之后被反复触发，
-    直接把服务器 CPU 与磁盘打满、SSH 都连不上。读缓存时不该重复做这件事，
-    缓存里的 rec 已经带着上一次生成的 bayes_report_url。
-    """
-    if not isinstance(recs, list) or not recs:
-        return
-    if _lazy_mod._BAYES_REPORT_AVAILABLE:
-        persisted = set(_lazy_mod.persist_beidan_recs(recs))
-        for rec in recs:
-            mid = str(rec.get('match_id') or '')
-            if mid and mid in persisted:
-                rec['bayes_report_url'] = f"/reports/beidan_bayes_{mid}.html"
-    else:
-        _attach_bayes_report_url(recs, kind='beidan')
-    _trigger_beidan_report_sync(recs)
 
 
 _ANALYZE_LOCK = threading.Lock()
@@ -157,41 +118,6 @@ def _warm_football_caches():
         time.sleep(FOOTBALL_WARM_INTERVAL)
 
 
-BEIDAN_WARM_INTERVAL = int(os.getenv('BEIDAN_WARM_INTERVAL', '1800'))
-BEIDAN_WARM_SOURCE = os.getenv('BEIDAN_WARM_SOURCE', 'zgzcw')
-BEIDAN_WARM_TYPES = os.getenv('BEIDAN_WARM_TYPES', 'spf,rqspf,zjq')
-# 北单与足球预热打的是同一个 odds.500.com。两者共用限速令牌流后不会再互相推进 429，
-# 但同时起跑仍会从第一秒起互抢配额、把两边都拖慢。错开启动让足球那轮先跑完。
-BEIDAN_WARM_START_DELAY = int(os.getenv('BEIDAN_WARM_START_DELAY', '150'))
-
-
-def _warm_beidan_caches():
-    """后台预热当天北单推荐。
-
-    北单是「一次请求算完整页」的结构，冷算实测 12~15 秒全部压在用户那一次点击上，
-    所以预热的收益比足球更直接：命中后前端几乎是秒开。
-    预热用的键必须与接口层一致（date 缺省同为当天、bet_types 同序），否则热不到点上。
-    """
-    bet_types = [item for item in BEIDAN_WARM_TYPES.split(',') if item]
-    if BEIDAN_WARM_START_DELAY > 0:
-        time.sleep(BEIDAN_WARM_START_DELAY)
-    while True:
-        try:
-            generate_beidan_recommendations, _, _ = _load_beidan_helpers()
-            started = time.perf_counter()
-            result = generate_beidan_recommendations(
-                date=None, bet_types=bet_types, source=BEIDAN_WARM_SOURCE)
-            if 'error' in result:
-                log.warning('北单缓存预热跳过: %s', result['error'])
-            else:
-                finalize_beidan_recs(result.get('recommendations'))
-                write_beidan_cache(beidan_cache_key(None, BEIDAN_WARM_SOURCE, bet_types), result)
-                log.info('北单缓存预热完成: 推荐=%d条, 耗时 %.1fs',
-                         len(result.get('recommendations') or []),
-                         time.perf_counter() - started)
-        except Exception:
-            log.warning('北单缓存预热失败', exc_info=True)
-        time.sleep(BEIDAN_WARM_INTERVAL)
 
 
 def _trigger_football_analysis(matches):
@@ -271,10 +197,7 @@ def _attach_bayes_report_url(matches, kind='football'):
 
     两类来源都会触发按钮显示：
     1) 清单（football_bayes_manifest.json）中已登记（说明报告文件已存在）；
-    2) 可生成：足球有对应缓存 pkl、北单有已持久化 rec（即便 HTML 尚未生成，
-       点击时由 server 按需生成）。
-
-    兼容两种结构：足球比赛 match_id 在顶层；北单 rec 的 match_id 嵌套在 spf 内。
+    2) 可生成：有对应缓存 pkl（即便 HTML 尚未生成，点击时由 server 按需生成）。
     """
     if not matches:
         return matches
@@ -285,7 +208,7 @@ def _attach_bayes_report_url(matches, kind='football'):
             reportable = football_reportable_ids()
         except Exception:
             reportable = set()
-    prefix = 'football' if kind == 'football' else 'beidan'
+    prefix = kind
     for m in matches:
         mid = str(m.get('match_id') or (m.get('spf') or {}).get('match_id') or '')
         if not mid:

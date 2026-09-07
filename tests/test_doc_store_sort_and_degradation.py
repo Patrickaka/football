@@ -166,3 +166,42 @@ class DegradationSurfacesInPredictionRecords(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class DocStoreLoadOne(unittest.TestCase):
+    """单条读取给预测历史的精简内存副本补回完整时间线用。"""
+
+    def setUp(self):
+        self._orig_query_one = doc_store.db.query_one
+        self._orig_fallback = doc_store._fallback_load_all
+        doc_store.clear_degradation('t')
+
+    def tearDown(self):
+        doc_store.db.query_one = self._orig_query_one
+        doc_store._fallback_load_all = self._orig_fallback
+        doc_store.clear_degradation('t')
+
+    def test_reads_one_doc_by_key(self):
+        seen = []
+
+        def query_one(sql, params=None):
+            seen.append((sql, params))
+            return {'doc': json.dumps({'match_id': 'm1', 'n': 1})}
+
+        doc_store.db.query_one = query_one
+        self.assertEqual(doc_store.load_one('t', 'match_id', 'm1'), {'match_id': 'm1', 'n': 1})
+        self.assertIn('WHERE match_id=%s', seen[0][0])
+        self.assertEqual(seen[0][1], ('m1',))
+
+    def test_missing_row_is_none(self):
+        doc_store.db.query_one = lambda sql, params=None: None
+        self.assertIsNone(doc_store.load_one('t', 'match_id', 'nope'))
+
+    def test_falls_back_to_the_local_snapshot_when_mysql_is_down(self):
+        def query_one(sql, params=None):
+            raise RuntimeError('down')
+
+        doc_store.db.query_one = query_one
+        doc_store._fallback_load_all = lambda table: [{'match_id': 'm1', 'n': 1}, {'match_id': 'm2'}]
+        self.assertEqual(doc_store.load_one('t', 'match_id', 'm2'), {'match_id': 'm2'})
+        self.assertIsNotNone(doc_store.degradation('t'))

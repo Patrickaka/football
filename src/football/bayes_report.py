@@ -1,16 +1,16 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-单场深度报告生成模块（足球贝叶斯分析 skill × 现有足球/北单模块）
+单场深度报告生成模块（足球贝叶斯分析 skill × 现有足球模块）
 ==============================================================
 
-把现有预测模块（src/football、src/beidan）的真实输出当作概率底座，
+把现有预测模块（src/football）的真实输出当作概率底座，
 叠加 football-bayes skill 的分析框架（先验P0 → 战术语境修正 →
 联赛特性 → 似然更新P1 → 剧本 → 无效控球警示 → 风险清单），
 产出一份人读的深度报告（HTML）。
 
 本模块同时服务于两条链路：
-1. 脚本链路（scripts/football_bayes_report.py、scripts/gen_beidan_reports.py）
+1. 脚本链路（scripts/football_bayes_report.py）
    用于批量/手动预生成报告文件。
 2. 服务端按需生成（server.py 调用 ensure_football_report /
    ensure_beidan_report）——当用户点击「深度报告」按钮而报告文件尚
@@ -38,8 +38,6 @@ from ..domain.sports.football.reporting import (  # noqa: F401
     DRIFT_THRESHOLD,
     REPORT_SCHEMA_VERSION,
     _REPORT_CSS,
-    _beidan_p0_p1,
-    _beidan_scripts,
     _extract_mid_from_report_path,
     _to_implied,
     build_scripts,
@@ -48,7 +46,6 @@ from ..domain.sports.football.reporting import (  # noqa: F401
     likelihood_update,
     pct,
     possession_trap_warning,
-    render_beidan_html,
     render_html,
     report_url_from_path,
     risk_list,
@@ -59,7 +56,6 @@ MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.dirname(os.path.dirname(MODULE_DIR))
 DEFAULT_REPORTS_DIR = os.path.join(REPO_ROOT, "reports")
 FOOTBALL_CACHE_DIR = os.path.join(REPO_ROOT, "src", "football", "cache")
-BEIDAN_CACHE_DIR = os.path.join(REPO_ROOT, "src", "beidan", "cache")
 MANIFEST_PATH = os.path.join(DEFAULT_REPORTS_DIR, "football_bayes_manifest.json")
 
 # 防止并发请求同时生成同一报告
@@ -313,81 +309,7 @@ def build_report(cache_path: str, live: dict, out_path: str) -> dict:
     return report
 
 
-# ===================== 北单（beidan）深度报告 =====================
 
-
-
-
-
-def build_beidan_report(rec: dict, live: dict, out_path: str) -> dict:
-    match = {
-        "match_id": rec.get("match_id"),
-        "home": rec.get("home"),
-        "away": rec.get("away"),
-        "league": rec.get("league", ""),
-        "num": rec.get("num", ""),
-        "time": rec.get("time", ""),
-    }
-    league = match["league"]
-    home, away = match["home"], match["away"]
-    spf = rec.get("spf") or {}
-    p0, p1_init = _beidan_p0_p1(rec)
-    tactical = tactical_context(live)
-    league_info = league_specifics({}, league)
-    update = likelihood_update(p1_init, live, league)
-    scripts = _beidan_scripts(rec, tactical, home, away)
-    trap_warn = possession_trap_warning(live)
-    risks = risk_list({}, tactical, live)
-    q = spf.get("quality") or {}
-    conf_label = q.get("label") or ("高" if float(spf.get("confidence", 0) or 0) >= 0.7 else ("中" if float(spf.get("confidence", 0) or 0) >= 0.5 else "低"))
-    conf_score = q.get("score", spf.get("confidence", "?"))
-    risk_level = q.get("level", "中")
-
-    report = {
-        "match": match,
-        "ts": datetime.now().strftime("%Y-%m-%d %H:%M"),
-        "module_version": "beidan",
-        "tool_log": live.get("tool_log", []),
-        "p0": p0,
-        "tactical": tactical,
-        "league": league_info,
-        "update": update,
-        "wdl": update["p1"],
-        "scripts": scripts,
-        "trap_warn": trap_warn,
-        "risks": risks,
-        "confidence_label": conf_label,
-        "confidence_score": conf_score,
-        "risk_level": risk_level,
-        "injury_conflict": live.get("injury_conflict"),
-        "beidan": {
-            "spf": spf,
-            "rqspf": rec.get("rqspf") or {},
-            "zjq": rec.get("zjq") or {},
-            "upset": rec.get("upset") or spf.get("upset") or {},
-            "asian_trend": spf.get("asian_trend"),
-        },
-    }
-    html = render_beidan_html(report)
-    os.makedirs(os.path.dirname(out_path), exist_ok=True)
-    with open(out_path, "w", encoding="utf-8") as f:
-        f.write(html)
-    try:
-        update_manifest(out_path, match)
-    except Exception as e:
-        print(f"[WARN] 清单更新失败: {e}")
-
-    print(f"[OK] 北单报告已生成: {out_path}")
-    print(f"比赛: {league} {home} vs {away} @ {match.get('time','')}")
-    print(f"P0(赔率隐含): 主{pct(p0['home'])} 平{pct(p0['draw'])} 客{pct(p0['away'])}")
-    print(f"P1(模型校准): 主{pct(report['wdl']['home'])} 平{pct(report['wdl']['draw'])} 客{pct(report['wdl']['away'])}")
-
-    # 保存赔率快照（生成时刻的赔率），供后续变盘检测决定是否重生成
-    mid = rec.get("match_id") or _extract_mid_from_report_path(out_path)
-    if mid:
-        save_odds_snapshot(mid, "beidan", (rec.get("spf") or {}).get("odds") or {})
-    print(f"战术语境: {'已接入' if tactical['available'] else 'UNAVAILABLE(降级)'}")
-    return report
 
 
 
@@ -548,77 +470,6 @@ def _lookup_pkl(mid: str):
     return os.path.join(FOOTBALL_CACHE_DIR, fn)
 
 
-def ensure_beidan_report(mid: str, force: bool = False) -> Optional[str]:
-    """确保某北单比赛的深度报告存在；若不存在则现生成；若已存在但赔率变盘明显则重生成。
-
-    force=True 时无论是否存在、是否变盘都强制重生成。
-    返回报告文件绝对路径；若无法生成（无 rec 缓存）返回 None。
-    """
-    mid = str(mid)
-    out_path = os.path.join(DEFAULT_REPORTS_DIR, f"beidan_bayes_{mid}.html")
-    exists = os.path.exists(out_path)
-    if exists and not force:
-        # 变盘检测：当前 rec 的赔率与生成时快照偏差明显则重生成
-        rec_path = os.path.join(BEIDAN_CACHE_DIR, f"beidan_{mid}.json")
-        if not os.path.exists(rec_path):
-            return out_path  # 无 rec 可对比，保留旧报告
-        try:
-            with open(rec_path, "r", encoding="utf-8") as f:
-                rec = json.load(f)
-            odds = (rec.get("spf") or {}).get("odds") or {}
-            if odds_drifted(mid, "beidan", odds):
-                print(f"[INFO] 北单 {mid} 检测到变盘，重生成报告")
-                try:
-                    os.remove(out_path)
-                except OSError:
-                    pass
-            else:
-                return out_path
-        except Exception:
-            return out_path
-    with REPORT_GEN_LOCK:
-        if os.path.exists(out_path):
-            return out_path
-        rec_path = os.path.join(BEIDAN_CACHE_DIR, f"beidan_{mid}.json")
-        if not os.path.exists(rec_path):
-            return None
-        try:
-            with open(rec_path, "r", encoding="utf-8") as f:
-                rec = json.load(f)
-        except Exception as e:
-            print(f"[ERR] 读取北单 rec 失败 {mid}: {e}")
-            return None
-        rec["match_id"] = mid
-        live = load_live_context(mid)
-        try:
-            build_beidan_report(rec, live, out_path)  # 内部存快照
-            return out_path
-        except Exception as e:
-            print(f"[ERR] 北单报告生成失败 {mid}: {e}")
-            return None
-
-
-def persist_beidan_recs(recs: List[dict]) -> List[str]:
-    """把北单推荐 rec 落盘到 src/beidan/cache/beidan_{mid}.json，便于后续按需生成。
-
-    返回成功持久化的 match_id 列表。
-    """
-    os.makedirs(BEIDAN_CACHE_DIR, exist_ok=True)
-    persisted = []
-    for rec in recs:
-        mid = str(rec.get("match_id") or (rec.get("spf") or {}).get("match_id", "") or "")
-        if not mid:
-            continue
-        rec["match_id"] = mid
-        try:
-            with open(os.path.join(BEIDAN_CACHE_DIR, f"beidan_{mid}.json"), "w", encoding="utf-8") as f:
-                json.dump(rec, f, ensure_ascii=False, default=str)
-            persisted.append(mid)
-        except Exception as e:
-            print(f"[WARN] 北单 rec 落盘失败 {mid}: {e}")
-    return persisted
-
-
 # ===================== 赔率快照 & 变盘检测（自动重生成） =====================
 
 # 变盘阈值：胜平负隐含概率任一方绝对偏差 >= 此值即视为「变盘明显」，需重生成报告。
@@ -699,20 +550,6 @@ def sync_football_reports(mids):
             ensure_football_report(mid)  # 内部含「不存在则生成 / 变盘则重生成」
         except Exception as e:
             print(f"[ERR] 后台同步足球报告失败 {mid}: {e}")
-
-
-def sync_beidan_reports(recs):
-    """批量同步北单深度报告（供 server 后台线程调用）。"""
-    if not recs:
-        return
-    for rec in recs:
-        mid = str(rec.get("match_id") or (rec.get("spf") or {}).get("match_id", "") or "")
-        if not mid:
-            continue
-        try:
-            ensure_beidan_report(mid)
-        except Exception as e:
-            print(f"[ERR] 后台同步北单报告失败 {mid}: {e}")
 
 
 # ===================== 报告留存清理（retention） =====================
