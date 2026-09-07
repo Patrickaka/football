@@ -3207,6 +3207,406 @@ body.ui-shell[data-module="kl8"] {
   .ui-shell .prediction-calendar-popover { max-width: calc(100vw - 48px); }
 }
 </style>
+<style id="sports-desk">
+/* Hallmark · macrostructure: Stat-Led sports desk · tone: crisp, bright, numerical
+ * Horizontal masthead, warm paper, vermilion signals; existing routes and data.
+ * Pre-emit critique: P4 H4 E4 S5 R4 V4 */
+body.ui-shell {
+  --color-paper: oklch(97% .006 85);
+  --color-surface: oklch(99.7% .002 85);
+  --color-inset: oklch(95% .006 85);
+  --color-sidebar: var(--color-surface);
+  --color-rule: oklch(86% .009 85);
+  --color-control-rule: oklch(62% .012 85);
+  --color-ink: oklch(25% .012 260);
+  --color-muted: oklch(45% .01 260);
+  --color-dim: oklch(50% .01 260);
+  --color-accent: oklch(52% .19 28);
+  --color-accent-soft: oklch(96% .022 28);
+  --color-rose: var(--color-accent);
+  --color-rose-soft: var(--color-accent-soft);
+  --color-on-accent: var(--color-surface);
+  --color-overlay: oklch(25% .012 260 / .3);
+  --font-display: "Bahnschrift", "Arial Narrow", "Segoe UI", "Microsoft YaHei", sans-serif;
+  --font-body: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --board-number-font: var(--font-display);
+  --board-font: var(--font-body);
+  --shadow-surface: none;
+  --space-xs: 8px; --space-sm: 16px; --space-md: 24px; --space-lg: 32px;
+  --radius-card: 6px; --radius-control: 4px;
+  --ease-out: cubic-bezier(.16, 1, .3, 1); --dur-short: 150ms;
+  font-family: var(--font-body);
+  background: var(--color-paper) !important;
+}
+body.ui-shell, body.ui-shell[data-module="football"],
+body.ui-shell[data-module="basketball"], body.ui-shell[data-module="kl8"] {
+  --accent: var(--color-accent); --accent2: var(--accent);
+  --board-accent-soft: var(--color-accent-soft);
+}
+html, body.ui-shell { overflow-x: clip; }
+.ui-shell .wrap {
+  width: calc(100% - 64px); max-width: 1320px !important;
+  margin: 0 auto !important; padding: 0;
+}
+.ui-shell .app-sidebar {
+  position: sticky; inset: 0 auto auto; width: 100%; min-height: 84px;
+  display: flex !important; flex-direction: row; align-items: center;
+  gap: 64px; padding: 0 max(32px, calc((100% - 1320px) / 2));
+  border: 0; border-top: 3px solid var(--color-accent);
+  border-bottom: 1px solid var(--color-rule); background: var(--color-surface);
+}
+.ui-shell .brand { flex: 0 0 auto; margin: 0; gap: 12px; font-size: 23px; font-weight: 800; letter-spacing: -.05em; }
+.ui-shell .brand-symbol {
+  width: 38px; height: 40px; border-radius: 3px; transform: skew(-6deg);
+  background: var(--color-accent); color: var(--color-on-accent); font-size: 29px;
+}
+.ui-shell .brand small { font-size: 8px; letter-spacing: .18em; color: var(--color-dim); }
+.ui-shell :is(.nav-caption, .sidebar-footer, .nav-arrow) { display: none; }
+.ui-shell .app-sidebar .tabs { flex-direction: row; align-self: stretch; gap: 8px !important; }
+.ui-shell .app-sidebar .tabs .tab,
+.ui-shell[data-module] .app-sidebar .tabs .tab.active {
+  position: relative; width: auto; min-width: 126px; min-height: 80px;
+  justify-content: center; padding: 16px !important; gap: 9px;
+  border: 0 !important; border-radius: 0 !important;
+  background: transparent !important; color: var(--color-muted) !important;
+  font-size: 15px; font-weight: 650; white-space: nowrap;
+}
+.ui-shell .app-sidebar .tabs .tab small { display: none; }
+.ui-shell .app-sidebar .tabs .tab .module-icon { opacity: 1; width: 19px; height: 19px; }
+.ui-shell[data-module] .app-sidebar .tabs .tab.active { color: var(--color-ink) !important; }
+.ui-shell .app-sidebar .tabs .tab.active::after {
+  content: ''; position: absolute; inset: auto 16px -1px; height: 3px;
+  background: var(--color-accent); transform: none;
+}
+.ui-shell .app-sidebar .tabs .tab:hover { color: var(--color-accent) !important; background: var(--color-inset) !important; }
+.ui-shell .masthead-date { margin-left: auto; font-size: 12px; }
+.ui-shell .workspace-bar { min-height: 44px; border: 0; color: var(--color-dim); font-size: 11px; }
+.ui-shell .page-heading { display: block; padding: 8px 0 24px !important; }
+.ui-shell .page-heading h1 { font-size: clamp(28px, 3vw, 36px) !important; font-weight: 800 !important; letter-spacing: -.04em !important; }
+.ui-shell .page-heading p { margin-top: 8px !important; font-size: 13px !important; }
+.ui-shell .page-eyebrow { display: none; }
+.ui-shell .sport-overview {
+  background: var(--color-surface); border: 0; border-top: 3px solid var(--color-ink);
+  border-bottom: 1px solid var(--color-rule); border-radius: 0;
+  padding: 20px 0; margin-bottom: 24px; box-shadow: none;
+}
+.ui-shell .overview-item { padding-inline: 24px; border-radius: 0; }
+.ui-shell .overview-label { font-size: 13px; font-weight: 600; color: var(--color-ink); }
+.ui-shell .overview-value { font-family: var(--font-display); font-size: 42px; font-weight: 700; letter-spacing: -.05em; }
+.ui-shell .overview-detail { font-size: 11px; }
+.ui-shell .sport-panel :is(.tb-refresh, .search, .toolbar-buttons, .tb-btn, .date-value) { border-radius: var(--radius-control) !important; }
+.ui-shell .sport-panel .tb-refresh.refresh-primary { background: var(--color-accent); color: var(--color-on-accent); border-color: var(--color-accent); }
+.ui-shell .sport-panel .tb-refresh.refresh-primary:hover { background: var(--color-ink); color: var(--color-on-accent); border-color: var(--color-ink); }
+.ui-shell .sport-panel .filter-row { border-bottom-color: var(--color-control-rule); }
+.ui-shell .sport-panel .quality-tabs .tb-btn { font-weight: 600; padding-inline: 4px; }
+.ui-shell .sport-panel .league-title { font-size: 15px; margin-block: 24px 12px; }
+.ui-shell .sport-panel .league-title::before { height: 16px; width: 4px; }
+.ui-shell .sport-panel .sport-match-card {
+  border-radius: var(--radius-card); box-shadow: none;
+  border-top: 2px solid var(--color-ink) !important;
+  padding: 24px !important; grid-template-columns: 250px minmax(0, 1fr); gap: 0 28px;
+}
+.ui-shell .fixture-meta { margin-bottom: 18px; font-size: 11px; }
+.ui-shell .fixture-team strong { font-size: 24px; font-weight: 750; }
+.ui-shell .team-side { background: var(--color-inset); border: 0; border-radius: 2px; color: var(--color-muted); }
+.ui-shell .market-section-heading { margin-bottom: 16px; }
+.ui-shell .market-section-heading h3 { color: var(--color-muted); font-size: 11px; }
+.ui-shell .market-name { font-size: 14px; }
+.ui-shell .probability-value strong { font-family: var(--font-display); font-size: 25px; font-weight: 650; }
+.ui-shell .probability-track { height: 4px; border-radius: 0; }
+.ui-shell .probability-track i { border-radius: 0; }
+.ui-shell .score-value { font-family: var(--font-display); font-size: 23px; font-weight: 650; }
+.ui-shell .score-value span { font-family: var(--font-body); font-size: 11px; font-weight: 400; }
+.ui-shell :is(.decision-badge, .board-alert, .pro-status, .prediction-date-toolbar) { border-radius: var(--radius-control); }
+.ui-shell .board-alert { border-left: 3px solid var(--color-warning); }
+.ui-shell :is(.pro-modal-window, .kl8-modal-window, .bayes-modal, .prediction-calendar-popover) { border-radius: 8px; }
+.ui-shell .bottom-nav-item { border-radius: 0 !important; }
+body.ui-shell .bottom-nav-item.active { color: var(--color-accent) !important; background: transparent; box-shadow: inset 0 3px var(--color-accent); }
+.ui-shell button:active:not(:disabled) { transform: translateY(1px); }
+.ui-shell :is(button, a, input, select, summary):focus-visible { outline: 2px solid var(--color-accent); outline-offset: 3px; }
+@media (max-width: 1100px) {
+  .ui-shell .app-sidebar { gap: 32px; }
+  .ui-shell .app-sidebar .tabs .tab { min-width: 112px; }
+  .ui-shell .sport-panel .sport-match-card { grid-template-columns: 210px minmax(0, 1fr); gap: 0 20px; }
+  .ui-shell .fixture-team strong { font-size: 21px; }
+  .ui-shell .probability-value strong { font-size: 22px; }
+}
+@media (max-width: 768px) {
+  .ui-shell .wrap { width: calc(100% - 32px); margin: 0 auto !important; }
+  .ui-shell .app-sidebar { position: relative; inset: auto; min-height: 66px; padding-inline: 16px; gap: 12px; }
+  .ui-shell .app-sidebar .tabs { display: none; }
+  .ui-shell .brand { font-size: 20px; gap: 9px; }
+  .ui-shell .brand-symbol { width: 31px; height: 34px; font-size: 25px; }
+  .ui-shell .masthead-date { font-size: 10px; }
+  .ui-shell .workspace-bar { min-height: 38px; font-size: 10px; }
+  .ui-shell .workspace-bar > span:last-child { display: none; }
+  .ui-shell .page-heading { padding: 4px 0 20px !important; }
+  .ui-shell .page-heading h1 { font-size: 27px !important; }
+  .ui-shell .page-heading p { font-size: 11px !important; }
+  .ui-shell .sport-overview { padding-block: 16px; }
+  .ui-shell .overview-item, .ui-shell .overview-item:first-child { padding-inline: 12px; }
+  .ui-shell .overview-label { font-size: 11px; }
+  .ui-shell .overview-value { font-size: 32px; }
+  .ui-shell .sport-panel .sport-match-card { padding: 18px !important; }
+  .ui-shell .fixture-team strong { font-size: 19px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ui-shell *, .ui-shell *::before, .ui-shell *::after { animation: none !important; transition: none !important; }
+  .ui-shell button:active:not(:disabled) { transform: none; }
+}
+</style>
+<style id="numbers-scoreboard">
+/* Hallmark · structure: number scoreboard and draw ledger · theme: inherited sports desk
+ * Pre-emit critique: P4 H4 E4 S5 R5 V4
+ * Insert after daylight-workspace and the shared sports theme. No data or interaction changes. */
+.ui-shell .kl8-dashboard {
+  --kl8-red: var(--accent);
+  --kl8-red-deep: var(--accent);
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 24px 18px;
+  align-items: start;
+  animation: none;
+}
+.ui-shell .kl8-dashboard > * { grid-column: 1 / -1; min-width: 0; }
+.ui-shell .kl8-dashboard > .kl8-fushi-card { grid-column: auto; align-self: stretch; border-top-color: var(--accent) !important; }
+.ui-shell .kl8-hero {
+  padding: 24px 0 0;
+  border: 0;
+  border-top: 3px solid var(--accent);
+  border-bottom: 1px solid var(--color-rule);
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.ui-shell .kl8-hero-top { align-items: center; flex-direction: row; gap: 20px; }
+.ui-shell .kl8-eyebrow, .ui-shell .kl8-panel-kicker {
+  color: var(--color-dim);
+  font-size: 9px;
+  letter-spacing: .12em;
+  font-weight: 600;
+}
+.ui-shell .kl8-eyebrow::before { display: none; }
+.ui-shell .kl8-hero h2 {
+  color: var(--color-ink);
+  font-size: clamp(22px, 2.5vw, 32px);
+  line-height: 1.35;
+  letter-spacing: -.035em;
+}
+.ui-shell .kl8-hero h2 strong {
+  color: var(--accent);
+  font: 750 1.2em / 1.1 var(--board-number-font);
+  letter-spacing: -.035em;
+}
+.ui-shell .kl8-hero h2 span { margin-left: 8px; color: var(--color-muted); font-size: .65em; font-weight: 500; }
+.ui-shell .kl8-hero-copy { margin-top: 8px; font-size: 12px; }
+.ui-shell .kl8-status-pill {
+  padding: 7px 9px;
+  border: 1px solid var(--color-rule);
+  border-radius: 4px;
+  background: var(--color-surface);
+  color: var(--color-warning);
+  font-size: 11px;
+  font-weight: 600;
+  box-shadow: none;
+}
+.ui-shell .kl8-status-pill.validated { background: var(--color-surface); color: var(--color-positive); border-color: var(--color-rule); }
+.ui-shell .kl8-status-pill.reference { background: var(--color-surface); color: var(--color-info); border-color: var(--color-rule); }
+.ui-shell .kl8-status-pill i { width: 5px; height: 5px; border-radius: 1px; box-shadow: none; }
+.ui-shell .kl8-meta-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr)) minmax(0, 1.8fr);
+  gap: 0;
+  margin-top: 24px;
+  padding: 16px 0;
+  border-top: 1px solid var(--color-rule);
+}
+.ui-shell .kl8-meta-item { padding: 0 22px; border: 0; border-radius: 0; background: none; }
+.ui-shell .kl8-meta-item:first-child { padding-left: 0; }
+.ui-shell .kl8-meta-item + .kl8-meta-item { border-left: 1px solid var(--color-rule); }
+.ui-shell .kl8-meta-label { color: var(--color-muted); font-size: 10px; letter-spacing: .025em; font-weight: 400; }
+.ui-shell .kl8-meta-value { margin: 5px 0 3px; color: var(--color-ink); font: 650 21px / 1.35 var(--board-number-font); }
+.ui-shell .kl8-meta-value small { color: var(--color-muted); font-size: 11px; font-weight: 400; }
+.ui-shell .kl8-meta-item:last-child .kl8-meta-value { padding-top: 4px; font: 600 13px / 1.7 var(--board-font); }
+.ui-shell .kl8-meta-sub { color: var(--color-dim); font-size: 10px; }
+.ui-shell .kl8-disclaimer {
+  margin: -10px 0 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  color: var(--color-muted);
+  font-size: 11px;
+  line-height: 1.7;
+}
+.ui-shell .kl8-dashboard > .kl8-state-card {
+  padding: 14px 16px;
+  border: 1px solid var(--color-rule);
+  border-radius: 4px;
+  background: var(--color-surface);
+  box-shadow: none;
+}
+.ui-shell .kl8-state-card::before { width: 2px; box-shadow: none; }
+.ui-shell .kl8-state-title { font-size: 12px; font-weight: 600; }
+.ui-shell .kl8-state-value { margin-top: 7px; font-size: 25px; }
+.ui-shell .kl8-progress-track { max-width: 520px; height: 4px; border-radius: 0; }
+.ui-shell .kl8-progress-bar { border-radius: 0; }
+.ui-shell .kl8-dashboard > .kl8-panel {
+  padding: 20px;
+  border-radius: 6px;
+  background: var(--color-surface);
+  border-color: var(--color-rule);
+  box-shadow: none;
+}
+.ui-shell .kl8-dashboard > .kl8-picks-panel {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  box-shadow: none;
+}
+.ui-shell .kl8-panel-head { align-items: center; gap: 12px; margin-bottom: 16px; padding-bottom: 12px; border-bottom: 2px solid var(--color-ink); }
+.ui-shell .kl8-panel-head h3 { margin-top: 3px; font-size: 18px; font-weight: 650; }
+.ui-shell .kl8-panel-count, .ui-shell .kl8-soft-badge {
+  display: inline-flex;
+  padding: 3px 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  color: var(--color-muted);
+  font-size: 10px;
+  font-weight: 400;
+}
+.ui-shell .kl8-picks-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; align-items: stretch; }
+.ui-shell .kl8-select-card {
+  padding: 18px;
+  border: 1px solid var(--color-rule);
+  border-top: 2px solid var(--accent);
+  border-radius: 5px;
+  background: var(--color-surface);
+  box-shadow: none;
+  transition: border-color var(--dur-short) var(--ease-out);
+}
+.ui-shell .kl8-select-card::before { display: none; }
+.ui-shell .kl8-select-card:hover { transform: none; box-shadow: none; border-color: var(--color-control-rule); border-top-color: var(--accent); }
+.ui-shell .kl8-select-head { align-items: flex-start; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
+.ui-shell .kl8-select-title { font-size: 14px; font-weight: 600; line-height: 1.5; }
+.ui-shell .kl8-select-title strong { color: var(--color-ink); }
+.ui-shell .kl8-mode-badge {
+  padding: 2px 0 2px 7px;
+  border: 0;
+  border-left: 2px solid var(--kl8-card-accent, var(--accent));
+  border-radius: 0;
+  background: none;
+  font-size: 9px;
+  font-weight: 500;
+}
+.ui-shell .kl8-strategy-line { margin-bottom: 10px; color: var(--color-dim); font-size: 9px; }
+.ui-shell .kl8-numbers-row, .ui-shell .kl8-fushi-top7 { min-width: 0; flex-wrap: wrap; gap: 6px; }
+.ui-shell .kl8-picks-grid .kl8-numbers-row { min-height: 76px; align-content: center; padding: 10px 0; border-block: 1px dashed var(--color-rule); }
+.ui-shell .kl8-ball, .ui-shell .kl8-ball.highlight-ball {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--color-on-accent);
+  border-radius: 50%;
+  box-shadow: none;
+  text-shadow: none;
+  font-family: var(--board-number-font);
+  font-weight: 650;
+}
+.ui-shell .kl8-picks-grid .kl8-ball.highlight-ball { width: 34px; height: 34px; font-size: 14px; }
+.ui-shell .kl8-probability-line { margin-top: 10px; font-size: 10px; line-height: 1.8; }
+.ui-shell .kl8-inline-note { line-height: 1.8; }
+.ui-shell .kl8-inline-warning { padding: 8px 0 0; border: 0; border-top: 1px dashed var(--color-rule); border-radius: 0; background: none; line-height: 1.8; }
+.ui-shell .kl8-fushi-card { border-top: 2px solid var(--accent); }
+.ui-shell .kl8-fushi-header { align-items: flex-start; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; padding-bottom: 12px; font-size: 14px; line-height: 1.6; }
+.ui-shell .kl8-fushi-summary { padding: 0; border: 0; border-radius: 0; background: none; font-size: 11px; line-height: 1.8; }
+.ui-shell .kl8-fushi-top7 { padding: 12px 0; margin-bottom: 0; border-block: 1px dashed var(--color-rule); }
+.ui-shell .kl8-fushi-top7 .kl8-ball.highlight-ball { width: 34px !important; height: 34px !important; font-size: 14px !important; }
+.ui-shell .kl8-shape-strip { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px 0; margin-top: 15px; }
+.ui-shell .kl8-shape-chip { padding: 0 8px; border: 0; border-left: 1px solid var(--color-rule); border-radius: 0; background: none; }
+.ui-shell .kl8-shape-chip:nth-child(3n + 1) { border-left: 0; padding-left: 0; }
+.ui-shell .kl8-shape-chip .shape-k { color: var(--color-dim); font-size: 9px; }
+.ui-shell .kl8-shape-chip .shape-v { margin-top: 4px; font-size: 12px; }
+.ui-shell .kl8-draw-row { grid-template-columns: 86px minmax(0, 1fr) 88px; grid-template-areas: 'issue balls date'; gap: 16px; padding: 11px 0; border-bottom: 1px solid var(--color-rule); }
+.ui-shell .kl8-draw-row .draw-issue { grid-area: issue; color: var(--color-ink); font: 600 12px / 1.5 var(--board-number-font); }
+.ui-shell .kl8-draw-row .draw-date { grid-area: date; color: var(--color-dim); text-align: right; font-size: 10px; }
+.ui-shell .kl8-draw-row .draw-numbers { grid-area: balls; }
+.ui-shell .kl8-draw-balls { display: flex; flex-wrap: wrap; min-width: 0; gap: 5px !important; }
+.ui-shell .kl8-draw-balls .kl8-ball.small-ball { background: var(--color-surface); color: var(--color-ink); border-color: var(--color-rule); box-shadow: none; }
+.ui-shell .kl8-draw-balls .kl8-ball.small-ball.highlight-ball { background: var(--accent); color: var(--color-on-accent); border-color: var(--accent) !important; box-shadow: none !important; }
+.ui-shell .kl8-action-dock { padding: 20px 0 0; border: 0; border-top: 2px solid var(--color-ink); border-radius: 0; background: none; box-shadow: none; gap: 16px; }
+.ui-shell .kl8-action-copy strong { font-size: 13px; }
+.ui-shell .kl8-action-copy span { display: block; margin-top: 4px; }
+.ui-shell .kl8-action-buttons { gap: 8px; }
+.ui-shell .kl8-refresh-btn, .ui-shell .kl8-action-dock button { min-height: 38px; padding: 8px 12px; border-radius: 4px; font-size: 11px; font-weight: 500; }
+.ui-shell .kl8-action-dock .kl8-refresh-btn { background: var(--color-surface); border-color: var(--color-rule); }
+.ui-shell .kl8-action-dock .kl8-refresh-btn:hover { background: var(--color-inset); border-color: var(--color-control-rule); }
+.ui-shell .kl8-refresh-btn:active { transform: translateY(1px); }
+.ui-shell .kl8-modal-window { border-radius: 8px; }
+.ui-shell .kl8-modal-head { border-bottom: 2px solid var(--color-ink); }
+.ui-shell .kl8-record-card, .ui-shell .kl8-record-card.pending { padding: 16px 0; border: 0; border-bottom: 1px solid var(--color-rule); border-radius: 0; box-shadow: none; }
+.ui-shell .kl8-record-badge, .ui-shell .kl8-record-badge.pending { padding: 3px 6px; border-radius: 3px; }
+.ui-shell .kl8-modal-body .kl8-disclaimer { margin-top: 0; }
+@media (min-width: 1180px) {
+  .ui-shell .kl8-dashboard, .ui-shell .kl8-picks-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+@media (max-width: 979px) {
+  .ui-shell .kl8-meta-item { padding-inline: 14px; }
+  .ui-shell .kl8-meta-value { font-size: 18px; }
+  .ui-shell .kl8-action-dock { align-items: flex-start; flex-direction: column; }
+  .ui-shell .kl8-action-buttons { justify-content: flex-start; }
+}
+@media (max-width: 719px) {
+  .ui-shell .kl8-dashboard, .ui-shell .kl8-picks-grid { grid-template-columns: minmax(0, 1fr); gap: 20px; }
+  .ui-shell .kl8-picks-grid { gap: 12px; }
+  .ui-shell .kl8-hero { padding: 18px 0 0; }
+  .ui-shell .kl8-hero-top { flex-direction: column; align-items: flex-start; gap: 12px; }
+  .ui-shell .kl8-hero h2 { font-size: 23px; }
+  .ui-shell .kl8-hero h2 span { display: block; margin: 7px 0 0; font-size: 13px; }
+  .ui-shell .kl8-status-pill { padding: 5px 7px; font-size: 10px; }
+  .ui-shell .kl8-meta-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 15px 0; margin-top: 17px; padding-block: 14px; }
+  .ui-shell .kl8-meta-item { padding: 0 12px; }
+  .ui-shell .kl8-meta-item:nth-child(odd) { border-left: 0; padding-left: 0; }
+  .ui-shell .kl8-meta-label, .ui-shell .kl8-meta-sub { font-size: 9px; }
+  .ui-shell .kl8-meta-item:last-child .kl8-meta-value { padding-top: 3px; font-size: 11px; }
+  .ui-shell .kl8-dashboard > .kl8-panel { padding: 16px; }
+  .ui-shell .kl8-dashboard > .kl8-picks-panel { padding: 0; }
+  .ui-shell .kl8-panel-head { flex-direction: column; align-items: flex-start; gap: 5px; margin-bottom: 12px; }
+  .ui-shell .kl8-panel-head h3 { font-size: 17px; }
+  .ui-shell .kl8-select-card { padding: 16px; }
+  .ui-shell .kl8-select-head { flex-wrap: wrap; }
+  .ui-shell .kl8-select-title { font-size: 13px; }
+  .ui-shell .kl8-picks-grid .kl8-numbers-row { min-height: 60px; }
+  .ui-shell .kl8-draw-row { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: 'issue date' 'balls balls'; gap: 8px; padding-block: 12px !important; border-bottom-color: var(--color-rule) !important; }
+  .ui-shell .kl8-draw-row .draw-issue { grid-area: issue; }
+  .ui-shell .kl8-draw-row .draw-date { grid-area: date; }
+  .ui-shell .kl8-draw-row .draw-numbers { grid-area: balls; }
+  .ui-shell .kl8-draw-balls .kl8-ball.small-ball { width: 25px !important; height: 25px !important; }
+  .ui-shell .kl8-action-dock { padding-top: 16px; }
+  .ui-shell .kl8-action-buttons { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); width: 100%; gap: 8px; }
+  .ui-shell .kl8-action-buttons .kl8-refresh-btn { min-height: 44px; padding-inline: 8px; white-space: nowrap; font-size: 11px; }
+  .ui-shell .kl8-action-dock .action-success { grid-column: auto; grid-row: auto; }
+  .ui-shell .kl8-action-dock .kl8-refresh-btn:last-child { grid-column: 1 / -1; }
+  .ui-shell .kl8-modal-window { border-radius: 8px 8px 0 0; }
+  .ui-shell .kl8-modal-head { gap: 8px; }
+  .ui-shell .kl8-modal-title { font-size: 14px; }
+  .ui-shell .kl8-modal-head .kl8-refresh-btn { padding-inline: 10px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ui-shell .kl8-select-card { transition: none; }
+  .ui-shell .kl8-refresh-btn:active { transform: none; }
+}
+
+.ui-shell :is(.kl8-eyebrow, .kl8-panel-kicker, .kl8-strategy-line) { display: none; }
+.ui-shell .kl8-dashboard:has(> .kl8-fushi-card):not(:has(> .kl8-fushi-card ~ .kl8-fushi-card)) > .kl8-fushi-card { grid-column: 1 / -1; }
+@media (max-width: 719px) {
+  .ui-shell .kl8-hero-top { flex-direction: row; align-items: center; gap: 8px; }
+  .ui-shell .kl8-hero h2 { margin: 0; font-size: 22px; }
+  .ui-shell .kl8-hero h2 span, .ui-shell .kl8-hero-copy { display: none; }
+  .ui-shell .kl8-status-pill { flex-shrink: 0; white-space: nowrap; }
+  .ui-shell .kl8-dashboard { row-gap: 16px; }
+}
+</style>
 </head>
 <body class="ui-shell">
 <svg class="icon-library" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
@@ -3221,14 +3621,7 @@ body.ui-shell[data-module="kl8"] {
   <symbol id="icon-alert" viewBox="0 0 24 24"><path d="m12 3 10 18H2L12 3Zm0 6v5m0 3v1"/></symbol>
   <symbol id="icon-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
 </svg>
-<div class="wrap">
-  <div class="workspace-bar"><span>预测助手 <span class="workspace-separator">/</span> 赛事与数据</span><span id="workspace-date"></span></div>
-  <header class="page-heading">
-    <div class="page-eyebrow" id="page-eyebrow">FOOTBALL / 01</div>
-    <h1 id="page-title">足球赛事分析</h1>
-    <p id="page-desc">竞彩固定奖金：中国竞彩网 · 亚洲盘：香港马会 · 多源容错融合</p>
-  </header>
-  <aside class="app-sidebar" aria-label="主导航">
+  <nav class="app-sidebar" aria-label="主导航">
     <a class="brand" href="#football" onclick="switchTab('football'); return false;" aria-label="预测助手首页"><span class="brand-symbol" aria-hidden="true">P<span>·</span></span><span>预测助手<small>DATA & INSIGHT</small></span></a>
     <div class="nav-caption">分析工作台</div>
     <div class="tabs" role="tablist" aria-label="选择分析模块">
@@ -3236,8 +3629,17 @@ body.ui-shell[data-module="kl8"] {
       <button id="tab-basketball" type="button" class="tab" data-tab="basketball" role="tab" aria-selected="false" aria-controls="panel-basketball" tabindex="-1"><svg class="module-icon ui-icon" aria-hidden="true"><use href="#icon-basketball"/></svg><span>篮球分析<small>Basketball</small></span><span class="nav-arrow" aria-hidden="true">›</span></button>
       <button id="tab-kl8" type="button" class="tab" data-tab="kl8" role="tab" aria-selected="false" aria-controls="panel-kl8" tabindex="-1"><svg class="module-icon ui-icon" aria-hidden="true"><use href="#icon-numbers"/></svg><span>快乐8<small>Numbers</small></span><span class="nav-arrow" aria-hidden="true">›</span></button>
     </div>
+    <span class="masthead-date" id="workspace-date"></span>
     <div class="sidebar-footer"><span class="sidebar-divider"></span><b>让数据更清晰</b><p>查看分析 · 回顾记录 · 理性判断</p></div>
-  </aside>
+  </nav>
+<div class="wrap">
+  <div class="workspace-bar"><span>赛事与数据</span><span>查看分析 · 回顾记录 · 理性判断</span></div>
+  <header class="page-heading">
+    <div class="page-eyebrow" id="page-eyebrow">FOOTBALL / 01</div>
+    <h1 id="page-title">足球赛事分析</h1>
+    <p id="page-desc">竞彩固定奖金：中国竞彩网 · 亚洲盘：香港马会 · 多源容错融合</p>
+  </header>
+
   <div id="panel-football" class="tab-panel sport-panel football-panel active" role="tabpanel" aria-labelledby="tab-football">
     <div id="search-wrap" style="display:none"></div>
     <div id="app" class="sport-dashboard football-dashboard"></div>
@@ -6499,7 +6901,7 @@ function renderKL8(r) {
   // 刷新按钮
   html += `<div id="kl8-parameter-search-result"></div>`;
   html += `<section class="kl8-action-dock">`;
-  html += `<div class="kl8-action-copy"><strong>数据与策略工具</strong><span>所有原有操作保持不变</span></div>`;
+  html += `<div class="kl8-action-copy"><strong>数据与策略工具</strong><span>计算、开奖与历史记录</span></div>`;
   html += `<div class="kl8-action-buttons">`;
   html += `<button type="button" class="kl8-refresh-btn" onclick="refreshKL8()">↻ 重新计算</button>`;
   html += `<button type="button" class="kl8-refresh-btn action-warn" onclick="openKL8ExcludeModal()">⊖ 剔除号码重算</button>`;
