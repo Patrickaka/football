@@ -53,7 +53,7 @@ def _run_js(expression, extra_functions=()):
     )
     completed = subprocess.run(
         [NODE, '--input-type=module', '-e', source],
-        capture_output=True, text=True, timeout=30,
+        capture_output=True, text=True, encoding='utf-8', timeout=30,
     )
     if completed.returncode != 0:
         raise AssertionError(f'node 执行失败: {completed.stderr.strip()}')
