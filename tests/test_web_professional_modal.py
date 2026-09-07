@@ -90,7 +90,7 @@ class WebProfessionalModalTests(unittest.TestCase):
         self.assertIn('const compactFootballView = true;', html)
         self.assertIn('class="football-compact-summary"', html)
         self.assertIn("compactProbLine(standardPrediction.probs, ['胜','平','负'])", html)
-        self.assertIn("compactProbLine(handicapCard.prediction.probs, ['让胜','让平','让负'])", html)
+        self.assertIn("compactProbLine(handicapCard.prediction.marginalProbs, ['让胜','让平','让负'])", html)
         self.assertIn('class="football-score-reference"', html)
         self.assertIn("比分参考 Top3（非主推）", html)
         self.assertIn("getFootballScoreSettlement(score, lotteryHandicap)", html)

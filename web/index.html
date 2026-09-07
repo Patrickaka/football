@@ -2691,6 +2691,7 @@ body.ui-shell {
 .market-decision .selected + strong { color: var(--color-card-positive); }
 .market-candidate { display: block; font-size: 10px; color: var(--color-card-muted); margin-top: 4px; }
 .market-distribution { margin-top: 10px; color: var(--color-card-muted); font-size: 11px; line-height: 1.8; }
+.market-reason { grid-column: 1 / -1; margin: 12px 0 0; padding-left: 8px; border-left: 2px solid var(--muted); color: var(--muted); font-size: 12px; line-height: 1.65; overflow-wrap: anywhere; }
 .probability-strip { display: grid; grid-template-columns: repeat(var(--outcomes, 3), minmax(0, 1fr)); gap: 16px; }
 .probability-outcome { min-width: 0; }
 .probability-value { display: flex; align-items: baseline; justify-content: space-between; gap: 4px; font-size: 11px; }
@@ -4668,6 +4669,7 @@ function renderWebMarketRecommendation(label, state, pick, probabilityText = '')
   const candidate = isAbstain && (pick || state?.pick)
     ? `<span class="market-candidate">模型候选 ${esc(pick || state.pick)}</span>` : '';
   const status = ['selected', 'watch', 'abstain'].includes(state?.status) ? state.status : 'abstain';
+  const reasons = isAbstain ? (state?.reasons || []).filter(Boolean) : [];
   return `<section class="market-row" data-status="${status}" aria-label="${esc(label)}">
     <div class="market-row-heading"><span class="market-name">${esc(label)}</span></div>
     <div class="market-verdict">
@@ -4675,6 +4677,7 @@ function renderWebMarketRecommendation(label, state, pick, probabilityText = '')
       ${candidate}
     </div>
     ${probabilityText ? `<div class="market-distribution">${probabilityText}</div>` : ''}
+    ${reasons.length ? `<p class="market-reason">观望原因：${reasons.slice(0, 2).map(esc).join('；')}${reasons.length > 2 ? '。其余原因见下方筛选依据' : ''}</p>` : ''}
   </section>`;
 }
 
@@ -5265,7 +5268,7 @@ function renderFootballPredictions(results) {
           </div></details>
           ${standardPrediction ? renderWebMarketRecommendation('胜平负', spfGateState, spfGateState.pick || selectedStandard, compactProbLine(standardPrediction.probs, ['胜','平','负'])) : ''}
           ${standardPrediction?.selectionProfile?.mode === 'draw_cover' && spfGateState.status !== 'abstain' ? '<div class="draw-cover-note">模型分布提示防平，仅作辅助参考</div>' : ''}
-          ${handicapCard ? renderWebMarketRecommendation(`让球胜平负（${Number(lotteryHandicap) > 0 ? '+' : ''}${lotteryHandicap}）`, rqspfGateState, rqspfGateState.pick || selectedHandicap, compactProbLine(handicapCard.prediction.probs, ['让胜','让平','让负'])) : ''}
+          ${handicapCard ? renderWebMarketRecommendation(`让球胜平负（${Number(lotteryHandicap) > 0 ? '+' : ''}${lotteryHandicap}）`, rqspfGateState, rqspfGateState.pick || selectedHandicap, compactProbLine(handicapCard.prediction.marginalProbs, ['让胜','让平','让负'])) : ''}
           ${renderWebMarketRecommendation('大小球', totalGateState, totalDirection, `<span class="distribution-caption">比分矩阵进球数分布</span>${compactGoalText}`)}
           <div class="football-score-reference">
             <div class="score-section-heading">比分参考 Top3（非主推）</div>
