@@ -66,6 +66,33 @@ def _strategy_is_usable(strategy: Dict) -> bool:
     )
 
 
+def resolve_exclusion_strategy(strategy: Dict, play_type: str, excluded_numbers) -> Dict:
+    """Optionally rerank the first select-6 exclusion without altering round 0.
+
+    Linked fushi calculations pass the select-6 exclusion set here too. Later
+    rounds retain the base ranking; all returned picks still obey exclusions.
+    A configured experimental ranking never inherits validated status.
+    """
+    override = strategy.get('first_exclusion_strategy')
+    if play_type != 'select_6' or len(set(excluded_numbers)) != 6 or not override:
+        return strategy
+    result = deepcopy(strategy)
+    for key in (
+        'feature_weights', 'model_weights', 'window_size', 'repeat_direction',
+        'repeat_avoid_score', 'repeat_non_avoid_score', 'repeat_follow_score',
+        'repeat_non_follow_score', 'pool_max_last_numbers', 'frequency_mode',
+        'final_selection_mode', 'exclusion_selection_mode',
+    ):
+        if key in override:
+            result[key] = deepcopy(override[key])
+    result.update({
+        'strategy_id': override['strategy_id'],
+        'prediction_mode': 'reference_unvalidated',
+        'is_validated': False,
+    })
+    return result
+
+
 def resolve_play_strategy(play_type: str, allow_reference: bool = False) -> Optional[Dict]:
     """解析玩法策略：优先使用已验证策略
 

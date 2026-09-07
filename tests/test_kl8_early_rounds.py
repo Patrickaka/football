@@ -1,11 +1,65 @@
 import unittest
 from unittest.mock import patch
 
-from scripts.backtest.backtest_kl8_early_rounds import live_groups, objective, summarize, run_slice, slate
+from scripts.backtest.backtest_kl8_early_rounds import (
+    live_groups, objective, summarize, run_slice, slate, first_round_slate,
+    round_non_regression,
+)
 from src.kl8 import KL8Analyzer
+from src.kl8.strategies import resolve_exclusion_strategy
 
 
 class EarlyRoundAuditTests(unittest.TestCase):
+    def test_promotion_guard_does_not_hide_compound_regression(self):
+        baseline = [{'select_6': [1, 4, 4], 'fu_shi_7': [2, 4, 4]}]
+        candidate = [{'select_6': [1, 5, 5], 'fu_shi_7': [2, 3, 3]}]
+        self.assertFalse(round_non_regression(candidate, baseline, 1))
+        self.assertFalse(round_non_regression(candidate, baseline, 2))
+        self.assertTrue(round_non_regression(baseline, baseline, 1))
+
+    def test_first_round_objective_does_not_reward_second_round(self):
+        later_only = {'select_6': [6, 2, 5], 'fu_shi_7': [7, 3, 5]}
+        early = {'select_6': [0, 4, 0], 'fu_shi_7': [0, 4, 0]}
+        self.assertEqual(objective(later_only, first_round=True), 0)
+        self.assertEqual(summarize([early], first_round=True)['objective'], 1)
+
+    def test_first_round_override_leaves_primary_and_later_strategy_unchanged(self):
+        baseline = first_round_slate()['first_window_75']
+        baseline['is_validated'] = True
+        result = resolve_exclusion_strategy(baseline, 'select_6', list(range(1, 7)))
+        self.assertEqual(result['window_size'], 75)
+        self.assertFalse(result['is_validated'])
+        self.assertTrue(baseline['is_validated'])
+        self.assertNotEqual(baseline['strategy_id'], result['strategy_id'])
+        for play, excluded in [('select_6', []), ('select_6', list(range(1, 13))),
+                               ('select_5', list(range(1, 7)))]:
+            self.assertIs(resolve_exclusion_strategy(baseline, play, excluded), baseline)
+
+    def test_first_round_reranking_keeps_six_seven_sizes_and_linked_first_round(self):
+        analyzer = KL8Analyzer.__new__(KL8Analyzer)
+        analyzer.history_data = [{'issue': '2026001', 'numbers': list(range(1, 21))}]
+        analyzer.using_simulated_data = False
+        analyzer.statistics = {'last_numbers': set()}
+        baseline = {'window_size': 100, 'pool_max_last_numbers': 3,
+                    'final_selection_mode': 'concentrated'}
+        candidate = {**baseline, 'first_exclusion_strategy': {
+            'strategy_id': 'test_first', 'window_size': 75,
+        }}
+
+        def ranking(strategy, pool_size=80):
+            order = range(80, 0, -1) if strategy['window_size'] == 75 else range(1, 81)
+            return {'candidates': [(n, float(81-i)) for i, n in enumerate(order)]}
+
+        with patch.object(analyzer, 'build_pool_by_strategy', side_effect=ranking):
+            old_groups = live_groups(analyzer, baseline)
+            new_groups = live_groups(analyzer, candidate)
+        self.assertEqual(old_groups['select_6'][0], new_groups['select_6'][0])
+        self.assertNotEqual(old_groups['select_6'][1], new_groups['select_6'][1])
+        self.assertTrue(set(new_groups['select_6'][1]) <= set(new_groups['fu_shi_7'][1]))
+        for play, size in [('select_6', 6), ('fu_shi_7', 7)]:
+            self.assertEqual([len(g) for g in new_groups[play]], [size] * 3)
+            self.assertEqual(len(set(sum(new_groups[play], []))), 3 * size)
+
     def test_walk_forward_excludes_target_and_newer_draws(self):
         raw = [{'issue': str(10-i), 'numbers': list(range(1, 21))} for i in range(6)]
         seen = []

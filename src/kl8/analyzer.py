@@ -1006,6 +1006,7 @@ class KL8Analyzer:
             return {'error': '当前玩法没有可用策略'}, []
 
         excluded_set = set(excluded)
+        strategy = _strategies_mod.resolve_exclusion_strategy(strategy, play_type, excluded_set)
         pool_result = self.build_pool_by_strategy(
             strategy,
             pool_size=min(KL8_NUM_RANGE, max(40, pick_n + len(excluded) + 20)),

@@ -7,6 +7,7 @@ import argparse
 from copy import deepcopy
 import json
 import gzip
+import hashlib
 from pathlib import Path
 import sys
 from unittest.mock import patch
@@ -31,6 +32,24 @@ def slate(expanded=False):
             candidate = deepcopy(VALIDATION_CANDIDATES[name])
             candidate['pool_diversify'] = False
             result[name] = candidate
+    return result
+
+
+def first_round_slate():
+    """Fixed hypotheses; primary select-6 ranking is identical in every arm."""
+    baseline = resolve_play_strategy('select_6', allow_reference=True)
+    result = {'current': baseline}
+    for window in (75, 150):
+        candidate = deepcopy(baseline)
+        candidate['first_exclusion_strategy'] = {
+            'strategy_id': f'candidate_first_exclusion_window_{window}',
+            'window_size': window,
+        }
+        result[f'first_window_{window}'] = candidate
+    for name in ('select6_repeat_follow_75', 'select6_hot_balanced_150'):
+        candidate = deepcopy(baseline)
+        candidate['first_exclusion_strategy'] = deepcopy(VALIDATION_CANDIDATES[name])
+        result[f'first_{name}'] = candidate
     return result
 
 
@@ -68,14 +87,15 @@ def live_groups(analyzer, strategy):
         return groups
 
 
-def objective(row):
+def objective(row, first_round=False):
     # Both plays, round 1 and 2 equally weighted. Round 0 stays a guardrail.
-    hits = [hit for play in row.values() for hit in play[1:3]]
-    return sum((hit >= 4) + (hit >= 5) for hit in hits) / 4
+    hits = [hit for play in row.values() for hit in play[1:2 if first_round else 3]]
+    return sum((hit >= 4) + (hit >= 5) for hit in hits) / len(hits)
 
 
-def summarize(rows):
-    result = {'n_tests': len(rows), 'objective': sum(map(objective, rows)) / len(rows)}
+def summarize(rows, first_round=False):
+    result = {'n_tests': len(rows),
+              'objective': sum(objective(row, first_round) for row in rows) / len(rows)}
     for play in ('select_6', 'fu_shi_7'):
         result[play] = [
             {'round': r, 'mean_hits': sum(row[play][r] for row in rows) / len(rows),
@@ -83,6 +103,16 @@ def summarize(rows):
                 for k in (4, 5)}} for r in range(3)
         ]
     return result
+
+
+def round_non_regression(candidate, baseline, round_number):
+    """A gain in one play must not hide a loss in the other play."""
+    return all(
+        sum(metric(row[play][round_number]) for row in candidate) >=
+        sum(metric(row[play][round_number]) for row in baseline)
+        for play in ('select_6', 'fu_shi_7')
+        for metric in (lambda hit: hit, lambda hit: hit >= 4, lambda hit: hit >= 5)
+    )
 
 
 def run_slice(raw, indices, strategies):
@@ -111,8 +141,11 @@ def main():
     parser.add_argument('--periods', type=int, default=100, help='periods per chronological slice')
     parser.add_argument('--offset', type=int, default=0, help='skip newest draws to audit a separate historical interval')
     parser.add_argument('--expanded', action='store_true', help='also compare fixed alternative feature rankings')
+    parser.add_argument('--first-round', action='store_true', help='freeze select-6 primary and optimize round 1 only')
     parser.add_argument('--output', default='reports/kl8_early_rounds_audit.json')
     args = parser.parse_args()
+    if args.first_round and args.expanded:
+        parser.error('--first-round and --expanded select different fixed slates')
     opener = gzip.open if args.history.endswith('.gz') else open
     with opener(args.history, 'rt', encoding='utf-8') as handle:
         doc = json.load(handle)
@@ -128,32 +161,41 @@ def main():
             type(n) is not int or not 1 <= n <= 80 for n in numbers
         ):
             parser.error(f'invalid draw: {row["issue"]}')
-    strategies = slate(expanded=args.expanded)
+    strategies = first_round_slate() if args.first_round else slate(expanded=args.expanded)
     validation = run_slice(raw, range(args.offset + args.periods, args.offset + args.periods * 2), strategies)
-    winner = max(strategies, key=lambda name: summarize(validation[name])['objective'])
+    winner = max(strategies, key=lambda name: summarize(validation[name], args.first_round)['objective'])
     print(f'locked winner: {winner}', flush=True)
     final = run_slice(raw, range(args.offset, args.offset + args.periods),
                       {n: strategies[n] for n in dict.fromkeys(['current', winner])})
-    comparison = _paired_summary([objective(a) - objective(b)
+    comparison = _paired_summary([objective(a, args.first_round) - objective(b, args.first_round)
                                   for a, b in zip(final[winner], final['current'])])
     primary_guard = all(
         sum(row[play][0] for row in final[winner]) >=
         sum(row[play][0] for row in final['current'])
         for play in ('select_6', 'fu_shi_7')
     )
+    # Later exclusions depend on round 1 even when their ranking is unchanged.
+    # Do not trade away either play's round 2 to make round 1 look better.
+    first_guard = round_non_regression(final[winner], final['current'], 1)
+    second_guard = round_non_regression(final[winner], final['current'], 2)
     report = {
         'history_source': args.history,
+        'history_sha256': hashlib.sha256(Path(args.history).read_bytes()).hexdigest(),
+        'objective_rounds': [1] if args.first_round else [1, 2],
         'offset': args.offset,
         'holdout_issues': [raw[args.offset + args.periods - 1]['issue'], raw[args.offset]['issue']],
         'validation_issues': [raw[args.offset + 2 * args.periods - 1]['issue'], raw[args.offset + args.periods]['issue']],
         'latest_issue': raw[0]['issue'], 'periods_per_slice': args.periods,
         'locked_winner': winner, 'strategies': strategies,
-        'validation': {n: summarize(r) for n, r in validation.items()},
-        'holdout': {n: summarize(r) for n, r in final.items()},
+        'validation': {n: summarize(r, args.first_round) for n, r in validation.items()},
+        'holdout': {n: summarize(r, args.first_round) for n, r in final.items()},
         'paired_objective_difference': comparison,
         'primary_mean_non_regression': primary_guard,
-        'promotion_supported': winner != 'current' and comparison['ci_95'][0] > 0 and primary_guard,
-        'note': 'Round 0 is primary; objective uses individual rounds 1 and 2. '
+        'first_round_non_regression': first_guard,
+        'second_round_non_regression': second_guard,
+        'promotion_supported': winner != 'current' and comparison['ci_95'][0] > 0 and primary_guard
+                               and ((first_guard and second_guard) or not args.first_round),
+        'note': 'Round 0 is primary; objective_rounds lists the separately scored exclusion rounds. '
                 'Fushi hits are 7-number pool hits (best 5-number ticket capped at 5). '
                 'No target or future draw enters training. No automatic promotion.',
     }

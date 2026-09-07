@@ -38,17 +38,36 @@
   button:disabled { opacity: .6; cursor: default; }
   .error { color: var(--danger); font-size: 13px; min-height: 20px; margin-top: 12px; }
 </style>
+<style>
+  body { background: #0d1118; font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; color-scheme: dark; }
+  .card { max-width: 410px; padding: 40px 36px 28px; border-color: #2c394b; border-radius: 18px; background: #151d29; box-shadow: 0 25px 80px #0004; }
+  .login-mark { display: flex; align-items: center; justify-content: center; width: 45px; height: 45px; margin-bottom: 25px; border-radius: 13px; background: #75dfb9; color: #142a22; font-size: 29px; font-weight: 800; letter-spacing: -.1em; padding-right: 4px; }
+  .login-eyebrow { margin-bottom: 6px; font-size: 10px; letter-spacing: .2em; color: #8cafb0; }
+  h1 { font-size: 26px; font-weight: 650; letter-spacing: -.02em; }
+  .sub { margin: 10px 0 28px; color: #92a3bb; font-size: 13px; }
+  label { color: #b6c6da; font-size: 12px; }
+  input { min-height: 46px; padding: 11px 13px; border-color: #35445a; background: #0e1621; border-radius: 8px; margin-bottom: 20px; }
+  input:focus-visible { border-color: #75dfb9; outline: 3px solid #75dfb924; outline-offset: 1px; }
+  button { min-height: 46px; margin-top: 3px; border-radius: 8px; background: #75dfb9; color: #10271e; font-weight: 650; }
+  button:hover:not(:disabled) { background: #96eacb; }
+  button:focus-visible { outline: 2px solid #75dfb9; outline-offset: 4px; }
+  .login-footer { margin-top: 12px; padding-top: 20px; border-top: 1px solid #2b384a; color: #74869f; text-align: center; font-size: 11px; }
+  @media (max-width: 480px) { .card { padding: 30px 25px 24px; } }
+</style>
 </head>
 <body>
   <form class="card" id="form">
+    <div class="login-mark" aria-hidden="true">P·</div>
+    <div class="login-eyebrow">DATA & INSIGHT</div>
     <h1>预测助手</h1>
-    <p class="sub">请登录后继续</p>
+    <p class="sub">欢迎回来，登录后查看赛事与数据分析。</p>
     <label for="user">用户名</label>
     <input id="user" name="user" autocomplete="username" autofocus required>
     <label for="password">密码</label>
     <input id="password" name="password" type="password" autocomplete="current-password" required>
     <button type="submit" id="submit">登录</button>
-    <p class="error" id="error"></p>
+    <p class="error" id="error" role="alert"></p>
+    <div class="login-footer">足球 · 篮球 · 快乐8</div>
   </form>
 <script>
   const form = document.getElementById('form');

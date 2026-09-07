@@ -9,32 +9,15 @@ HTML = Path('web/index.html').read_text(encoding='utf-8')
 
 class KL8VisualShell(unittest.TestCase):
 
-    def test_primary_plays_come_first_and_the_rest_fold(self):
-        renderer = HTML.split('function renderKL8(r)', 1)[1].split(
-            'function getKL8ExcludeOptions()', 1,
-        )[0]
-        self.assertIn('KL8_PRIMARY_SELECTS.filter', renderer)
-        self.assertLess(renderer.index('<h3>本期号码</h3>'), renderer.index('<h3>复式</h3>'))
-        self.assertLess(renderer.index('<h3>复式</h3>'), renderer.index('<h3>更多玩法</h3>'))
-        self.assertLess(renderer.index('<h3>更多玩法</h3>'), renderer.index('<h3>最近开奖</h3>'))
-        self.assertIn('<details class="card kl8-panel kl8-fold">', renderer)
-        self.assertEqual(HTML.count('KL8_PRIMARY_SELECTS = [5, 6, 10];'), 1)
-
-    def test_copy_is_chinese_only_on_the_kl8_page(self):
-        for english in ('Statistical Console', 'Draw history', 'Number selections',
-                        'Heuristic ranking', 'strategy /', 'random E='):
-            with self.subTest(text=english):
-                self.assertNotIn(english, HTML)
-
     def test_dashboard_is_scoped_to_the_kl8_tab(self):
         self.assertIn(
             "document.body.classList.toggle('kl8-view', tab === 'kl8');",
             HTML,
         )
         self.assertIn('<div class="kl8-dashboard">', HTML)
-        self.assertIn('class="kl8-hero kl8-topbar"', HTML)
-        self.assertIn('class="kl8-picks-grid kl8-primary-grid"', HTML)
-        self.assertIn('class="kl8-tools-row"', HTML)
+        self.assertIn('class="kl8-hero"', HTML)
+        self.assertIn('class="kl8-picks-grid"', HTML)
+        self.assertIn('class="kl8-action-dock"', HTML)
 
     def test_all_five_existing_actions_remain_available(self):
         renderer = HTML.split('function renderKL8(r)', 1)[1].split(
@@ -74,10 +57,9 @@ class KL8VisualShell(unittest.TestCase):
                 self.assertIn(hook, HTML)
         self.assertGreaterEqual(HTML.count('class="kl8-modal-backdrop"'), 3)
 
-    def test_mobile_layout_stacks_cards_and_actions(self):
+    def test_mobile_layout_keeps_primary_record_action_full_width(self):
         self.assertIn('@media (max-width: 768px)', HTML)
-        self.assertIn('.kl8-picks-grid, .kl8-primary-grid { grid-template-columns: 1fr;', HTML)
-        self.assertIn('.kl8-topbar-actions { position: static;', HTML)
+        self.assertIn('.kl8-action-dock .action-success { grid-column: 1 / -1;', HTML)
         self.assertIn('max-height: min(92dvh, 860px);', HTML)
         self.assertIn('grid-template-areas: "issue date" "balls balls";', HTML)
 

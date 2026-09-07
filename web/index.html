@@ -675,12 +675,56 @@
     box-shadow: 0 0 100px rgba(255, 83, 115, .16);
     pointer-events: none;
   }
+  .kl8-hero::after {
+    content: '08';
+    position: absolute;
+    right: 28px;
+    bottom: -38px;
+    color: rgba(255, 255, 255, .025);
+    font-size: 150px;
+    font-weight: 900;
+    line-height: 1;
+    letter-spacing: -.08em;
+    pointer-events: none;
+  }
+  .kl8-hero-top {
+    position: relative;
+    z-index: 1;
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 22px;
+  }
+  .kl8-eyebrow,
   .kl8-panel-kicker {
     color: #ff8195;
     font-size: 10px;
     font-weight: 800;
     letter-spacing: .18em;
     text-transform: uppercase;
+  }
+  .kl8-eyebrow { display: flex; align-items: center; gap: 8px; margin-bottom: 7px; }
+  .kl8-eyebrow::before {
+    content: '';
+    width: 22px;
+    height: 2px;
+    border-radius: 999px;
+    background: linear-gradient(90deg, #ff4f70, #ff9a78);
+  }
+  .kl8-hero h2 {
+    margin: 0;
+    color: #f4f7fb;
+    font-size: clamp(25px, 3.5vw, 38px);
+    line-height: 1.18;
+    letter-spacing: -.045em;
+  }
+  .kl8-hero h2 strong { color: #ff7189; font-variant-numeric: tabular-nums; }
+  .kl8-hero h2 span { color: #d7dee8; font-weight: 520; }
+  .kl8-hero-copy {
+    max-width: 680px;
+    margin-top: 8px;
+    color: #8f9caf;
+    font-size: 12px;
   }
   .kl8-status-pill {
     display: inline-flex;
@@ -713,6 +757,46 @@
     background: rgba(99, 164, 255, .10);
     color: #91bdff;
   }
+  .kl8-meta-grid {
+    position: relative;
+    z-index: 1;
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 10px;
+    margin-top: 22px;
+  }
+  .kl8-meta-item {
+    min-width: 0;
+    padding: 11px 13px;
+    border: 1px solid rgba(127, 145, 170, .15);
+    border-radius: 12px;
+    background: rgba(6, 11, 18, .28);
+  }
+  .kl8-meta-label {
+    color: #778599;
+    font-size: 10px;
+    font-weight: 650;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+  }
+  .kl8-meta-value {
+    margin-top: 3px;
+    overflow: hidden;
+    color: #edf2f8;
+    font-size: 14px;
+    font-weight: 720;
+    font-variant-numeric: tabular-nums;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .kl8-meta-sub {
+    margin-top: 2px;
+    overflow: hidden;
+    color: #69778b;
+    font-size: 10px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
   .kl8-disclaimer {
     display: flex;
     align-items: flex-start;
@@ -727,7 +811,9 @@
   }
   .kl8-disclaimer b { color: #a9cbff; font-size: 13px; line-height: 1.25; }
   .kl8-panel,
-  .kl8-select-card {
+  .kl8-state-card,
+  .kl8-select-card,
+  .kl8-action-dock {
     border: 1px solid var(--kl8-border);
     background: linear-gradient(145deg, rgba(23, 33, 48, .92), rgba(15, 23, 34, .90));
     box-shadow: 0 16px 42px rgba(0, 0, 0, .20), inset 0 1px rgba(255, 255, 255, .035);
@@ -760,6 +846,40 @@
     font-weight: 700;
     white-space: nowrap;
   }
+  .kl8-state-card {
+    position: relative;
+    overflow: hidden;
+    padding: 18px 20px;
+    border-radius: 16px;
+  }
+  .kl8-state-card::before {
+    content: '';
+    position: absolute;
+    inset: 0 auto 0 0;
+    width: 3px;
+    background: var(--state-accent, var(--kl8-blue));
+    box-shadow: 0 0 18px var(--state-accent, var(--kl8-blue));
+  }
+  .kl8-state-card.backfill { --state-accent: #63a4ff; }
+  .kl8-state-card.verifying { --state-accent: #f6bd55; }
+  .kl8-state-card.failed { --state-accent: #ff657e; }
+  .kl8-state-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--state-accent, #63a4ff);
+    font-size: 14px;
+    font-weight: 760;
+  }
+  .kl8-state-value {
+    margin-top: 8px;
+    color: #f2f6fb;
+    font-size: 24px;
+    font-weight: 820;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -.03em;
+  }
+  .kl8-state-copy { margin-top: 5px; color: #8492a6; font-size: 11px; }
   .kl8-progress-track {
     height: 7px;
     margin: 11px 0 8px;
@@ -820,6 +940,15 @@
     color: var(--kl8-card-accent);
     font-size: 10px;
     font-weight: 760;
+  }
+  .kl8-strategy-line {
+    margin-bottom: 11px;
+    overflow: hidden;
+    color: #69778a;
+    font-size: 10px;
+    font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .kl8-numbers-row {
     display: flex;
@@ -909,6 +1038,34 @@
     line-height: 1.5;
   }
   .kl8-fushi-card { --kl8-card-accent: #ff5d78; }
+  .kl8-fushi-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 13px;
+    padding-bottom: 13px;
+    border-bottom: 1px solid rgba(124, 142, 168, .14);
+    color: #edf2f8;
+    font-size: 16px;
+    font-weight: 760;
+  }
+  .kl8-fushi-summary {
+    margin-bottom: 12px;
+    padding: 9px 11px;
+    border: 1px solid rgba(99, 164, 255, .13);
+    border-radius: 10px;
+    background: rgba(99, 164, 255, .05);
+    color: #8190a4;
+    font-size: 11px;
+  }
+  .kl8-fushi-top7 {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin: 0 0 16px;
+    justify-content: flex-start;
+  }
   .kl8-fushi-grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
@@ -968,6 +1125,17 @@
   }
   .kl8-shape-chip.good .shape-v { color: #6adfac; }
   .kl8-shape-chip.warn .shape-v { color: #f0c46e; }
+  .kl8-action-dock {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 18px;
+    padding: 16px 18px;
+    border-radius: 17px;
+  }
+  .kl8-action-copy { flex: 0 0 auto; }
+  .kl8-action-copy strong { display: block; color: #edf2f8; font-size: 13px; }
+  .kl8-action-copy span { display: block; margin-top: 2px; color: #68768a; font-size: 10px; }
   .kl8-action-buttons { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
   .kl8-refresh-btn {
     min-height: 38px;
@@ -996,191 +1164,6 @@
   .kl8-refresh-btn.action-info { border-color: rgba(99, 164, 255, .25); background: rgba(99, 164, 255, .09); color: #91bdff; }
   .kl8-refresh-btn.action-success { border-color: rgba(66, 211, 146, .25); background: rgba(66, 211, 146, .09); color: #76e7b4; }
   .kl8-refresh-btn.action-muted { border-color: rgba(127, 145, 170, .19); background: rgba(127, 145, 170, .08); color: #9aa7b8; }
-  .kl8-topbar { padding: 20px 24px 18px; }
-  .kl8-topbar::after { content: none; }
-  .kl8-topbar-main {
-    position: relative;
-    z-index: 1;
-    display: flex;
-    align-items: center;
-    gap: 14px;
-    flex-wrap: wrap;
-  }
-  .kl8-topbar-main h2 {
-    margin: 0;
-    color: #f4f7fb;
-    font-size: clamp(22px, 3vw, 30px);
-    line-height: 1.15;
-    letter-spacing: -.04em;
-  }
-  .kl8-topbar-main h2 strong { color: #ff7189; font-variant-numeric: tabular-nums; }
-  .kl8-topbar-actions {
-    position: absolute;
-    z-index: 1;
-    top: 18px;
-    right: 22px;
-    display: flex;
-    gap: 8px;
-  }
-  .kl8-topbar-meta {
-    position: relative;
-    z-index: 1;
-    margin-top: 8px;
-    color: #8f9caf;
-    font-size: 12px;
-    line-height: 1.55;
-  }
-  .kl8-topbar-meta.muted { margin-top: 4px; color: #66748a; font-size: 11px; }
-  .kl8-topbar .kl8-progress-track { position: relative; z-index: 1; max-width: 420px; }
-  .kl8-panel-count {
-    flex: 0 0 auto;
-    padding: 4px 10px;
-    border: 1px solid rgba(124, 142, 168, .18);
-    border-radius: 999px;
-    color: #8593a7;
-    font-size: 11px;
-  }
-  .kl8-primary-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: start; }
-  .kl8-recent-panel .kl8-draw-row { grid-template-columns: 118px minmax(0, 1fr) 82px; }
-  .kl8-fact-line {
-    margin-top: 12px;
-    color: #93a1b5;
-    font-size: 12.5px;
-    line-height: 1.5;
-  }
-  .kl8-fact-line b { color: #fff; font-weight: 700; }
-  .kl8-dashboard .kl8-ball {
-    border-color: rgba(255, 255, 255, .2);
-    background: linear-gradient(160deg, #ff7b7b 0%, #e8455a 48%, #b8253c 100%);
-    box-shadow: 0 6px 14px rgba(184, 37, 60, .28), inset 0 1px 1px rgba(255, 255, 255, .3);
-    text-shadow: 0 1px 2px rgba(80, 0, 16, .4);
-  }
-  .kl8-primary-grid .kl8-ball.highlight-ball { width: 46px; height: 46px; font-size: 19px; letter-spacing: -.02em; }
-  .kl8-primary-grid .kl8-numbers-row { gap: 9px; }
-  .kl8-compact-row .kl8-ball.small-ball { width: 34px; height: 34px; font-size: 14px; }
-  .kl8-draw-balls .kl8-ball.small-ball { width: 31px !important; height: 31px !important; font-size: 12.5px !important; }
-  .kl8-select-title { font-size: 16px; }
-  .kl8-select-title strong, .kl8-compact-name strong { color: #f4f7fb; }
-  .kl8-mode-badge { font-size: 11px; }
-  .kl8-ball.is-new { box-shadow: 0 0 0 2px #121a26, 0 0 0 4px #46d989, 0 6px 14px rgba(184, 37, 60, .28); }
-  .kl8-compact-row .kl8-ball.is-new { box-shadow: 0 0 0 1px #121a26, 0 0 0 3px #46d989; }
-  .kl8-ball.small-ball.is-plain {
-    border-color: rgba(126, 145, 171, .24);
-    background: linear-gradient(145deg, #2b394d, #1b2636);
-    box-shadow: inset 0 1px rgba(255, 255, 255, .055);
-    color: #bac4d1;
-    text-shadow: none;
-  }
-  .kl8-details { margin-top: 12px; border-top: 1px solid rgba(124, 142, 168, .12); padding-top: 8px; }
-  .kl8-details summary {
-    cursor: pointer;
-    list-style: none;
-    color: #6f7d92;
-    font-size: 11px;
-    user-select: none;
-  }
-  .kl8-details summary::-webkit-details-marker { display: none; }
-  .kl8-details summary::before { content: '▸ '; }
-  .kl8-details[open] summary::before { content: '▾ '; }
-  .kl8-details-body { margin-top: 8px; }
-  .kl8-detail-line { margin-top: 6px; color: #7f8da1; font-size: 11px; line-height: 1.55; }
-  .kl8-detail-line code { color: #9fb0c6; font-size: 10px; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
-  .kl8-detail-line b { color: #dfe6ef; }
-  .kl8-neg { color: #ff8297; }
-  .kl8-pos { color: #76e7b4; }
-  .kl8-fold summary {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    cursor: pointer;
-    list-style: none;
-    user-select: none;
-  }
-  .kl8-fold summary::-webkit-details-marker { display: none; }
-  .kl8-fold summary h3 { margin: 0; color: #edf2f8; font-size: 16px; font-weight: 760; }
-  .kl8-fold summary h3::before { content: '▸ '; color: #6f7d92; font-size: 12px; }
-  .kl8-fold[open] summary h3::before { content: '▾ '; }
-  .kl8-fold[open] summary { margin-bottom: 14px; padding-bottom: 12px; border-bottom: 1px solid rgba(124, 142, 168, .14); }
-  .kl8-compact-list { display: flex; flex-direction: column; }
-  .kl8-compact-row {
-    display: grid;
-    grid-template-columns: 96px minmax(0, 1fr) auto;
-    align-items: center;
-    gap: 14px;
-    padding: 10px 2px;
-    border-bottom: 1px solid rgba(124, 142, 168, .10);
-  }
-  .kl8-compact-row:last-child { border-bottom: 0; }
-  .kl8-compact-name { display: flex; align-items: center; gap: 8px; color: #edf2f8; font-size: 14px; font-weight: 720; }
-  .kl8-compact-name strong { color: var(--kl8-card-accent); }
-  .kl8-compact-row .kl8-numbers-row { gap: 5px; }
-  .kl8-compact-meta { color: #8593a7; font-size: 12px; white-space: nowrap; }
-  .kl8-draw-row .draw-issue { white-space: nowrap; color: #c1cad8; font-size: 13px; }
-  .kl8-recent-panel .draw-date { font-size: 11px; }
-  .kl8-draw-row .draw-issue em {
-    margin-left: 6px;
-    padding: 1px 6px;
-    border-radius: 999px;
-    background: rgba(255, 93, 120, .16);
-    color: #ff8297;
-    font-size: 9px;
-    font-style: normal;
-    font-weight: 700;
-    vertical-align: middle;
-  }
-  .kl8-tools-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    flex-wrap: wrap;
-    margin-top: 12px;
-    padding-top: 12px;
-    border-top: 1px solid rgba(124, 142, 168, .12);
-  }
-  .kl8-legend { display: inline-flex; align-items: center; gap: 7px; color: #7f8da1; font-size: 11px; }
-  .kl8-legend i { width: 10px; height: 10px; border-radius: 50%; background: linear-gradient(145deg, #fa627d, #c7294f); }
-  .kl8-tools-links { display: flex; gap: 6px; flex-wrap: wrap; }
-  .kl8-link-btn {
-    padding: 6px 11px;
-    border: 1px solid rgba(124, 142, 168, .2);
-    border-radius: 999px;
-    background: rgba(127, 145, 170, .07);
-    color: #aab6c6;
-    font-size: 11px;
-    cursor: pointer;
-    transition: border-color .2s ease, color .2s ease;
-  }
-  .kl8-link-btn:hover { border-color: rgba(255, 112, 137, .4); color: #ffb3c0; }
-  .kl8-perf-chips { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-  .kl8-perf-label { color: #7f8da1; font-size: 11px; }
-  .kl8-perf-chip {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    padding: 4px 9px;
-    border: 1px solid rgba(124, 142, 168, .18);
-    border-radius: 999px;
-    color: #c7d0dc;
-    font-size: 11px;
-    font-variant-numeric: tabular-nums;
-  }
-  .kl8-perf-chip small { color: #7f8da1; font-size: 10px; }
-  .kl8-perf-chip em { font-style: normal; font-weight: 700; color: #8593a7; }
-  .kl8-perf-chip.pos em { color: #76e7b4; }
-  .kl8-perf-chip.neg em { color: #ff8297; }
-  .kl8-detail-block { margin-top: 14px; }
-  .kl8-detail-block:first-child { margin-top: 0; }
-  .kl8-detail-title { color: #dfe6ef; font-size: 13px; font-weight: 700; }
-  .kl8-detail-title span { margin-left: 8px; color: #6f7d92; font-size: 11px; font-weight: 400; }
-  .kl8-candidate-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; margin-top: 8px; }
-  .kl8-candidate-col { padding: 10px; border: 1px solid rgba(124, 142, 168, .14); border-radius: 10px; background: rgba(6, 11, 18, .28); }
-  .kl8-candidate-name { margin-bottom: 8px; color: #c7d0dc; font-size: 12px; font-weight: 700; }
-  .kl8-candidate-col .kl8-numbers-row { gap: 4px; }
-  .kl8-ranking-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 6px; margin-top: 8px; }
-  .kl8-ranking-item { display: flex; align-items: center; gap: 8px; padding: 4px 8px; border-radius: 8px; background: rgba(6, 11, 18, .28); color: #8593a7; font-size: 11px; font-variant-numeric: tabular-nums; }
-
   .kl8-modal-backdrop {
     position: fixed;
     inset: 0;
@@ -1481,6 +1464,12 @@
     .kl8-draw-row:last-child {
       border-bottom: none !important;
     }
+    /* 复式7码大球缩小 */
+    .kl8-fushi-top7 .kl8-ball.highlight-ball {
+      width: 36px !important;
+      height: 36px !important;
+      font-size: 15px !important;
+    }
     /* 选号卡片中的球也缩小 */
     .kl8-select-card .kl8-numbers-row {
       flex-wrap: wrap;
@@ -1603,6 +1592,13 @@
     .kl8-fushi-grid {
       grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
     }
+    .kl8-fushi-top7 {
+      gap: 6px;
+    }
+    .kl8-fushi-header {
+      padding: 10px 12px;
+      font-size: 14px;
+    }
   }
 
   /* 快乐8工作台响应式覆盖：放在通用移动规则之后，避免旧内联布局抢优先级 */
@@ -1614,25 +1610,30 @@
   }
   body.kl8-view .bottom-nav-item.active { color: #ff7189; }
   @media (max-width: 980px) {
-    .kl8-primary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .kl8-meta-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .kl8-action-dock { align-items: flex-start; flex-direction: column; }
+    .kl8-action-buttons { justify-content: flex-start; }
   }
   @media (max-width: 768px) {
     body.kl8-view header { margin-bottom: 14px; }
     body.kl8-view header h1 { font-size: 20px; }
     .kl8-dashboard { gap: 12px; }
     .kl8-hero { padding: 19px 16px 16px; border-radius: 17px; }
-    .kl8-topbar-main h2 { font-size: 24px; }
-    .kl8-topbar-actions { position: static; margin-top: 12px; }
-    .kl8-topbar-actions .kl8-refresh-btn { flex: 1; min-height: 40px; }
+    .kl8-hero::after { right: 12px; bottom: -18px; font-size: 96px; }
+    .kl8-hero-top { align-items: flex-start; flex-direction: column; gap: 13px; }
+    .kl8-hero h2 { font-size: 25px; }
+    .kl8-hero-copy { font-size: 11px; }
     .kl8-status-pill { padding: 6px 10px; font-size: 11px; }
+    .kl8-meta-grid { gap: 7px; margin-top: 17px; }
+    .kl8-meta-item { padding: 9px 10px; border-radius: 10px; }
+    .kl8-meta-value { font-size: 13px; }
     .kl8-disclaimer { padding: 9px 10px; border-radius: 10px; }
     .kl8-panel { padding: 14px; border-radius: 15px; }
     .kl8-panel-head { align-items: flex-start; margin-bottom: 12px; padding-bottom: 10px; }
     .kl8-panel-head h3 { font-size: 15px; }
-    .kl8-picks-grid, .kl8-primary-grid { grid-template-columns: 1fr; gap: 9px; }
-    .kl8-compact-row { grid-template-columns: 1fr; gap: 6px; }
-    .kl8-compact-meta { white-space: normal; }
-    .kl8-fold summary h3 { font-size: 15px; }
+    .kl8-state-card { padding: 15px 14px; border-radius: 14px; }
+    .kl8-state-value { font-size: 21px; }
+    .kl8-picks-grid { grid-template-columns: 1fr; gap: 9px; }
     .kl8-select-card { margin: 0; padding: 13px; border-radius: 13px; }
     .kl8-select-title { margin: 0; font-size: 14px; }
     .kl8-select-head { margin-bottom: 9px; }
@@ -1650,7 +1651,12 @@
       border-color: rgba(255, 120, 144, .52) !important;
       box-shadow: 0 0 0 2px rgba(255, 93, 120, .10), inset 0 1px rgba(255, 255, 255, .28) !important;
     }
-    .kl8-tools-row { flex-direction: column; align-items: flex-start; }
+    .kl8-fushi-header { padding: 0 0 11px; font-size: 14px; }
+    .kl8-fushi-summary { font-size: 10px; }
+    .kl8-action-dock { gap: 12px; padding: 14px; border-radius: 15px; }
+    .kl8-action-buttons { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); width: 100%; }
+    .kl8-action-buttons .kl8-refresh-btn { min-height: 44px; width: 100%; }
+    .kl8-action-dock .action-success { grid-column: 1 / -1; grid-row: 1; }
     .kl8-modal-backdrop { align-items: flex-end; padding: 0; }
     .kl8-modal-window {
       width: 100%;
@@ -1667,8 +1673,12 @@
   @media (max-width: 480px) {
     .kl8-hero { padding: 17px 13px 14px; }
     .kl8-hero h2 { font-size: 22px; }
+    .kl8-meta-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .kl8-meta-item { padding: 8px; }
+    .kl8-meta-label, .kl8-meta-sub { font-size: 9px; }
     .kl8-panel { padding: 12px; }
     .kl8-panel-count { display: none; }
+    .kl8-action-copy span { display: none; }
     .kl8-action-buttons { gap: 7px; }
     .kl8-refresh-btn { padding: 8px 7px; font-size: 10px; }
     .kl8-modal-body { padding: 12px 9px calc(12px + env(safe-area-inset-bottom, 0px)); }
@@ -2440,26 +2450,218 @@
     .prediction-date-result { flex: 0 0 100%; margin-left: 0; }
   }
 </style>
+<style id="workspace-design-system">
+/* Shared workspace skin: all three modules use the same spacing and surfaces. */
+body.ui-shell {
+  --bg: #0d1118; --card: #151b25; --card2: #1d2633; --bg2: #111822;
+  --line: #283342; --border: #283342; --text: #edf2f8; --muted: #98a6b9;
+  --accent: #52c9a2; --accent2: #70ddba; --warn: #e8b566;
+  --sport-accent: #70ddba; --sport-accent-rgb: 112, 221, 186;
+  --sport-secondary: #9bbcf4; --sport-secondary-rgb: 155, 188, 244;
+  --sport-surface: #151b25; --sport-line: #283342;
+  padding: 0 0 28px !important; background: var(--bg) !important;
+  color: var(--text); font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  font-size: 14px; line-height: 1.65; color-scheme: dark;
+  -webkit-font-smoothing: antialiased;
+}
+body.ui-shell[data-module="basketball"] { --sport-accent: #f3b36e; --sport-accent-rgb: 243, 179, 110; --accent: #d59754; --accent2: #f3b36e; }
+body.ui-shell[data-module="kl8"] { --accent: #df718b; --accent2: #f49aaf; --sport-accent: #f49aaf; }
+.ui-shell::before, .ui-shell::after { display: none !important; }
+.ui-shell .wrap { width: calc(100% - 292px); max-width: 1180px !important; margin: 0 36px 0 256px !important; }
+.ui-shell button, .ui-shell input, .ui-shell select { font: inherit; }
+.ui-shell button { touch-action: manipulation; }
+.ui-shell button:focus-visible, .ui-shell a:focus-visible, .ui-shell summary:focus-visible,
+.ui-shell input:focus-visible, .ui-shell select:focus-visible { outline: 2px solid var(--sport-accent); outline-offset: 4px; }
+.ui-shell button:disabled { opacity: .42; cursor: not-allowed; }
+.ui-shell button::before { display: none !important; }
+.ui-shell .workspace-bar { display: flex; justify-content: space-between; gap: 16px; align-items: center; min-height: 72px; border-bottom: 1px solid #222c39; color: #a9b6c7; font-size: 12px; }
+.workspace-separator { padding: 0 12px; color: #4c5b70; }
+#workspace-date { color: #8292a8; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.ui-shell .page-heading { position: relative; padding: 32px 0 25px !important; margin: 0 !important; text-align: left; border: 0 !important; border-radius: 0 !important; background: none !important; box-shadow: none !important; overflow: visible; }
+.ui-shell .page-heading::before, .ui-shell .page-heading::after { display: none !important; }
+.ui-shell .page-heading h1 { font-size: clamp(26px, 3vw, 34px) !important; font-weight: 650 !important; line-height: 1.35; letter-spacing: -.04em !important; margin: 7px 0 10px; }
+.ui-shell .page-heading p { max-width: 760px; color: var(--muted) !important; font-size: 13px !important; letter-spacing: 0 !important; }
+.page-eyebrow { font-size: 10px; font-weight: 650; letter-spacing: .19em; color: var(--sport-accent); }
+.ui-shell .app-sidebar { position: fixed; z-index: 30; inset: 0 auto 0 0; display: flex; flex-direction: column; width: 220px; padding: 30px 18px 24px; background: #111721; border-right: 1px solid #26303d; }
+.brand { display: flex; gap: 11px; align-items: center; margin: 0 9px 42px; color: #f2f5fa; text-decoration: none; font-size: 19px; font-weight: 700; letter-spacing: .02em; }
+.brand-symbol { display: flex; align-items: center; justify-content: center; width: 39px; height: 39px; border-radius: 12px; background: #75dfb9; color: #10251e; font-size: 28px; font-weight: 800; letter-spacing: -.12em; padding-right: 5px; }
+.brand-symbol span { font-size: 25px; }
+.brand small { display: block; margin-top: 1px; color: #718096; font-size: 8px; font-weight: 500; letter-spacing: .2em; }
+.nav-caption { padding: 0 14px; margin-bottom: 12px; color: #74839a; font-size: 11px; }
+.ui-shell .tabs { display: flex; flex-direction: column; gap: 7px !important; margin: 0 !important; padding: 0 !important; border: 0 !important; border-radius: 0 !important; background: none !important; box-shadow: none !important; backdrop-filter: none !important; }
+.ui-shell .tabs .tab { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 62px; flex: none; padding: 11px 14px !important; color: #9aabc0 !important; text-align: left; font-size: 13px; font-weight: 550; border: 1px solid transparent !important; border-radius: 10px !important; background: transparent; box-shadow: none !important; }
+.tabs .tab small { display: block; margin-top: 1px; font-size: 10px; color: #66778f; font-weight: 400; letter-spacing: .035em; }
+.tabs .tab .module-icon { width: 21px; font-size: 19px; filter: grayscale(1); opacity: .65; }
+.tabs .tab .nav-arrow { margin-left: auto; opacity: 0; font-size: 16px; }
+.ui-shell .tabs .tab.active { background: #1f2e32 !important; color: #9be8cd !important; border-color: #2b4847 !important; }
+.ui-shell[data-module="basketball"] .tabs .tab.active { background: #30281f !important; border-color: #59412e !important; color: #f3bc81 !important; }
+.ui-shell[data-module="kl8"] .tabs .tab.active { background: #30212c !important; border-color: #563543 !important; color: #f0a6b7 !important; }
+.ui-shell .tabs .tab.active small { color: #a4b8b7; }
+.tabs .tab.active .module-icon { filter: none; opacity: 1; }
+.tabs .tab.active .nav-arrow { opacity: 1; }
+.ui-shell .tabs .tab:hover { background: #1a2533 !important; }
+.sidebar-footer { margin-top: auto; padding: 24px 12px 0; color: #62748c; font-size: 10px; }
+.sidebar-footer b { color: #a2b0c2; font-size: 12px; font-weight: 500; }
+.sidebar-footer p { margin-top: 5px; }
+.sidebar-divider { display: block; width: 26px; height: 2px; margin-bottom: 14px; background: #51647b; }
+.ui-shell .sport-panel { --bg2: #111822; --border: #283342; animation: none; }
+.sport-overview { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; margin-bottom: 24px; }
+.overview-item { position: relative; padding: 18px 22px; border: 1px solid #283342; border-radius: 13px; background: #151c27; }
+.overview-label { display: flex; justify-content: space-between; align-items: center; color: #bdc7d5; font-size: 12px; }
+.overview-index { color: #54637a; font-size: 10px; font-family: ui-monospace, monospace; }
+.overview-value { margin: 4px 0 3px; color: #f0f5fc; font-size: 36px; font-weight: 600; font-variant-numeric: tabular-nums; letter-spacing: -.045em; line-height: 1.45; }
+.overview-value span { padding-left: 9px; color: #71829a; font-size: 11px; font-weight: 400; letter-spacing: 0; }
+.overview-item:first-child .overview-value { color: var(--sport-accent); }
+.overview-detail { color: #7f91aa; font-size: 11px; }
+.ui-shell .sport-panel .sport-toolbar { padding: 17px 18px; margin-bottom: 16px; background: #151b25; border: 1px solid #283342; border-radius: 12px; box-shadow: none; backdrop-filter: none; }
+.ui-shell .sport-toolbar::after { display: none; }
+.ui-shell .sport-panel .toolbar-label { font-size: 11px; letter-spacing: 0; font-weight: 500; color: #91a0b4; }
+.ui-shell .sport-panel .toolbar-buttons { background: #0f151f; border: 1px solid #273345; padding: 3px; border-radius: 8px; }
+.ui-shell .sport-panel .tb-btn { padding: 7px 12px; min-height: 35px; box-shadow: none; font-size: 12px; color: #a8b5c7; border-radius: 6px; }
+.ui-shell .sport-panel .tb-btn.tb-active { background: #293545; color: #edf4fc; box-shadow: none; }
+.ui-shell .sport-panel .tb-refresh { min-height: 39px; background: #1e2938; border: 1px solid #34445b; color: #c2d3ea; border-radius: 8px; font-size: 12px; box-shadow: none; transform: none; }
+.ui-shell .sport-panel .tb-refresh:hover { background: #2a3a4d; border-color: #59718d; box-shadow: none; transform: none; }
+.ui-shell .sport-panel .search { background: #0f151f !important; color: #e1e9f4 !important; border: 1px solid #344053 !important; border-radius: 8px !important; min-height: 40px; box-shadow: none; }
+.ui-shell .sport-panel .search::placeholder { color: #788ba4; }
+.ui-shell .sport-panel .date-value { color: #b6c6d9; border-color: #334157; background: #1a2433; box-shadow: none; border-radius: 6px; }
+.ui-shell .sport-panel .league-title { font-size: 13px; font-weight: 600; letter-spacing: 0; color: #d8e2ef; margin: 12px 0; }
+.ui-shell .sport-panel .league-title::before { width: 3px; height: 14px; background: var(--sport-accent); box-shadow: none; }
+.ui-shell .sport-panel .league-title::after { background: #283342; }
+.ui-shell .sport-panel .sport-match-card { padding: 22px !important; margin-bottom: 16px; border-radius: 13px; background: #151c27; border: 1px solid #2a3749 !important; box-shadow: none; transition: border-color .18s; }
+.ui-shell .sport-panel .sport-match-card:hover { background: #151c27; border-color: #4a607b !important; box-shadow: none; transform: none; }
+.ui-shell .sport-match-card::before { display: none; }
+.ui-shell .sport-panel .sport-match-card > div:not(:first-child) { box-shadow: none; }
+.ui-shell .sport-panel .fixture-heading { flex-wrap: wrap; gap: 12px !important; padding: 0 0 16px !important; margin-bottom: 14px; border-bottom: 1px solid #2a3443; }
+.fixture-identity { min-width: 0; }
+.fixture-meta { display: flex; gap: 12px; flex-wrap: wrap; color: #90a1b9; font-size: 11px; margin-bottom: 14px; }
+.fixture-meta span:first-child { color: #afbdd0; }
+.fixture-teams { display: flex; align-items: center; gap: 16px; margin-bottom: 12px; }
+.fixture-team { display: flex; gap: 10px; align-items: center; min-width: 0; flex: 1; }
+.fixture-team strong { font-size: 17px; font-weight: 650; color: #edf2fa; line-height: 1.45; overflow-wrap: anywhere; }
+.team-monogram { display: flex; align-items: center; justify-content: center; width: 38px; height: 42px; flex-shrink: 0; border: 1px solid #3b5262; border-radius: 10px 10px 14px 14px; background: #203443; color: #b4dce5; font-size: 12px; font-weight: 650; }
+.away-monogram { border-color: #4c4865; background: #2c2a40; color: #cec5ec; }
+.fixture-vs { color: #71849f; font-size: 10px; font-weight: 700; letter-spacing: .06em; }
+.ui-shell .fixture-actions { margin-left: 0 !important; align-self: flex-end; }
+.ui-shell .sport-panel .bayes-report-btn { padding: 7px 10px; background: #1d293a; border-color: #34465f; color: #a9c4ec; border-radius: 7px; box-shadow: none; }
+.ui-shell .sport-panel .bayes-report-btn:hover { background: #293b55; box-shadow: none; }
+.ui-shell #panel-football .football-compact-summary { padding: 15px !important; margin-top: 0 !important; background: #111c26 !important; border: 1px solid #2c414a !important; box-shadow: none; border-radius: 9px !important; }
+.ui-shell .football-compact-summary > div { line-height: 1.8; }
+.ui-shell .football-score-reference { border-color: #2b3d49 !important; padding-top: 12px !important; margin-top: 12px !important; }
+.ui-shell .football-score-reference > div:last-child > div { border: 1px solid #2c3b50; border-radius: 7px !important; box-shadow: none; }
+.ui-shell #panel-basketball .sport-match-card > div[style*="background:var(--bg2)"] { background: #111822 !important; border: 1px solid #2b3544; padding: 12px 14px !important; border-radius: 9px !important; margin-top: 12px !important; }
+.ui-shell .sport-panel .pager { border: 0; padding: 4px 0 12px; margin: 6px 0 14px; background: transparent; box-shadow: none; justify-content: flex-end; }
+.ui-shell .sport-panel .pager button, .ui-shell .sport-panel .pager select { background: #151e2b; border: 1px solid #334157; color: #acbcd1; border-radius: 6px; }
+.ui-shell .sport-panel .status { color: #91a3bc; font-size: 12px; }
+.ui-shell .sport-panel .sport-toolbar + .status { border: 0; background: transparent; padding: 4px 2px 8px !important; }
+.ui-shell .status.error { color: #efb2a7; background: #291e23; border: 1px solid #513239; border-radius: 10px; padding: 18px; }
+.ui-shell .card, .ui-shell .edu { background: #151c27; border: 1px solid #2a3749; box-shadow: none; border-radius: 12px; }
+.ui-shell .card h3 { color: #dbe5f4; }
+.ui-shell .section-title { color: #b9cbe1; border-color: #2a3749; }
+.ui-shell .kl8-dashboard { gap: 20px; }
+.ui-shell .kl8-hero { border: 1px solid #473342; border-radius: 13px; background: #201c29; padding: 24px; box-shadow: none; }
+.ui-shell .kl8-hero::before, .ui-shell .kl8-hero::after { display: none; }
+.ui-shell .kl8-hero h2 { color: #e9e2ed; }
+.ui-shell .kl8-hero h2 strong { color: #f3b3c3; }
+.ui-shell .kl8-hero-copy, .ui-shell .kl8-strategy-line { color: #a298b0; }
+.ui-shell .kl8-meta-card, .ui-shell .kl8-pick-card { border: 1px solid #303847; background: #171f2a; box-shadow: none; border-radius: 11px; }
+.ui-shell .kl8-pick-card::before, .ui-shell .kl8-pick-card::after { display: none; }
+.ui-shell .kl8-ball { background: #bc4967; border: 1px solid #ef8da6; box-shadow: none; text-shadow: none; font-weight: 650; }
+.ui-shell .kl8-ball.highlight-ball { background: #cb536f; box-shadow: none; }
+.ui-shell .kl8-draw-balls .kl8-ball.small-ball { background: #222e40; border-color: #3e4f66; color: #cfdbec; box-shadow: none; }
+.ui-shell .kl8-draw-balls .kl8-ball.small-ball.highlight-ball { background: #ae415e; box-shadow: none; }
+.ui-shell .kl8-action-dock { border: 1px solid #334052; background: #19222f; box-shadow: none; border-radius: 12px; padding: 12px; }
+.ui-shell .kl8-action-dock button { border-radius: 8px; box-shadow: none; font-size: 12px; min-height: 42px; }
+.ui-shell .disclaimer { margin: 32px 0 0; padding: 16px 0; background: transparent; border: 0; border-top: 1px solid #283342; border-radius: 0; color: #8c9aaf; font-size: 11px; line-height: 1.8; }
+.ui-shell .bottom-nav { display: none; }
+.ui-shell .bottom-nav-item { background: transparent; border: 0; font: inherit; }
+@media (min-width: 1536px) { .ui-shell .wrap { margin-left: calc(220px + (100vw - 220px - 1180px) / 2) !important; } }
+@media (min-width: 1200px) {
+  .ui-shell .sport-panel .league-group { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 18px; align-items: start; }
+  .ui-shell .sport-panel .league-title { grid-column: 1 / -1; }
+  .ui-shell .fixture-heading .fixture-actions { width: 100%; justify-content: flex-start !important; }
+}
+@media (max-width: 1100px) {
+  .ui-shell .app-sidebar { width: 186px; padding: 25px 12px; }
+  .ui-shell .wrap { width: calc(100% - 234px); margin-left: 210px !important; margin-right: 24px !important; }
+  .brand { font-size: 17px; gap: 8px; margin-left: 6px; }
+  .ui-shell .tabs .tab { padding: 10px !important; }
+  .overview-item { padding: 15px; }
+}
+@media (max-width: 768px) {
+  body.ui-shell { padding: 0 0 calc(86px + env(safe-area-inset-bottom)) !important; }
+  .ui-shell .app-sidebar { display: none; }
+  .ui-shell .wrap { width: auto; max-width: none !important; margin: 0 16px !important; }
+  .ui-shell .workspace-bar { min-height: 55px; font-size: 11px; }
+  .workspace-separator { padding: 0 7px; }
+  #workspace-date { font-size: 10px; }
+  .ui-shell .page-heading { padding: 24px 0 20px !important; }
+  .ui-shell .page-heading h1 { font-size: 27px !important; }
+  .ui-shell .page-heading p { font-size: 12px !important; line-height: 1.8; }
+  .sport-overview { gap: 8px; margin-bottom: 18px; }
+  .overview-item { padding: 13px 10px; border-radius: 9px; }
+  .overview-label { font-size: 10px; }
+  .overview-index { display: none; }
+  .overview-value { font-size: 29px; margin-top: 6px; }
+  .overview-value span { padding-left: 5px; }
+  .overview-detail { display: none; }
+  .ui-shell .sport-panel .sport-toolbar { padding: 13px 12px; }
+  .ui-shell .sport-panel .toolbar-row { gap: 10px; }
+  .ui-shell .sport-panel .toolbar-group { flex-wrap: wrap; max-width: 100%; min-width: 0 !important; }
+  .ui-shell .sport-panel .toolbar-row:first-child > .toolbar-group:first-child { flex-basis: 100% !important; }
+  .ui-shell .sport-panel .tb-btn { padding: 7px 10px; min-height: 38px; }
+  .ui-shell .sport-panel .toolbar-label { font-size: 10px; }
+  .ui-shell .sport-panel .tb-refresh { min-height: 40px; padding: 8px 10px; flex: 1 0 auto; margin: 0 !important; }
+  .ui-shell .sport-panel .toolbar-divider { display: none; }
+  .ui-shell .sport-panel .sport-match-card { padding: 17px 14px !important; border-radius: 11px; }
+  .ui-shell .sport-panel .fixture-heading { gap: 12px; }
+  .ui-shell .fixture-actions { flex-basis: 100%; justify-content: flex-start !important; }
+  .fixture-team { gap: 7px; }
+  .fixture-team strong { font-size: 15px; }
+  .fixture-teams { gap: 10px; }
+  .team-monogram { width: 30px; height: 35px; font-size: 10px; }
+  .ui-shell #panel-football .football-compact-summary { padding: 12px !important; }
+  .ui-shell .sport-panel .pager { gap: 5px; justify-content: center; flex-wrap: wrap; }
+  .ui-shell .sport-panel .pager button, .ui-shell .sport-panel .pager select { min-height: 37px; padding: 5px 9px; font-size: 11px; }
+  .ui-shell .kl8-hero { padding: 18px; }
+  .ui-shell .kl8-hero-top { gap: 12px; }
+  .ui-shell .kl8-picks-grid { gap: 12px; }
+  .ui-shell .bottom-nav { display: flex; padding: 6px 12px calc(6px + env(safe-area-inset-bottom)); background: #141d2a; border-top: 1px solid #344155; box-shadow: 0 -6px 24px #0003; backdrop-filter: none; }
+  .ui-shell .bottom-nav-item { min-height: 51px; color: #8e9fb7; border-radius: 8px; }
+  .ui-shell .bottom-nav-item.active { color: var(--sport-accent); background: #243044; }
+  .ui-shell .bottom-nav-item .nav-icon { font-size: 19px; }
+  .ui-shell .disclaimer { margin-top: 22px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ui-shell *, .ui-shell *::before, .ui-shell *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; transition-duration: .01ms !important; }
+}
+</style>
 </head>
-<body>
+<body class="ui-shell">
 <div class="wrap">
-  <header>
-    <h1 id="page-title">⚽ 足球比分预测</h1>
+  <div class="workspace-bar"><span>预测助手 <span class="workspace-separator">/</span> 赛事与数据</span><span id="workspace-date"></span></div>
+  <header class="page-heading">
+    <div class="page-eyebrow" id="page-eyebrow">FOOTBALL / 01</div>
+    <h1 id="page-title">足球赛事分析</h1>
     <p id="page-desc">竞彩固定奖金：中国竞彩网 · 亚洲盘：香港马会 · 多源容错融合</p>
   </header>
-  <div class="tabs" role="tablist">
-    <button type="button" class="tab active" data-tab="football" role="tab">⚽ 足球预测</button>
-    <button type="button" class="tab" data-tab="basketball" role="tab">🏀 篮球</button>
-    <button type="button" class="tab" data-tab="kl8" role="tab">🎱 快乐8</button>
-  </div>
-  <div id="panel-football" class="tab-panel sport-panel football-panel active">
+  <aside class="app-sidebar" aria-label="主导航">
+    <a class="brand" href="#football" onclick="switchTab('football'); return false;" aria-label="预测助手首页"><span class="brand-symbol" aria-hidden="true">P<span>·</span></span><span>预测助手<small>DATA & INSIGHT</small></span></a>
+    <div class="nav-caption">分析工作台</div>
+    <div class="tabs" role="tablist" aria-label="选择分析模块">
+      <button id="tab-football" type="button" class="tab active" data-tab="football" role="tab" aria-selected="true" aria-controls="panel-football"><span class="module-icon" aria-hidden="true">⚽</span><span>足球分析<small>Football</small></span><span class="nav-arrow" aria-hidden="true">↗</span></button>
+      <button id="tab-basketball" type="button" class="tab" data-tab="basketball" role="tab" aria-selected="false" aria-controls="panel-basketball" tabindex="-1"><span class="module-icon" aria-hidden="true">🏀</span><span>篮球分析<small>Basketball</small></span><span class="nav-arrow" aria-hidden="true">↗</span></button>
+      <button id="tab-kl8" type="button" class="tab" data-tab="kl8" role="tab" aria-selected="false" aria-controls="panel-kl8" tabindex="-1"><span class="module-icon" aria-hidden="true">◉</span><span>快乐8<small>Numbers</small></span><span class="nav-arrow" aria-hidden="true">↗</span></button>
+    </div>
+    <div class="sidebar-footer"><span class="sidebar-divider"></span><b>让数据更清晰</b><p>查看分析 · 回顾记录 · 理性判断</p></div>
+  </aside>
+  <div id="panel-football" class="tab-panel sport-panel football-panel active" role="tabpanel" aria-labelledby="tab-football">
     <div id="search-wrap" style="display:none"></div>
     <div id="app" class="sport-dashboard football-dashboard"></div>
   </div>
-  <div id="panel-basketball" class="tab-panel sport-panel basketball-panel">
+  <div id="panel-basketball" class="tab-panel sport-panel basketball-panel" role="tabpanel" aria-labelledby="tab-basketball">
     <div id="app-basketball" class="sport-dashboard basketball-dashboard"></div>
   </div>
-  <div id="panel-kl8" class="tab-panel">
+  <div id="panel-kl8" class="tab-panel" role="tabpanel" aria-labelledby="tab-kl8">
     <div id="app-kl8"></div>
   </div>
   <div id="panel-predictions" class="tab-panel">
@@ -2472,18 +2674,18 @@
 
 <!-- 移动端底部固定导航 -->
 <nav class="bottom-nav" id="bottom-nav">
-  <div class="bottom-nav-item active" data-tab="football">
+  <button type="button" class="bottom-nav-item active" data-tab="football" aria-label="足球分析">
     <span class="nav-icon">⚽</span>
     <span>足球</span>
-  </div>
-  <div class="bottom-nav-item" data-tab="basketball">
+  </button>
+  <button type="button" class="bottom-nav-item" data-tab="basketball" aria-label="篮球分析">
     <span class="nav-icon">🏀</span>
     <span>篮球</span>
-  </div>
-  <div class="bottom-nav-item" data-tab="kl8">
+  </button>
+  <button type="button" class="bottom-nav-item" data-tab="kl8" aria-label="快乐8">
     <span class="nav-icon">🎱</span>
     <span>快乐8</span>
-  </div>
+  </button>
 </nav>
 
 <script>
@@ -2492,6 +2694,9 @@ const appBasketball = document.getElementById('app-basketball');
 const searchWrap = document.getElementById('search-wrap');
 const pageTitle = document.getElementById('page-title');
 const pageDesc = document.getElementById('page-desc');
+document.getElementById('workspace-date').textContent = new Intl.DateTimeFormat('zh-CN', {
+  month: 'long', day: 'numeric', weekday: 'long',
+}).format(new Date());
 let allMatches = [];
 let allPredictions = [];
 let footballAnalysisProgress = null;
@@ -2515,18 +2720,18 @@ function pad2(value) {
 
 const TAB_META = {
   football: {
-    title: '⚽ 足球比分预测',
-    desc: '竞彩固定奖金：中国竞彩网 · 亚洲盘：香港马会 · 多源容错融合',
+    title: '足球赛事分析',
+    desc: '聚焦比赛走向，结合胜平负、亚洲盘与比分参考，查看每一场的判断依据。',
     disclaimer: '⚠ 以上分析仅为概率统计参考，体育赛事结果受多种不确定因素影响，不构成任何投注建议。请理性对待！',
   },
   basketball: {
-    title: '🏀 篮球分析',
-    desc: '数据来源：odds.500.com · 胜负 + 让分胜负 + 大小分',
+    title: '篮球赛事分析',
+    desc: '从胜负到让分、大小分，清晰对比赛前盘口与模型判断。',
     disclaimer: '⚠ 以上分析仅为概率统计参考，篮球赛事结果受多种不确定因素影响，不构成任何投注建议。请理性对待！',
   },
   kl8: {
-    title: '🎱 快乐8分析',
-    desc: '本期号码 · 最近开奖 · 自动结算',
+    title: '快乐8数据分析',
+    desc: '本期号码、历史开奖与命中记录，一处查看，逐期回顾。',
     disclaimer: '⚠ 开奖具有随机性，以上分析仅为历史统计参考，不构成任何投注建议。',
   },
   predictions: {
@@ -3751,10 +3956,24 @@ function getLotteryLinkedSelections(lottery) {
   };
 }
 
+function renderSportOverview(items) {
+  return `<div class="sport-overview">${items.map(([label, value, detail], i) =>
+    `<div class="overview-item"><div class="overview-label"><span>${esc(label)}</span><span class="overview-index">0${i + 1}</span></div><div class="overview-value">${esc(String(value))}<span>场</span></div><div class="overview-detail">${esc(detail)}</div></div>`
+  ).join('')}</div>`;
+}
+
+function renderFixtureTeams(home, away) {
+  return `<div class="fixture-teams"><div class="fixture-team"><span class="team-monogram" aria-hidden="true">${esc([...String(home || '?')].slice(0, 2).join(''))}</span><strong>${esc(home)}</strong></div><span class="fixture-vs">VS</span><div class="fixture-team"><span class="team-monogram away-monogram" aria-hidden="true">${esc([...String(away || '?')].slice(0, 2).join(''))}</span><strong>${esc(away)}</strong></div></div>`;
+}
+
 function renderFootballPredictions(results) {
   allPredictions = results;
   if (!footballSessionFilterPinned) footballSessionFilter = defaultFootballSessionFilter(results);
-  let html = '';
+  let html = renderSportOverview([
+    ['分析赛事', results.length, '本次已载入的比赛'],
+    ['精选赛事', results.filter(item => getFootballResultTier(item).tier === 'selected').length, '通过推荐筛选的场次'],
+    ['观察赛事', results.filter(item => getFootballResultTier(item).tier === 'watch').length, '仍需关注更多赛前信息'],
+  ]);
 
   searchWrap.innerHTML = '';
   searchWrap.style.display = '';
@@ -3764,7 +3983,7 @@ function renderFootballPredictions(results) {
       <div class="toolbar-group" style="flex:1;min-width:200px">
         <span class="toolbar-label">搜索</span>
         <div style="flex:1">
-          <input type="search" id="search" class="search" placeholder="🔍 搜索球队或联赛…" 
+          <input type="search" id="search" class="search" placeholder="搜索球队、联赛或场次编号" aria-label="搜索足球比赛"
             value="${esc(listFilter || '')}" 
             style="width:100%;padding:8px 12px;border-radius:8px;border:1px solid rgba(44,58,78,0.5);background:rgba(0,0,0,0.2);color:var(--text);font-size:13px"
           />
@@ -3836,7 +4055,7 @@ function renderFootballPredictions(results) {
   const pageResults = visibleResults.slice(pageStart, pageStart + footballPageSize);
 
   html += `<div style="margin:0 0 12px;padding:9px 11px;background:rgba(59,130,246,.10);border-left:3px solid #3b82f6;border-radius:7px;font-size:12px;color:var(--muted)">
-    Web 主推已接入准确率门禁：默认只显示经冻结跨赛季规则选中的玩法；观察/观望项不作单推。
+    推荐说明：精选项已通过历史验证筛选；观察与观望项仅供参考。
   </div>`;
   const footballUpsetCount = results.filter(item => item?.result?.upset?.alert === true).length;
   if (footballUpsetCount) {
@@ -3879,14 +4098,10 @@ function renderFootballPredictions(results) {
     const reportUrl = m.bayes_report_url ? apiPrefix() + m.bayes_report_url : '';
 
     let itemHtml = `<div class="match sport-match-card football-match-card" style="display:block;padding:12px">
-      <div style="display:flex;justify-content:space-between;align-items:flex-start">
-        <div style="flex:1">
-          <div style="font-weight:bold;font-size:15px;margin-bottom:4px">
-            ${esc(m.home)} <span style="color:var(--muted)">vs</span> ${esc(m.away)}
-          </div>
-          <div style="font-size:13px;color:var(--muted)">
-            ${esc(m.num || '')} · ${esc(m.time || '')}
-          </div>
+      <div class="fixture-heading" style="display:flex;justify-content:space-between;align-items:flex-start">
+        <div class="fixture-identity" style="flex:1">
+          <div class="fixture-meta"><span>${esc(m.num || m.league || '足球赛事')}</span><span>${esc(m.time || '时间待定')}</span></div>
+          ${renderFixtureTeams(m.home, m.away)}
           ${cf && cf.score != null ? `<div style="font-size:12px;color:${cf.level === 'low' ? 'var(--muted)' : cf.level === 'high' ? 'var(--accent2)' : 'var(--warn)'};margin-top:2px">
             📡 信息完整度 ${(cf.score * 100).toFixed(0)}%
           </div>` : ''}
@@ -3895,7 +4110,7 @@ function renderFootballPredictions(results) {
             ${resultTier.downgradeReasons.length ? `<span style="font-weight:normal;color:var(--muted)">（已降级：${esc(resultTier.downgradeReasons.join('、'))}）</span>` : ''}
           </div>
         </div>
-        <div style="margin-left:10px;flex-shrink:0;display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end">
+        <div class="fixture-actions" style="margin-left:10px;flex-shrink:0;display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end">
           <button class="bayes-report-btn" onclick="openFootballEvidenceModal('${esc(m.match_id || r.match?.match_id || '')}')">🔎 证据审计</button>
           ${reportUrl ? `<button class="bayes-report-btn" onclick="openBayesModal('${esc(reportUrl)}', '${esc(m.home)} vs ${esc(m.away)}')">📊 深度报告</button>` : ''}
         </div>
@@ -4040,7 +4255,7 @@ function renderFootballPredictions(results) {
           : accuracyGate.total_goals?.candidate === 'under' ? '小2.5' : '-';
         const correctionLabel = r.model?.joint_market_state?.applied ? ' · 已修正' : ' · 联合分析';
         itemHtml += `<div class="football-compact-summary" style="margin-top:10px;padding:11px 12px;background:rgba(6,182,212,.08);border:1px solid rgba(6,182,212,.35);border-radius:8px">
-          <div style="font-size:12px;color:#06b6d4;font-weight:bold;margin-bottom:7px">📊 Web 门禁推荐 · 欧赔 + 亚盘水位${correctionLabel}</div>
+          <div style="font-size:12px;color:var(--sport-accent);font-weight:600;margin-bottom:7px">赛前综合判断 · 欧赔与亚盘水位${correctionLabel}</div>
           <div style="font-size:11px;color:var(--muted);margin-bottom:7px">
             ${standardPrediction ? `欧赔基准：${esc(euroPrediction)} · ` : '竞彩胜平负未开售 · '}亚盘方向：${esc(asianDirection)}
             ${r.model?.joint_market_state?.conflict ? '<span style="color:var(--warn)"> · ⚠️ 欧亚方向冲突</span>' : '<span style="color:var(--accent2)"> · 方向一致</span>'}
@@ -4053,7 +4268,7 @@ function renderFootballPredictions(results) {
             <div style="font-size:11px;color:var(--muted);margin-bottom:5px">⚽ 比分参考 Top3（非主推）</div>
             <div style="display:flex;gap:7px;flex-wrap:wrap">${compactScoreHtml || '<span style="font-size:11px;color:var(--muted)">暂无比分分布</span>'}</div>
           </div>
-          <div style="font-size:10px;color:var(--muted);margin-top:7px">只有标记为“精选”的玩法进入 Web 主推；观察项尚缺独立验证，观望项已被门禁拒绝。</div>
+          <div style="font-size:11px;color:var(--muted);margin-top:7px">精选：通过历史验证筛选 · 观察：待验证 · 观望：暂不推荐</div>
         </div>`;
       }
       if (!compactFootballView) marketCards.forEach(card => {
@@ -5072,9 +5287,14 @@ function renderResult(r) {
 
 function switchTab(tab) {
   activeTab = tab;
+  document.body.dataset.module = tab;
   document.body.classList.toggle('kl8-view', tab === 'kl8');
   document.querySelectorAll('[data-tab]').forEach(el => {
     el.classList.toggle('active', el.dataset.tab === tab);
+    if (el.getAttribute('role') === 'tab') {
+      el.setAttribute('aria-selected', String(el.dataset.tab === tab));
+      el.tabIndex = el.dataset.tab === tab ? 0 : -1;
+    }
   });
   document.querySelectorAll('.tab-panel').forEach(el => {
     el.classList.toggle('active', el.id === 'panel-' + tab);
@@ -5082,6 +5302,9 @@ function switchTab(tab) {
   const meta = TAB_META[tab] || TAB_META.football;
   pageTitle.textContent = meta.title;
   pageDesc.textContent = meta.desc;
+  document.getElementById('page-eyebrow').textContent = {
+    football: 'FOOTBALL / 01', basketball: 'BASKETBALL / 02', kl8: 'NUMBERS / 03', predictions: 'HISTORY / 04',
+  }[tab] || 'WORKSPACE';
   document.getElementById('disclaimer').innerHTML = meta.disclaimer;
   location.hash = tab === 'basketball' ? 'basketball' : tab === 'kl8' ? 'kl8' : tab === 'predictions' ? 'predictions' : 'football';
   if (tab === 'football') {
@@ -5120,6 +5343,17 @@ document.querySelectorAll('[data-tab]').forEach(el => {
       window.scrollTo({ top: 0, behavior: 'smooth' });
     }
   };
+});
+
+document.querySelector('.tabs').addEventListener('keydown', event => {
+  const tabs = [...document.querySelectorAll('.tabs [role="tab"]')];
+  const index = tabs.indexOf(document.activeElement);
+  if (index < 0 || !['ArrowDown', 'ArrowUp', 'ArrowRight', 'ArrowLeft', 'Home', 'End'].includes(event.key)) return;
+  event.preventDefault();
+  const next = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1
+    : (index + (['ArrowDown', 'ArrowRight'].includes(event.key) ? 1 : -1) + tabs.length) % tabs.length;
+  tabs[next].focus();
+  tabs[next].click();
 });
 
 // ── 快乐8相关函数 ──
@@ -5320,244 +5554,359 @@ function kl8HypergeomPGe(pick, k) {
 }
 
 // 玩法中奖率 & 易中推荐 面板
-function kl8Pad(n) {
-  return String(n).padStart(2, '0');
-}
-
-const KL8_MIN_WIN = { 3: 3, 4: 4, 5: 3, 6: 4, 7: 4, 8: 4, 9: 4, 10: 5 };
-const KL8_PRIMARY_SELECTS = [5, 6, 10];
-const KL8_SELECT_TYPES = [3, 4, 5, 6, 7, 8, 9, 10];
-const KL8_FUSHI_TYPES = [
-  { key: 'fu_shi_4', label: '选4复式', pool: '7 码', field: 'top4_numbers', basePick: 4 },
-  { key: 'fu_shi_7', label: '选5复式', pool: '7 码', field: 'top7_numbers', basePick: 5 },
-  { key: 'fu_shi_10_11', label: '选10复式', pool: '11 码', field: 'top11_numbers', basePick: 10 },
-];
-
-function kl8PlayMode(play) {
-  const isRef = play.prediction_mode === 'reference_unvalidated';
-  const isCoverage = play.baseline_type === 'fair_deterministic_coverage';
-  return {
-    accent: isRef ? '#f6bd55' : '#42d392',
-    badge: isCoverage ? '公平覆盖' : (isRef ? '统计参考' : '已验证'),
-    isRef,
-  };
-}
-
-function kl8PlayFacts(sel, st, changeInfo, lastSet) {
-  const winTh = KL8_MIN_WIN[st] || st;
-  const rate = (kl8HypergeomPGe(st, winTh) * 100).toFixed(1);
-  const repeats = (sel.numbers || []).filter(n => lastSet.has(n)).length;
-  const added = new Set(((changeInfo.play_changes || {})[`select_${st}`] || {}).added || []);
-  return { winTh, rate, repeats, added };
-}
-
-function renderKL8Details(play, numbers, extraLines = []) {
-  let body = '';
-  if (play.strategy_id) body += `<div class="kl8-detail-line">策略：<code>${esc(play.strategy_id)}</code></div>`;
-  for (const line of extraLines) body += line;
-  body += renderKL8ShapeProfile(play.shape_profile, numbers);
-  body += renderKL8AccuracyProfile(play.accuracy_profile);
-  if (play.strategy_evidence) {
-    const ev = play.strategy_evidence;
-    body += `<div class="kl8-inline-warning">单号信号 ${(Number(ev.empirical_next_hit_rate || 0) * 100).toFixed(2)}%，随机 ${(Number(ev.random_baseline || 0) * 100).toFixed(2)}%，未通过显著性验证。</div>`;
-  }
-  if (play.warning) body += `<div class="kl8-inline-warning">${esc(play.warning)}</div>`;
-  return `<details class="kl8-details"><summary>详情</summary><div class="kl8-details-body">${body}</div></details>`;
-}
-
-function renderKL8PickCard(sel, st, changeInfo, lastSet) {
-  const mode = kl8PlayMode(sel);
-  const facts = kl8PlayFacts(sel, st, changeInfo, lastSet);
-  const balls = sel.numbers.map(n =>
-    `<span class="kl8-ball highlight-ball ${facts.added.has(n) ? 'is-new' : ''}">${kl8Pad(n)}</span>`).join('');
-  const changed = facts.added.size ? ` · 换入 <b>${esc(facts.added.size)}</b> 个` : '';
-  const repeatLine = sel.repeat_profile
-    ? `<div class="kl8-detail-line">近 ${esc(sel.repeat_profile.sample_size || 0)} 期相邻开奖平均重号 ${esc(sel.repeat_profile.mean_draw_overlap || 0)} 个${sel.repeat_profile.constraint_applied ? `，策略要求至少 ${esc(sel.repeat_profile.configured_minimum || 0)} 个` : '，不强制换入重号'}。</div>`
-    : '';
-  return `<article class="kl8-select-card" style="--kl8-card-accent:${mode.accent}">
-    <div class="kl8-select-head"><div class="kl8-select-title"><strong>选${esc(st)}</strong> · ${esc(sel.numbers.length)} 码</div><span class="kl8-mode-badge">${esc(mode.badge)}</span></div>
-    <div class="kl8-numbers-row">${balls}</div>
-    <div class="kl8-fact-line">中 ${esc(facts.winTh)} 个起中奖 · 约 <b>${esc(facts.rate)}%</b>/期 · 上期重号 <b>${esc(facts.repeats)}</b>${changed}</div>
-    ${renderKL8Details(sel, sel.numbers, [repeatLine])}
-  </article>`;
-}
-
-function renderKL8CompactRow(sel, st, changeInfo, lastSet) {
-  const mode = kl8PlayMode(sel);
-  const facts = kl8PlayFacts(sel, st, changeInfo, lastSet);
-  const balls = sel.numbers.map(n =>
-    `<span class="kl8-ball small-ball ${facts.added.has(n) ? 'is-new' : ''}">${kl8Pad(n)}</span>`).join('');
-  return `<div class="kl8-compact-row" style="--kl8-card-accent:${mode.accent}">
-    <div class="kl8-compact-name"><strong>选${esc(st)}</strong><span class="kl8-mode-badge">${esc(mode.badge)}</span></div>
-    <div class="kl8-numbers-row">${balls}</div>
-    <div class="kl8-compact-meta">中 ${esc(facts.winTh)} 个起 · 约 ${esc(facts.rate)}%/期 · 重号 ${esc(facts.repeats)}</div>
-  </div>`;
-}
-
-function renderKL8FushiCard(f, fushi) {
-  const coreNumbers = fushi[f.field] || fushi.core_numbers || [];
-  const mode = kl8PlayMode(fushi);
-  const winTh = f.basePick <= 4 ? 2 : (f.basePick <= 7 ? 3 : 5);
-  const expected = (fushi.total_combinations * kl8HypergeomPGe(f.basePick, winTh)).toFixed(1);
-  const balls = coreNumbers.map(n => `<span class="kl8-ball highlight-ball">${kl8Pad(n)}</span>`).join('');
-  return `<article class="kl8-select-card kl8-fushi-card" style="--kl8-card-accent:${mode.accent}">
-    <div class="kl8-select-head"><div class="kl8-select-title"><strong>${esc(f.label)}</strong> · ${esc(f.pool)}</div><span class="kl8-mode-badge">${esc(mode.badge)}</span></div>
-    <div class="kl8-numbers-row">${balls}</div>
-    <div class="kl8-fact-line">共 <b>${esc(fushi.total_combinations)}</b> 注 · 每注中 ${esc(winTh)} 个起中奖 · 期望中奖约 <b>${esc(expected)}</b> 注</div>
-    ${renderKL8Details(fushi, coreNumbers)}
-  </article>`;
-}
-
-function kl8StatusMeta(r, signalStatus, backfill) {
-  const current = backfill.current_periods || r.statistics?.total_periods || 0;
-  const target = backfill.target_periods || 800;
-  if (!backfill.is_complete) {
-    return { cls: '', label: '历史补数中', note: `历史样本 ${current} / ${target} 期，补齐后自动开始策略验证。` };
-  }
-  if (signalStatus === 'validated') {
-    return { cls: 'validated', label: '策略已验证', note: '当前启用的策略已通过训练、验证与封存测试。' };
-  }
-  if (signalStatus === 'reference_unvalidated') {
-    return { cls: 'reference', label: '统计参考', note: '号码由固定策略按历史统计生成，尚未通过验证。' };
-  }
-  const modes = KL8_SELECT_TYPES.map(st => r[`select_${st}`]?.prediction_mode)
-    .concat(KL8_FUSHI_TYPES.map(f => r[f.key]?.prediction_mode));
-  const allNotVerified = modes.every(m => m === 'not_verified' || m === undefined);
-  const anyWarning = KL8_SELECT_TYPES.some(st => r[`select_${st}`]?.warning) || KL8_FUSHI_TYPES.some(f => r[f.key]?.warning);
-  if (allNotVerified && anyWarning) {
-    return { cls: '', label: '未发现可验证策略', note: '候选策略均未超过随机基线，以下号码为公平覆盖参考。' };
-  }
-  return { cls: '', label: '策略验证中', note: `历史样本已达 ${current} 期，正在做训练、验证与封存测试。` };
-}
-
-function renderKL8ChangeInfo(changeInfo) {
-  const poolChanges = changeInfo.pool_changes || {};
-  let html = `<div class="kl8-detail-block"><div class="kl8-detail-title">本期相较上期</div>`;
-  html += `<div class="kl8-detail-line">基准期 ${esc(changeInfo.current_based_on)} → 上期 ${esc(changeInfo.previous_based_on)}</div>`;
-  html += poolChanges.changed === 0
-    ? `<div class="kl8-detail-line">候选池前 20 名未变化</div>`
-    : `<div class="kl8-detail-line">候选池替换 <b>${esc(poolChanges.changed)}</b> / ${esc(poolChanges.total_pool_size)} 个号码</div>`;
-  const playChanges = changeInfo.play_changes || {};
-  const items = KL8_SELECT_TYPES.map(st => [`选${st}`, playChanges[`select_${st}`]])
-    .concat(KL8_FUSHI_TYPES.map(f => [f.label, playChanges[f.key]]));
-  for (const [label, pc] of items) {
-    if (!pc || !pc.changed_count) continue;
-    const removed = (pc.removed || []).map(kl8Pad).join(' ');
-    const added = (pc.added || []).map(kl8Pad).join(' ');
-    html += `<div class="kl8-detail-line">${esc(label)}：${removed ? `<span class="kl8-neg">−${esc(removed)}</span> ` : ''}${added ? `<span class="kl8-pos">+${esc(added)}</span>` : ''}</div>`;
-  }
-  html += `<div class="kl8-detail-line">原因：${esc(changeInfo.change_reason || '数据更新')} · 置信：${esc(changeInfo.confidence_level || '低')}</div></div>`;
-  return html;
-}
-
-function renderKL8Candidates(r) {
-  const plays = [
-    { key: 'select_5', label: '选5' },
-    { key: 'select_6', label: '选6' },
-    { key: 'select_10', label: '选10' },
-  ].filter(item => r[item.key]?.candidates?.length > 0);
-  if (!plays.length) return '';
-  let html = `<div class="kl8-detail-block"><div class="kl8-detail-title">候选号码池 <span>红球为该玩法最终推荐</span></div><div class="kl8-candidate-grid">`;
-  for (const play of plays) {
-    const selected = new Set(r[play.key]?.numbers || []);
-    html += `<div class="kl8-candidate-col"><div class="kl8-candidate-name">${esc(play.label)} 前 15</div><div class="kl8-numbers-row">`;
-    for (const item of r[play.key].candidates.slice(0, 15)) {
-      const num = typeof item === 'object' ? item[0] : item;
-      html += `<span class="kl8-ball small-ball ${selected.has(num) ? 'highlight-ball' : 'is-plain'}">${kl8Pad(num)}</span>`;
-    }
-    html += `</div></div>`;
-  }
-  return html + `</div></div>`;
-}
-
-function renderKL8Ranking(ranking) {
-  if (!ranking || !ranking.length) return '';
-  let html = `<div class="kl8-detail-block"><div class="kl8-detail-title">号码排名前 20 <span>启发式排序分，不是开出概率</span></div><div class="kl8-ranking-grid">`;
-  for (const item of ranking) {
-    const score = item.ranking_score?.toFixed(3) || item.score?.toFixed(3) || '0';
-    html += `<div class="kl8-ranking-item"><span class="kl8-ball small-ball is-plain">${kl8Pad(item.num)}</span><span>${esc(score)}</span></div>`;
-  }
-  return html + `</div></div>`;
-}
-
 function renderKL8(r) {
   kl8LastData = r;
   const appKL8 = document.getElementById('app-kl8');
+  let html = '';
+  const selectTypes = [3, 4, 5, 6, 7, 8, 9, 10];
+  const fushiTypes = [
+    { key: 'fu_shi_4', label: '选4复式 — 7码复式', field: 'top4_numbers', coreLabel: '7个核心号码', basePick: 4 },
+    { key: 'fu_shi_7', label: '选5复式 — 7码复式', field: 'top7_numbers', coreLabel: '7个核心号码', basePick: 5 },
+    { key: 'fu_shi_10_11', label: '选10复式 — 11码复式', field: 'top11_numbers', coreLabel: '11个核心号码', basePick: 10 },
+  ];
+
+  // v9.2: 三种状态 — 补数中 / 验证中 / 已验证
   const signalStatus = r.statistics?.signal_status || 'unknown';
-  const backfill = r.statistics?.backfill_progress || {};
-  const status = kl8StatusMeta(r, signalStatus, backfill);
-  const currentPeriods = backfill.current_periods || r.statistics?.total_periods || 0;
+  const backfillProgress = r.statistics?.backfill_progress || {};
+  const isBackfilling = !backfillProgress.is_complete;
+  const currentPeriods = backfillProgress.current_periods || r.statistics?.total_periods || 0;
+  const targetPeriods = backfillProgress.target_periods || 800;
+  const progressPct = backfillProgress.progress_pct || 0;
+
+  const modelVersion = r.statistics?.version || 'unknown';
   const basedOnIssue = r.based_on_issue || r.statistics?.based_on_issue || '-';
   const targetIssue = r.target_issue || r.statistics?.target_issue || '-';
-  const generatedAt = String(r.prediction_generated_at || r.statistics?.prediction_generated_at || '-').replace('T', ' ').slice(0, 16);
-  const changeInfo = r.change_info || {};
-  const lastSet = new Set(r.statistics?.last_numbers || []);
+  const generatedAt = r.prediction_generated_at || r.statistics?.prediction_generated_at || '-';
+  const statusClass = isBackfilling
+    ? ''
+    : signalStatus === 'validated'
+      ? 'validated'
+      : signalStatus === 'reference_unvalidated'
+        ? 'reference'
+        : '';
+  const statusLabel = isBackfilling
+    ? '历史补数中'
+    : signalStatus === 'validated'
+      ? '策略已验证'
+      : signalStatus === 'reference_unvalidated'
+        ? '统计参考'
+        : '等待验证';
 
-  let html = `<div class="kl8-dashboard">`;
-  html += `<section class="kl8-hero kl8-topbar">
-    <div class="kl8-topbar-main">
-      <h2>第 <strong>${esc(targetIssue)}</strong> 期</h2>
-      <div class="kl8-status-pill ${status.cls}"><i></i>${esc(status.label)}</div>
+  html += `<div class="kl8-dashboard">`;
+  html += `<section class="kl8-hero">
+    <div class="kl8-hero-top">
+      <div>
+        <div class="kl8-eyebrow">KL8 Statistical Console</div>
+        <h2>第 <strong>${esc(targetIssue)}</strong> 期 <span>数据工作台</span></h2>
+        <div class="kl8-hero-copy">查看本期推荐，追踪每轮命中，回顾历史表现。</div>
+      </div>
+      <div class="kl8-status-pill ${statusClass}"><i></i>${esc(statusLabel)}</div>
     </div>
-    <div class="kl8-topbar-actions">
-      <button type="button" class="kl8-refresh-btn" onclick="refreshKL8()">↻ 重新计算</button>
-      <button type="button" class="kl8-refresh-btn action-info" onclick="fetchKL8Data()">↓ 抓取最新开奖</button>
+    <div class="kl8-meta-grid">
+      <div class="kl8-meta-item">
+        <div class="kl8-meta-label">预测期号</div>
+        <div class="kl8-meta-value">${esc(targetIssue)}</div>
+        <div class="kl8-meta-sub">本次输出目标</div>
+      </div>
+      <div class="kl8-meta-item">
+        <div class="kl8-meta-label">基于期号</div>
+        <div class="kl8-meta-value">${esc(basedOnIssue)}</div>
+        <div class="kl8-meta-sub">最近数据基准</div>
+      </div>
+      <div class="kl8-meta-item">
+        <div class="kl8-meta-label">分析样本</div>
+        <div class="kl8-meta-value">${esc(currentPeriods)} <small>期</small></div>
+        <div class="kl8-meta-sub">目标 ${esc(targetPeriods)} 期</div>
+      </div>
+      <div class="kl8-meta-item" title="${esc(modelVersion)}">
+        <div class="kl8-meta-label">模型版本</div>
+        <div class="kl8-meta-value">${esc(modelVersion)}</div>
+        <div class="kl8-meta-sub">生成于 ${esc(generatedAt)}</div>
+      </div>
     </div>
-    <div class="kl8-topbar-meta">基于第 ${esc(basedOnIssue)} 期 · 样本 ${esc(currentPeriods)} 期 · ${esc(generatedAt)} 生成 · ${esc(status.note)}</div>`;
-  if (!backfill.is_complete) {
-    html += `<div class="kl8-progress-track"><div class="kl8-progress-bar" style="width:${esc(backfill.progress_pct || 0)}%"></div></div>`;
-  }
-  html += `<div class="kl8-topbar-meta muted">开奖具有随机性，号码仅为历史统计参考，不构成投注建议。</div></section>`;
+  </section>`;
+  html += `<div class="kl8-disclaimer"><b>ⓘ</b><span>快乐8开奖具有随机性，以下号码仅为历史统计参考，不构成投注建议，也无法保证提升命中率。</span></div>`;
+  html += renderKL8PerformanceSummary(r.statistics?.recent_settlement_performance);
 
-  const primary = KL8_PRIMARY_SELECTS.filter(st => r[`select_${st}`]?.numbers?.length);
-  if (primary.length) {
-    html += `<section class="card kl8-panel"><div class="kl8-panel-head"><h3>本期号码</h3><span class="kl8-panel-count">绿边球为本期换入</span></div>`;
-    html += `<div class="kl8-picks-grid kl8-primary-grid">${primary.map(st => renderKL8PickCard(r[`select_${st}`], st, changeInfo, lastSet)).join('')}</div></section>`;
-  }
-
-  const fushi = KL8_FUSHI_TYPES.filter(f => (r[f.key]?.[f.field] || r[f.key]?.core_numbers || []).length);
-  if (fushi.length) {
-    html += `<section class="card kl8-panel"><div class="kl8-panel-head"><h3>复式</h3><span class="kl8-panel-count">核心号码全包</span></div>`;
-    html += `<div class="kl8-picks-grid kl8-primary-grid">${fushi.map(f => renderKL8FushiCard(f, r[f.key])).join('')}</div></section>`;
+  // ── 状态1：历史补数中 ──
+  if (isBackfilling) {
+    html += `<section class="kl8-state-card backfill">`;
+    html += `<div class="kl8-state-title">📥 历史样本补充中</div>`;
+    html += `<div class="kl8-state-value">${esc(currentPeriods)} / ${esc(targetPeriods)} <small>期</small></div>`;
+    html += `<div class="kl8-progress-track"><div class="kl8-progress-bar" style="width:${esc(progressPct)}%"></div></div>`;
+    html += `<div class="kl8-state-copy">已完成 ${esc(progressPct)}% · 系统每10分钟自动补充一批历史数据，达到 ${esc(targetPeriods)} 期后自动开始策略验证。</div>`;
+    html += `</section>`;
   }
 
-  const others = KL8_SELECT_TYPES.filter(st => !KL8_PRIMARY_SELECTS.includes(st) && r[`select_${st}`]?.numbers?.length);
-  if (others.length) {
-    html += `<details class="card kl8-panel kl8-fold"><summary><h3>更多玩法</h3><span class="kl8-panel-count">${others.map(st => `选${st}`).join(' · ')}</span></summary>`;
-    html += `<div class="kl8-compact-list">${others.map(st => renderKL8CompactRow(r[`select_${st}`], st, changeInfo, lastSet)).join('')}</div></details>`;
-  }
+  // ── 状态2：验证中（历史已满800期，但尚无通过验证的策略）───
+  if (!isBackfilling && (signalStatus === 'verification_pending' || signalStatus === 'unknown')) {
+    // 检查是否有任何玩法已验证
+    const allModes = selectTypes.map(st => r[`select_${st}`]?.prediction_mode);
+    for (const f of fushiTypes) allModes.push(r[f.key]?.prediction_mode);
+    const anyValidated = allModes.some(m => m === 'validated');
 
-  if (r.recent_results && r.recent_results.length > 0) {
-    const showCount = window.innerWidth <= 768 ? 3 : 5;
-    html += `<section class="card kl8-panel kl8-recent-panel"><div class="kl8-panel-head"><h3>最近开奖</h3>${renderKL8PerformanceSummary(r.statistics?.recent_settlement_performance)}</div>`;
-    for (const rec of r.recent_results.slice(0, showCount)) {
-      const isLatest = String(rec.issue) === String(basedOnIssue);
-      html += `<div class="draw-row kl8-draw-row ${isLatest ? 'is-latest' : ''}"><span class="draw-issue">${esc(rec.issue)}${isLatest ? '<em>最新</em>' : ''}</span>`;
-      html += `<span class="draw-numbers kl8-draw-balls">${(rec.numbers || []).map(n => `<span class="kl8-ball small-ball ${lastSet.has(n) ? 'highlight-ball' : ''}">${kl8Pad(n)}</span>`).join('')}</span>`;
-      html += `<span class="draw-date">${esc(rec.date)}</span></div>`;
+    if (!anyValidated) {
+      // 检查是否全部都未发现可验证策略（所有候选均未通过）
+      const allNotVerified = allModes.every(m => m === 'not_verified' || m === undefined);
+      const anyWarning = selectTypes.some(st => r[`select_${st}`]?.warning) || fushiTypes.some(f => r[f.key]?.warning);
+
+      if (allNotVerified && anyWarning) {
+        // 验证失败状态
+        html += `<section class="kl8-state-card failed">`;
+        html += `<div class="kl8-state-title">未发现可验证策略</div>`;
+        html += `<div class="kl8-state-copy">当前候选均未超过随机基线 · 历史数据 ${esc(currentPeriods)} / ${esc(targetPeriods)} 期 · 本玩法不输出号码。</div>`;
+        html += `</section>`;
+      } else {
+        // 验证中状态
+        html += `<section class="kl8-state-card verifying">`;
+        html += `<div class="kl8-state-title">⏳ 策略验证中</div>`;
+        html += `<div class="kl8-state-copy">历史数据已达到 ${esc(currentPeriods)} 期，正在运行训练、验证与封存测试。当前暂无通过验证的推荐策略。</div>`;
+        html += `</section>`;
+      }
     }
-    html += `<div class="kl8-tools-row"><span class="kl8-legend"><i></i>红球 = 与最新一期重号</span><span class="kl8-tools-links">
-      <button type="button" class="kl8-link-btn" onclick="openKL8ExcludeModal()">剔除号码重算</button>
-      <button type="button" class="kl8-link-btn" onclick="openKL8KillModal()">杀号计算</button>
-      <button type="button" class="kl8-link-btn" onclick="openKL8RecordsModal()">预测记录</button>
-    </span></div></section>`;
   }
 
+  // ── 状态3：已验证（至少一个玩法有validated策略）───
   if (signalStatus === 'validated') {
-    const blocks = [
-      changeInfo.has_previous ? renderKL8ChangeInfo(changeInfo) : '',
-      renderKL8Candidates(r),
-      renderKL8Ranking(r.ranking),
-    ].filter(Boolean);
-    if (blocks.length) {
-      html += `<details class="card kl8-panel kl8-fold"><summary><h3>策略详情</h3><span class="kl8-panel-count">变化对比 · 候选池 · 排名</span></summary>${blocks.join('')}</details>`;
+    html += `<section class="kl8-state-card" style="--state-accent:#42d392"><div class="kl8-state-title">✓ 策略验证通过</div><div class="kl8-state-copy">当前启用策略已通过严格回测验证。</div></section>`;
+  }
+
+  // 最近开奖结果（始终显示）
+  if (r.recent_results && r.recent_results.length > 0) {
+    const isMobile = window.innerWidth <= 768;
+    const showCount = isMobile ? 3 : 5;
+    html += `<section class="card kl8-panel kl8-recent-panel">`;
+    html += `<div class="kl8-panel-head"><div><div class="kl8-panel-kicker">Draw history</div><h3>最近开奖结果</h3></div><span class="kl8-panel-count">近 ${esc(showCount)} 期</span></div>`;
+    for (const rec of r.recent_results.slice(0, showCount)) {
+      const isLatestDraw = String(rec.issue) === String(basedOnIssue);
+      html += `<div class="draw-row kl8-draw-row ${isLatestDraw ? 'is-latest' : ''}">`;
+      html += `<span class="draw-issue">${esc(rec.issue)}</span>`;
+      html += `<span class="draw-numbers kl8-draw-balls" style="font-size:13px;letter-spacing:1px;gap:4px">`;
+      const nums = rec.numbers || [];
+      const lastSet = new Set(r.statistics?.last_numbers || []);
+      for (const n of nums) {
+        const isHighlight = lastSet.has(n);
+        html += `<span class="kl8-ball small-ball ${isHighlight ? 'highlight-ball' : ''}" style="width:26px;height:26px;font-size:10px;display:inline-flex">${String(n).padStart(2,'0')}</span>`;
+      }
+      html += `</span>`;
+      html += `<span class="draw-date">${esc(rec.date)}</span>`;
+      html += `</div>`;
+    }
+    html += `</section>`;
+  }
+
+  // ── 本期变化对比信息（仅在有已验证策略时显示）───
+  const changeInfo = r.change_info || {};
+  if (changeInfo.has_previous && signalStatus === 'validated') {
+    html += `<div class="card kl8-panel" style="padding:12px 15px;border-left:3px solid #63a4ff">`;
+    html += `<div style="font-size:13px;font-weight:600;margin-bottom:6px;color:#4493f8">📊 本期相较上期变化</div>`;
+    html += `<div style="font-size:11px;color:#8b949e;margin-bottom:8px">`;
+    html += `本期基准: ${esc(changeInfo.current_based_on)} · 上期基准: ${esc(changeInfo.previous_based_on)}`;
+    html += `</div>`;
+    const poolChanges = changeInfo.pool_changes || {};
+    if (poolChanges.changed === 0) {
+      html += `<div style="font-size:12px;color:#8b949e;margin-bottom:6px">候选池延续：当前数据更新后，前20排名未发生变化</div>`;
+    } else {
+      html += `<div style="font-size:12px;margin-bottom:6px">`;
+      html += `<span style="color:#4493f8">候选池变化</span>: `;
+      html += `<span style="color:#da3633;font-weight:600">${poolChanges.changed}</span>`;
+      html += ` / <span style="color:#8b949e">${poolChanges.total_pool_size}</span>`;
+      html += ` 号号替换`;
+      html += `</div>`;
+    }
+    const playChanges = changeInfo.play_changes || {};
+    for (const st of selectTypes) {
+      const key = `select_${st}`;
+      const pc = playChanges[key];
+      if (!pc || pc.changed_count === 0) continue;
+      html += `<div style="font-size:11px;margin-bottom:4px">`;
+      html += `<span style="color:#4493f8">选${st}</span>: `;
+      if (pc.removed && pc.removed.length > 0) {
+        html += `<span style="color:#da3633">-${pc.removed.map(n=>String(n).padStart(2,'0')).join(',')}</span> `;
+      }
+      if (pc.added && pc.added.length > 0) {
+        html += `<span style="color:#2ea043">+${pc.added.map(n=>String(n).padStart(2,'0')).join(',')}</span>`;
+      }
+      html += `</div>`;
+    }
+    for (const f of fushiTypes) {
+      const fpc = playChanges[f.key];
+      if (fpc && fpc.changed_count > 0) {
+        html += `<div style="font-size:11px;margin-bottom:4px">`;
+        html += `<span style="color:#4493f8">${esc(f.label)}</span>: `;
+        if (fpc.removed && fpc.removed.length > 0) {
+          html += `<span style="color:#da3633">-${fpc.removed.map(n=>String(n).padStart(2,'0')).join(',')}</span> `;
+        }
+        if (fpc.added && fpc.added.length > 0) {
+          html += `<span style="color:#2ea043">+${fpc.added.map(n=>String(n).padStart(2,'0')).join(',')}</span>`;
+        }
+        html += `</div>`;
+      }
+    }
+    html += `<div style="font-size:11px;color:#8b949e;margin-top:4px">变化原因: ${esc(changeInfo.change_reason || '数据更新')}</div>`;
+    html += `<div style="font-size:11px;margin-top:4px">置信等级: <span style="font-weight:600;color:${changeInfo.confidence_level==='低'?'#9a6700':'#2ea043'}">${esc(changeInfo.confidence_level || '低')}</span> · 策略状态: ${esc(changeInfo.strategy_status || '验证中')}</div>`;
+    html += `</div>`;
+  }
+
+  // 候选池（仅在有已验证策略时显示）
+  if (signalStatus === 'validated') {
+    const candidatePlays = [
+      { key: 'select_5', label: '选5' },
+      { key: 'select_6', label: '选6' },
+      { key: 'select_10', label: '选10' },
+    ].filter(item => r[item.key]?.candidates?.length > 0);
+
+    if (candidatePlays.length > 0) {
+      html += `<div class="card kl8-panel" style="padding:14px 16px">`;
+      html += `<div style="font-size:13px;font-weight:600;margin-bottom:8px">候选号码池 <span style="font-size:11px;color:#8b949e">(按玩法独立展示)</span></div>`;
+      html += `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px">`;
+      for (const play of candidatePlays) {
+        const selectedSet = new Set(r[play.key]?.numbers || []);
+        html += `<div style="padding:8px;border:1px solid var(--line);border-radius:6px;background:var(--card2)">`;
+        html += `<div style="font-size:12px;font-weight:700;margin-bottom:6px">${esc(play.label)} Top15</div>`;
+        html += `<div style="display:flex;flex-wrap:wrap;gap:4px;line-height:1.6">`;
+        for (const item of r[play.key].candidates.slice(0, 15)) {
+          const num = typeof item === 'object' ? item[0] : item;
+          if (selectedSet.has(num)) {
+            html += `<span class="kl8-ball highlight-ball" style="width:28px;height:28px;font-size:11px">${String(num).padStart(2,'0')}</span> `;
+          } else {
+            html += `<span class="kl8-ball small-ball">${String(num).padStart(2,'0')}</span> `;
+          }
+        }
+        html += `</div></div>`;
+      }
+      html += `</div>`;
+      html += `<div style="font-size:11px;color:var(--muted);margin-top:6px">高亮球为该玩法最终推荐号。</div>`;
+      html += `</div>`;
     }
   }
 
+  // 各玩法推荐号码 — v9.2: verification_pending状态不显示号码
+  const hasAnyNumbers = selectTypes.some(st => {
+    const sel = r[`select_${st}`];
+    return sel && sel.numbers && sel.numbers.length > 0;
+  });
+
+  if (hasAnyNumbers) {
+    html += `<section class="card kl8-panel kl8-picks-panel">`;
+    html += `<div class="kl8-panel-head"><div><div class="kl8-panel-kicker">Number selections</div><h3>本期统计参考号码</h3></div><span class="kl8-panel-count">固定策略输出</span></div>`;
+    html += `<div class="kl8-picks-grid">`;
+
+    for (const st of selectTypes) {
+      const key = `select_${st}`;
+      const sel = r[key];
+      if (!sel || !sel.numbers || sel.numbers.length === 0) continue;
+
+      const isRef = sel.prediction_mode === 'reference_unvalidated';
+      const isCoverage = sel.baseline_type === 'fair_deterministic_coverage';
+      const borderColor = isRef ? '#f6bd55' : '#42d392';
+      const badgeText = isCoverage ? '公平覆盖' : (isRef ? '参考' : '已验证');
+
+      // 主推号码：每个玩法只输出一组。
+      const kl8MinWin = { 3: 3, 4: 4, 5: 3, 6: 4, 7: 4, 8: 4, 9: 4, 10: 5 };
+      const winTh = kl8MinWin[st] || st;
+      html += `<article class="kl8-select-card" style="--kl8-card-accent:${borderColor}">`;
+      html += `<div class="kl8-select-head"><div class="kl8-select-title"><strong>${esc(sel.desc)}</strong> · 主推 ${esc(sel.numbers.length)} 码</div><span class="kl8-mode-badge">${esc(badgeText)}</span></div>`;
+      html += `<div class="kl8-strategy-line" title="${esc(sel.strategy_id || '')}">strategy / ${esc(sel.strategy_id || '-')}</div>`;
+      if (sel.strategy_evidence) {
+        const ev = sel.strategy_evidence;
+        html += `<div class="kl8-inline-warning">单号弱信号：${(Number(ev.empirical_next_hit_rate || 0) * 100).toFixed(2)}% vs 随机 ${(Number(ev.random_baseline || 0) * 100).toFixed(2)}% · 未通过显著性验证</div>`;
+      }
+      html += `<div class="kl8-numbers-row">`;
+      const playChangeInfo = (changeInfo.play_changes || {})[key];
+      const addedSet = new Set(playChangeInfo ? playChangeInfo.added : []);
+      for (const n of sel.numbers) {
+        if (addedSet.has(n)) {
+          html += `<span class="kl8-ball highlight-ball" style="border:2px solid #2ea043;box-shadow:0 0 3px #2ea043">${String(n).padStart(2,'0')}</span>`;
+        } else {
+          html += `<span class="kl8-ball highlight-ball">${String(n).padStart(2,'0')}</span>`;
+        }
+      }
+      html += `</div>`;
+      const kl8WR = (kl8HypergeomPGe(st, winTh) * 100).toFixed(1);          // 单注参考率
+      html += `<div class="kl8-probability-line">中${esc(winTh)}+ 约 <b style="color:${kl8WR >= 15 ? '#42d392' : '#f6bd55'}">${esc(kl8WR)}%</b>/期 · 期望中 ${esc((sel.numbers.length * 0.25).toFixed(2))} 个</div>`;
+      html += renderKL8ShapeProfile(sel.shape_profile, sel.numbers);
+      if (sel.repeat_profile) {
+        const actualRepeats = sel.numbers.filter(n => (r.statistics?.last_numbers || []).includes(n)).length;
+        const repeatRule = sel.repeat_profile.constraint_applied
+          ? ` · 策略约束至少 ${esc(sel.repeat_profile.configured_minimum || 0)} 个`
+          : ' · 仅统计观察，不强制换入重号';
+        html += `<div class="kl8-inline-note">重号结构：本组 ${esc(actualRepeats)} 个 · 近${esc(sel.repeat_profile.sample_size || 0)}期相邻开奖平均 ${esc(sel.repeat_profile.mean_draw_overlap || 0)} 个${repeatRule}</div>`;
+      }
+      html += renderKL8AccuracyProfile(sel.accuracy_profile);
+      if (isRef && sel.warning) {
+        html += `<div class="kl8-inline-warning">⚠ ${esc(sel.warning)}</div>`;
+      }
+      html += `</article>`;
+    }
+    html += `</div></section>`;
+  }
+
+  // 复式玩法 — 仅在有号码时显示
+  for (const f of fushiTypes) {
+    const fushi = r[f.key];
+    const coreNumbers = fushi ? (fushi[f.field] || fushi.core_numbers || []) : [];
+    if (!fushi || coreNumbers.length === 0) continue;
+
+    const isRef = fushi.prediction_mode === 'reference_unvalidated';
+    const isCoverage = fushi.baseline_type === 'fair_deterministic_coverage';
+    const border = isRef ? '#f6bd55' : '#42d392';
+    const badge = isCoverage ? '公平覆盖' : (isRef ? '参考' : '已验证');
+    const comboPick = fushi.combo_pick || (f.key === 'fu_shi_10_11' ? 10 : 5);
+    const poolSize = fushi.pool_size || coreNumbers.length;
+
+    html += `<section class="card kl8-panel kl8-fushi-card" style="--kl8-card-accent:${border}">`;
+    html += `<div class="kl8-fushi-header"><span>${esc(f.label)}</span><span class="kl8-mode-badge">${esc(badge)} · ${esc(fushi.total_combinations)} 组</span></div>`;
+    if (fushi.strategy_id) {
+      html += `<div class="kl8-strategy-line" title="${esc(fushi.strategy_id)}">strategy / ${esc(fushi.strategy_id)}</div>`;
+    }
+    const fushiBasePick = f.comboPick || f.basePick || (f.key === 'fu_shi_10_11' ? 10 : 5);
+    const fushiWinTh = fushiBasePick <= 4 ? 2 : (fushiBasePick <= 7 ? 3 : 5);
+    const fushiExpWins = (fushi.total_combinations * kl8HypergeomPGe(fushiBasePick, fushiWinTh)).toFixed(1);
+    html += `<div class="kl8-fushi-summary">${esc(f.coreLabel)} · 每注中奖门槛中 ${esc(fushiWinTh)} 个 · 期望中奖注数约 <b style="color:#42d392">${esc(fushiExpWins)}</b> 注（共 ${esc(fushi.total_combinations)} 注）</div>`;
+    html += `<div class="kl8-fushi-top7">`;
+    for (const n of coreNumbers) {
+      html += `<span class="kl8-ball highlight-ball" style="width:44px;height:44px;font-size:18px">${String(n).padStart(2,'0')}</span>`;
+    }
+    html += `</div>`;
+    html += renderKL8ShapeProfile(fushi.shape_profile, coreNumbers);
+    if (isRef && fushi.warning) {
+      html += `<div class="kl8-inline-warning">⚠ ${esc(fushi.warning)}</div>`;
+    }
+    html += `</section>`;
+  }
+
+  // 号码排名Top20（仅在有已验证策略时显示）
+  if (signalStatus === 'validated' && r.ranking && r.ranking.length > 0) {
+    html += `<section class="card kl8-panel">`;
+    html += `<div class="kl8-panel-head"><div><div class="kl8-panel-kicker">Heuristic ranking</div><h3>号码排名 Top20</h3></div><span class="kl8-panel-count">非开出概率</span></div>`;
+    html += `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:6px">`;
+    for (const item of r.ranking) {
+      const rankingScore = item.ranking_score?.toFixed(3) || item.score?.toFixed(3) || '0';
+      html += `<div style="display:flex;align-items:center;gap:8px;padding:4px 8px;background:var(--card);border-radius:6px;font-size:13px">`;
+      html += `<span class="kl8-ball" style="width:28px;height:28px;font-size:11px">${String(item.num).padStart(2,'0')}</span>`;
+      html += `<span style="color:var(--muted)">排序: ${rankingScore}</span>`;
+      html += `</div>`;
+    }
+    html += `</div>`;
+    html += `</section>`;
+  }
+
+  // 刷新按钮
   html += `<div id="kl8-parameter-search-result"></div>`;
+  html += `<section class="kl8-action-dock">`;
+  html += `<div class="kl8-action-copy"><strong>数据与策略工具</strong><span>所有原有操作保持不变</span></div>`;
+  html += `<div class="kl8-action-buttons">`;
+  html += `<button type="button" class="kl8-refresh-btn" onclick="refreshKL8()">↻ 重新计算</button>`;
+  html += `<button type="button" class="kl8-refresh-btn action-warn" onclick="openKL8ExcludeModal()">⊖ 剔除号码重算</button>`;
+  html += `<button type="button" class="kl8-refresh-btn action-danger" onclick="openKL8KillModal()">⌫ 杀号计算</button>`;
+  html += `<button type="button" class="kl8-refresh-btn action-info" onclick="fetchKL8Data()">↻ 抓取最新开奖</button>`;
+  html += `<button type="button" class="kl8-refresh-btn action-success" onclick="openKL8RecordsModal()">▦ 预测记录</button>`;
+  html += `</div></section>`;
   html += `</div>`;
   html += `<div id="kl8-exclude-modal"></div>`;
   html += `<div id="kl8-records-modal"></div>`;
+
   appKL8.innerHTML = html;
 }
 
@@ -5634,25 +5983,40 @@ function renderKL8AccuracyProfile(profile) {
   const zero = pct(Number(profile.zero_hit_probability_random || 0));
   const probs = profile.theoretical_probabilities || {};
   const keys = Array.isArray(profile.key_thresholds) ? profile.key_thresholds : [];
-  const keyText = keys.map(k => `中 ${esc(k)} 个 ${pct(Number(probs[k] || 0))}`).join('，');
-  return `<div class="kl8-detail-line">随机基线：期望中 ${expected} 个，一个不中 ${zero}${keyText ? `，${keyText}` : ''}。</div>`;
+  const keyText = keys.map(k => `${esc(k)} ${pct(Number(probs[k] || 0))}`).join(' | ');
+  const targetText = profile.target_hits
+    ? ` | target ${esc(profile.target_hits)} hit=${pct(Number(profile.target_probability_random || 0))}`
+    : '';
+  const mode = profile.selected_mode ? ` | mode ${esc(profile.selected_mode)}` : '';
+  return `<div class="kl8-inline-note kl8-accuracy-line">
+    random E=${expected} | P(0 hit)=${zero}${targetText}${keyText ? ` | ${keyText}` : ''}${mode}
+  </div>`;
 }
 
 function renderKL8PerformanceSummary(performance) {
   const available = Number(performance?.available_count || 0);
   if (!available) {
-    return `<span class="kl8-panel-count">等待下一期开奖后自动结算</span>`;
+    return `<div class="kl8-inline-warning kl8-performance-note">实际效果等待下一期开奖自动结算；当前页面概率均为随机理论值，不代表模型准确率。</div>`;
   }
   const windows = Array.isArray(performance.windows) ? performance.windows : [];
   const current = windows.find(w => Number(w.settled_count || 0) > 0) || {};
   const rows = Object.values(current.play_stats || {}).filter(x => /^select_(5|6)$/.test(x.play_type || ''));
   if (!rows.length) return '';
-  const chips = rows.map(stat => {
+  const cells = rows.map(stat => {
     const delta = Number(stat.hit_delta_vs_random || 0);
-    const cls = delta > 0 ? 'pos' : delta < 0 ? 'neg' : '';
-    return `<span class="kl8-perf-chip ${cls}" title="${esc(stat.label)}近 ${esc(current.settled_count || available)} 期实际平均命中，与随机基线比较"><b>${esc(stat.label)}</b> ${Number(stat.avg_hits || 0).toFixed(2)} <small>/ 随机 ${Number(stat.random_expected_hits || 0).toFixed(2)}</small><em>${delta > 0 ? '+' : ''}${delta.toFixed(2)}</em></span>`;
+    const color = delta > 0 ? '#2ea043' : delta < 0 ? '#f85149' : '#8b949e';
+    let line = `<span style="margin-right:18px">${esc(stat.label)}：实际均中 <b>${Number(stat.avg_hits || 0).toFixed(2)}</b>，随机 ${Number(stat.random_expected_hits || 0).toFixed(2)}，<b style="color:${color}">${delta >= 0 ? '+' : ''}${delta.toFixed(2)}</b></span>`;
+    // v9.6: 同时展示多注组合层面的实际命中率
+    const ms = stat.multi_slip;
+    if (ms && ms.settled_count > 0) {
+      line += `<span style="margin-right:18px">${esc(stat.label)}多注：最佳组均中 <b>${Number(ms.avg_best_hits || 0).toFixed(2)}</b> · ≥3 <b>${(ms.ge3_rate * 100).toFixed(0)}%</b> · ≥4 <b>${(ms.ge4_rate * 100).toFixed(0)}%</b> · ≥5 <b>${(ms.ge5_rate * 100).toFixed(0)}%</b></span>`;
+    }
+    return line;
   }).join('');
-  return `<span class="kl8-perf-chips"><span class="kl8-perf-label">近 ${esc(current.settled_count || available)} 期命中</span>${chips}</span>`;
+  return `<div class="card kl8-panel" style="padding:12px 15px;border-left:3px solid #63a4ff">
+    <div style="font-size:12px;color:#8b949e;margin-bottom:5px">最近 ${esc(current.settled_count || available)} 期实际结算（与随机基线比较）</div>
+    <div style="font-size:12px;line-height:1.7">${cells}</div>
+  </div>`;
 }
 
 // 多注覆盖方案（v9.6）：渲染 N 组覆盖最大化号码，诚实展示组合层面命中率
@@ -5760,7 +6124,7 @@ function openKL8ExcludeModal() {
   let html = `<div class="kl8-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="kl8-exclude-title">`;
   html += `<div class="kl8-modal-window">`;
   html += `<div class="kl8-modal-head">`;
-  html += `<div><div class="kl8-panel-kicker">进阶重算</div><div class="kl8-modal-title" id="kl8-exclude-title">剔除号码重新计算</div></div>`;
+  html += `<div><div class="kl8-panel-kicker">Advanced recalculation</div><div class="kl8-modal-title" id="kl8-exclude-title">剔除号码重新计算</div></div>`;
   html += `<button type="button" class="kl8-refresh-btn action-muted" onclick="closeKL8ExcludeModal()">关闭</button>`;
   html += `</div><div class="kl8-modal-body">`;
   html += `<div class="kl8-disclaimer" style="margin-bottom:12px"><b>ⓘ</b><span>选择玩法后，会剔除当前整组号码并重算；新结果会成为下一次剔除对象，直到候选不足为止。不会覆盖正式预测和快照。</span></div>`;
@@ -5873,7 +6237,7 @@ function openKL8KillModal() {
   let html = `<div class="kl8-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="kl8-kill-title">`;
   html += `<div class="kl8-modal-window">`;
   html += `<div class="kl8-modal-head">`;
-  html += `<div><div class="kl8-panel-kicker">手动排除</div><div class="kl8-modal-title" id="kl8-kill-title">杀号计算</div></div>`;
+  html += `<div><div class="kl8-panel-kicker">Manual exclusion</div><div class="kl8-modal-title" id="kl8-kill-title">杀号计算</div></div>`;
   html += `<button type="button" class="kl8-refresh-btn action-muted" onclick="closeKL8KillModal()">关闭</button>`;
   html += `</div><div class="kl8-modal-body">`;
   html += `<div class="kl8-disclaimer" style="margin-bottom:12px"><b>ⓘ</b><span>输入杀号后先计算一次；之后每次计算会把当前结果整组加入排除列表再推荐，不影响“剔除号码重新计算”。</span></div>`;
@@ -5917,7 +6281,7 @@ async function openKL8RecordsModal() {
   target.innerHTML = `<div class="kl8-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="kl8-records-title">
     <div class="kl8-modal-window records">
       <div class="kl8-modal-head">
-        <div><div class="kl8-panel-kicker">历史记录</div><div class="kl8-modal-title" id="kl8-records-title">快乐8预测记录</div></div>
+        <div><div class="kl8-panel-kicker">Prediction archive</div><div class="kl8-modal-title" id="kl8-records-title">快乐8预测记录</div></div>
         <button type="button" class="kl8-refresh-btn action-muted" onclick="closeKL8RecordsModal()">关闭</button>
       </div>
       <div id="kl8-records-body" class="kl8-modal-body" style="flex:1;min-height:0;overflow:auto">
@@ -6547,7 +6911,12 @@ function handleBasketballSearch(e) {
 
 function renderBasketball(result) {
   basketballLastResult = result;
-  let html = '';
+  const overviewMatches = result.matches || [];
+  let html = renderSportOverview([
+    ['分析赛事', overviewMatches.length, '当前数据源已载入'],
+    ['盘口跟踪', overviewMatches.filter(m => m.market_analysis?.available).length, '已有盘口变化分析'],
+    ['正在比赛', overviewMatches.filter(m => m.status === 'in_progress').length, '展示已保存的赛前信息'],
+  ]);
   
   html += `<div class="sport-toolbar-shell sport-toolbar basketball-toolbar">
     <div class="toolbar-row">
@@ -6555,6 +6924,7 @@ function renderBasketball(result) {
         <span class="toolbar-label">搜索</span>
         <div style="flex:1">
           <input type="search" id="basketball-search" class="search"
+            aria-label="搜索篮球比赛"
             placeholder="搜索球队、联赛"
             value="${esc(basketballSearchFilter || '')}"
             style="width:100%;margin-bottom:0;padding:8px 12px;border-radius:8px;border:1px solid rgba(44,58,78,0.5);background:rgba(0,0,0,0.2);color:var(--text);font-size:13px"
@@ -6616,11 +6986,10 @@ function renderBasketball(result) {
     html += `<div class="league-group"><div class="league-title">${esc(league)}</div>`;
     matches.forEach(m => {
       html += `<div class="match sport-match-card basketball-match-card" style="display:block;padding:12px">
-        <div style="display:flex;justify-content:space-between;align-items:flex-start">
-          <div style="flex:1">
-            <div style="font-weight:bold;font-size:15px;margin-bottom:4px">
-              ${esc(m.home)} <span style="color:var(--muted)">vs</span> ${esc(m.away)}
-            </div>
+        <div class="fixture-heading" style="display:flex;justify-content:space-between;align-items:flex-start">
+          <div class="fixture-identity" style="flex:1">
+            <div class="fixture-meta"><span>${esc(m.league || '篮球赛事')}</span><span>赛前分析</span></div>
+            ${renderFixtureTeams(m.home, m.away)}
             <div style="font-size:13px;color:var(--muted)">
               ${esc(m.time || '')}
               ${m.status === 'in_progress' ? '<span style="margin-left:8px;color:#f59e0b">已开赛 · 仅展示赛前盘口</span>' : ''}
