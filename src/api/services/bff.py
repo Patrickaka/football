@@ -32,6 +32,7 @@ def football_home_payload(params=None) -> Dict:
     from src.api.services import football as football_service
     from src.football.config import CACHE_AVAILABLE, get_cache
     from src.football.pipeline import (
+        _is_hkjc_cache_current,
         _is_lottery_cache_current,
         _is_prediction_cache_current,
         analysis_cache_key,
@@ -62,6 +63,7 @@ def football_home_payload(params=None) -> Dict:
             cached is not None
             and _is_prediction_cache_current(cached)
             and _is_lottery_cache_current(cached, match)
+            and _is_hkjc_cache_current(cached, match)
         ):
             ready.append({'match_id': match.get('match_id'), 'result': cached})
         else:

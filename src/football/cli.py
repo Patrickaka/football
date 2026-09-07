@@ -101,6 +101,25 @@ def _heat_tag(heat):
     return {'cold': '❄冷', 'hot': '🔥热', 'neutral': '—'}.get(heat, '—')
 
 
+def _format_euro_asian_deviation(deviation):
+    if deviation.get('fit_failed'):
+        return '欧亚盘口强度校验失败：无法确认两个市场的强度是否一致'
+    fair_price = deviation.get('method') == 'poisson_fair_price'
+    keys = ('euro_supremacy', 'asian_supremacy', 'deviation') if fair_price else (
+        'implied_handicap', 'actual_handicap', 'deviation')
+    try:
+        left, right, difference = (float(deviation[key]) for key in keys)
+        if not all(math.isfinite(value) for value in (left, right, difference)):
+            raise ValueError('non_finite_deviation')
+    except (KeyError, TypeError, ValueError, OverflowError):
+        return '欧亚盘口强度校验：数据不足，无法比较'
+    if fair_price:
+        return (f'欧亚强度差异: 欧赔净胜球均值{left:+.2f} vs '
+                f'亚盘净胜球均值{right:+.2f}，差异{difference:+.2f}球')
+    return (f'欧赔亚盘偏差: 欧赔隐含让球{left:+.2f} vs '
+            f'实际盘口{right:+.2f}，偏差{difference:+.2f}')
+
+
 def render_cli(result):
     """将 analyze_match 的结果渲染为命令行报告"""
     match, asian, euro, total, model = (
@@ -229,7 +248,7 @@ def render_cli(result):
                 print(f"  ⚡ {joint_water['hint_desc']}")
         
         if euro_asian_dev:
-            print(f"  欧赔亚盘偏差: 欧赔隐含让球{euro_asian_dev['implied_handicap']:+.2f} vs 实际盘口{euro_asian_dev['actual_handicap']:+.2f}，偏差{euro_asian_dev['deviation']:+.2f}")
+            print(f"  {_format_euro_asian_deviation(euro_asian_dev)}")
 
     print("\n" + "=" * 65)
     print("【综合信号汇总】")

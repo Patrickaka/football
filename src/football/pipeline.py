@@ -757,7 +757,8 @@ def _analyze_match_impl(match, force_refresh=False):
         total['xg_away'] = team['elo_xg_away']
         total['xg_total'] = team['elo_xg_home'] + team['elo_xg_away']
 
-    target_total = total['implied_total']
+    observed_total_goals = total['implied_total']
+    target_total = observed_total_goals
     lp_avg = league_profile.get('avg_goal', AVG_LEAGUE_GOAL)
     target_total = max(lp_avg * 1.6, min(lp_avg * 3.5, target_total))  # 原1.4/3.2，上调下限使λ更真实
     total['implied_total'] = target_total
@@ -793,7 +794,21 @@ def _analyze_match_impl(match, force_refresh=False):
 
     # 新增：联合异常特征
     joint_anomaly = compute_joint_anomaly(yazhi_raw, daxiao_raw)
-    euro_asian_dev = compute_euro_asian_deviation(euro['close'], asian['handicap'])
+    observed_deviation_markets = all(
+        market.get('source') not in {'model_proxy', 'unavailable'}
+        and market.get('source_matched') is not False
+        for market in (asian, euro, total)
+    )
+    # A missing market price must not borrow the prediction model's 0.5 default.
+    observed_asian_home_price = next(
+        (asian['close_prob'].get(key) for key in ('home_give', 'home_recv', 'home')
+         if asian['close_prob'].get(key) is not None), None)
+    euro_asian_dev = compute_euro_asian_deviation(
+        euro['close'], asian['handicap'],
+        total_goals=observed_total_goals,
+        asian_home_probability=observed_asian_home_price,
+        markets_observed=observed_deviation_markets,
+    )
     
     # 新增：凯利时序趋势分析
     kelly_trend = analyze_kelly_trend(euro_raw.get('series', []))

@@ -104,6 +104,22 @@ class FootballAccuracyGateTests(unittest.TestCase):
         self.assertFalse(result["spf"]["selected"])
         self.assertIn("欧赔与亚盘明显冲突", result["spf"]["reasons"])
 
+    def test_failed_strength_fit_cannot_pass_with_small_legacy_deviation(self):
+        result = build_accuracy_gate({
+            "standard": {
+                "probabilities": {"胜": .84, "平": .09, "负": .07},
+                "market_probabilities": {"胜": .82, "平": .10, "负": .08},
+            },
+            "handicap": {
+                "probabilities": {"让胜": .84, "让平": .09, "让负": .07},
+                "market_probabilities": {"让胜": .82, "让平": .10, "让负": .08},
+            },
+        }, anomaly={"euro_asian_deviation": {"abs_deviation": .01, "fit_failed": True}})
+        for market in ("spf", "rqspf"):
+            with self.subTest(market=market):
+                self.assertFalse(result[market]["selected"])
+                self.assertIn("欧亚盘口强度校验失败", result[market]["reasons"])
+
     def test_upset_alert_downgrades_chalk_and_exposes_defensive_watch(self):
         result = build_accuracy_gate(
             {

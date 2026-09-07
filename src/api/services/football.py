@@ -16,6 +16,7 @@ import json
 import time
 import re
 from datetime import datetime, timedelta
+from copy import deepcopy
 from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
@@ -32,6 +33,109 @@ log = logging.getLogger('api.services.football')
 # 漏掉不会在导入时报错，运行到那一行才 NameError。
 FOOTBALL_BATCH_LIMIT = max(1, int(os.getenv('FOOTBALL_BATCH_LIMIT', '30')))
 FOOTBALL_BATCH_CONCURRENCY = max(1, int(os.getenv('FOOTBALL_BATCH_CONCURRENCY', '2')))
+
+# 客户端不提供盘口上下文；从服务器已取得的当天赛程精确补回。
+_MATCH_CONTEXT_IDS = ('match_id', 'analysis_id', 'zgzcw_id')
+_HKJC_CONTEXT_FIELDS = (
+    'hkjc_id', 'hkjc_match_score', 'hkjc_had_odds', 'hkjc_updated_at',
+    'asian_source', 'asian_offer_matched', 'asian_current',
+    'total_source', 'total_offer_matched', 'total_current',
+)
+_CURRENT_MATCH_SNAPSHOT = (None, ())
+
+
+def _remember_match_snapshot(matches):
+    global _CURRENT_MATCH_SNAPSHOT
+    _CURRENT_MATCH_SNAPSHOT = (
+        datetime.now(), tuple(deepcopy(m) for m in matches if isinstance(m, dict)),
+    )
+
+
+def _read_persisted_match_snapshot(now):
+    """只读已有赛程，不为补全预测参数再发起一轮源站请求。"""
+    try:
+        from src.football.config import MATCH_LIST_CACHE_PATH
+        with open(MATCH_LIST_CACHE_PATH, encoding='utf-8') as handle:
+            payload = json.load(handle)
+        saved_at = datetime.fromisoformat(str(payload.get('saved_at') or ''))
+        if saved_at.tzinfo is not None:
+            saved_at = saved_at.astimezone().replace(tzinfo=None)
+        matches = payload.get('matches')
+        if (saved_at.date() != now.date() or saved_at > now
+                or not isinstance(matches, list)):
+            return None, ()
+        return saved_at, tuple(m for m in matches if isinstance(m, dict))
+    except (OSError, ValueError, TypeError, AttributeError):
+        return None, ()
+
+
+def _prediction_schedule_snapshot():
+    """内存与磁盘取较新的当天快照；与分析缓存相同，跨天即失效。"""
+    global _CURRENT_MATCH_SNAPSHOT
+    now = datetime.now()
+    remembered_at, matches = _CURRENT_MATCH_SNAPSHOT
+    if remembered_at is None or remembered_at.date() != now.date():
+        _CURRENT_MATCH_SNAPSHOT = (None, ())
+        remembered_at, matches = _CURRENT_MATCH_SNAPSHOT
+    persisted_at, persisted = _read_persisted_match_snapshot(now)
+    if persisted_at is not None and (remembered_at is None or persisted_at > remembered_at):
+        matches = persisted
+    return matches
+
+
+def _identity_text(value):
+    return ''.join(str(value or '').split()).casefold()
+
+
+def _match_kickoff_identity(match):
+    """对齐已有的完整日期与 MM-DD HH:MM，不能把日期不同的场次串起来。"""
+    raw = str(match.get('time') or '').strip()
+    if not raw:
+        return ''
+    try:
+        kickoff = datetime.fromisoformat(raw)
+        if kickoff.tzinfo is not None:
+            kickoff = kickoff.astimezone().replace(tzinfo=None)
+        return kickoff.strftime('%Y-%m-%d %H:%M')
+    except ValueError:
+        pass
+    now = datetime.now()
+    try:
+        if re.fullmatch(r'\d{2}:\d{2}', raw):
+            date = str(match.get('date') or now.strftime('%Y-%m-%d'))[:10]
+            kickoff = datetime.strptime(f'{date} {raw}', '%Y-%m-%d %H:%M')
+        else:
+            kickoff = datetime.strptime(f'{now.year}-{raw}', '%Y-%m-%d %H:%M')
+            # 与赛程的开赛判定一致：年末看到一月赛程时归入下一年。
+            if kickoff < now - timedelta(days=180):
+                kickoff = kickoff.replace(year=now.year + 1)
+        return kickoff.strftime('%Y-%m-%d %H:%M')
+    except ValueError:
+        return _identity_text(raw)
+
+
+def _with_current_market_context(match, snapshot):
+    """仅补服务端确认的 HKJC 字段；基础参数不改，ID/队伍/开赛时间冲突则拒绝。"""
+    enriched = {key: value for key, value in match.items() if key not in _HKJC_CONTEXT_FIELDS}
+    candidates = []
+    for known in snapshot:
+        shared_ids = [key for key in _MATCH_CONTEXT_IDS
+                      if _identity_text(match.get(key)) and _identity_text(known.get(key))]
+        if not shared_ids or any(
+                _identity_text(match[key]) != _identity_text(known[key]) for key in shared_ids):
+            continue
+        if any(_identity_text(match.get(key)) and _identity_text(known.get(key))
+               and _identity_text(match[key]) != _identity_text(known[key])
+               for key in ('home', 'away')):
+            continue
+        if match.get('time') and known.get('time') and (
+                _match_kickoff_identity(match) != _match_kickoff_identity(known)):
+            continue
+        candidates.append(known)
+    if len(candidates) == 1:
+        known = candidates[0]
+        enriched.update({key: deepcopy(known[key]) for key in _HKJC_CONTEXT_FIELDS if key in known})
+    return enriched
 
 
 def try_generate_report(rel: str):
@@ -50,6 +154,8 @@ def try_generate_report(rel: str):
 def matches_payload():
     try:
         matches = fetch_match_list()
+        if not get_match_list_status().get('stale'):
+            _remember_match_snapshot(matches)
 
         # 过滤掉「已开赛」的比赛：列表只保留未开赛场次，减少前端渲染量、
         # 也避免对已经无法进行投注分析的比赛做无谓展示（提速）。
@@ -183,7 +289,8 @@ def predict_payload(params):
     if not match_id:
         return {'error': '缺少 match_id 参数'}
     force_refresh = params.get('force_refresh', ['false'])[0].lower() == 'true'
-    return analyze_one(match_from_params(params), force_refresh)
+    match = _with_current_market_context(match_from_params(params), _prediction_schedule_snapshot())
+    return analyze_one(match, force_refresh)
 
 
 def predict_batch_payload(body):
@@ -204,6 +311,9 @@ def predict_batch_payload(body):
     matches = [match_from_json(item) for item in raw_matches if isinstance(item, dict)]
     if not matches:
         return {'error': 'matches 中没有有效的比赛对象'}
+
+    snapshot = _prediction_schedule_snapshot()
+    matches = [_with_current_market_context(match, snapshot) for match in matches]
 
     workers = min(FOOTBALL_BATCH_CONCURRENCY, len(matches))
     with ThreadPoolExecutor(max_workers=workers, thread_name_prefix='PredictBatch') as pool:

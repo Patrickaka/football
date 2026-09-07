@@ -46,7 +46,7 @@ class WebProfessionalModalTests(unittest.TestCase):
         self.assertIn("timeoutError.code = 'ANALYSIS_TIMEOUT'", html)
         self.assertIn("已完成结果先行展示", html)
         self.assertIn("已隔离 ${footballAnalysisFailures.length} 场超时/失败分析", html)
-        self.assertIn("📡 信息完整度", html)
+        self.assertIn('class="fixture-completeness">信息完整度', html)
         self.assertIn("预测可信度", html)
         self.assertIn("本场专业证据审计", html)
         self.assertIn("胜平负预测", html)

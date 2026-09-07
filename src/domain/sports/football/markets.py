@@ -434,8 +434,171 @@ def euro_to_handicap_implied(p_home, p_away, k=EURO_HANDICAP_K):
     return (p_home - p_away) * k
 
 
-def compute_euro_asian_deviation(euro_probs, asian_handicap, k=EURO_HANDICAP_K):
-    """理论让球值（由欧赔转换）与实际亚盘让球值的偏差"""
+def _poisson_market_quotes(total_goals, supremacy, handicap):
+    """Price 1X2 and Asian home-side stakes from one independent Poisson pair.
+
+    Integer lines refund pushes. Quarter lines split the stake before adding
+    win/loss fractions; fair implied probability is wins / (wins + losses),
+    not the unconditional chance of a positive payout. Averaged non-grid
+    handicaps interpolate the stake fractions of adjacent quarter lines.
+    """
+    home_mean, away_mean = (total_goals + supremacy) / 2, (total_goals - supremacy) / 2
+    if home_mean < 0 or away_mean < 0:
+        raise ValueError('negative_poisson_mean')
+    size = max(30, math.ceil(total_goals + 10 * math.sqrt(total_goals) + 10))
+
+    def pmf(mean):
+        values = [math.exp(-mean)]
+        for goals in range(1, size):
+            values.append(values[-1] * mean / goals)
+        return values
+
+    home, away = pmf(home_mean), pmf(away_mean)
+    cumulative = []
+    running = 0.0
+    for probability in away:
+        running += probability
+        cumulative.append(running)
+    mass = sum(home) * running
+
+    def fractions(line):
+        won = pushed = 0.0
+        integer = abs(line - round(line)) < 1e-10
+        for goals, probability in enumerate(home):
+            last_away = math.ceil(goals - line) - 1
+            if last_away >= 0:
+                won += probability * cumulative[min(last_away, size - 1)]
+            if integer:
+                tied_away = goals - round(line)
+                if 0 <= tied_away < size:
+                    pushed += probability * away[tied_away]
+        lost = max(0.0, mass - won - pushed)
+        return won, lost, pushed
+
+    win, loss, draw = fractions(0.0)
+    lower = math.floor(handicap * QUARTERS_PER_GOAL) / QUARTERS_PER_GOAL
+    weight = (handicap - lower) * QUARTERS_PER_GOAL
+    asian_win = asian_loss = 0.0
+    for grid_line, grid_weight in ((lower, 1.0 - weight), (lower + 0.25, weight)):
+        if grid_weight <= 1e-12:
+            continue
+        lines = _settlement_lines(grid_line)
+        for line in lines:
+            won, lost, _ = fractions(line)
+            asian_win += grid_weight * won / len(lines)
+            asian_loss += grid_weight * lost / len(lines)
+    at_risk = asian_win + asian_loss
+    if not math.isfinite(at_risk) or at_risk <= 1e-14:
+        raise ValueError('no_settled_asian_stake')
+    return {
+        'home': win / mass, 'draw': draw / mass, 'away': loss / mass,
+        'asian_home': asian_win / at_risk,
+    }
+
+
+def _fit_poisson_market_supremacy(total_goals, target, handicap, *, asian=False):
+    """Invert a monotone market price, rejecting an unreachable target."""
+    def quote(supremacy):
+        probabilities = _poisson_market_quotes(total_goals, supremacy, handicap)
+        value = (probabilities['asian_home'] if asian
+                 else probabilities['home'] - probabilities['away'])
+        if not math.isfinite(value):
+            raise ValueError('non_finite_fitted_probability')
+        return value
+
+    bound = total_goals * (1.0 - 1e-8)
+    lo, hi = -bound, bound
+    if target < quote(lo) - 1e-9 or target > quote(hi) + 1e-9:
+        raise ValueError('price_outside_poisson_support')
+    for _ in range(48):
+        mid = (lo + hi) / 2
+        if quote(mid) < target:
+            lo = mid
+        else:
+            hi = mid
+    fitted = (lo + hi) / 2
+    if abs(quote(fitted) - target) > 1e-7:
+        raise ValueError('poisson_price_fit_did_not_converge')
+    return fitted
+
+
+def compute_euro_asian_deviation(euro_probs, asian_handicap, k=EURO_HANDICAP_K, *,
+                                 total_goals=None, asian_home_probability=None,
+                                 markets_observed=None):
+    """Compare euro/Asian strength using a shared expected-goal-margin scale.
+
+    The original three-argument call retains its exact four-field contract.
+    Explicitly observed total-goal and Asian fair-price inputs enable Poisson
+    inversion. Missing/proxy inputs keep the legacy proxy with audit metadata;
+    invalid inputs or a failed fit additionally set ``fit_failed`` so the gate
+    cannot treat a failed comparison as evidence of agreement.
+    """
+    enhanced = any(value is not None for value in
+                   (total_goals, asian_home_probability, markets_observed))
+    if enhanced:
+        try:
+            legacy = compute_euro_asian_deviation(euro_probs, asian_handicap, k)
+            if not all(math.isfinite(float(value)) for value in legacy.values()):
+                raise ValueError('non_finite_legacy_input')
+        except (TypeError, ValueError, AttributeError, OverflowError):
+            legacy = {'implied_handicap': None, 'actual_handicap': None,
+                      'deviation': None, 'abs_deviation': None}
+        def finite_input(value):
+            try:
+                number = float(value)
+                return number if math.isfinite(number) else None
+            except (TypeError, ValueError, OverflowError):
+                return None
+
+        audit = {
+            'method': 'linear_probability_proxy', 'fit_failed': False,
+            'input_basis': {
+                'total_goals': finite_input(total_goals),
+                'asian_home_probability': finite_input(asian_home_probability),
+                'markets_observed': markets_observed is True,
+            },
+        }
+
+        def fallback(reason, failed=False):
+            return {**legacy, **audit, 'fallback_reason': reason,
+                    'fit_failed': failed or legacy['abs_deviation'] is None}
+
+        if markets_observed is not True:
+            return fallback('missing_or_unobserved_market_inputs')
+        if total_goals is None or asian_home_probability is None:
+            return fallback('missing_total_or_asian_fair_price')
+        try:
+            total_value = float(total_goals)
+            home_price = float(asian_home_probability)
+            line = float(asian_handicap)
+            probs = [float(euro_probs[key]) for key in ('home', 'draw', 'away')]
+            values = [total_value, home_price, line, *probs]
+            if (not all(math.isfinite(value) for value in values)
+                    or not 0 < total_value <= 15 or not 0 < home_price < 1
+                    or abs(line) > 10 or any(not 0 <= value <= 1 for value in probs)
+                    or abs(sum(probs) - 1.0) > 0.01):
+                return fallback('invalid_observed_market_inputs', True)
+            probability_total = sum(probs)
+            balance = (probs[0] - probs[2]) / probability_total
+            euro_supremacy = _fit_poisson_market_supremacy(total_value, balance, line)
+            asian_supremacy = _fit_poisson_market_supremacy(
+                total_value, home_price, line, asian=True)
+            deviation = euro_supremacy - asian_supremacy
+            return {
+                **legacy, **audit,
+                'method': 'poisson_fair_price',
+                'deviation_unit': 'expected_goal_margin',
+                'euro_supremacy': round(euro_supremacy, 6),
+                'asian_supremacy': round(asian_supremacy, 6),
+                'legacy_deviation': legacy['deviation'],
+                'deviation': round(deviation, 4),
+                'abs_deviation': round(abs(deviation), 4),
+            }
+        except Exception as exc:
+            # A failed numerical check is not evidence that the markets agree.
+            return {**fallback('poisson_price_fit_failed', True),
+                    'fit_error': str(exc), 'error_type': type(exc).__name__}
+
     implied_handicap = euro_to_handicap_implied(
         euro_probs.get('home', 0.5), euro_probs.get('away', 0.5), k)
     deviation = implied_handicap - asian_handicap

@@ -3209,35 +3209,41 @@ body.ui-shell[data-module="kl8"] {
 }
 </style>
 <style id="sports-desk">
-/* Hallmark · macrostructure: Stat-Led sports desk · tone: crisp, bright, numerical
- * Horizontal masthead, warm paper, vermilion signals; existing routes and data.
+/* Hallmark · macrostructure: full-width fixture workspace · modern-minimal
+ * Warm ivory-to-rose background; red rules; all market evidence visible.
  * Pre-emit critique: P4 H4 E4 S5 R4 V4 */
 body.ui-shell {
-  --color-paper: oklch(97% .006 85);
-  --color-surface: oklch(99.7% .002 85);
-  --color-inset: oklch(95% .006 85);
+  --color-paper: oklch(97% .01 55);
+  --color-paper-start: oklch(95% .026 25);
+  --color-paper-middle: oklch(98% .009 65);
+  --color-paper-end: oklch(95% .018 55);
+  --color-surface: oklch(99.7% .002 55);
+  --color-inset: oklch(97% .008 35);
   --color-sidebar: var(--color-surface);
-  --color-rule: oklch(86% .009 85);
-  --color-control-rule: oklch(62% .012 85);
-  --color-ink: oklch(25% .012 260);
-  --color-muted: oklch(45% .01 260);
-  --color-dim: oklch(50% .01 260);
-  --color-accent: oklch(52% .19 28);
-  --color-accent-soft: oklch(96% .022 28);
+  --color-rule: oklch(88% .026 25);
+  --color-control-rule: oklch(69% .055 25);
+  --color-ink: oklch(29% .025 250);
+  --color-muted: oklch(47% .02 250);
+  --color-dim: oklch(50% .018 250);
+  --color-accent: oklch(51% .18 25);
+  --color-accent-soft: oklch(96% .02 25);
+  --color-accent-line: oklch(72% .10 25);
   --color-rose: var(--color-accent);
   --color-rose-soft: var(--color-accent-soft);
   --color-on-accent: var(--color-surface);
-  --color-overlay: oklch(25% .012 260 / .3);
-  --font-display: "Bahnschrift", "Arial Narrow", "Segoe UI", "Microsoft YaHei", sans-serif;
+  --color-overlay: oklch(25% .025 250 / .3);
   --font-body: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
-  --board-number-font: var(--font-display);
+  --font-display: var(--font-body);
+  --board-number-font: var(--font-body);
   --board-font: var(--font-body);
   --shadow-surface: none;
-  --space-xs: 8px; --space-sm: 16px; --space-md: 24px; --space-lg: 32px;
-  --radius-card: 6px; --radius-control: 4px;
+  --space-3xs: 4px; --space-xs: 8px; --space-sm: 16px;
+  --space-md: 24px; --space-lg: 32px; --space-xl: 48px;
+  --radius-card: 8px; --radius-control: 4px;
   --ease-out: cubic-bezier(.16, 1, .3, 1); --dur-short: 150ms;
-  font-family: var(--font-body);
-  background: var(--color-paper) !important;
+  font-family: var(--font-body); font-variant-numeric: tabular-nums;
+  background: linear-gradient(135deg, var(--color-paper-start) 0%, var(--color-paper-middle) 46%, var(--color-paper-end) 100%) !important;
+  background-attachment: fixed !important;
 }
 body.ui-shell, body.ui-shell[data-module="football"],
 body.ui-shell[data-module="basketball"], body.ui-shell[data-module="kl8"] {
@@ -3245,111 +3251,189 @@ body.ui-shell[data-module="basketball"], body.ui-shell[data-module="kl8"] {
   --board-accent-soft: var(--color-accent-soft);
 }
 html, body.ui-shell { overflow-x: clip; }
-.ui-shell .wrap {
-  width: calc(100% - 64px); max-width: 1320px !important;
-  margin: 0 auto !important; padding: 0;
-}
+.ui-shell .wrap { width: calc(100% - 64px); max-width: 1320px !important; margin: 0 auto !important; padding: 0; }
 .ui-shell .app-sidebar {
-  position: sticky; inset: 0 auto auto; width: 100%; min-height: 84px;
+  position: sticky; inset: 0 auto auto; width: 100%; min-height: 64px;
   display: flex !important; flex-direction: row; align-items: center;
-  gap: 64px; padding: 0 max(32px, calc((100% - 1320px) / 2));
-  border: 0; border-top: 3px solid var(--color-accent);
-  border-bottom: 1px solid var(--color-rule); background: var(--color-surface);
+  gap: var(--space-xl); padding: 0 max(32px, calc((100% - 1320px) / 2));
+  border: 0; border-bottom: 1px solid var(--color-rule); background: var(--color-surface);
 }
-.ui-shell .brand { flex: 0 0 auto; margin: 0; gap: 12px; font-size: 23px; font-weight: 800; letter-spacing: -.05em; }
-.ui-shell .brand-symbol {
-  width: 38px; height: 40px; border-radius: 3px; transform: skew(-6deg);
-  background: var(--color-accent); color: var(--color-on-accent); font-size: 29px;
-}
-.ui-shell .brand small { font-size: 8px; letter-spacing: .18em; color: var(--color-dim); }
-.ui-shell :is(.nav-caption, .sidebar-footer, .nav-arrow) { display: none; }
-.ui-shell .app-sidebar .tabs { flex-direction: row; align-self: stretch; gap: 8px !important; }
+.ui-shell .brand { flex: 0 0 auto; margin: 0; gap: var(--space-xs); font-size: 18px; font-weight: 650; letter-spacing: 0; }
+.ui-shell .brand-symbol { width: 28px; height: 28px; border-radius: var(--radius-control); transform: none; background: var(--color-accent); color: var(--color-on-accent); font-size: 22px; }
+.ui-shell :is(.brand small, .nav-caption, .sidebar-footer, .nav-arrow) { display: none; }
+.ui-shell .app-sidebar .tabs { flex-direction: row; align-self: stretch; gap: var(--space-xs) !important; }
 .ui-shell .app-sidebar .tabs .tab,
 .ui-shell[data-module] .app-sidebar .tabs .tab.active {
-  position: relative; width: auto; min-width: 126px; min-height: 80px;
-  justify-content: center; padding: 16px !important; gap: 9px;
+  position: relative; width: auto; min-width: 112px; min-height: 64px;
+  justify-content: center; padding: var(--space-sm) !important; gap: var(--space-xs);
   border: 0 !important; border-radius: 0 !important;
   background: transparent !important; color: var(--color-muted) !important;
-  font-size: 15px; font-weight: 650; white-space: nowrap;
+  font-size: 14px; font-weight: 500; white-space: nowrap;
 }
 .ui-shell .app-sidebar .tabs .tab small { display: none; }
-.ui-shell .app-sidebar .tabs .tab .module-icon { opacity: 1; width: 19px; height: 19px; }
-.ui-shell[data-module] .app-sidebar .tabs .tab.active { color: var(--color-ink) !important; }
-.ui-shell .app-sidebar .tabs .tab.active::after {
-  content: ''; position: absolute; inset: auto 16px -1px; height: 3px;
-  background: var(--color-accent); transform: none;
-}
+.ui-shell .app-sidebar .tabs .tab .module-icon { opacity: 1; width: 17px; height: 17px; }
+.ui-shell[data-module] .app-sidebar .tabs .tab.active { color: var(--color-accent) !important; font-weight: 600; }
+.ui-shell .app-sidebar .tabs .tab.active::after { content: ''; position: absolute; inset: auto 16px -1px; height: 2px; background: var(--color-accent); transform: none; }
 .ui-shell .app-sidebar .tabs .tab:hover { color: var(--color-accent) !important; background: var(--color-inset) !important; }
 .ui-shell .masthead-date { margin-left: auto; font-size: 12px; }
-.ui-shell .workspace-bar { min-height: 44px; border: 0; color: var(--color-dim); font-size: 11px; }
-.ui-shell .page-heading { display: block; padding: 8px 0 24px !important; }
-.ui-shell .page-heading h1 { font-size: clamp(28px, 3vw, 36px) !important; font-weight: 800 !important; letter-spacing: -.04em !important; }
-.ui-shell .page-heading p { margin-top: 8px !important; font-size: 13px !important; }
+.ui-shell .workspace-bar { min-height: 36px; border: 0; color: var(--color-dim); font-size: 11px; }
+.ui-shell .page-heading { display: flex; align-items: baseline; flex-wrap: wrap; gap: var(--space-xs) var(--space-sm); padding: var(--space-xs) 0 var(--space-sm) !important; }
+.ui-shell .page-heading h1 { font-size: 24px !important; font-weight: 600 !important; letter-spacing: 0 !important; }
+.ui-shell .page-heading p { margin: 0 !important; font-size: 12px !important; }
 .ui-shell .page-eyebrow { display: none; }
-.ui-shell .sport-overview {
-  background: var(--color-surface); border: 0; border-top: 3px solid var(--color-ink);
-  border-bottom: 1px solid var(--color-rule); border-radius: 0;
-  padding: 20px 0; margin-bottom: 24px; box-shadow: none;
-}
-.ui-shell .overview-item { padding-inline: 24px; border-radius: 0; }
-.ui-shell .overview-label { font-size: 13px; font-weight: 600; color: var(--color-ink); }
-.ui-shell .overview-value { font-family: var(--font-display); font-size: 42px; font-weight: 700; letter-spacing: -.05em; }
-.ui-shell .overview-detail { font-size: 11px; }
+.ui-shell .sport-overview { display: flex; flex-wrap: wrap; gap: 0; padding: 0; margin-bottom: var(--space-md); background: transparent; border: 0; border-radius: 0; box-shadow: none; }
+.ui-shell .overview-item, .ui-shell .overview-item:first-child { flex: 0 1 auto; display: flex; flex-direction: row; align-items: baseline; flex-wrap: wrap; gap: var(--space-xs); padding: 0 var(--space-md); border-right: 1px solid var(--color-rule); }
+.ui-shell .overview-item:first-child { padding-left: 0; }
+.ui-shell .overview-item:last-child { border: 0; }
+.ui-shell .overview-label { font-size: 12px; font-weight: 400; color: var(--color-muted); }
+.ui-shell .overview-value { font-family: var(--font-body); font-size: 20px; font-weight: 600; letter-spacing: 0; }
+.ui-shell .overview-value span { font-size: 11px; margin-left: var(--space-3xs); font-weight: 400; }
+.ui-shell .overview-detail { font-size: 11px; color: var(--color-dim); }
 .ui-shell .sport-panel :is(.tb-refresh, .search, .toolbar-buttons, .tb-btn, .date-value) { border-radius: var(--radius-control) !important; }
+.ui-shell .sport-panel :is(.tb-refresh, .search) { min-height: 40px; }
+.ui-shell .sport-panel .search { background: var(--color-surface) !important; }
+.ui-shell .sport-panel .search:focus { border-color: var(--color-accent) !important; box-shadow: none; }
+.ui-shell #panel-basketball .basketball-toolbar .toolbar-group:nth-child(2) > .tb-btn.tb-active { background: var(--color-accent-soft); border-color: var(--color-accent-line); color: var(--color-accent); }
 .ui-shell .sport-panel .tb-refresh.refresh-primary { background: var(--color-accent); color: var(--color-on-accent); border-color: var(--color-accent); }
 .ui-shell .sport-panel .tb-refresh.refresh-primary:hover { background: var(--color-ink); color: var(--color-on-accent); border-color: var(--color-ink); }
-.ui-shell .sport-panel .filter-row { border-bottom-color: var(--color-control-rule); }
-.ui-shell .sport-panel .quality-tabs .tb-btn { font-weight: 600; padding-inline: 4px; }
-.ui-shell .sport-panel .league-title { font-size: 15px; margin-block: 24px 12px; }
-.ui-shell .sport-panel .league-title::before { height: 16px; width: 4px; }
-.ui-shell .sport-panel .sport-match-card {
-  border-radius: var(--radius-card); box-shadow: none;
-  border-top: 2px solid var(--color-ink) !important;
-  padding: 24px !important; grid-template-columns: 250px minmax(0, 1fr); gap: 0 28px;
-}
-.ui-shell .fixture-meta { margin-bottom: 18px; font-size: 11px; }
-.ui-shell .fixture-team strong { font-size: 24px; font-weight: 750; }
+.ui-shell .sport-panel .filter-row { border-bottom-color: var(--color-rule); }
+.ui-shell .sport-panel .quality-tabs .tb-btn { font-weight: 500; padding-inline: var(--space-xs); border-radius: 0 !important; }
+.ui-shell .sport-panel .league-title { font-size: 13px; font-weight: 600; margin-block: var(--space-sm); }
+.ui-shell .sport-panel .league-title::before { display: none; }
+.ui-shell .sport-panel .league-title::after { background: var(--color-accent-line); }
+.ui-shell .board-guidance { margin-block: var(--space-xs); font-size: 11px; }
+.ui-shell .board-alert { border: 1px solid var(--color-rule); border-radius: var(--radius-control); }
+.ui-shell .sport-panel .sport-match-card { border: 1px solid var(--color-rule) !important; border-top: 2px solid var(--color-accent) !important; border-radius: var(--radius-card); box-shadow: none; padding: var(--space-md) !important; grid-template-columns: 220px minmax(0, 1fr); gap: 0 var(--space-md); margin-bottom: var(--space-sm); }
+.ui-shell .sport-panel .sport-match-card:hover { border-color: var(--color-rule) !important; border-top-color: var(--color-accent) !important; transform: none; box-shadow: none; }
+.ui-shell .fixture-team strong { font-family: var(--font-body); font-size: 20px; font-weight: 600; letter-spacing: 0; }
 .ui-shell .team-side { background: var(--color-inset); border: 0; border-radius: 2px; color: var(--color-muted); }
-.ui-shell .market-section-heading { margin-bottom: 16px; }
-.ui-shell .market-section-heading h3 { color: var(--color-muted); font-size: 11px; }
-.ui-shell .market-name { font-size: 14px; }
-.ui-shell .probability-value strong { font-family: var(--font-display); font-size: 25px; font-weight: 650; }
-.ui-shell .probability-track { height: 4px; border-radius: 0; }
-.ui-shell .probability-track i { border-radius: 0; }
-.ui-shell .score-value { font-family: var(--font-display); font-size: 23px; font-weight: 650; }
-.ui-shell .score-value span { font-family: var(--font-body); font-size: 11px; font-weight: 400; }
-.ui-shell :is(.decision-badge, .board-alert, .pro-status, .prediction-date-toolbar) { border-radius: var(--radius-control); }
-.ui-shell .board-alert { border-left: 3px solid var(--color-warning); }
-.ui-shell :is(.pro-modal-window, .kl8-modal-window, .bayes-modal, .prediction-calendar-popover) { border-radius: 8px; }
+.ui-shell .decision-badge { padding: 2px 6px; font-size: 11px; border-radius: 3px; font-weight: 500; }
+.ui-shell .decision-badge::before { display: none; }
+.ui-shell .probability-value strong { font-family: var(--font-body); font-size: 20px; font-weight: 600; letter-spacing: 0; }
+.ui-shell .probability-track { height: 3px; border-radius: 2px; }
+.ui-shell .probability-track i { border-radius: inherit; }
+.ui-shell .basketball-market .probability-value strong { font-size: 22px; }
+.ui-shell .score-value { font-family: var(--font-body); font-size: 18px; font-weight: 600; }
+.ui-shell .score-value span { font-family: var(--font-body); font-size: 12px; font-weight: 400; }
+.ui-shell #panel-football .football-match-card { display: block !important; padding: 0 !important; overflow: clip; }
+.ui-shell #panel-football .fixture-heading { display: flex !important; flex-direction: row !important; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: var(--space-sm) var(--space-md) !important; padding: var(--space-sm) var(--space-md) !important; background: var(--color-surface); border-bottom: 1px solid var(--color-rule); }
+.ui-shell #panel-football .fixture-identity { min-width: 0; flex: 1 1 360px; }
+.ui-shell #panel-football .fixture-meta { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-xs); margin-bottom: var(--space-xs); font-size: 12px; }
+.ui-shell #panel-football .fixture-time { font-size: 12px; margin-left: var(--space-xs); }
+.ui-shell #panel-football .fixture-teams { flex-direction: row; align-items: center; flex-wrap: wrap; gap: var(--space-sm); margin: 0; }
+.ui-shell #panel-football .fixture-team { flex: 0 1 auto; min-width: 0; gap: var(--space-xs); }
+.ui-shell #panel-football .fixture-team strong { overflow-wrap: anywhere; text-wrap: auto; }
+.ui-shell #panel-football .fixture-vs { display: block; font-size: 11px; font-weight: 400; color: var(--color-dim); }
+.ui-shell #panel-football .fixture-assessment { flex: 0 1 auto; text-align: right; }
+.ui-shell #panel-football .fixture-status { justify-content: flex-end; margin: 0 0 var(--space-3xs); font-size: 12px; gap: var(--space-xs); }
+.ui-shell #panel-football .fixture-completeness { font-size: 11px; margin: 0; }
+.ui-shell #panel-football .fixture-downgrade { font-size: 11px; margin-top: var(--space-3xs); }
+.ui-shell #panel-football .football-compact-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0; border: 0 !important; padding: var(--space-sm) var(--space-md) 0 !important; margin: 0 !important; }
+.ui-shell #panel-football .market-section-heading { margin: 0 0 var(--space-sm); }
+.ui-shell #panel-football .market-section-heading h3, .ui-shell #panel-football .market-section-heading > span { font-size: 11px; color: var(--color-dim); }
+.ui-shell #panel-football .market-row { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: subgrid; grid-row: span 4; align-content: start; gap: 0; padding: 0 var(--space-md) var(--space-sm); border: 0; border-left: 1px solid var(--color-rule); }
+.ui-shell #panel-football .market-row:not(.market-row ~ .market-row) { padding-left: 0; border-left: 0; }
+.ui-shell #panel-football .market-row[aria-label="大小球"] { padding-right: 0; }
+.ui-shell #panel-football .market-name { font-size: 14px; font-weight: 600; }
+.ui-shell #panel-football .market-verdict { min-height: 0; display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3xs) var(--space-xs); padding-top: var(--space-xs); text-align: left; }
+.ui-shell #panel-football .market-decision { font-size: 12px; gap: var(--space-xs); }
+.ui-shell #panel-football .market-candidate { margin: 0; font-size: 11px; }
+.ui-shell #panel-football .market-distribution { grid-column: 1 / -1; margin-top: var(--space-sm); }
+.ui-shell #panel-football .probability-strip { gap: var(--space-sm); }
+.ui-shell #panel-football .probability-value { flex-direction: column; align-items: flex-start; font-size: 12px; gap: var(--space-3xs); }
+.ui-shell #panel-football .probability-track { margin-top: var(--space-xs); }
+.ui-shell #panel-football .market-reason { margin: var(--space-sm) 0 0; padding: 0; border: 0; font-size: 12px; line-height: 1.75; }
+.ui-shell #panel-football .market-reason > span { display: block; color: var(--color-ink); font-size: 11px; margin-bottom: var(--space-3xs); }
+.ui-shell #panel-football .distribution-caption { font-size: 11px; margin-top: var(--space-xs); }
+.ui-shell #panel-football .football-score-reference { display: flex; gap: var(--space-md); padding: var(--space-sm) 0 !important; border-block: 1px solid var(--color-rule) !important; }
+.ui-shell #panel-football .score-section-heading { max-width: none; flex: 0 0 160px; font-size: 11px; margin: 0; }
+.ui-shell #panel-football .score-options { gap: var(--space-md); }
+.ui-shell #panel-football .score-settlement { font-size: 11px; }
+.ui-shell #panel-football .match-context { margin: 0; padding: var(--space-sm) 0; }
+.ui-shell #panel-football .context-heading { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-xs) var(--space-sm); }
+.ui-shell #panel-football :is(.context-heading h4, .market-evidence h4) { margin: 0; font-size: 12px; font-weight: 600; color: var(--color-ink); }
+.ui-shell #panel-football .context-state { font-size: 11px; white-space: normal; }
+.ui-shell #panel-football .context-content { padding: var(--space-xs) 0 0; font-size: 12px; line-height: 1.75; }
+.ui-shell #panel-football .context-content p { margin-top: var(--space-3xs); }
+.ui-shell #panel-football .market-evidence { display: flex; flex-wrap: wrap; gap: var(--space-xs) var(--space-md); align-items: baseline; padding: var(--space-sm) 0; border-top: 1px solid var(--color-rule); }
+.ui-shell #panel-football .evidence-content { display: flex; flex-wrap: wrap; gap: var(--space-xs) var(--space-md); padding: 0; }
+.ui-shell #panel-football .evidence-row { display: flex; flex-wrap: wrap; gap: var(--space-xs); padding: 0; font-size: 11px; }
+.ui-shell #panel-football .evidence-row p { margin: 0; }
+.ui-shell #panel-football .fixture-alert { margin: 0; padding: var(--space-xs) var(--space-md); font-size: 12px; background: var(--color-warning-soft); border: 0; border-bottom: 1px solid var(--color-rule); }
+.ui-shell #panel-football .fixture-alert summary { min-height: 28px; }
+.ui-shell #panel-football .alert-details { padding-bottom: var(--space-xs); }
+.ui-shell #panel-football .fixture-actions { padding: var(--space-xs) var(--space-md); margin: 0; gap: var(--space-md); border-top: 1px solid var(--color-rule) !important; background: var(--color-inset); }
+.ui-shell #panel-football .fixture-actions .bayes-report-btn { min-height: 32px; font-size: 12px; }
+.ui-shell .fixture-actions .action-arrow { display: none; }
+.ui-shell :is(.pro-modal-window, .kl8-modal-window, .bayes-modal, .prediction-calendar-popover) { border-radius: var(--radius-card); }
+.ui-shell :is(.prediction-date-trigger-icon, .prediction-calendar-nav), .ui-shell .prediction-date-label::before { color: var(--color-accent); }
+.ui-shell .prediction-date-trigger:focus-visible { box-shadow: none; }
+.ui-shell :is(.prediction-date-trigger:hover, .prediction-date-trigger[aria-expanded="true"], .prediction-date-action:hover,
+  .prediction-calendar-day:hover:not(:disabled), .prediction-calendar-nav:hover:not(:disabled)) { background: var(--color-accent-soft); border-color: var(--color-accent-line); }
+.ui-shell .prediction-calendar-day.has-records::after { background: var(--color-accent); }
+.ui-shell .prediction-calendar-day.selected { background: var(--color-accent); border-color: var(--color-accent); color: var(--color-on-accent); }
+.ui-shell .prediction-calendar-day.selected::after { background: var(--color-on-accent); }
 .ui-shell .bottom-nav-item { border-radius: 0 !important; }
-body.ui-shell .bottom-nav-item.active { color: var(--color-accent) !important; background: transparent; box-shadow: inset 0 3px var(--color-accent); }
-.ui-shell button:active:not(:disabled) { transform: translateY(1px); }
+body.ui-shell .bottom-nav-item.active { color: var(--color-accent) !important; background: var(--color-accent-soft); box-shadow: none; }
+.ui-shell button:active:not(:disabled) { opacity: .8; transform: none; }
 .ui-shell :is(button, a, input, select, summary):focus-visible { outline: 2px solid var(--color-accent); outline-offset: 3px; }
 @media (max-width: 1100px) {
-  .ui-shell .app-sidebar { gap: 32px; }
-  .ui-shell .app-sidebar .tabs .tab { min-width: 112px; }
-  .ui-shell .sport-panel .sport-match-card { grid-template-columns: 210px minmax(0, 1fr); gap: 0 20px; }
-  .ui-shell .fixture-team strong { font-size: 21px; }
-  .ui-shell .probability-value strong { font-size: 22px; }
+  .ui-shell .app-sidebar { gap: var(--space-md); }
+  .ui-shell .app-sidebar .tabs .tab { min-width: 100px; }
+  .ui-shell .overview-detail { flex-basis: 100%; }
+  .ui-shell .overview-item { gap: var(--space-3xs) var(--space-xs); }
+  .ui-shell #panel-football .market-row { padding-inline: var(--space-sm); }
 }
 @media (max-width: 768px) {
   .ui-shell .wrap { width: calc(100% - 32px); margin: 0 auto !important; }
-  .ui-shell .app-sidebar { position: relative; inset: auto; min-height: 66px; padding-inline: 16px; gap: 12px; }
+  .ui-shell .app-sidebar { position: relative; inset: auto; min-height: 56px; padding-inline: var(--space-sm); gap: var(--space-xs); }
   .ui-shell .app-sidebar .tabs { display: none; }
-  .ui-shell .brand { font-size: 20px; gap: 9px; }
-  .ui-shell .brand-symbol { width: 31px; height: 34px; font-size: 25px; }
+  .ui-shell .brand { font-size: 17px; }
   .ui-shell .masthead-date { font-size: 10px; }
-  .ui-shell .workspace-bar { min-height: 38px; font-size: 10px; }
+  .ui-shell .workspace-bar { min-height: 32px; font-size: 10px; }
   .ui-shell .workspace-bar > span:last-child { display: none; }
-  .ui-shell .page-heading { padding: 4px 0 20px !important; }
-  .ui-shell .page-heading h1 { font-size: 27px !important; }
-  .ui-shell .page-heading p { font-size: 11px !important; }
-  .ui-shell .sport-overview { padding-block: 16px; }
-  .ui-shell .overview-item, .ui-shell .overview-item:first-child { padding-inline: 12px; }
-  .ui-shell .overview-label { font-size: 11px; }
-  .ui-shell .overview-value { font-size: 32px; }
-  .ui-shell .sport-panel .sport-match-card { padding: 18px !important; }
-  .ui-shell .fixture-team strong { font-size: 19px; }
+  .ui-shell .page-heading { padding: var(--space-xs) 0 var(--space-sm) !important; }
+  .ui-shell .page-heading h1 { font-size: 22px !important; }
+  .ui-shell .page-heading p { font-size: 11px !important; flex-basis: 100%; }
+  .ui-shell .sport-overview { flex-wrap: nowrap; margin-bottom: var(--space-sm); }
+  .ui-shell .overview-item, .ui-shell .overview-item:first-child { flex: 1 1 0; padding-inline: var(--space-sm); gap: var(--space-3xs); }
+  .ui-shell .overview-item:first-child { padding-left: 0; }
+  .ui-shell .overview-item:last-child { padding-right: 0; }
+  .ui-shell .overview-label { flex-basis: 100%; font-size: 11px; }
+  .ui-shell .overview-value { font-size: 20px; }
+  .ui-shell .overview-detail { display: none; }
+  .ui-shell .sport-panel .tb-refresh { min-height: 40px; }
+  .ui-shell #panel-football .fixture-heading { padding: var(--space-sm) !important; gap: var(--space-sm) !important; }
+  .ui-shell #panel-football .fixture-identity { flex-basis: 320px; }
+  .ui-shell #panel-football .fixture-teams { gap: var(--space-xs); }
+  .ui-shell #panel-football .fixture-team strong { font-size: 18px; }
+  .ui-shell #panel-football .fixture-meta, .ui-shell #panel-football .fixture-time { font-size: 11px; }
+  .ui-shell #panel-football .fixture-assessment { text-align: left; }
+  .ui-shell #panel-football .fixture-status { justify-content: flex-start; }
+  .ui-shell #panel-football .football-compact-summary { padding: var(--space-sm) var(--space-sm) 0 !important; }
+  .ui-shell #panel-football .market-row { padding-inline: var(--space-sm); }
+  .ui-shell #panel-football .market-verdict { flex-direction: column; align-items: flex-start; }
+  .ui-shell #panel-football .probability-strip { gap: var(--space-xs); }
+  .ui-shell #panel-football .probability-value strong { font-size: 18px; }
+  .ui-shell #panel-football .football-score-reference { gap: var(--space-sm); }
+  .ui-shell #panel-football .score-section-heading { flex-basis: 116px; }
+  .ui-shell #panel-football .fixture-alert { padding-inline: var(--space-sm); }
+  .ui-shell #panel-football .fixture-actions { padding-inline: var(--space-sm); }
+}
+@media (max-width: 719px) {
+  .ui-shell #panel-football .fixture-identity { flex-basis: 100%; }
+  .ui-shell #panel-football .football-compact-summary { display: flex; flex-direction: column; }
+  .ui-shell #panel-football .market-section-heading { margin-bottom: 0; }
+  .ui-shell #panel-football .market-row { grid-template-rows: none; grid-row: auto; padding: var(--space-sm) 0 !important; border: 0; border-bottom: 1px solid var(--color-rule); }
+  .ui-shell #panel-football .market-verdict { flex-direction: row; align-items: center; }
+  .ui-shell #panel-football .probability-strip { gap: var(--space-sm); }
+  .ui-shell #panel-football .probability-value strong { font-size: 20px; }
+  .ui-shell #panel-football .football-score-reference { display: block; border-top: 0 !important; }
+  .ui-shell #panel-football .score-section-heading { margin-bottom: var(--space-xs); }
+  .ui-shell #panel-football .score-options { gap: var(--space-sm); }
+  .ui-shell #panel-football .score-value { font-size: 17px; gap: var(--space-3xs); }
+  .ui-shell #panel-football .score-value span { font-size: 11px; }
+  .ui-shell #panel-football .score-settlement { font-size: 10px; }
 }
 @media (prefers-reduced-motion: reduce) {
   .ui-shell *, .ui-shell *::before, .ui-shell *::after { animation: none !important; transition: none !important; }
@@ -3465,7 +3549,7 @@ body.ui-shell .bottom-nav-item.active { color: var(--color-accent) !important; b
   background: none;
   box-shadow: none;
 }
-.ui-shell .kl8-panel-head { align-items: center; gap: 12px; margin-bottom: 16px; padding-bottom: 12px; border-bottom: 2px solid var(--color-ink); }
+.ui-shell .kl8-panel-head { align-items: center; gap: 12px; margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid var(--color-accent-line); }
 .ui-shell .kl8-panel-head h3 { margin-top: 3px; font-size: 18px; font-weight: 650; }
 .ui-shell .kl8-panel-count, .ui-shell .kl8-soft-badge {
   display: inline-flex;
@@ -3535,7 +3619,7 @@ body.ui-shell .bottom-nav-item.active { color: var(--color-accent) !important; b
 .ui-shell .kl8-draw-balls { display: flex; flex-wrap: wrap; min-width: 0; gap: 5px !important; }
 .ui-shell .kl8-draw-balls .kl8-ball.small-ball { background: var(--color-surface); color: var(--color-ink); border-color: var(--color-rule); box-shadow: none; }
 .ui-shell .kl8-draw-balls .kl8-ball.small-ball.highlight-ball { background: var(--accent); color: var(--color-on-accent); border-color: var(--accent) !important; box-shadow: none !important; }
-.ui-shell .kl8-action-dock { padding: 20px 0 0; border: 0; border-top: 2px solid var(--color-ink); border-radius: 0; background: none; box-shadow: none; gap: 16px; }
+.ui-shell .kl8-action-dock { padding: 20px 0 0; border: 0; border-top: 1px solid var(--color-accent-line); border-radius: 0; background: none; box-shadow: none; gap: 16px; }
 .ui-shell .kl8-action-copy strong { font-size: 13px; }
 .ui-shell .kl8-action-copy span { display: block; margin-top: 4px; }
 .ui-shell .kl8-action-buttons { gap: 8px; }
@@ -3544,7 +3628,7 @@ body.ui-shell .bottom-nav-item.active { color: var(--color-accent) !important; b
 .ui-shell .kl8-action-dock .kl8-refresh-btn:hover { background: var(--color-inset); border-color: var(--color-control-rule); }
 .ui-shell .kl8-refresh-btn:active { transform: translateY(1px); }
 .ui-shell .kl8-modal-window { border-radius: 8px; }
-.ui-shell .kl8-modal-head { border-bottom: 2px solid var(--color-ink); }
+.ui-shell .kl8-modal-head { border-bottom: 1px solid var(--color-accent-line); }
 .ui-shell .kl8-record-card, .ui-shell .kl8-record-card.pending { padding: 16px 0; border: 0; border-bottom: 1px solid var(--color-rule); border-radius: 0; box-shadow: none; }
 .ui-shell .kl8-record-badge, .ui-shell .kl8-record-badge.pending { padding: 3px 6px; border-radius: 3px; }
 .ui-shell .kl8-modal-body .kl8-disclaimer { margin-top: 0; }
@@ -4631,8 +4715,47 @@ function accuracyGateReasonText(reason) {
     market_signal_weak: '盘口变化信号较弱',
     market_conflicts_with_model: '盘口变化与模型方向冲突',
     total_accuracy_gate_rejected: '大小球未通过跨赛季准确率门禁',
+    '欧赔与亚盘明显冲突': '欧赔与亚盘的强度差异较大',
   };
   return reasons[reason] || String(reason || '');
+}
+
+function getFootballMarketContext(result) {
+  const deviation = result?.anomaly?.euro_asian_deviation;
+  const rawDeviation = deviation?.abs_deviation;
+  const value = rawDeviation == null || rawDeviation === '' ? NaN : Number(rawDeviation);
+  const hasDeviation = Number.isFinite(value) && value >= 0;
+  const gates = result?.lottery?.accuracy_gate || {};
+  const gateConflict = [gates.spf, gates.rqspf].some(gate =>
+    (gate?.reasons || []).includes('欧赔与亚盘明显冲突'));
+  const fitFailed = deviation?.fit_failed === true || [gates.spf, gates.rqspf].some(gate =>
+    (gate?.reasons || []).includes('欧亚盘口强度校验失败'));
+  const strengthConflict = gateConflict || (hasDeviation && value >= 0.50);
+  const state = result?.model?.joint_market_state;
+  const movementConflict = state?.conflict === true;
+  const activeSignals = ['handicap_signal', 'asian_water_signal', 'euro_signal']
+    .map(key => Number(state?.[key])).filter(signal => Number.isFinite(signal) && Math.abs(signal) > 0.10);
+  const movementLabel = movementConflict ? '盘口走势存在分歧'
+    : activeSignals.length >= 2 ? '走势信号同向' : '暂无明确走势信号';
+  const fittedMargins = [deviation?.euro_supremacy, deviation?.asian_supremacy];
+  const basis = deviation?.method === 'poisson_fair_price'
+    && fittedMargins.every(margin => margin != null && Number.isFinite(Number(margin)))
+    ? `按同一总进球口径折算：欧赔净胜球 ${Number(fittedMargins[0]).toFixed(2)}，亚盘净胜球 ${Number(fittedMargins[1]).toFixed(2)}；`
+    : deviation?.method === 'linear_probability_proxy' && !fitFailed ? '市场数据不足，按近似强度指标筛选；' : '';
+  return {
+    fitFailed,
+    strengthConflict,
+    conflict: fitFailed || strengthConflict || movementConflict,
+    label: fitFailed ? '盘口强度校验失败' : strengthConflict ? '盘口强度分歧' : movementLabel,
+    detail: `${basis}${fitFailed ? '盘口强度拟合失败，暂不放行推荐' : hasDeviation ? `盘口强度差 ${value.toFixed(2)} 球（筛选界限 0.50 球）` : '盘口强度差暂无有效数据'}；${movementLabel}`,
+  };
+}
+
+function getFootballTotalCandidate(gate) {
+  const direction = gate?.candidate === 'over' ? '大' : gate?.candidate === 'under' ? '小' : '';
+  if (!direction) return '-';
+  const line = gate?.line == null || gate.line === '' ? NaN : Number(gate.line);
+  return Number.isFinite(line) && line > 0 ? `${direction}${line}` : `${direction}球（盘口待确认）`;
 }
 
 function formatAccuracyGateValidation(gate) {
@@ -4669,7 +4792,7 @@ function renderWebMarketRecommendation(label, state, pick, probabilityText = '')
   const candidate = isAbstain && (pick || state?.pick)
     ? `<span class="market-candidate">模型候选 ${esc(pick || state.pick)}</span>` : '';
   const status = ['selected', 'watch', 'abstain'].includes(state?.status) ? state.status : 'abstain';
-  const reasons = isAbstain ? (state?.reasons || []).filter(Boolean) : [];
+  const reasons = (state?.reasons || []).filter(Boolean);
   return `<section class="market-row" data-status="${status}" aria-label="${esc(label)}">
     <div class="market-row-heading"><span class="market-name">${esc(label)}</span></div>
     <div class="market-verdict">
@@ -4677,7 +4800,7 @@ function renderWebMarketRecommendation(label, state, pick, probabilityText = '')
       ${candidate}
     </div>
     ${probabilityText ? `<div class="market-distribution">${probabilityText}</div>` : ''}
-    ${reasons.length ? `<p class="market-reason">观望原因：${reasons.slice(0, 2).map(esc).join('；')}${reasons.length > 2 ? '。其余原因见下方筛选依据' : ''}</p>` : ''}
+    ${reasons.length ? `<p class="market-reason"><span>${isAbstain ? '观望原因' : '筛选依据'}</span>${reasons.map(esc).join('；')}</p>` : ''}
   </section>`;
 }
 
@@ -4696,14 +4819,15 @@ function renderProbabilityStrip(probabilities, keys, odds = null, selected = '')
 }
 
 function renderMarketEvidence(markets) {
-  const rows = markets.filter(([, state]) => state && (state.validation || state.reasons?.length));
+  const rows = markets.filter(([, state, reasonsShown]) => state &&
+    (state.validation || (!reasonsShown && state.reasons?.length)));
   if (!rows.length) return '';
-  return `<details class="market-evidence"><summary>筛选依据与历史验证<span aria-hidden="true">＋</span></summary>
-    <div class="evidence-content">${rows.map(([label, state]) => `<div class="evidence-row"><strong>${esc(label)}</strong>
-      ${state.reasons?.length ? `<p>${state.reasons.map(esc).join('；')}</p>` : ''}
+  return `<section class="market-evidence" aria-label="筛选依据与历史验证"><h4>筛选依据与历史验证</h4>
+    <div class="evidence-content">${rows.map(([label, state, reasonsShown]) => `<div class="evidence-row"><strong>${esc(label)}</strong>
+      ${!reasonsShown && state.reasons?.length ? `<p>${state.reasons.map(esc).join('；')}</p>` : ''}
       ${state.validation ? `<p class="evidence-validation">${esc(state.validation)}</p>` : ''}
     </div>`).join('')}</div>
-  </details>`;
+  </section>`;
 }
 
 function getFootballResultTier(item) {
@@ -4752,8 +4876,7 @@ function getFootballResultTier(item) {
     officialBetAllowed,
   });
   const totalGate = accuracyGate.total_goals;
-  const totalCandidate = totalGate?.candidate === 'over' ? '大2.5'
-    : totalGate?.candidate === 'under' ? '小2.5' : '-';
+  const totalCandidate = getFootballTotalCandidate(totalGate);
   const totalState = getAccuracyGatePresentation(totalGate, totalCandidate, {
     officialBetAllowed,
   });
@@ -4780,8 +4903,10 @@ function getFootballResultTier(item) {
   if (r.upset?.alert) downgradeReasons.push('爆冷预警');
   if (r.risk_level?.level === 'high') downgradeReasons.push('综合风险高');
   if (r.confidence?.level === 'low') downgradeReasons.push('数据置信度低');
-  if (Number(r.anomaly?.euro_asian_deviation?.abs_deviation || 0) >= 0.50) {
-    downgradeReasons.push('欧赔与亚盘分歧');
+  const marketContext = getFootballMarketContext(r);
+  if (marketContext.fitFailed) downgradeReasons.push('盘口强度校验失败');
+  if (marketContext.strengthConflict) {
+    downgradeReasons.push('盘口强度分歧');
   }
   if (downgradeReasons.length) {
     if (tier === 'selected') tier = 'watch';
@@ -4968,8 +5093,8 @@ function getLotteryLinkedSelections(lottery) {
 }
 
 function renderSportOverview(items) {
-  return `<div class="sport-overview">${items.map(([label, value, detail], i) =>
-    `<div class="overview-item"><div class="overview-label"><span>${esc(label)}</span><span class="overview-index">0${i + 1}</span></div><div class="overview-value">${esc(String(value))}<span>场</span></div><div class="overview-detail">${esc(detail)}</div></div>`
+  return `<div class="sport-overview">${items.map(([label, value, detail]) =>
+    `<div class="overview-item"><div class="overview-label">${esc(label)}</div><div class="overview-value">${esc(String(value))}<span>场</span></div><div class="overview-detail">${esc(detail)}</div></div>`
   ).join('')}</div>`;
 }
 
@@ -5106,16 +5231,17 @@ function renderFootballPredictions(results) {
     const reportUrl = m.bayes_report_url ? apiPrefix() + m.bayes_report_url : '';
 
     let itemHtml = `<div class="match sport-match-card football-match-card" data-tier="${resultTier.tier}" style="display:block;padding:12px">
-      <div class="fixture-heading" style="display:flex;justify-content:space-between;align-items:flex-start">
-        <div class="fixture-identity" style="flex:1">
-          <div class="fixture-meta"><span>${esc(m.num || '足球赛事')}</span><span>${esc(m.league || '')}</span></div>
+      <div class="fixture-heading">
+        <div class="fixture-identity">
+          <div class="fixture-meta"><span>${esc(m.num || '足球赛事')}</span><span>${esc(m.league || '')}</span><time class="fixture-time">${uiIcon('clock')}${esc(m.time || '时间待定')}</time></div>
           ${renderFixtureTeams(m.home, m.away)}
-          <div class="fixture-time">${uiIcon('clock')}${esc(m.time || '时间待定')}</div>
+        </div>
+        <div class="fixture-assessment">
           <div class="fixture-status">
             <span class="decision-badge ${resultTier.tier}">${esc(resultTier.label)}</span>
             <span class="fixture-pick">${esc(resultTier.market)} ${esc(resultTier.prediction)} <b>${(resultTier.probability * 100).toFixed(0)}%</b></span>
-            ${cf && cf.score != null ? `<span class="fixture-completeness" title="📡 信息完整度">信息完整度 <b>${(cf.score * 100).toFixed(0)}%</b></span>` : ''}
           </div>
+          ${cf && cf.score != null ? `<span class="fixture-completeness">信息完整度 <b>${(cf.score * 100).toFixed(0)}%</b></span>` : ''}
           ${resultTier.downgradeReasons.length ? `<div class="fixture-downgrade">已降级 · ${esc(resultTier.downgradeReasons.join('、'))}</div>` : ''}
         </div>
       </div>`;
@@ -5149,7 +5275,7 @@ function renderFootballPredictions(results) {
         };
         const drawCandidates = upset.draw_candidates || (upset.candidates || []).filter(c => c.scenario === 'draw_cover');
         const outrightCandidates = upset.outright_candidates || (upset.candidates || []).filter(c => c.scenario === 'outright_upset');
-        itemHtml += `<details class="fixture-alert"><summary>
+        itemHtml += `<details class="fixture-alert" open><summary>
           <span style="color:${uColor};font-weight:bold">${esc(upset.label)}</span>
           <span style="color:var(--muted)"> · 热门${esc(upset.favorite)} ${((upset.favorite_prob || 0) * 100).toFixed(0)}%</span>
           <span class="disclosure-arrow" aria-hidden="true">⌄</span></summary><div class="alert-details">
@@ -5160,10 +5286,10 @@ function renderFootballPredictions(results) {
         </div></details>`;
       }
 
-      if (upset && upset.confident) {
+      if (upset?.confident && resultTier.markets.spf.status === 'selected' && resultTier.tier === 'selected') {
         itemHtml += `<div style="margin-top:8px;padding:7px 8px;background:var(--bg2);border-left:3px solid var(--color-positive);border-radius:6px;font-size:12px">
-          <span style="color:var(--color-positive);font-weight:bold">✅ 热门稳胆</span>
-          <span style="color:var(--muted)"> · ${esc(upset.favorite || '')} ${((upset.favorite_prob || 0) * 100).toFixed(0)}% 领先次选 ${((upset.gap || 0) * 100).toFixed(0)}% · 真实冷门率约 30%</span>
+          <span style="color:var(--color-positive);font-weight:bold">胜平负倾向较集中</span>
+          <span style="color:var(--muted)"> · ${esc(upset.favorite || '')} ${((upset.favorite_prob || 0) * 100).toFixed(0)}% · 领先次选 ${((upset.gap || 0) * 100).toFixed(0)} 个百分点</span>
         </div>`;
       }
 
@@ -5258,14 +5384,11 @@ function renderFootballPredictions(results) {
         const spfGateState = resultTier.markets.spf;
         const rqspfGateState = resultTier.markets.rqspf;
         const totalGateState = resultTier.markets.total_goals;
-        const totalDirection = accuracyGate.total_goals?.candidate === 'over' ? '大2.5'
-          : accuracyGate.total_goals?.candidate === 'under' ? '小2.5' : '-';
+        const totalDirection = getFootballTotalCandidate(accuracyGate.total_goals);
         const correctionLabel = r.model?.joint_market_state?.applied ? ' · 已修正' : ' · 联合分析';
+        const marketContext = getFootballMarketContext(r);
         itemHtml += `<div class="football-compact-summary">
           <div class="market-section-heading"><h3>玩法分析</h3><span>赛前概率参考</span></div>
-          <details class="match-context"><summary><span>欧赔与亚盘水位${correctionLabel}</span><span class="context-state${r.model?.joint_market_state?.conflict ? ' conflict' : ''}">${r.model?.joint_market_state?.conflict ? '方向冲突' : '方向一致'} <span aria-hidden="true">⌄</span></span></summary><div class="context-content">
-            ${standardPrediction ? `欧赔基准：${esc(euroPrediction)} · ` : '竞彩胜平负未开售 · '}亚盘方向：${esc(asianDirection)}
-          </div></details>
           ${standardPrediction ? renderWebMarketRecommendation('胜平负', spfGateState, spfGateState.pick || selectedStandard, compactProbLine(standardPrediction.probs, ['胜','平','负'])) : ''}
           ${standardPrediction?.selectionProfile?.mode === 'draw_cover' && spfGateState.status !== 'abstain' ? '<div class="draw-cover-note">模型分布提示防平，仅作辅助参考</div>' : ''}
           ${handicapCard ? renderWebMarketRecommendation(`让球胜平负（${Number(lotteryHandicap) > 0 ? '+' : ''}${lotteryHandicap}）`, rqspfGateState, rqspfGateState.pick || selectedHandicap, compactProbLine(handicapCard.prediction.marginalProbs, ['让胜','让平','让负'])) : ''}
@@ -5274,7 +5397,11 @@ function renderFootballPredictions(results) {
             <div class="score-section-heading">比分参考 Top3（非主推）</div>
             <div class="score-options">${compactScoreHtml || '<span class="empty-reference">暂无比分分布</span>'}</div>
           </div>
-          ${renderMarketEvidence([['胜平负', spfGateState], ['让球胜平负', rqspfGateState], ['大小球', totalGateState]])}
+          <section class="match-context" aria-label="盘口依据"><div class="context-heading"><h4>欧赔与亚盘水位${correctionLabel}</h4><span class="context-state${marketContext.conflict ? ' conflict' : ''}">${esc(marketContext.label)}</span></div><div class="context-content">
+            ${standardPrediction ? `欧赔基准：${esc(euroPrediction)} · ` : '竞彩胜平负未开售 · '}亚盘方向：${esc(asianDirection)}
+            <p>${esc(marketContext.detail)}</p>
+          </div></section>
+          ${renderMarketEvidence([['胜平负', spfGateState, Boolean(standardPrediction)], ['让球胜平负', rqspfGateState, Boolean(handicapCard)], ['大小球', totalGateState, true]])}
         </div>`;
       }
       if (!compactFootballView) marketCards.forEach(card => {
@@ -5405,8 +5532,8 @@ function renderFootballPredictions(results) {
       }
 
       itemHtml += `<div class="fixture-actions">
-        <button type="button" class="bayes-report-btn" onclick="openFootballEvidenceModal('${esc(m.match_id || r.match?.match_id || '')}')">${uiIcon('audit')}证据审计 <span aria-hidden="true">↗</span></button>
-        ${reportUrl ? `<button type="button" class="bayes-report-btn" onclick="openBayesModal('${esc(reportUrl)}', '${esc(m.home)} vs ${esc(m.away)}')">${uiIcon('records')}深度报告 <span aria-hidden="true">↗</span></button>` : ''}
+        <button type="button" class="bayes-report-btn" onclick="openFootballEvidenceModal('${esc(m.match_id || r.match?.match_id || '')}')">${uiIcon('audit')}证据审计</button>
+        ${reportUrl ? `<button type="button" class="bayes-report-btn" onclick="openBayesModal('${esc(reportUrl)}', '${esc(m.home)} vs ${esc(m.away)}')">${uiIcon('records')}深度报告</button>` : ''}
       </div></div>`;
       return itemHtml;
     }
@@ -8008,7 +8135,7 @@ function renderBasketball(result) {
 
         const marketAnalysis = m.market_analysis || {};
         if (marketAnalysis.available) {
-          html += `<details class="basketball-market-context"><summary><span>盘口变化分析</span><span class="context-state">${esc(marketAnalysis.verdict || '查看变化')} <span aria-hidden="true">⌄</span></span></summary>
+          html += `<details class="basketball-market-context" open><summary><span>盘口变化分析</span><span class="context-state">${esc(marketAnalysis.verdict || '查看变化')} <span aria-hidden="true">⌄</span></span></summary>
             <div class="basketball-signals">${(marketAnalysis.signals || []).map(signal => {
               const flowState = signal.aligned_with_model === true ? '同向' : signal.aligned_with_model === false ? '反向' : '中性';
               const flowColor = signal.aligned_with_model === true ? 'var(--color-positive)' : signal.aligned_with_model === false ? 'var(--color-warning)' : 'var(--muted)';

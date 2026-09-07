@@ -276,6 +276,8 @@ def build_accuracy_gate(
             reasons.append("基础数据置信度低")
         if conflict:
             reasons.append("欧赔与亚盘明显冲突")
+        if euro_asian.get("fit_failed"):
+            reasons.append("欧亚盘口强度校验失败")
         if key == "spf" and upset.get("alert"):
             reasons.append("爆冷信号触发，正路降为防冷观察")
 
