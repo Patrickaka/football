@@ -165,7 +165,7 @@ class PredictionToolbarWiring(unittest.TestCase):
 
     def test_calendar_counts_are_keyed_by_session(self):
         prepare = HTML.split('function preparePredictionCalendar(', 1)[1].split(
-            '\nfunction ', 1)[0]
+            '\n}\n', 1)[0]
         self.assertIn('predictionSessionKey', prepare)
         self.assertNotIn('predictionRecordDateKey', prepare)
 

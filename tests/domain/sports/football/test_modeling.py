@@ -79,27 +79,6 @@ class ThreeDixonColesModels(unittest.TestCase):
         return {(h, a): float(raw[h][a])
                 for h in range(max_goals + 1) for a in range(max_goals + 1)}
 
-    def test_all_three_agree_when_rho_is_zero(self):
-        lh, la = self.LAM
-        mine = scoring_model.build_score_matrix(lh, la, 6, 0.0)
-        from src.domain.sports.beidan import scoring_model as beidan
-        theirs = beidan.dixon_coles_matrix(lh, la, 0.0, 6)
-        ml_m = self._ml_matrix(lh, la, 0.0)
-        for cell in mine:
-            with self.subTest(cell=cell):
-                self.assertAlmostEqual(mine[cell], theirs[cell], places=15)
-                self.assertAlmostEqual(mine[cell], ml_m[cell], places=15)
-
-    def test_they_diverge_once_rho_is_not_zero(self):
-        """**反方向**：rho≠0 时必须不同，否则「不能合并」这个结论就站不住。"""
-        lh, la = self.LAM
-        mine = scoring_model.build_score_matrix(lh, la, 6, -0.05)
-        from src.domain.sports.beidan import scoring_model as beidan
-        theirs = beidan.dixon_coles_matrix(lh, la, -0.05, 6)
-        ml_m = self._ml_matrix(lh, la, -0.05)
-        self.assertGreater(max(abs(mine[c] - theirs[c]) for c in mine), 1e-4)
-        self.assertGreater(max(abs(mine[c] - ml_m[c]) for c in mine), 1e-4)
-
     def test_our_tau_matches_the_standard_formula_on_the_four_low_cells(self):
         lh, la, rho = 1.5, 1.1, -0.05
         self.assertAlmostEqual(scoring_model._dc_tau(0, 0, lh, la, rho), 1 - lh * la * rho)

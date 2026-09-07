@@ -261,9 +261,6 @@ def entries():
     TACTICAL = reporting.tactical_context(LIVE)
     yield from _y('bayes_report', 'build_scripts', '-', MODULE, TACTICAL, '主队', '客队')
     yield from _y('bayes_report', 'risk_list', '-', MODULE['risk'], TACTICAL, LIVE)
-    yield from _y('bayes_report', '_beidan_p0_p1', '-',
-        {'euro_open': dict(IMPLIED), 'wdl': dict(WDL)})
-    yield from _y('bayes_report', '_beidan_scripts', '-', {'wdl': dict(WDL)}, TACTICAL, '主队', '客队')
     for path in ('/a/b/reports/football_bayes_12345.html',
                  'beidan_bayes_abc.html', '/x/football_12345.html', 'x.html', ''):
         yield from _y('bayes_report', '_extract_mid_from_report_path', path or 'empty', path)

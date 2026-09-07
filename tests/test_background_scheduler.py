@@ -144,15 +144,13 @@ class Kl8RegistrationTests(_Base):
                          ['kl8_history_backfill', 'kl8_strategy_verification'])
 
     def test_all_periodic_tasks_fit_the_worker_budget(self):
-        """七个周期任务：kl8 三个 + 篮球 + 足球两个 + 北单回填。"""
+        """六个周期任务：kl8 三个 + 篮球 + 足球两个。"""
         from src.football.result_sync import register_football_tasks
-        from src.beidan.settling import register_beidan_tasks
 
         self._register()
         background.submit_periodic('basketball_odds_tracking', lambda: None, 900)
         register_football_tasks(background.submit_periodic)
-        register_beidan_tasks(background.submit_periodic)
-        self.assertEqual(background.task_count(), 7)
+        self.assertEqual(background.task_count(), 6)
         self.assertLess(background.task_count(), background.MAX_WORKERS,
                         '周期任务占满 worker，一次性任务将永远排不上队')
 
@@ -216,21 +214,6 @@ class FootballTaskRegistrationTests(_Base):
         source = pathlib.Path(module.__file__).read_text(encoding='utf-8')
         self.assertNotIn('apscheduler.schedulers', source)
         self.assertFalse(hasattr(module, 'start_background_sync'))
-
-
-class BeidanTaskRegistrationTests(_Base):
-
-    def test_backlog_catchup_runs_every_ten_minutes(self):
-        from src.beidan.settling import register_beidan_tasks
-
-        calls = []
-        names = register_beidan_tasks(
-            lambda name, fn, interval: calls.append((name, fn, interval)) or True,
-        )
-
-        self.assertEqual(names, ['beidan_result_sync'])
-        self.assertEqual(calls[0][0], 'beidan_result_sync')
-        self.assertEqual(calls[0][2], 600)
 
 
 class StaggerWiringTests(_Base):

@@ -27,6 +27,7 @@ from src.kl8.fetch import (
     fetch_kl8_history_backfill,        # v9.2: 保留给人工全量补数
     count_valid_history_periods,       # v9.2: 期数统计
 )
+from src.kl8 import records as _records_mod
 from src.kl8 import (
     ACTIVE_STRATEGIES,
     KL8_PREDICTOR_VERSION,
@@ -404,7 +405,7 @@ def run_verified_strategy_selection_if_needed():
     - 每个玩法独立验证（不强制共用 select_5 策略）
     - 使用固定的 VALIDATION_CANDIDATES 做锦标赛
     - 验证通过后写入 ACTIVE_STRATEGIES
-    - 验证完成后删除游标文件，不再重复验证
+    - 同一期号上验证过的玩法不再重算，等新开奖后再跑
     """
     from src.kl8 import (
         get_kl8_analyzer, ACTIVE_STRATEGIES,
@@ -412,9 +413,6 @@ def run_verified_strategy_selection_if_needed():
         activate_verified_strategy, _persist_active_strategies,
         SELECT_CONFIG,
     )
-    from pathlib import Path
-    from src.kl8.fetch import KL8_BACKFILL_STATE_FILE
-
     current_periods = count_valid_history_periods()
     if current_periods < 800:
         log.info(f'快乐8: 历史数据不足800期({current_periods}期)，暂不验证策略')
@@ -433,13 +431,19 @@ def run_verified_strategy_selection_if_needed():
         log.info('快乐8: 所有玩法已有验证策略，无需重新验证')
         return
 
-    log.info(f'快乐8: 开始验证未通过的玩法: {unverified_play_types}')
-
     analyzer = get_kl8_analyzer()
+    latest_issue = str(analyzer.history_data[0]['issue']) if analyzer.history_data else ''
+    pending_play_types = _play_types_pending_verification(
+        unverified_play_types, latest_issue)
+    if not pending_play_types:
+        log.info(f'快乐8: 期号 {latest_issue} 已验证过 {unverified_play_types}，无新开奖，跳过重算')
+        return
+
+    log.info(f'快乐8: 开始验证未通过的玩法: {pending_play_types}')
     bt = KL8RollingBacktest(analyzer)
 
     # v9.2: 每个玩法独立验证
-    for play_type in unverified_play_types:
+    for play_type in pending_play_types:
         log.info(f'快乐8: 开始验证 {play_type}')
 
         result = bt.run_candidate_tournament_per_play_type(
@@ -454,14 +458,26 @@ def run_verified_strategy_selection_if_needed():
         else:
             log.info(f'快乐8: {play_type} 验证结果: {result.get("summary", "")}')
 
-    # 验证完成后删除补数游标（如果还存在）
-    state_path = Path(KL8_BACKFILL_STATE_FILE)
-    if state_path.exists():
-        # 不删除 — 可能还需要继续补数给其他玩法
-        pass
+    _records_mod._persist_verification_state(
+        latest_issue,
+        _verified_play_types_for_issue(latest_issue) + pending_play_types,
+    )
 
     # 清缓存重建
     clear_cache()
+
+
+def _verified_play_types_for_issue(latest_issue):
+    state = _records_mod._load_verification_state()
+    if str(state.get('latest_issue')) != str(latest_issue):
+        return []
+    return [pt for pt in state.get('play_types') or [] if isinstance(pt, str)]
+
+
+def _play_types_pending_verification(unverified_play_types, latest_issue):
+    """同一期号上已经跑过的玩法不再重算：候选与数据都没变，结论不会变。"""
+    already = set(_verified_play_types_for_issue(latest_issue))
+    return [pt for pt in unverified_play_types if pt not in already]
 
 
 # 三个周期任务的间隔（秒）

@@ -22,7 +22,6 @@ log = logging.getLogger('api.startup')
 WARMUP_THREADS = (
     ('WarmKL8Thread', 'src.api.services.kl8', 'kl8_payload', '快乐8'),
     ('WarmFootballThread', 'src.api.runtime.jobs', '_warm_football_caches', '足球'),
-    ('WarmBeidanThread', 'src.api.runtime.jobs', '_warm_beidan_caches', '北单'),
 )
 
 
@@ -43,7 +42,7 @@ def run_startup_maintenance():
 
 
 def register_background_tasks():
-    """登记四族周期任务，登记完再统一启动调度器。
+    """登记三族周期任务，登记完再统一启动调度器。
 
     迁移前它们分散在三处（kl8 用 APScheduler、篮球采样自建调度器、
     另有裸线程），没有任何一个地方能回答「现在后台在跑什么」。
@@ -82,13 +81,6 @@ def register_background_tasks():
         log.warning('登记足球后台任务失败: %s', exc)
 
     try:
-        from src.beidan.settling import register_beidan_tasks
-
-        register_beidan_tasks(background.submit_periodic)
-    except Exception as exc:
-        log.warning('登记北单赛果回填任务失败: %s', exc)
-
-    try:
         background.start()
         log.info('后台调度器已启动: %s 个周期任务', background.task_count())
     except Exception as exc:
@@ -98,7 +90,6 @@ def register_background_tasks():
 def start_cache_warmups():
     """把每日首次打开的全量冷分析挪到后台。
 
-    北单一次请求要算完整页、冷算 12 秒以上；3D 的 ML 更久。
     线程都是 daemon——**预热没算完不该拦着进程退出**。
     """
     for thread_name, module_path, function_name, label in WARMUP_THREADS:

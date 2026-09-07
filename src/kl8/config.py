@@ -621,6 +621,7 @@ KL8_PRIZE_TABLE_FILE = data_path('kl8_prize_table.json')
 # ─── v9: 策略试验与激活持久化 ───
 KL8_STRATEGY_TRIAL_FILE = data_path('kl8_strategy_trials.json')
 KL8_ACTIVE_STRATEGIES_FILE = data_path('kl8_active_strategies.json')
+KL8_VERIFICATION_STATE_FILE = data_path('kl8_verification_state.json')
 KL8_FINAL_TEST_REPORT_FILE = data_path('kl8_final_test_report.json')
 
 # ─── 冲突审核队列 ───

@@ -34,6 +34,11 @@ def football_prediction_save(records):
     doc_store.replace_all('football_prediction', _FOOTBALL_PREDICTION_COLS, rows)
 
 
+def football_prediction_get(match_id):
+    """按 match_id 读回库里的完整记录，供内存精简副本按需补全。"""
+    return doc_store.load_one('football_prediction', 'match_id', match_id)
+
+
 def football_prediction_upsert(record):
     """单行 UPSERT 一条预测记录，避免整表重写（每请求级热点写入）。"""
     return doc_store.upsert_one(

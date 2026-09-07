@@ -279,8 +279,31 @@ def _lottery_match_key(match_num, match_time):
     return (num, when) if num and when else None
 
 
+#: 已结算超过这么久的记录，内存里只留 market_timeline 的最后一条快照。
+TIMELINE_OFFLOAD_AFTER_MINUTES = 3 * 24 * 60
+#: 标记内存副本的时间线已截断，写库前必须先从库里读回完整时间线。
+TIMELINE_OFFLOADED = '_timeline_offloaded'
+
+
+def _timeline_offloadable(record, now):
+    if not record.get('settled') or record.get(TIMELINE_OFFLOADED):
+        return False
+    if len(record.get('market_timeline') or []) <= 1:
+        return False
+    try:
+        return _is_match_settle_due(record.get('match_time'),
+                                    minutes=TIMELINE_OFFLOAD_AFTER_MINUTES, now=now)
+    except Exception:
+        return False
+
+
 class PredictionHistory:
-    """预测历史记录管理器"""
+    """预测历史记录管理器
+
+    market_timeline 占记录体积七成，而已结算多日的记录只在导出与整表写回时
+    才需要完整时间线，所以它们的内存副本只留最后一条快照（`timeline[-1]`
+    的读法照常成立），写库时按需从库读回合并。
+    """
 
     # 多场比赛并发分析时 add_prediction 会同时读写 records 并做单条 UPSERT，
     # 用类级可重入锁把「查重—更新—落库」串起来（实例可能绕过 __init__ 构造）。
@@ -298,6 +321,51 @@ class PredictionHistory:
         except Exception as e:
             log.error(f"加载预测历史失败: {e}")
             self.records = []
+        self.offload_stale_timelines()
+
+    def offload_stale_timelines(self, now=None):
+        """把已结算多日记录的时间线截到最后一条，返回本次截断的条数。"""
+        now = now or datetime.now()
+        offloaded = 0
+        with self._records_lock:
+            for record in self.records:
+                if _timeline_offloadable(record, now):
+                    record['market_timeline'] = record['market_timeline'][-1:]
+                    record[TIMELINE_OFFLOADED] = True
+                    offloaded += 1
+        if offloaded:
+            log.info("预测历史时间线已精简: %d 条记录只保留最后一条快照", offloaded)
+        return offloaded
+
+    def _stored_timeline(self, record):
+        stored = repositories.football_prediction_get(record.get('match_id'))
+        timeline = (stored or {}).get('market_timeline')
+        if not timeline:
+            log.warning("预测记录 %s 无法从库读回完整时间线，沿用内存副本",
+                        record.get('match_id'))
+            return None
+        return timeline
+
+    def _hydrate_timeline(self, record):
+        """就地补回完整时间线；只在即将修改该记录时调用。"""
+        if not record.get(TIMELINE_OFFLOADED):
+            return record
+        stored = self._stored_timeline(record)
+        if stored:
+            record['market_timeline'] = stored
+        record.pop(TIMELINE_OFFLOADED, None)
+        return record
+
+    def _persistable(self, record):
+        """返回可写库/导出的完整记录；精简副本会合并库里的时间线，不改内存。"""
+        if not record.get(TIMELINE_OFFLOADED):
+            return record
+        merged = dict(record)
+        merged.pop(TIMELINE_OFFLOADED, None)
+        stored = self._stored_timeline(record)
+        if stored:
+            merged['market_timeline'] = stored
+        return merged
 
     def _save(self):
         """保存记录到 MySQL（整表重写）。仅用于批量操作（audit/repair 等）。
@@ -306,14 +374,18 @@ class PredictionHistory:
         binlog/磁盘写爆。
         """
         try:
-            repositories.football_prediction_save(self.records)
+            if any(r.get(TIMELINE_OFFLOADED) for r in self.records):
+                for record in self.records:
+                    repositories.football_prediction_upsert(self._persistable(record))
+            else:
+                repositories.football_prediction_save(self.records)
         except Exception as e:
             log.error(f"保存预测历史失败: {e}")
 
     def _save_record(self, record):
         """仅 UPSERT 单条记录，把每请求写入量从 O(表行数) 降到 O(1)。"""
         try:
-            backend = repositories.football_prediction_upsert(record)
+            backend = repositories.football_prediction_upsert(self._persistable(record))
             if backend == 'fallback':
                 log.warning(
                     "MySQL预测记录写入失败，已降级本地存储: match_id=%s",
@@ -439,7 +511,7 @@ class PredictionHistory:
         # 检查是否已存在
         existing = self._find_existing_record(match_id, match_num, match_time)
         if existing is not None:
-            record = existing
+            record = self._hydrate_timeline(existing)
             newly_aliased = self._register_alias_match_id(record, match_id)
             # 跳过无变化的重复写入：缓存命中时同一场比赛会被反复「预测」，
             # 但内容与时间层其实一字未变。此时直接返回，不写库、不更新时间戳，
@@ -2086,6 +2158,7 @@ def auto_sync_results():
             failed += 1
             log.error(f"同步比赛结果异常: {home} vs {away} - {e}")
     
+    _global_history.offload_stale_timelines()
     return {
         'synced': synced,
         'failed': failed,
@@ -2469,7 +2542,7 @@ def get_prediction_export() -> Dict:
     )
     records = [
         {key: record.get(key) for key in export_fields if key in record}
-        for record in _global_history.records
+        for record in map(_global_history._persistable, _global_history.records)
     ]
     records.sort(key=lambda item: item.get('match_time', ''))
     return {

@@ -19,7 +19,7 @@ log = setup_logger('kl8')
 from . import config as _cfg
 
 from .config import (
-    FUSHI_CONFIG, FUSHI_PLAY_KEYS, KL8_ACTIVE_STRATEGIES_FILE, KL8_CONFLICT_QUEUE_FILE, KL8_FINAL_TEST_REPORT_FILE, KL8_PREDICTOR_VERSION, KL8_PRIZE_TABLE_FILE, KL8_STRATEGY_TRIAL_FILE, SELECT_PLAY_KEYS, SELECT_TYPES,
+    FUSHI_CONFIG, FUSHI_PLAY_KEYS, KL8_ACTIVE_STRATEGIES_FILE, KL8_CONFLICT_QUEUE_FILE, KL8_VERIFICATION_STATE_FILE, KL8_FINAL_TEST_REPORT_FILE, KL8_PREDICTOR_VERSION, KL8_PRIZE_TABLE_FILE, KL8_STRATEGY_TRIAL_FILE, SELECT_PLAY_KEYS, SELECT_TYPES,
 )
 from .stats import (
     hypergeom_expected,
@@ -300,6 +300,38 @@ def _persist_active_strategies():
         log.warning(f'持久化已激活策略失败: {e}')
         if temp_path.exists():
             temp_path.unlink()
+
+
+def _persist_verification_state(latest_issue, play_types):
+    """记录这轮验证覆盖的最新期号与玩法，供下一轮判断是否需要重算。"""
+    path = Path(KL8_VERIFICATION_STATE_FILE)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = path.with_suffix('.json.tmp')
+    payload = {
+        'latest_issue': str(latest_issue),
+        'play_types': list(play_types),
+        'verified_at': time.strftime('%Y-%m-%dT%H:%M:%S'),
+    }
+    try:
+        temp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding='utf-8')
+        temp_path.replace(path)
+    except Exception as e:
+        log.warning(f'持久化策略验证状态失败: {e}')
+        if temp_path.exists():
+            temp_path.unlink()
+
+
+def _load_verification_state():
+    path = Path(KL8_VERIFICATION_STATE_FILE)
+    if not path.exists():
+        return {}
+    try:
+        loaded = json.loads(path.read_text(encoding='utf-8'))
+        if isinstance(loaded, dict):
+            return loaded
+    except Exception as e:
+        log.warning(f'加载策略验证状态失败: {e}')
+    return {}
 
 
 def _load_active_strategies():

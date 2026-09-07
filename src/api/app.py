@@ -11,7 +11,7 @@ from src.api.auth import AuthSettings, build_session_manager, install_auth
 from src.api.deps import Settings, build_cache, build_database, get_executor, shutdown_executor
 from src.api.rate_limit import ClientRateLimiters, install_rate_limit
 from src.api.routers import auth as auth_routes
-from src.api.routers import basketball, beidan, bff, football, health, kl8, pages
+from src.api.routers import basketball, bff, football, health, kl8, pages
 from src.api import startup as startup_orchestration
 from src.api.runtime import background, shared_cache
 
@@ -89,7 +89,6 @@ def create_app(settings=None, auth_settings=None):
     app.include_router(health.router)
     app.include_router(auth_routes.router)
     app.include_router(basketball.router)
-    app.include_router(beidan.router)
     app.include_router(kl8.router)
     app.include_router(football.router)
     app.include_router(bff.router)
