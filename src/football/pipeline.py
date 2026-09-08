@@ -562,9 +562,10 @@ def _analyze_match_impl(match, force_refresh=False):
                         'lottery': cached_lottery,
                     },
                     lottery_handicap=(cached_lottery.get('handicap') or {}).get('handicap'),
+                    # Settlement needs full-match probabilities; conditional
+                    # scenarios remain in odds_data['lottery'] for explanation.
                     predicted_rqspf=(
-                        (cached_lottery.get('linked_recommendation') or {}).get('handicap_conditional_probabilities')
-                        or (cached_lottery.get('handicap') or {}).get('probabilities')
+                        (cached_lottery.get('handicap') or {}).get('probabilities')
                     ),
                     goal_count=model.get('goal_count'),
                     professional_snapshot={
@@ -1690,9 +1691,9 @@ def _analyze_match_impl(match, force_refresh=False):
             ml_available=ml_available,
             ml_feature_snapshot=ml_feature_snapshot,
             lottery_handicap=(lottery.get('handicap') or {}).get('handicap'),
+            # Do not score a probability conditioned on the SPF pick coming true.
             predicted_rqspf=(
-                (lottery.get('linked_recommendation') or {}).get('handicap_conditional_probabilities')
-                or (lottery.get('handicap') or {}).get('probabilities')
+                (lottery.get('handicap') or {}).get('probabilities')
             ),
             goal_count=goal_count_result,
             professional_snapshot={

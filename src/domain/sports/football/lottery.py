@@ -50,6 +50,30 @@ def parse_lottery_handicap(value):
     return int(number)
 
 
+def lottery_outcomes_compatible(standard_result, handicap_result, handicap):
+    """Whether one integer goal margin can settle both selections as wins.
+
+    Return None when the selections or lottery line cannot be verified.  In
+    particular, 胜 + 让负 is impossible at -1 but possible at -2 (win by one).
+    """
+    line = parse_lottery_handicap(handicap)
+    if (line is None or standard_result not in ('胜', '平', '负')
+            or handicap_result not in ('让胜', '让平', '让负')):
+        return None
+    infinity = float('inf')
+    standard_bounds = {
+        '胜': (1, infinity), '平': (0, 0), '负': (-infinity, -1),
+    }
+    handicap_bounds = {
+        '让胜': (1 - line, infinity),
+        '让平': (-line, -line),
+        '让负': (-infinity, -1 - line),
+    }
+    lower, upper = standard_bounds[standard_result]
+    rq_lower, rq_upper = handicap_bounds[handicap_result]
+    return max(lower, rq_lower) <= min(upper, rq_upper)
+
+
 def lottery_odds_probabilities(odds, keys):
     """Return normalized, overround-removed probabilities for one lottery market."""
     implied = {}

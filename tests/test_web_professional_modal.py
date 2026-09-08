@@ -53,7 +53,8 @@ class WebProfessionalModalTests(unittest.TestCase):
         self.assertIn("让球胜平负", html)
         self.assertIn("赛后比分", html)
         self.assertIn("setFootballQualityFilter('upset')", html)
-        self.assertIn("防冷方向：", html)
+        self.assertIn("防冷情景（非推荐）：", html)
+        self.assertNotIn("防冷方向：", html)
 
     def test_professional_status_falls_back_to_static_backtest(self):
         path = os.path.join(ROOT, 'web', 'index.html')

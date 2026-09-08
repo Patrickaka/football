@@ -4787,20 +4787,18 @@ function getAccuracyGatePresentation(gate, candidate, options = {}) {
 }
 
 function renderWebMarketRecommendation(label, state, pick, probabilityText = '') {
-  const isAbstain = state?.status === 'abstain';
-  const decision = isAbstain ? '不推荐' : (pick || state?.pick || '-');
-  const candidate = isAbstain && (pick || state?.pick)
-    ? `<span class="market-candidate">模型候选 ${esc(pick || state.pick)}</span>` : '';
   const status = ['selected', 'watch', 'abstain'].includes(state?.status) ? state.status : 'abstain';
+  const isSelected = status === 'selected';
+  // 最高概率仅是分布的最大值，未通过筛选时不能作为推荐方向展示。
+  const decision = isSelected ? (pick || state?.pick || '-') : '不推荐';
   const reasons = (state?.reasons || []).filter(Boolean);
   return `<section class="market-row" data-status="${status}" aria-label="${esc(label)}">
     <div class="market-row-heading"><span class="market-name">${esc(label)}</span></div>
     <div class="market-verdict">
       <span class="market-decision"><span class="decision-badge ${status}">${esc(state?.label || '观望')}</span><strong>${esc(decision)}</strong></span>
-      ${candidate}
     </div>
     ${probabilityText ? `<div class="market-distribution">${probabilityText}</div>` : ''}
-    ${reasons.length ? `<p class="market-reason"><span>${isAbstain ? '观望原因' : '筛选依据'}</span>${reasons.map(esc).join('；')}</p>` : ''}
+    ${reasons.length ? `<p class="market-reason"><span>${isSelected ? '筛选依据' : status === 'watch' ? '观察原因' : '观望原因'}</span>${reasons.map(esc).join('；')}</p>` : ''}
   </section>`;
 }
 
@@ -4890,6 +4888,8 @@ function getFootballResultTier(item) {
     primary = { ...spfState, market: '胜平负', prediction: spfState.pick };
   } else if (totalState.status === 'selected') {
     primary = { ...totalState, market: '大小球', prediction: totalCandidate };
+  } else if (rqspfState.status === 'selected') {
+    primary = { ...rqspfState, market: '让球胜平负', prediction: rqspfState.pick };
   } else if (spfState.status === 'watch') {
     primary = { ...spfState, market: '胜平负', prediction: spfState.pick };
   } else if (totalState.status === 'watch' && totalCandidate !== '-') {
@@ -5239,7 +5239,7 @@ function renderFootballPredictions(results) {
         <div class="fixture-assessment">
           <div class="fixture-status">
             <span class="decision-badge ${resultTier.tier}">${esc(resultTier.label)}</span>
-            <span class="fixture-pick">${esc(resultTier.market)} ${esc(resultTier.prediction)} <b>${(resultTier.probability * 100).toFixed(0)}%</b></span>
+            <span class="fixture-pick">${resultTier.tier === 'selected' ? `${esc(resultTier.market)} ${esc(resultTier.prediction)} <b>${(resultTier.probability * 100).toFixed(0)}%</b>` : '暂无通过筛选的推荐'}</span>
           </div>
           ${cf && cf.score != null ? `<span class="fixture-completeness">信息完整度 <b>${(cf.score * 100).toFixed(0)}%</b></span>` : ''}
           ${resultTier.downgradeReasons.length ? `<div class="fixture-downgrade">已降级 · ${esc(resultTier.downgradeReasons.join('、'))}</div>` : ''}
@@ -5279,7 +5279,7 @@ function renderFootballPredictions(results) {
           <span style="color:${uColor};font-weight:bold">${esc(upset.label)}</span>
           <span style="color:var(--muted)"> · 热门${esc(upset.favorite)} ${((upset.favorite_prob || 0) * 100).toFixed(0)}%</span>
           <span class="disclosure-arrow" aria-hidden="true">⌄</span></summary><div class="alert-details">
-          ${upset.recommended_cover ? `<div style="margin-top:4px;color:${uColor};font-weight:bold">防冷方向：${esc(upset.recommended_cover)}</div>` : ''}
+          ${upset.recommended_cover ? `<div style="margin-top:4px;color:${uColor}">防冷情景（非推荐）：${esc(upset.recommended_cover)}</div>` : ''}
           ${upset.signals?.length ? `<div style="margin-top:3px;color:var(--muted)">依据：${upset.signals.slice(0, 4).map(esc).join('；')}</div>` : ''}
           ${renderScenario('真正爆冷', outrightCandidates, 'var(--color-danger)')}
           ${renderScenario('防冷平局', drawCandidates, 'var(--color-warning)')}
@@ -5329,14 +5329,8 @@ function renderFootballPredictions(results) {
             ? `🇨🇳 中国体彩 · 让球胜平负（主队 ${lotteryHandicap > 0 ? '+' : ''}${lotteryHandicap}）`
             : `🎯 让球胜平负（主队 ${lotteryHandicap > 0 ? '+' : ''}${lotteryHandicap}·修正后模型）`,
           prediction: {
-            pred: linkedSelections?.handicapPredictions?.[0] || r.lottery.handicap.prediction,
-            preds: linkedSelections?.handicapPredictions,
-            probs: linkedSelections?.handicapConditionalProbabilities
-              && Object.keys(linkedSelections.handicapConditionalProbabilities).length
-              ? linkedSelections.handicapConditionalProbabilities
-              : r.lottery.handicap.probabilities,
-            conditional: Boolean(linkedSelections?.handicapConditionalProbabilities
-              && Object.keys(linkedSelections.handicapConditionalProbabilities).length),
+            pred: r.lottery.handicap.prediction,
+            probs: r.lottery.handicap.probabilities,
             marginalProbs: r.lottery.handicap.probabilities,
             modelProbs: r.lottery.handicap.model_probabilities,
             marketProbs: r.lottery.handicap.market_probabilities,
@@ -5390,7 +5384,7 @@ function renderFootballPredictions(results) {
         itemHtml += `<div class="football-compact-summary">
           <div class="market-section-heading"><h3>玩法分析</h3><span>赛前概率参考</span></div>
           ${standardPrediction ? renderWebMarketRecommendation('胜平负', spfGateState, spfGateState.pick || selectedStandard, compactProbLine(standardPrediction.probs, ['胜','平','负'])) : ''}
-          ${standardPrediction?.selectionProfile?.mode === 'draw_cover' && spfGateState.status !== 'abstain' ? '<div class="draw-cover-note">模型分布提示防平，仅作辅助参考</div>' : ''}
+          ${standardPrediction?.selectionProfile?.mode === 'draw_cover' && spfGateState.status === 'selected' ? '<div class="draw-cover-note">模型分布提示防平，仅作辅助参考</div>' : ''}
           ${handicapCard ? renderWebMarketRecommendation(`让球胜平负（${Number(lotteryHandicap) > 0 ? '+' : ''}${lotteryHandicap}）`, rqspfGateState, rqspfGateState.pick || selectedHandicap, compactProbLine(handicapCard.prediction.marginalProbs, ['让胜','让平','让负'])) : ''}
           ${renderWebMarketRecommendation('大小球', totalGateState, totalDirection, `<span class="distribution-caption">比分矩阵进球数分布</span>${compactGoalText}`)}
           <div class="football-score-reference">
@@ -5405,6 +5399,7 @@ function renderFootballPredictions(results) {
         </div>`;
       }
       if (!compactFootballView) marketCards.forEach(card => {
+        const cardState = card.handicap ? resultTier.markets.rqspf : resultTier.markets.spf;
         itemHtml += '<div style="margin-top:8px;padding:8px;background:var(--bg2);border-radius:8px">';
         itemHtml += `<div style="font-size:12px;color:var(--muted);margin-bottom:6px">${card.title}</div>`;
         itemHtml += '<div style="display:flex;gap:12px">';
@@ -5412,11 +5407,7 @@ function renderFootballPredictions(results) {
           const prob = card.prediction.probs[key] || 0;
           const probabilityAvailable = Object.prototype.hasOwnProperty.call(card.prediction.probs, key);
           const odd = card.odds?.[key];
-          const selectedPredictions = card.accuracyGate && !card.accuracyGate.selected
-            ? []
-            : (card.prediction.preds?.length
-              ? card.prediction.preds : [card.prediction.pred]);
-          const isPred = selectedPredictions.includes(key);
+          const isPred = cardState.status === 'selected' && cardState.pick === key;
           const colors = {
             '胜': 'var(--color-danger)', '平': 'var(--color-warning)', '负': 'var(--color-positive)',
             '让胜': 'var(--color-danger)', '让平': 'var(--color-warning)', '让负': 'var(--color-positive)'
@@ -5429,31 +5420,24 @@ function renderFootballPredictions(results) {
         });
         itemHtml += '</div>';
         if (card.prediction.marketProbs && card.prediction.pred) {
-          const sourceKey = card.prediction.pred;
+          const sourceKey = cardState.status === 'selected' ? cardState.pick : card.prediction.pred;
           const modelValue = Number(card.prediction.modelProbs?.[sourceKey] || 0);
           const marketValue = Number(card.prediction.marketProbs?.[sourceKey] || 0);
           const fusedValue = Number(card.prediction.probs?.[sourceKey] || 0);
-          const marginalValue = Number(card.prediction.marginalProbs?.[sourceKey] || 0);
           const marketWeight = Math.round(Number(card.prediction.marketWeight || 0) * 100);
-          itemHtml += card.prediction.conditional
-            ? `<div style="font-size:10px;color:var(--color-info);margin-top:6px">
-                ${esc(sourceKey)}：在“不让球${esc(linkedSelections?.primaryPrediction || '')}”条件下 ${(fusedValue * 100).toFixed(0)}% · 独立让球综合概率 ${(marginalValue * 100).toFixed(0)}%（比分模型 ${(modelValue * 100).toFixed(0)}% / 中国足彩网去水 ${(marketValue * 100).toFixed(0)}%）
-              </div>`
-            : `<div style="font-size:10px;color:var(--color-info);margin-top:6px">
+          itemHtml += `<div style="font-size:10px;color:var(--color-info);margin-top:6px">
                 ${esc(sourceKey)}：比分模型 ${(modelValue * 100).toFixed(0)}% · 中国足彩网赔率去水 ${(marketValue * 100).toFixed(0)}% · 综合 ${(fusedValue * 100).toFixed(0)}%（赔率权重 ${marketWeight}%）
               </div>`;
         }
         itemHtml += '</div>';
-        if (!card.handicap && card.prediction.selectionProfile?.mode === 'draw_cover') {
-          itemHtml += `<div style="font-size:11px;color:var(--color-warning);margin-top:6px">⚠️ 平局与首选概率差距较小：严格单选为 ${esc(card.prediction.pred)}，覆盖建议为 ${(card.prediction.preds || []).map(esc).join('/')}</div>`;
+        if (!card.handicap && cardState.status === 'selected' && card.prediction.selectionProfile?.mode === 'draw_cover') {
+          itemHtml += '<div style="font-size:11px;color:var(--color-warning);margin-top:6px">模型分布提示防平，仅作辅助参考</div>';
         }
       });
-      if (!compactFootballView && linkedSelections && marketCards.length > 1) {
-        const compatibleText = linkedSelections.compatibleHandicapPredictions?.join('/')
-          || linkedSelections.handicapPredictions.join('/');
+      if (!compactFootballView && resultTier.markets.spf.status === 'selected' && resultTier.markets.rqspf.status === 'selected') {
         itemHtml += `<div style="margin-top:6px;padding:7px 9px;border:1px solid rgba(59,130,246,.35);background:rgba(59,130,246,.08);border-radius:7px;font-size:12px;color:var(--color-info)">
-          🔗 先看胜平负：<b>${esc(linkedSelections.primaryPrediction)} ⇒ 让球兼容 ${esc(compatibleText)} ⇒ 首选 ${esc(linkedSelections.handicapPredictions[0])}</b>
-          <span style="color:var(--muted)">（让球百分比为该胜平负方向下的条件分析）</span>
+          已通过筛选：<b>胜平负 ${esc(resultTier.markets.spf.pick)} · 让球胜平负 ${esc(resultTier.markets.rqspf.pick)}</b>
+          <span style="color:var(--muted)">（各玩法百分比均为全场概率）</span>
         </div>`;
       }
       if (!compactFootballView && r.model?.joint_market_state?.applied) {
@@ -6018,7 +6002,8 @@ function renderResult(r) {
     <div class="meta">${m.num ? esc(m.num) + ' · ' : ''}${esc(m.league || '')} ${esc(m.time || '')}</div>
     ${lp && lp.name && lp.name !== 'default' && lp.avg_goal != null ? `<div class="meta">联赛模型 ${esc(lp.name)} · 场均 ${lp.avg_goal.toFixed(2)} 球</div>` : ''}
     ${modelInfo.length ? `<div class="meta" style="color:${'var(--warn)'}">${modelInfo.join(' · ')}</div>` : ''}
-    ${cf && cf.score != null ? `<div class="meta" style="color:${cf.level === 'low' ? 'var(--away)' : 'var(--accent2)'}">信息完整度 ${(cf.score * 100).toFixed(0)}% · 赛果概率 ${(detailResultTier.probability * 100).toFixed(0)}% · 预测可信度 ${(detailResultTier.predictionReliability * 100).toFixed(0)}%</div>` : ''}</div>`;
+    <div class="meta"><span class="decision-badge ${detailResultTier.tier}">${esc(detailResultTier.label)}</span> ${detailResultTier.tier === 'selected' ? `${esc(detailResultTier.market)} ${esc(detailResultTier.prediction)}` : '暂无通过筛选的推荐'}</div>
+    ${cf && cf.score != null ? `<div class="meta" style="color:${cf.level === 'low' ? 'var(--away)' : 'var(--accent2)'}">信息完整度 ${(cf.score * 100).toFixed(0)}% · 模型概率（参考） ${(detailResultTier.probability * 100).toFixed(0)}% · 预测可信度 ${(detailResultTier.predictionReliability * 100).toFixed(0)}%</div>` : ''}</div>`;
 
   html += renderModelStatus(r.model_status);
   const professionalEvidence = r.professional_evidence || {};
@@ -6223,11 +6208,10 @@ function renderResult(r) {
   html += `</div>`;
 
   const recommendRank = r.recommend_rank || md.recommend || [];
-  const recTitle = cf && cf.level === 'low'
-    ? '⭐ 最终策略推荐：低置信仅 1 个比分'
-    : !recommendRank || recommendRank.length === 0
-      ? '⭐ 最终策略推荐：不推荐比分'
-      : `⭐ 最终策略推荐：${recommendRank.length} 个比分`;
+  // 胜平负/让球筛选通过不代表比分玩法也已验证。
+  const recTitle = recommendRank.length
+    ? `比分参考（非推荐）：${recommendRank.length} 个比分`
+    : '比分参考（非推荐）：暂无比分';
   html += `<h3 style="color:var(--accent2);font-size:15px;margin:18px 0 10px">${recTitle}</h3>`;
   if (cf && cf.notes && cf.notes.length) {
     html += `<div class="status" style="padding:0 0 12px;font-size:13px;text-align:left">${cf.notes.map(esc).join('；')}</div>`;
@@ -6235,9 +6219,9 @@ function renderResult(r) {
   recommendRank.forEach((s, i) => {
     const recProb = s.prob != null ? s.prob : 0;
     const reasons = s.reasons && s.reasons.length ? s.reasons : [];
-    html += `<div class="rec">
-      <div class="title"><span class="star">★</span> ${esc(m.home)} ${s.home || (s.score ? s.score.split('-')[0] : '-')} : ${s.away || (s.score ? s.score.split('-')[1] : '-')} ${esc(m.away)} <span class="star">★</span></div>
-      <div class="sub">第${i + 1}推荐 · 结果：${resultLabel(s)} · 比分概率 ${pct(recProb)}${s.recommend_score != null ? ' · 推荐评分 ' + pct(s.recommend_score) : ''}</div>
+    html += `<div class="card">
+      <div class="title">${esc(m.home)} ${s.home || (s.score ? s.score.split('-')[0] : '-')} : ${s.away || (s.score ? s.score.split('-')[1] : '-')} ${esc(m.away)}</div>
+      <div class="sub">参考 ${i + 1} · 结果：${resultLabel(s)} · 比分概率 ${pct(recProb)}${s.recommend_score != null ? ' · 排序评分 ' + pct(s.recommend_score) : ''}</div>
       <div class="reasons">${reasons.map(x => `<span>${esc(x)}</span>`).join('')}</div></div>`;
   });
 
@@ -6247,10 +6231,10 @@ function renderResult(r) {
   const htfSampleInfo = halfFullTime && halfFullTime.sample_info ? halfFullTime.sample_info : null;
   
   if (htfProbs.length > 0) {
-    html += `<h3 style="color:var(--accent2);font-size:15px;margin:18px 0 10px">⚡ 半全场推荐</h3>`;
+    html += `<h3 style="color:var(--accent2);font-size:15px;margin:18px 0 10px">⚡ 半全场参考（非推荐）</h3>`;
     html += `<div class="card">`;
     
-    // 显示 Top3 推荐
+    // 显示 Top3 概率参考
     const top3 = htfProbs.slice(0, 3);
     html += `<div style="margin-bottom:12px">`;
     top3.forEach((item, index) => {
@@ -6276,16 +6260,11 @@ function renderResult(r) {
       fullProbs[full] += prob;
     });
     
-    const halfMax = Math.max(...Object.values(halfProbs));
-    const fullMax = Math.max(...Object.values(fullProbs));
-    const halfLabel = Object.keys(halfProbs).find(k => halfProbs[k] === halfMax);
-    const fullLabel = Object.keys(fullProbs).find(k => fullProbs[k] === fullMax);
-    
     const halfLabels = { H: '主胜', D: '平局', A: '客胜' };
     
     html += `<div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--line)">`;
-    html += `<div class="row"><span class="k">半场倾向</span><span class="v">${esc(halfLabels[halfLabel])} ${halfProbs[halfLabel].toFixed(1)}%</span></div>`;
-    html += `<div class="row"><span class="k">全场倾向</span><span class="v">${esc(halfLabels[fullLabel])} ${fullProbs[fullLabel].toFixed(1)}%</span></div>`;
+    html += `<div class="row"><span class="k">半场概率参考</span><span class="v">${Object.entries(halfProbs).map(([key, probability]) => `${esc(halfLabels[key])} ${probability.toFixed(1)}%`).join(' / ')}</span></div>`;
+    html += `<div class="row"><span class="k">全场概率参考</span><span class="v">${Object.entries(fullProbs).map(([key, probability]) => `${esc(halfLabels[key])} ${probability.toFixed(1)}%`).join(' / ')}</span></div>`;
     html += `</div>`;
     
     // 样本质量信息
@@ -6326,13 +6305,13 @@ function renderResult(r) {
     html += `</div>`;
   }
 
-  // 进球数推荐（从比分模型完整分布边际化，确保与比分预测一致）
+  // 进球数参考（从比分模型完整分布边际化，确保与比分预测一致）
   const scoreGoalDist = md && md.candidates && md.candidates.length
     ? getGoalDistributionFromCandidates(md.candidates)
     : [];
   const goalCount = md && md.goal_count ? md.goal_count : null;
   if (scoreGoalDist.length > 0) {
-    html += `<h3 style="color:var(--accent2);font-size:15px;margin:18px 0 10px">⚽ 进球数推荐</h3>`;
+    html += `<h3 style="color:var(--accent2);font-size:15px;margin:18px 0 10px">⚽ 进球数参考（非推荐）</h3>`;
     html += `<div class="card">`;
     html += `<div class="goal-grid">`;
     scoreGoalDist.slice(0, 3).forEach((item, index) => {

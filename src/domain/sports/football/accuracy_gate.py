@@ -5,6 +5,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
+from .lottery import lottery_outcomes_compatible
+
 
 TARGET_ACCURACY = 0.80
 
@@ -230,7 +232,7 @@ def build_accuracy_gate(
     league: Any = None,
     production_spf_policy: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Return separate abstention decisions for SPF and RQSPF."""
+    """Screen each market, then reject mutually exclusive paired selections."""
 
     confidence = confidence or {}
     anomaly = anomaly or {}
@@ -307,6 +309,25 @@ def build_accuracy_gate(
             ),
             "validation": spf_policy["validation"] if historically_supported else None,
         }
+    # Independent marginal maxima are valid probabilities, but cannot always
+    # be recommended together.  Do not replace either pick with a conditional
+    # runner-up just to make the displayed directions agree.
+    if decisions["spf"]["selected"] and decisions["rqspf"]["selected"]:
+        compatible = lottery_outcomes_compatible(
+            decisions["spf"]["decision"], decisions["rqspf"]["decision"],
+            (lottery.get("handicap") or {}).get("handicap"),
+        )
+        if compatible is not True:
+            reason = (
+                "胜平负与让球胜平负方向互斥，不能同时推荐"
+                if compatible is False
+                else "缺少有效体彩让球数，无法核验两玩法推荐是否兼容"
+            )
+            for market_key in ("spf", "rqspf"):
+                decisions[market_key]["selected"] = False
+                decisions[market_key]["decision"] = "观望"
+                decisions[market_key]["reasons"].append(reason)
+
     decisions["upset"] = {
         "selected": False,
         "watch": upset.get("alert") is True,
