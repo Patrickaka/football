@@ -200,16 +200,27 @@ class IntelligenceAgent:
         return best
 
     def _save(self, context):
+        from .retention import cleanup_intelligence_cache, intelligence_cache_lock, validate_cache_path
+
         directory = self._directory(context['match_id'])
-        directory.mkdir(parents=True, exist_ok=True)
         name = require_timestamp(context['captured_at']).strftime('%Y%m%dT%H%M%S%f') + '-' + uuid.uuid4().hex
         path, temporary = directory / (name + '.json'), directory / (name + '.tmp')
-        try:
-            temporary.write_text(json.dumps(context, ensure_ascii=False, allow_nan=False), encoding='utf-8')
-            os.replace(temporary, path)
-        finally:
-            if temporary.exists():
-                temporary.unlink()
+        with intelligence_cache_lock(self.cache_dir, create=True):
+            validate_cache_path(directory, self.cache_dir)
+            directory.mkdir(parents=True, exist_ok=True)
+            validate_cache_path(temporary, self.cache_dir)
+            try:
+                temporary.write_text(json.dumps(context, ensure_ascii=False, allow_nan=False), encoding='utf-8')
+                validate_cache_path(path, self.cache_dir)
+                os.replace(temporary, path)
+            finally:
+                if temporary.exists():
+                    validate_cache_path(temporary, self.cache_dir)
+                    temporary.unlink()
+        # Lock acquisition is separate: a file lock is not recursive. A second
+        # writer may publish between these operations, but this sweep includes
+        # its snapshot too and never touches an in-progress temporary file.
+        cleanup_intelligence_cache(self.cache_dir, match_id=context['match_id'], max_bytes=0, now=self.clock())
 
     def research_match_context(self, match, *, as_of=None, findings=(), force=False):
         """Blocking research: invoke only from a background job/CLI.

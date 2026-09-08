@@ -11,6 +11,22 @@ _POLLUTING_FILES = [
 
 
 @pytest.fixture(scope='session', autouse=True)
+def isolate_football_intelligence(tmp_path_factory):
+    """Keep ordinary pipeline tests from starting real background research.
+
+    Dedicated IntelligenceAgent tests invoke their fake sources directly; this
+    flag only stops pipeline submissions. Otherwise unrelated match fixtures
+    consume the shared tool slots and make later bounded-agent tests flaky.
+    Never read/write a developer's real intelligence cache during the suite.
+    """
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setenv('FOOTBALL_INTELLIGENCE_ENABLED', '0')
+        patch.setenv('FOOTBALL_INTELLIGENCE_CACHE_DIR',
+                     str(tmp_path_factory.mktemp('football-intelligence')))
+        yield
+
+
+@pytest.fixture(scope='session', autouse=True)
 def skip_startup_orchestration():
     """测试里不执行启动编排。
 

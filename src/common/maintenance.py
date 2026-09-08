@@ -6,7 +6,7 @@
 
 清理边界（务必守住）：
 - 只删「可再生 / 已轮转」的东西：过期 binlog、旧的滚动日志文件。
-- 绝不碰业务数据：预测记录、kl8 快照/结算、开奖历史、校准库等一律不动。
+- 绝不删除业务数据：足球历史只允许经校验的无损压缩；kl8 快照/结算、开奖历史、校准库不动。
 - 每步独立 try/except：一步失败不影响其余，且绝不让维护线程崩溃退出。
 
 binlog 的主策略应是 MySQL 服务端配置 `binlog_expire_logs_seconds`（由 MySQL
@@ -267,16 +267,28 @@ def run_maintenance(force_emergency: bool = False, status: dict = None) -> dict:
         }
     try:
         result['artifacts'] = cleanup_regenerable_artifacts(artifact_retention)
-        result['disk_after'] = disk_status()
     except Exception as e:
         log.error(f"可再生文件清理异常：{e}")
         result['artifacts'] = {'removed_count': 0, 'bytes_freed': 0, 'errors': [str(e)]}
+    try:
+        # Cache limits are independent of pressure; business history is always
+        # losslessly archived, even when disk space is critical.
+        from ..football.storage_maintenance import run_football_storage_maintenance
+        result['football_storage'] = run_football_storage_maintenance()
+    except Exception as e:
+        log.error('足球存储维护异常：%s', e)
+        result['football_storage'] = {'errors': [str(e)]}
+    try:
+        result['disk_after'] = disk_status()
+    except Exception as e:
+        result['disk_status_error'] = str(e)
     after = result.get('disk_after') or before
     artifact_result = result.get('artifacts') or {}
     active_log_result = result.get('active_logs') or {}
     bytes_freed = (
         artifact_result.get('bytes_freed', 0)
         + active_log_result.get('bytes_freed', 0)
+        + ((result.get('football_storage') or {}).get('intelligence_cache') or {}).get('removed_bytes', 0)
     )
     emit = log.warning if level != 'healthy' else log.debug
     emit(

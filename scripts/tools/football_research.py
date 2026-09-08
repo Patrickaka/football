@@ -23,7 +23,8 @@ def load_records(path=None):
         records = data.get('records') if isinstance(data, dict) else data
         if not isinstance(records, list):
             raise ValueError('input must be prediction records or an export with records')
-        return records
+        from src.common.football_storage import decode_record
+        return [decode_record(record) for record in records]
     from src.football.result_sync import get_history
     return get_history().records
 

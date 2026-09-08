@@ -154,16 +154,31 @@ class AgentCacheTests(unittest.TestCase):
         self.assertFalse(agent.get_cached_context(MATCH['match_id'], as_of=NOW)['evidence'][0]['verified'])
 
     def test_failure_and_hard_timeout_preserve_existing_facts(self):
+        entered, release = threading.Event(), threading.Event()
+        workers = []
         class Slow:
             name, categories = 'slow', ('weather',)
             def fetch(self, *args, **kwargs):
-                time.sleep(.3)
+                workers.append(threading.current_thread())
+                entered.set()
+                release.wait()
                 return []
-        started = time.monotonic()
-        context = self.agent(sources=[Slow()], budget_seconds=.03).research_match_context(MATCH, findings=[fact()])
-        self.assertLess(time.monotonic() - started, .2)
-        self.assertTrue(context['evidence'][0]['verified'])
-        self.assertEqual(context['errors'][0]['error'], 'TimeoutError')
+        try:
+            started = time.monotonic()
+            context = self.agent(sources=[Slow()], budget_seconds=.03).research_match_context(MATCH, findings=[fact()])
+            self.assertLess(time.monotonic() - started, .2)
+            self.assertTrue(entered.is_set(), 'the timeout must come from an active source')
+            self.assertFalse(release.is_set())
+            self.assertTrue(context['evidence'][0]['verified'])
+            self.assertEqual(context['errors'][0]['error'], 'TimeoutError')
+        finally:
+            release.set()
+            if entered.wait(.5):
+                # Joining the actual tool worker also waits for _Budget.call's
+                # finally block to release its shared semaphore slot.
+                for worker in workers:
+                    worker.join(timeout=1)
+                    self.assertFalse(worker.is_alive())
 
     def test_gap_planning_skips_completed_categories_and_bounds_requests(self):
         calls = []
@@ -239,23 +254,30 @@ class AgentCacheTests(unittest.TestCase):
 
     def test_submit_is_nonblocking_deduplicated_and_has_bounded_queue(self):
         entered, release = threading.Event(), threading.Event()
+        workers = []
         class Source:
             name, categories = 'blocking', ('news',)
             def fetch(self, *args, **kwargs):
+                workers.append(threading.current_thread())
                 entered.set()
                 release.wait(1)
                 return []
         agent = self.agent(sources=[Source()], queue_size=1, budget_seconds=2)
-        started = time.monotonic()
-        first = agent.submit_research(MATCH)
-        self.assertTrue(first['submitted'])
-        self.assertLess(time.monotonic() - started, .2)
-        self.assertTrue(entered.wait(.5))
-        self.assertEqual(agent.submit_research(MATCH)['status'], 'pending')
-        self.assertTrue(agent.submit_research(dict(MATCH, match_id='second'))['submitted'])
-        self.assertEqual(agent.submit_research(dict(MATCH, match_id='third'))['status'], 'queue_full')
-        release.set()
-        agent._queue.join()
+        try:
+            started = time.monotonic()
+            first = agent.submit_research(MATCH)
+            self.assertTrue(first['submitted'])
+            self.assertLess(time.monotonic() - started, .2)
+            self.assertTrue(entered.wait(.5))
+            self.assertEqual(agent.submit_research(MATCH)['status'], 'pending')
+            self.assertTrue(agent.submit_research(dict(MATCH, match_id='second'))['submitted'])
+            self.assertEqual(agent.submit_research(dict(MATCH, match_id='third'))['status'], 'queue_full')
+        finally:
+            release.set()
+            agent._queue.join()
+            for worker in workers:
+                worker.join(timeout=1)
+                self.assertFalse(worker.is_alive())
         self.assertEqual(agent.submit_research(MATCH)['status'], 'cached')
         self.assertEqual(agent.submit_research(dict(MATCH, time='bad', kickoff='bad'))['status'], 'invalid_match')
 

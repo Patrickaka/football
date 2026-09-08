@@ -66,6 +66,7 @@ from ..domain.sports.football.prediction_evaluation import (
     canonical_hash, event_hash, evaluate_frozen_events, evaluate_frozen_ml, score_metrics,
 )
 from .prediction_events import append_prediction_event
+from ..common.football_storage import FootballStorageError
 
 # 27 个纯计算转发给领域层（时间解析的"当前年"由调用方注入）
 normalize_1x2_probs = _st.normalize_1x2_probs
@@ -330,6 +331,11 @@ class PredictionHistory:
         try:
             self.records = repositories.football_prediction_load()
             log.debug("已加载 %d 条预测历史记录", len(self.records))
+        except FootballStorageError:
+            # A corrupt archive is not an empty history. Propagate so callers
+            # cannot proceed to overwrite the store with an empty collection.
+            log.exception('足球归档校验失败，停止加载，保留原存储')
+            raise
         except Exception as e:
             log.error(f"加载预测历史失败: {e}")
             self.records = []
@@ -553,7 +559,7 @@ class PredictionHistory:
                 and (not match_num or record.get('match_num') == match_num)
                 and not newly_aliased
             ):
-                if event_audit['appended']:
+                if event_audit.get('storage_changed') or event_audit['appended']:
                     backend = self._save_record(record)
                     if backend == 'failed':
                         record.clear()
@@ -2393,6 +2399,7 @@ def get_prediction_records(include_hidden: bool = False,
 
 def get_prediction_export() -> Dict:
     """返回可用于离线回测/校准的完整预测记录（不包含数据库配置）。"""
+    from .prediction_events import hydrate_prediction_events
     export_fields = (
         'match_id', 'league', 'home', 'away', 'match_time',
         'match_num',
@@ -2417,11 +2424,18 @@ def get_prediction_export() -> Dict:
         'decision_snapshot', 'result_quality', 'result_source', 'sync_source',
         'half_time_data_quality', 'exclude_from_calibration', 'params_snapshot',
     )
+    # Export a stable view while prediction writers may compact event lists.
+    # The archive and hot list must come from the same version of each row.
+    with _global_history._records_lock:
+        complete_records = [deepcopy(_global_history._persistable(row))
+                            for row in _global_history.records]
     records = [
         {**{key: deepcopy(record.get(key)) for key in export_fields if key in record},
+         **({'prediction_events': hydrate_prediction_events(record)}
+            if 'prediction_event_archive' in record or 'prediction_event_retention' in record else {}),
          **(score_metrics(record.get('predicted_scores'), record.get('actual_score'))
             if record.get('settled') else {})}
-        for record in map(_global_history._persistable, _global_history.records)
+        for record in complete_records
     ]
     records.sort(key=lambda item: item.get('match_time', ''))
     stats = _global_history.get_stats()

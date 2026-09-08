@@ -12,6 +12,13 @@ from src.common.logger import _SafeRotatingFileHandler
 
 
 class MaintenanceRetentionTests(unittest.TestCase):
+    def setUp(self):
+        # Existing cleanup tests must not touch the real football store/cache.
+        storage = patch('src.football.storage_maintenance.run_football_storage_maintenance',
+                        return_value={'intelligence_cache': {'removed_bytes': 0}})
+        self.storage_maintenance = storage.start()
+        self.addCleanup(storage.stop)
+
     def test_disk_status_has_warning_and_critical_levels(self):
         usage = namedtuple('usage', 'total used free')
         total = 20 * 1024 ** 3
@@ -103,6 +110,7 @@ class MaintenanceRetentionTests(unittest.TestCase):
         artifacts.assert_called_once_with(maintenance.EMERGENCY_ARTIFACT_RETENTION_DAYS)
         self.assertTrue(result['emergency'])
         self.assertEqual(result['disk_after'], recovered)
+        self.storage_maintenance.assert_called_once_with()
 
     def test_force_emergency_cleans_even_when_project_disk_looks_healthy(self):
         healthy = {

@@ -8,6 +8,7 @@ import threading
 from .agent import IntelligenceAgent
 from .extraction import OllamaFactExtractor
 from .sources import FootballDataSource, GdeltNewsSource, JsonEndpointSource, OpenMeteoSource, RssSource
+from .retention import cleanup_intelligence_cache
 
 _default = None
 _default_lock = threading.Lock()
@@ -76,4 +77,4 @@ def get_intelligence_status():
 
 __all__ = ['IntelligenceAgent', 'research_match_context', 'get_cached_context', 'submit_research',
            'OllamaFactExtractor', 'JsonEndpointSource', 'RssSource', 'FootballDataSource',
-           'GdeltNewsSource', 'OpenMeteoSource', 'get_intelligence_status']
+           'GdeltNewsSource', 'OpenMeteoSource', 'get_intelligence_status', 'cleanup_intelligence_cache']

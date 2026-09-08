@@ -3,6 +3,7 @@
 import copy
 import unittest
 from contextlib import ExitStack
+from itertools import product
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
@@ -75,7 +76,8 @@ class RqspfProbabilityPersistenceTests(unittest.TestCase):
                      patch.object(pipeline, 'get_cache', return_value=cached) as cache, \
                      patch.object(pipeline, 'set_cache') as write_cache, \
                      patch.object(pipeline, 'predict_scores') as calculate, \
-                     patch.object(result_sync, 'save_prediction', return_value={}) as save:
+                     patch.object(result_sync, 'save_prediction', return_value={
+                         'saved': True, 'persistence_backend': 'test'}) as save:
                     result = pipeline.analyze_match(match)
 
                 cache.assert_called_once_with(
@@ -87,8 +89,17 @@ class RqspfProbabilityPersistenceTests(unittest.TestCase):
                 self.assert_saved_marginal(save, result, handicap)
 
     def test_fresh_analysis_saves_all_match_outcomes_not_draw_condition(self):
-        for handicap in (1, -1):
-            with self.subTest(handicap=handicap), ExitStack() as stack:
+        # A completed save, an already persisted prediction, and a failed or
+        # unknown save are different outcomes of the real persistence API.
+        save_outcomes = (
+            ({'saved': True, 'persistence_backend': 'mysql'}, True),
+            ({'saved': True, 'persistence_backend': 'fallback'}, True),
+            ({'saved': False, 'persistence_backend': 'unchanged'}, True),
+            ({'saved': False, 'persistence_backend': 'failed'}, False),
+            ({}, False),
+        )
+        for handicap, (save_response, expected_saved) in product((1, -1), save_outcomes):
+            with self.subTest(handicap=handicap, save_response=save_response), ExitStack() as stack:
                 # Keep the real orchestration, market aggregation and save call;
                 # replace persistence and model inputs with isolated fixtures.
                 for flag in ('CACHE_AVAILABLE', 'BAYESIAN_CALIBRATION_AVAILABLE',
@@ -120,18 +131,20 @@ class RqspfProbabilityPersistenceTests(unittest.TestCase):
                     return_value={'available': False, 'prediction_ready': False}))
                 stack.enter_context(patch.object(
                     result_sync, 'get_history',
-                    return_value=SimpleNamespace(get_record=Mock(return_value=None))))
+                    return_value=SimpleNamespace(records=[], get_record=Mock(return_value=None))))
+                stack.enter_context(patch(
+                    'src.football.research_runtime.completed_intelligence', return_value=None))
                 stack.enter_context(patch.object(
                     result_sync, 'get_history_stats', return_value={}))
                 save = stack.enter_context(patch.object(
-                    result_sync, 'save_prediction', return_value={}))
+                    result_sync, 'save_prediction', return_value=save_response))
                 fetch = stack.enter_context(patch.object(
                     pipeline._fetching_mod, 'fetch', side_effect=AssertionError('network request')))
 
                 result = pipeline.analyze_match(_match(handicap), force_refresh=True)
 
                 fetch.assert_not_called()
-                self.assertTrue(result['model_status']['prediction_saved'])
+                self.assertIs(result['model_status']['prediction_saved'], expected_saved)
                 self.assert_saved_marginal(save, result, handicap)
 
 
