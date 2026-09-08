@@ -83,3 +83,17 @@ class FootballRecordsWithoutMatches(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class FootballRecordsRetryReasonTests(unittest.TestCase):
+    """「重试中」的记录要把上次失败原因亮出来，否则分不清是没开奖还是数据源坏了。"""
+
+    def _renderer(self):
+        return HTML.split("'retry': { label: '重试中'", 1)[1].split(
+            'renderPredictionsPager(records.length', 1,
+        )[0]
+
+    def test_retry_records_show_last_sync_error(self):
+        renderer = self._renderer()
+        self.assertIn("record.sync_status === 'retry' && record.last_sync_error", renderer)
+        self.assertIn('上次失败：${esc(record.last_sync_error)}', renderer)

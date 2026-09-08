@@ -8854,6 +8854,7 @@ async function loadPredictions() {
             ${hasSpf ? `<div><span style="color:var(--muted)">胜平负预测：</span><b>${esc(spf.pick)}</b> · ${spf.detail}</div>` : ''}
             ${hasRqspf ? `<div style="margin-top:4px"><span style="color:var(--muted)">让球胜平负${handicapText}预测：</span><b>${esc(rqspf.pick)}</b> · ${rqspf.detail}</div>` : ''}
             ${marketVerificationNote}
+            ${record.sync_status === 'retry' && record.last_sync_error ? `<div style="color:var(--warn);margin-top:2px">上次失败：${esc(record.last_sync_error)}</div>` : ''}
             ${record.next_sync_at ? `<div style="color:var(--muted);margin-top:2px">预计同步：${record.next_sync_at?.replace('T', ' ').slice(0, 16) || '-'}</div>` : ''}
           </div>`;
         }

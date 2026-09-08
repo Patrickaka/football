@@ -8,7 +8,7 @@
 from __future__ import annotations
 
 import re
-from typing import Dict, List
+from typing import Dict, Iterator, List, Set, Tuple
 
 
 SPORTTERY_BASE = 'https://www.sporttery.cn'
@@ -164,21 +164,10 @@ def parse_sporttery_results(payload: Dict) -> Dict[str, Dict]:
     比分就是完场。`poolStatus` 不作为门槛：单关未开售的场次它是空串，
     但比分照样是真的（奥斯纳 vs 拜仁 1:4）。
     """
-    if not isinstance(payload, dict):
-        raise ValueError('sporttery result response is not an object')
-    if str(payload.get('errorCode')) != '0' or not payload.get('success'):
-        raise ValueError(
-            'sporttery result error: '
-            + str(payload.get('errorMessage') or 'unknown')
-        )
-    value = payload.get('value') or {}
     results = {}
-    for raw in (value.get('matchResult') or []):
-        if not isinstance(raw, dict):
-            continue
-        sporttery_id = str(raw.get('matchId') or '').strip()
+    for sporttery_id, raw in _listed_result_items(payload):
         score = _section_score(raw.get('sectionsNo999'))
-        if not (sporttery_id and score):
+        if not score:
             continue
         results[sporttery_id] = {
             'score': score,
@@ -187,3 +176,29 @@ def parse_sporttery_results(payload: Dict) -> Dict[str, Dict]:
             'match_date': str(raw.get('matchDate') or '').strip(),
         }
     return results
+
+
+def parse_sporttery_listed_ids(payload: Dict) -> Set[str]:
+    """开奖接口列出的全部 matchId，不管有没有比分。
+
+    列出但没有比分的是「已完赛、官网尚未开奖」——沙职凌晨场 02:00 开球，
+    官网 08:44 才开奖。这与「接口里根本没有」要分开对待：前者只是早了。
+    """
+    return {sporttery_id for sporttery_id, _ in _listed_result_items(payload)}
+
+
+def _listed_result_items(payload: Dict) -> Iterator[Tuple[str, Dict]]:
+    if not isinstance(payload, dict):
+        raise ValueError('sporttery result response is not an object')
+    if str(payload.get('errorCode')) != '0' or not payload.get('success'):
+        raise ValueError(
+            'sporttery result error: '
+            + str(payload.get('errorMessage') or 'unknown')
+        )
+    value = payload.get('value') or {}
+    for raw in (value.get('matchResult') or []):
+        if not isinstance(raw, dict):
+            continue
+        sporttery_id = str(raw.get('matchId') or '').strip()
+        if sporttery_id:
+            yield sporttery_id, raw

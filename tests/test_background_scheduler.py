@@ -181,14 +181,26 @@ class FootballTaskRegistrationTests(_Base):
                          ['football_result_sync', 'football_time_layer_scan'])
 
     def test_intervals_are_independent(self):
-        """**两个间隔必须各自独立**：赛后回填两小时一轮，分层扫描十分钟一轮。
+        """**两个间隔必须各自独立**：赛后回填半小时一轮，分层扫描十分钟一轮。
         迁移前的降级分支让它们共用 7200 秒，这条用例正是为那个塌缩而设。"""
         calls = []
         self._register(lambda name, fn, interval: calls.append((name, interval)) or True)
         self.assertEqual(dict(calls), {
-            'football_result_sync': 7200,
+            'football_result_sync': 1800,
             'football_time_layer_scan': 600,
         })
+
+    def test_result_sync_interval_fits_the_pending_result_recheck(self):
+        """官网「已列出未开奖」的场次按短窗口重查，回填轮次不能比窗口还稀。
+
+        沙职凌晨场官网 08:44 才开奖，两小时一轮让 06:33、08:33 两次都扑空。
+        """
+        from src.football import result_sync
+
+        self.assertLessEqual(
+            result_sync.SYNC_INTERVAL_SECONDS,
+            result_sync.PENDING_RESULT_RETRY_MINUTES * 60,
+        )
 
     def test_time_layer_interval_fits_the_narrowest_layer(self):
         """扫描间隔必须显著小于最窄的那一层，否则那层会被整个跳过。

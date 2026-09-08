@@ -8,6 +8,7 @@
 任何队名比对。
 """
 
+from datetime import datetime, timedelta
 from unittest import mock
 
 import pytest
@@ -16,6 +17,7 @@ from src.domain.sports.football import settlement
 from src.football import result_sync
 from src.football.result_sync import PredictionHistory
 from src.football.sporttery import (
+    parse_sporttery_listed_ids,
     parse_sporttery_results,
     sporttery_result_url,
 )
@@ -89,6 +91,27 @@ class ParseSportteryResultsTests:
             parse_sporttery_results([])
 
 
+class ParseSportteryListedIdsTests:
+    """开奖接口列出但还没有比分的场次是「已完赛、尚未开奖」，不是「找不到」。
+
+    沙职凌晨场 02:00 开球，官网 08:44 才开奖；回填在 06:33 与 08:33 各跑一次，
+    两次都把它当成「未找到赛果」计入失败，退避到 6 小时后。
+    """
+
+    def test_lists_ids_regardless_of_score(self):
+        listed = parse_sporttery_listed_ids(_payload([
+            _result_item(matchId=2041324, sectionsNo999='', poolStatus='Close',
+                         matchResultStatus='1'),
+            _result_item(matchId=2041325),
+        ]))
+
+        assert listed == {'2041324', '2041325'}
+
+    def test_api_error_raises(self):
+        with pytest.raises(ValueError):
+            parse_sporttery_listed_ids({'success': False, 'errorCode': '500'})
+
+
 class SportteryResultUrlTests:
     def test_url_carries_date_window_and_page(self):
         url = sporttery_result_url('2026-09-02', '2026-09-04', page_no=2)
@@ -131,9 +154,23 @@ class FetchResultBySportteryIdTests:
 
     def test_miss_returns_none(self):
         with mock.patch.object(
-                result_sync, '_fetch_sporttery_results', return_value={}):
+                result_sync, '_fetch_sporttery_results', return_value={}), \
+             mock.patch.object(
+                result_sync, '_fetch_sporttery_listed_ids', return_value=set()):
             assert result_sync.fetch_result_by_sporttery_id(
                 'sporttery_2041234', SETTLED_MATCH_TIME) is None
+
+    def test_listed_but_unsettled_raises_pending(self):
+        with mock.patch.object(
+                result_sync, '_fetch_sporttery_results', return_value={}), \
+             mock.patch.object(
+                result_sync, '_fetch_sporttery_listed_ids',
+                return_value={'2041234'}) as listed:
+            with pytest.raises(result_sync.SportteryResultPending):
+                result_sync.fetch_result_by_sporttery_id(
+                    'sporttery_2041234', SETTLED_MATCH_TIME)
+
+        listed.assert_called_once_with('2020-09-02', '2020-09-04')
 
     def test_unparseable_match_time_skips_the_request(self):
         with mock.patch.object(result_sync, '_fetch_sporttery_results') as fetched:
@@ -216,6 +253,51 @@ class AutoSyncPrefersSportteryResultsTests:
 
         by_team.assert_called_once_with('迈季宽广', '拉斯永恒', SETTLED_MATCH_TIME)
         assert summary['synced'] == 1
+
+
+class AutoSyncDefersUnsettledSportteryTests:
+    """官网已列出、尚未开奖：不计失败次数，短间隔再查；兜底源仍要试。"""
+
+    def _pending(self, *args, **kwargs):
+        raise result_sync.SportteryResultPending('竞彩官网尚未开奖')
+
+    def test_unsettled_match_is_deferred_without_counting_a_failure(self):
+        history = _history_with(_sporttery_record())
+        before = datetime.now()
+
+        with mock.patch.object(result_sync, '_global_history', history), \
+             mock.patch.object(
+                 result_sync, 'fetch_result_by_sporttery_id',
+                 side_effect=self._pending), \
+             mock.patch.object(
+                 result_sync, 'fetch_result_by_team_and_date', return_value=None):
+            summary = result_sync.auto_sync_results()
+
+        record = history.records[0]
+        assert summary['pending'] == 1
+        assert summary['failed'] == 0
+        assert record['sync_status'] == 'retry'
+        assert record.get('sync_attempts', 0) == 0
+        assert record['last_sync_error'] == '竞彩官网尚未开奖'
+        next_sync = datetime.fromisoformat(record['next_sync_at'])
+        expected = before + timedelta(minutes=result_sync.PENDING_RESULT_RETRY_MINUTES)
+        assert timedelta(0) <= next_sync - expected < timedelta(minutes=1)
+
+    def test_unsettled_match_still_settles_from_team_fallback(self):
+        """06:33 那轮官网没开奖，周一 006/007/008 是靠 500 队名兜底结算的。"""
+        history = _history_with(_sporttery_record())
+
+        with mock.patch.object(result_sync, '_global_history', history), \
+             mock.patch.object(
+                 result_sync, 'fetch_result_by_sporttery_id',
+                 side_effect=self._pending), \
+             mock.patch.object(
+                 result_sync, 'fetch_result_by_team_and_date',
+                 return_value={'score': '0-2', 'result': 'A', 'source': 'live_team'}):
+            summary = result_sync.auto_sync_results()
+
+        assert summary['synced'] == 1
+        assert history.records[0]['settled'] is True
 
 
 class ResultQualityTreatsSportteryAsOfficialTests:

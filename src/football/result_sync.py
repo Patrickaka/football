@@ -55,7 +55,7 @@ import math
 import hashlib
 import logging
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Iterator, List, Optional, Set, Tuple
 from threading import Thread, RLock
 
 from ..common import repositories
@@ -116,6 +116,13 @@ ACTIONABLE_POLICY_VERSION = 'selective-1x2-v4-accuracy-first'
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), 'data')
 HISTORY_FILE = os.path.join(DATA_DIR, 'prediction_history.json')
+
+
+class SportteryResultPending(Exception):
+    """竞彩官网已列出这场比赛，但还没有开奖比分。"""
+
+
+PENDING_RESULT_RETRY_MINUTES = 30
 
 
 # ==================== 评估指标计算函数 ====================
@@ -1114,6 +1121,26 @@ class PredictionHistory:
                 return True
         return False
     
+    def defer_sync(self, match_id: str, reason: str,
+                   minutes: int = PENDING_RESULT_RETRY_MINUTES) -> bool:
+        """赛果还没公布，不算一次失败，短间隔后再查。
+
+        沙职凌晨场官网 08:44 才开奖，之前按「未找到赛果」计失败会退避到
+        2 小时、6 小时，明明已经开奖还要干等。
+        """
+        for record in self.records:
+            if record.get('match_id') != match_id:
+                continue
+            record['sync_status'] = 'retry'
+            record['last_sync_error'] = reason
+            record['last_sync_at'] = datetime.now().isoformat()
+            record['next_sync_at'] = (
+                datetime.now() + timedelta(minutes=minutes)
+            ).isoformat()
+            self._save_record(record)
+            return True
+        return False
+
     def _handle_sync_failure(self, record: Dict, error: str):
         """处理同步失败"""
         attempts = record.get('sync_attempts', 0) + 1
@@ -2107,15 +2134,17 @@ def auto_sync_results():
     1. 竞彩官网记录（sporttery_*）：按 matchId 查官网开奖接口
     2. 500 数字 fid：match_id 对应赛果页面
     3. 主队 + 客队 + 比赛日期模糊匹配
-    4. 都没有：记一次失败，按退避重试，超过 5 次标记 failed
+    4. 官网列出但尚未开奖：不计失败，短间隔后再查
+    5. 都没有：记一次失败，按退避重试，超过 5 次标记 failed
     """
     ready = _global_history.get_ready_to_sync()
     
     if not ready:
-        return {'synced': 0, 'failed': 0, 'message': '没有需要同步的比赛'}
+        return {'synced': 0, 'failed': 0, 'pending': 0, 'message': '没有需要同步的比赛'}
     
     synced = 0
     failed = 0
+    pending = 0
     
     for record in ready:
         match_id = record['match_id']
@@ -2130,7 +2159,12 @@ def auto_sync_results():
             # 队名兜底对这些场次永远失败。非 500 数字 fid 在
             # fetch_result_by_match_id 内部直接返回 None，落到队名+日期兜底，
             # 不能在这里整条跳过——那会让这些记录永远停在「准备同步」。
-            result = fetch_result_by_sporttery_id(match_id, match_time)
+            pending_reason = None
+            try:
+                result = fetch_result_by_sporttery_id(match_id, match_time)
+            except SportteryResultPending as exc:
+                pending_reason = str(exc)
+                result = None
             if not result:
                 result = fetch_result_by_match_id(match_id, match_time)
             if not result:
@@ -2148,6 +2182,10 @@ def auto_sync_results():
                     log.info(f"同步成功: {home} vs {away} -> {result['score']}")
                 else:
                     failed += 1
+            elif pending_reason:
+                _global_history.defer_sync(match_id, pending_reason)
+                pending += 1
+                log.info(f"赛果尚未公布，稍后再查: {home} vs {away} - {pending_reason}")
             else:
                 _global_history.update_result(match_id, None, None, error='未找到赛果')
                 failed += 1
@@ -2162,8 +2200,9 @@ def auto_sync_results():
     return {
         'synced': synced,
         'failed': failed,
+        'pending': pending,
         'total': len(ready),
-        'message': f'结算了 {synced}/{len(ready)} 场比赛，失败 {failed} 场'
+        'message': f'结算了 {synced}/{len(ready)} 场比赛，失败 {failed} 场，待开奖 {pending} 场'
     }
 
 
@@ -2296,27 +2335,44 @@ def _sporttery_fetch_json(url: str, referer: str = None) -> Dict:
     return fetch_json(url, referer=referer)
 
 
-def _fetch_sporttery_results(begin_date: str, end_date: str) -> Dict[str, Dict]:
-    """拉取日期窗口内竞彩官网的全部完场赛果，翻完所有分页后按 matchId 合并。
+def _fetch_sporttery_pages(begin_date: str, end_date: str) -> Iterator[Dict]:
+    """逐页产出日期窗口内竞彩官网开奖接口的原始响应。
 
     底层 fetch 带 TTL 缓存，同一轮同步里同一天的几十场只会真正请求一次。
     """
-    from .sporttery import (
-        SPORTTERY_RESULT_REFERER, parse_sporttery_results, sporttery_result_url,
-    )
+    from .sporttery import SPORTTERY_RESULT_REFERER, sporttery_result_url
 
-    merged: Dict[str, Dict] = {}
     page_no = 1
     while True:
         payload = _sporttery_fetch_json(
             sporttery_result_url(begin_date, end_date, page_no=page_no),
             referer=SPORTTERY_RESULT_REFERER,
         )
-        merged.update(parse_sporttery_results(payload))
+        yield payload
         pages = int((payload.get('value') or {}).get('pages') or 1)
         if page_no >= pages:
-            return merged
+            return
         page_no += 1
+
+
+def _fetch_sporttery_results(begin_date: str, end_date: str) -> Dict[str, Dict]:
+    """拉取日期窗口内竞彩官网的全部完场赛果，翻完所有分页后按 matchId 合并。"""
+    from .sporttery import parse_sporttery_results
+
+    merged: Dict[str, Dict] = {}
+    for payload in _fetch_sporttery_pages(begin_date, end_date):
+        merged.update(parse_sporttery_results(payload))
+    return merged
+
+
+def _fetch_sporttery_listed_ids(begin_date: str, end_date: str) -> Set[str]:
+    """日期窗口内竞彩官网列出的全部 matchId，含尚未开奖的。"""
+    from .sporttery import parse_sporttery_listed_ids
+
+    listed: Set[str] = set()
+    for payload in _fetch_sporttery_pages(begin_date, end_date):
+        listed |= parse_sporttery_listed_ids(payload)
+    return listed
 
 
 def fetch_result_by_sporttery_id(match_id: str, match_time: str) -> Optional[Dict]:
@@ -2339,6 +2395,8 @@ def fetch_result_by_sporttery_id(match_id: str, match_time: str) -> Optional[Dic
     ]
     hit = _fetch_sporttery_results(window[0], window[1]).get(sporttery_id)
     if not hit:
+        if sporttery_id in _fetch_sporttery_listed_ids(window[0], window[1]):
+            raise SportteryResultPending('竞彩官网尚未开奖')
         return None
     result = _parse_score_string(hit['score'])
     if not result:
@@ -2656,7 +2714,7 @@ def get_history() -> PredictionHistory:
 
 
 # 两个周期任务的间隔（秒）
-SYNC_INTERVAL_SECONDS = 7200        # 赛后回填，两小时一轮
+SYNC_INTERVAL_SECONDS = 1800        # 赛后回填，半小时一轮，须不大于 PENDING_RESULT_RETRY_MINUTES
 TIME_LAYER_INTERVAL_SECONDS = 600   # 时间分层扫描，十分钟一轮
 
 
