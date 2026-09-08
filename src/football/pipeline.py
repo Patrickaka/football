@@ -1193,6 +1193,9 @@ def _analyze_match_impl(match, force_refresh=False):
 
     # Top5 按最终概率排序，不能再按亚盘热门方向删除反向高概率比分。
     # 冷门提示和不同比赛剧本由独立的 upset / analyst 字段提供。
+    # Match the frozen-event evaluator's deterministic tie-breaking, including
+    # symmetric 1-0 / 0-1 probabilities and zero-mass tail cells.
+    candidates = sorted(candidates, key=lambda item: (-item[1], item[0]))
     top_score_candidates = select_top_score_candidates(candidates, limit=5)
     
     # 更新比分冷热计算：使用赔率隐含概率 vs 模型概率
@@ -1393,7 +1396,7 @@ def _analyze_match_impl(match, force_refresh=False):
     try:
         from .market_db import MarketScoreDB
         db = MarketScoreDB()
-        market_sample_count = sum(db.sample_counts.values())
+        market_sample_count = db.count()
     except Exception as e:
         log.debug(f"获取盘口库统计失败: {e}")
     

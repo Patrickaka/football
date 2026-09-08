@@ -113,9 +113,10 @@ def dixon_coles_1x2_prob(lam_home: float, lam_away: float,
     """计算 Dixon-Coles 模型下的 1X2 概率"""
     matrix = dixon_coles_score_matrix(lam_home, lam_away, max_goals, rho)
     if NUMPY_AVAILABLE:
-        p_home = np.triu(matrix, 1).sum()
+        # Rows are home goals and columns are away goals: home wins lie below the diagonal.
+        p_home = np.tril(matrix, -1).sum()
         p_draw = np.trace(matrix)
-        p_away = np.tril(matrix, -1).sum()
+        p_away = np.triu(matrix, 1).sum()
     else:
         p_home = sum(matrix[h][a] for h in range(max_goals + 1) for a in range(max_goals + 1) if h > a)
         p_draw = sum(matrix[i][i] for i in range(max_goals + 1))

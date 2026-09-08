@@ -20,7 +20,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 log = logging.getLogger('domain.football.settlement')
 
-PRODUCTION_MODEL_VERSION = 'football-v2026.09.08-agent-research-18'
+PRODUCTION_MODEL_VERSION = 'football-v2026.09.08-score-learning-19'
 ACTIONABLE_MIN_PROBABILITY = 0.65
 ACTIONABLE_MIN_MARGIN = 0.10
 ACTIONABLE_POLICY_VERSION = 'selective-1x2-v4-accuracy-first'

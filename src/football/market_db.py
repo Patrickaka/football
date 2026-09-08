@@ -20,9 +20,9 @@
 import os
 import re
 import json
+import math
 import urllib.request
 from typing import Dict, List, Tuple, Optional, Any
-from collections import defaultdict
 
 from ..common import kv_store
 from ..common.logger import setup_logger
@@ -235,6 +235,9 @@ def parse_match_row(row: Dict) -> Optional[Dict]:
             'AvgAHA': avg_aha,
             'AvgOver': avg_over,
             'AvgUnder': avg_under,
+            # These columns are quotes for the fixed 2.5-goal contract.
+            # Its Poisson-implied mean is not a different quoted line.
+            'total_line': 2.5 if avg_over is not None and avg_under is not None else None,
             'OAhh': o_ahh,
             'OOver': o_over,
             'OUnder': o_under,
@@ -277,6 +280,10 @@ class MarketScoreDB:
     def __init__(self):
         self.db: Dict[str, Dict[str, float]] = {}
         self.sample_counts: Dict[str, int] = {}  # 记录每个盘口组合的样本数
+        # Independent observations after rejecting an unverifiable legacy
+        # bucket. Format: {market_key: {score: positive integer count}}.
+        # Legacy probabilities/sample_counts remain untouched for auditing.
+        self.fresh_counts: Dict[str, Dict[str, int]] = {}
         self._load()
     
     def _load(self):
@@ -285,12 +292,14 @@ class MarketScoreDB:
             data = kv_store.load('market_score_db') or {}
             self.db = data.get('probabilities', {})
             self.sample_counts = data.get('sample_counts', {})
+            self.fresh_counts = data.get('fresh_counts', {})
             if self.db:
                 log.debug("已加载盘口比分数据库: %d 个盘口组合", len(self.db))
         except Exception as e:
             log.warning("加载盘口比分数据库失败: %s", e)
             self.db = {}
             self.sample_counts = {}
+            self.fresh_counts = {}
 
     def load(self):
         """从 MySQL 加载数据库（公开方法）"""
@@ -301,12 +310,119 @@ class MarketScoreDB:
         kv_store.save('market_score_db', {
             'probabilities': self.db,
             'sample_counts': self.sample_counts,
+            'fresh_counts': self.fresh_counts,
         })
         print(f"数据库已保存，{len(self.db)} 个盘口组合")
     
     def _get_key(self, asian: float, ou: float) -> str:
         """纯计算在领域层"""
         return _mm.market_score_key(asian, ou)
+
+    @staticmethod
+    def _market_values(asian, ou):
+        try:
+            if isinstance(asian, bool) or isinstance(ou, bool):
+                return None
+            asian, ou = float(asian), float(ou)
+            if not math.isfinite(asian) or not math.isfinite(ou) or ou <= 0:
+                return None
+            return normalize_asian(asian), normalize_ou(ou)
+        except (TypeError, ValueError, OverflowError):
+            return None
+
+    def _legacy_bucket_counts(self, key):
+        """Recover observed integer counts from either supported legacy format.
+
+        Older builds stored raw counts until normalization; saved databases
+        normally contain probabilities plus N.  A normalized bucket without N,
+        or probabilities incompatible with N, cannot establish observed counts.
+        Leave such data intact but exclude it from learning and model queries.
+        """
+        bucket = self.db.get(key)
+        if not isinstance(bucket, dict) or not bucket:
+            return None
+        values = {}
+        for score, value in bucket.items():
+            if not isinstance(score, str) or not re.fullmatch(r'(0|[1-9]\d*)-(0|[1-9]\d*)', score):
+                return None
+            try:
+                if isinstance(value, bool):
+                    return None
+                value = float(value)
+            except (TypeError, ValueError, OverflowError):
+                return None
+            if not math.isfinite(value) or value < 0:
+                return None
+            values[score] = value
+        mass = sum(values.values())
+        if not math.isfinite(mass) or mass <= 0:
+            return None
+        sample_count = self.sample_counts.get(key)
+        if sample_count is not None:
+            if isinstance(sample_count, bool) or not isinstance(sample_count, (int, float)):
+                return None
+            try:
+                finite_count = math.isfinite(sample_count)
+            except (ValueError, OverflowError):
+                return None
+            if not finite_count or sample_count <= 0 or int(sample_count) != sample_count:
+                return None
+            sample_count = int(sample_count)
+        normalized = math.isclose(mass, 1.0, rel_tol=0.0, abs_tol=1e-9)
+        if normalized:
+            if sample_count is None:
+                return None
+            counts = {score: value * sample_count for score, value in values.items()}
+        else:
+            counts = values
+        # Floating point round trips are allowed; fractional pseudo-counts are
+        # not.  In particular the old `(p + 1) / 2` updates fail this check.
+        if any(abs(value - round(value)) > 1e-6 for value in counts.values()):
+            return None
+        counts = {score: int(round(value)) for score, value in counts.items()}
+        observed = sum(counts.values())
+        if observed <= 0 or (sample_count is not None and observed != sample_count):
+            return None
+        return counts
+
+    def _fresh_bucket_counts(self, key):
+        """Read the explicit count format without inferring old observations."""
+        if not isinstance(self.fresh_counts, dict):
+            return None
+        bucket = self.fresh_counts.get(key)
+        if not isinstance(bucket, dict) or not bucket:
+            return None
+        for score, count in bucket.items():
+            if (not isinstance(score, str)
+                    or not re.fullmatch(r'(0|[1-9]\d*)-(0|[1-9]\d*)', score)
+                    or type(count) is not int or count <= 0):
+                return None
+        return dict(bucket)
+
+    def _bucket_counts(self, key):
+        if not isinstance(self.fresh_counts, dict):
+            return None
+        # Once restarted, this independent sample is authoritative. Never mix
+        # it back into the preserved legacy payload, even after save/reload.
+        if key in self.fresh_counts:
+            return self._fresh_bucket_counts(key)
+        return self._legacy_bucket_counts(key)
+
+    def _count_source(self, key):
+        return ('post_repair_observations' if key in self.fresh_counts
+                else 'verified_legacy_counts')
+
+    def _bucket_keys(self):
+        return dict.fromkeys([*self.db, *self.fresh_counts]) if isinstance(self.fresh_counts, dict) else {}
+
+    def _store_counts(self, key, counts):
+        sample_count = sum(counts.values())
+        self.sample_counts[key] = sample_count
+        self.db[key] = {
+            score: count / sample_count
+            for score, count in sorted(counts.items(), key=lambda item: -item[1])
+            if count > 0
+        }
     
     def add_record(self, asian: float, ou: float, score: str):
         """
@@ -317,18 +433,31 @@ class MarketScoreDB:
             ou: 标准化的大小球值
             score: 比分字符串（如 "2-1"）
         """
-        key = self._get_key(asian, ou)
-        
-        if key not in self.db:
-            self.db[key] = {}
-            self.sample_counts[key] = 0
-        
-        # 确保 score 存在
-        if score not in self.db[key]:
-            self.db[key][score] = 0.0
-        
-        self.db[key][score] += 1.0
-        self.sample_counts[key] += 1
+        market = self._market_values(asian, ou)
+        if market is None or not isinstance(score, str) or not re.fullmatch(r'(0|[1-9]\d*)-(0|[1-9]\d*)', score):
+            return False
+        if not isinstance(self.fresh_counts, dict):
+            return False
+        key = self._get_key(*market)
+        use_fresh = key in self.fresh_counts
+        if use_fresh:
+            counts = self._fresh_bucket_counts(key)
+            if counts is None:
+                log.warning("新增盘口样本计数无法核验，保留并跳过写入: %s", key)
+                return False
+        elif key not in self.db and key not in self.sample_counts:
+            counts = {}
+        else:
+            counts = self._legacy_bucket_counts(key)
+            if counts is None:
+                log.warning("旧盘口比分桶计数无法核验，保留旧数据并独立积累新赛果: %s", key)
+                counts, use_fresh = {}, True
+        counts[score] = counts.get(score, 0) + 1
+        if use_fresh:
+            self.fresh_counts[key] = counts
+        else:
+            self._store_counts(key, counts)
+        return True
     
     def add_match_result(self, asian: float, ou: float, score: str):
         """
@@ -339,12 +468,7 @@ class MarketScoreDB:
             ou: 大小球线
             score: 比分字符串（如 "2-1"）
         """
-        asian = normalize_asian(asian)
-        ou = normalize_ou(ou)
-        if asian is None or ou is None or not score:
-            return
-        self.add_record(asian, ou, score)
-        self._normalize_all()
+        return self.add_record(asian, ou, score)
     
     def add_records(self, records: List[Dict]):
         """批量添加记录"""
@@ -378,16 +502,18 @@ class MarketScoreDB:
 
             asian = normalize_asian(asian)
 
-            # 计算大小球（从赔率反推）
-            ou = self._implied_total_from_odds(
-                record.get('AvgOver'), record.get('AvgUnder')
-            )
-            ou = normalize_ou(ou)
+            # Football-Data Avg>2.5 / Avg<2.5 are always the 2.5 line.
+            # Bucket by that observed contract, never its implied goal mean.
+            over, under = record.get('AvgOver'), record.get('AvgUnder')
+            ou = record.get('total_line')
+            if (over is None or under is None or not math.isfinite(over)
+                    or not math.isfinite(under) or over <= 1 or under <= 1):
+                ou = None
 
             if asian is not None and ou is not None:
                 score = f"{record['FTHG']}-{record['FTAG']}"
-                self.add_record(asian, ou, score)
-                count += 1
+                if self.add_record(asian, ou, score):
+                    count += 1
 
         # 归一化所有概率
         self._normalize_all()
@@ -400,11 +526,11 @@ class MarketScoreDB:
     def _normalize_all(self):
         """归一化所有盘口组合的概率"""
         for key in self.db:
-            total = sum(self.db[key].values())
-            if total > 0:
-                self.db[key] = {k: v / total for k, v in sorted(
-                    self.db[key].items(), key=lambda x: -x[1]
-                )}
+            if not isinstance(self.fresh_counts, dict) or key in self.fresh_counts:
+                continue
+            counts = self._bucket_counts(key)
+            if counts is not None:
+                self._store_counts(key, counts)
     
     def get_prob(self, asian: float, ou: float) -> Optional[Dict[str, float]]:
         """
@@ -417,8 +543,14 @@ class MarketScoreDB:
         返回：
             比分概率字典，如果没有精确匹配则返回None
         """
-        key = self._get_key(normalize_asian(asian), normalize_ou(ou))
-        return self.db.get(key)
+        market = self._market_values(asian, ou)
+        if market is None:
+            return None
+        counts = self._bucket_counts(self._get_key(*market))
+        if counts is None:
+            return None
+        count = sum(counts.values())
+        return {score: value / count for score, value in counts.items() if value > 0}
     
     def get_prob_with_nearest(self, asian: float, ou: float) -> Dict[str, Any]:
         """
@@ -433,14 +565,26 @@ class MarketScoreDB:
         返回：
             包含比分概率和距离信息的字典
         """
-        target_asian = normalize_asian(asian)
-        target_ou = normalize_ou(ou)
+        empty = {'probabilities': {}, 'sample_count': 0, 'matched_key': None,
+                 'distance': float('inf'), 'exact_match': False,
+                 'reason': 'no_valid_history'}
+        market = self._market_values(asian, ou)
+        if market is None:
+            return {**empty, 'reason': 'invalid_market'}
+        target_asian, target_ou = market
         key = self._get_key(target_asian, target_ou)
         
         # 精确匹配
-        if key in self.db:
+        counts = self._bucket_counts(key)
+        invalid_exact_bucket = key in self._bucket_keys() and counts is None
+        if counts is not None:
+            count = sum(counts.values())
             return {
-                'probabilities': self.db[key],
+                'probabilities': {score: value / count for score, value in counts.items() if value > 0},
+                'sample_count': count,
+                'matched_key': key,
+                'count_source': self._count_source(key),
+                'legacy_bucket_excluded': key in self.fresh_counts,
                 'distance': 0.0,
                 'exact_match': True
             }
@@ -449,25 +593,31 @@ class MarketScoreDB:
         nearest_result = self._find_nearest_key(target_asian, target_ou)
         if nearest_result:
             nearest_key, distance = nearest_result
-            print(f"未找到精确匹配 {key}，使用最近邻 {nearest_key} (距离={distance})")
+            counts = self._bucket_counts(nearest_key)
+            count = sum(counts.values())
             return {
-                'probabilities': self.db[nearest_key],
+                'probabilities': {score: value / count for score, value in counts.items() if value > 0},
+                'sample_count': count,
+                'matched_key': nearest_key,
+                'count_source': self._count_source(nearest_key),
+                'legacy_bucket_excluded': nearest_key in self.fresh_counts,
+                'excluded_exact_bucket': key if invalid_exact_bucket else None,
                 'distance': distance,
                 'exact_match': False
             }
         
-        return {
-            'probabilities': {},
-            'distance': float('inf'),
-            'exact_match': False
-        }
+        return {**empty, 'reason': 'invalid_bucket_counts'} if invalid_exact_bucket else empty
     
     def _find_nearest_key(self, asian: float, ou: float) -> Optional[Tuple[str, float]]:
         """查找最近的盘口组合键"""
         min_distance = float('inf')
         nearest = None
         
-        for key in self.db:
+        for key in self._bucket_keys():
+            if not isinstance(key, str):
+                continue
+            if self._bucket_counts(key) is None:
+                continue
             parts = key.split('_')
             if len(parts) != 2:
                 continue
@@ -487,8 +637,14 @@ class MarketScoreDB:
     
     def get_sample_count(self, asian: float, ou: float) -> int:
         """获取指定盘口组合的样本数量"""
-        key = self._get_key(normalize_asian(asian), normalize_ou(ou))
-        return self.sample_counts.get(key, 0)
+        market = self._market_values(asian, ou)
+        counts = self._bucket_counts(self._get_key(*market)) if market is not None else None
+        return sum(counts.values()) if counts is not None else 0
+
+    def count(self) -> int:
+        """Count only usable observations, excluding replaced legacy samples."""
+        return sum(sum(counts.values()) for key in self._bucket_keys()
+                   if (counts := self._bucket_counts(key)) is not None)
     
     def get_top_scores(self, asian: float, ou: float, top_n: int = 10) -> List[Tuple[str, float]]:
         """
@@ -502,7 +658,7 @@ class MarketScoreDB:
         返回：
             排序后的比分概率列表
         """
-        prob = self.get_prob_with_nearest(asian, ou)
+        prob = self.get_prob_with_nearest(asian, ou).get('probabilities', {})
         if not prob:
             return []
         
@@ -528,7 +684,7 @@ class MarketScoreDB:
             包含概率、样本数、距离等信息的字典（probabilities为空字典）
         """
         score_result = self.get_prob_with_nearest(asian, ou)
-        sample_count = self.get_sample_count(asian, ou)
+        sample_count = score_result.get('sample_count', 0)
         
         return {
             'probabilities': {},  # 不再提供伪半场数据
@@ -576,22 +732,26 @@ class MarketScoreDB:
     
     def merge_with(self, other_db: 'MarketScoreDB'):
         """合并另一个数据库"""
-        for key, probs in other_db.db.items():
-            if key not in self.db:
-                self.db[key] = defaultdict(float)
-            
-            for score, prob in probs.items():
-                # 按样本数加权合并
-                self.db[key][score] += prob * other_db.sample_counts.get(key, 1)
-            
-            self.sample_counts[key] = self.sample_counts.get(key, 0) + other_db.sample_counts.get(key, 0)
-        
-        self._normalize_all()
+        if not isinstance(self.fresh_counts, dict):
+            return
+        for key in other_db._bucket_keys():
+            incoming = other_db._bucket_counts(key)
+            existing = ({} if key not in self.db and key not in self.sample_counts and key not in self.fresh_counts
+                        else self._bucket_counts(key))
+            if incoming is None or existing is None:
+                continue
+            for score, count in incoming.items():
+                existing[score] = existing.get(score, 0) + count
+            if key in self.fresh_counts:
+                self.fresh_counts[key] = existing
+            else:
+                self._store_counts(key, existing)
     
     def clear(self):
         """清空数据库"""
         self.db = {}
         self.sample_counts = {}
+        self.fresh_counts = {}
 
 
 # ==================== 盘口变化数据库 ====================
@@ -708,7 +868,7 @@ def get_market_score_prob(asian_handicap: float, over_under: float,
     top_scores = sorted(prob.items(), key=lambda x: -x[1])[:top_n]
     
     # 获取样本数
-    sample_count = db.get_sample_count(asian_handicap, over_under)
+    sample_count = prob_result.get('sample_count', 0)
     
     return {
         'asian_handicap': normalize_asian(asian_handicap),
@@ -718,6 +878,11 @@ def get_market_score_prob(asian_handicap: float, over_under: float,
         'probabilities': prob,
         'distance': distance,
         'exact_match': exact_match,
+        'matched_key': prob_result.get('matched_key'),
+        'count_source': prob_result.get('count_source'),
+        'legacy_bucket_excluded': prob_result.get('legacy_bucket_excluded', False),
+        'reason': prob_result.get('reason'),
+        'excluded_exact_bucket': prob_result.get('excluded_exact_bucket'),
     }
 
 

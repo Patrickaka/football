@@ -167,6 +167,7 @@ def ensemble_predict_scores(asian, euro, total, team_strength=None, league_profi
     """
     all_matrices = []
     all_lams = []
+    members = []
     model_types = ['poisson', 'negative_binomial']
 
     # 2744场离线回测中 Poisson/DC 的比分排序更稳。负二项只用于补充
@@ -195,6 +196,7 @@ def ensemble_predict_scores(asian, euro, total, team_strength=None, league_profi
             matrix = {(c[0][0], c[0][1]): c[1] for c in candidates}
             all_matrices.append(matrix)
             all_lams.append((lam_home, lam_away))
+            members.append({'name': model_type, 'meta': meta})
             
         except Exception as e:
             log.warning(f"集成模型 {model_type} 失败: {e}")
@@ -209,10 +211,9 @@ def ensemble_predict_scores(asian, euro, total, team_strength=None, league_profi
                               current_time_layer=current_time_layer)
     
     # 融合多个矩阵
-    if len(all_matrices) == 2:
-        weights = requested_weights
-    else:
-        weights = [1.0]
+    requested = dict(zip(model_types, requested_weights))
+    weight_sum = sum(requested[member['name']] for member in members)
+    weights = [requested[member['name']] / weight_sum for member in members]
     
     # 合并所有矩阵的键
     all_keys = set()
@@ -240,8 +241,8 @@ def ensemble_predict_scores(asian, euro, total, team_strength=None, league_profi
         ensemble_matrix = {k: v / total_prob for k, v in ensemble_matrix.items()}
     
     # 计算平均 lambda
-    avg_lam_home = sum(l[0] for l in all_lams) / len(all_lams)
-    avg_lam_away = sum(l[1] for l in all_lams) / len(all_lams)
+    avg_lam_home = sum(l[0] * w for l, w in zip(all_lams, weights))
+    avg_lam_away = sum(l[1] * w for l, w in zip(all_lams, weights))
     
     calibration_meta = {'calibration_requested': enable_calibration, 'calibrated': False,
                         'calibration_method': None, 'calibration_reason': 'disabled'}
@@ -255,17 +256,23 @@ def ensemble_predict_scores(asian, euro, total, team_strength=None, league_profi
     meta = {
         'ensemble_size': len(all_matrices),
         'ensemble_method': 'adaptive_weighted',
-        'ensemble_weights': {
-            'poisson': round(weights[0], 4),
-            'negative_binomial': round(weights[1], 4) if len(weights) > 1 else 0.0,
-        },
+        'ensemble_weights': {name: round(sum(w for member, w in zip(members, weights)
+                                            if member['name'] == name), 4)
+                             for name in model_types},
         'model_type': 'ensemble',
         'supremacy_asian': meta.get('supremacy_asian'),
         'supremacy_euro': meta.get('supremacy_euro'),
         'supremacy_blended': meta.get('supremacy_blended'),
         'target_total': meta.get('target_total'),
         **calibration_meta,
-        'market_db_used': meta.get('market_db_used', False),
+        'market_db_used': any(member['meta'].get('market_db_used') for member in members),
+        'static_market_prior': {
+            'applied': any(member['meta'].get('static_market_prior', {}).get('applied') for member in members),
+            'scope': 'score_ensemble_before_downstream_calibration',
+            'weight': sum(w * member['meta'].get('static_market_prior', {}).get('weight', 0.0)
+                          for member, w in zip(members, weights)),
+            'members': {member['name']: member['meta'].get('static_market_prior', {}) for member in members},
+        },
     }
     
     return candidates, avg_lam_home, avg_lam_away, meta
@@ -712,6 +719,64 @@ def calculate_half_full_time_probs(candidates, team_strength=None, asian=None, t
 
 
 
+def apply_static_score_prior(matrix, market_result, *, max_weight=0.15, quality_factor=1.0):
+    """Blend a qualified historical score bucket; no storage or training here.
+
+    Keep the whole model support and use a convex weight, so 15% means 15%.
+    The caller supplies the existing policy cap and observed-market quality.
+    """
+    trace = {'applied': False, 'weight': 0.0, 'source': 'historical_market_scores'}
+    try:
+        sample_count = float(market_result.get('sample_count', 0))
+        distance = float(market_result.get('distance', float('inf')))
+        cap, quality = float(max_weight), float(quality_factor)
+        if not all(math.isfinite(value) for value in (sample_count, distance, cap, quality)):
+            raise ValueError('nonfinite prior metadata')
+        trace.update(sample_count=sample_count, distance=distance,
+                     key=market_result.get('matched_key', market_result.get('key')),
+                     exact_match=market_result.get('exact_match'),
+                     count_source=market_result.get('count_source'),
+                     legacy_bucket_excluded=market_result.get('legacy_bucket_excluded', False))
+        if sample_count < 30:
+            return matrix, {**trace, 'reason': market_result.get('reason') or 'insufficient_samples'}
+        if distance < 0 or distance > 0.5:
+            return matrix, {**trace, 'reason': 'distant_market_bucket'}
+        weight = min(0.30, max(0.0, cap)) * min(1.0, sample_count / 300.0) * min(1.0, max(0.0, quality))
+        if weight <= 0:
+            return matrix, {**trace, 'reason': 'zero_policy_or_quality_weight'}
+        prior = {}
+        for score, value in (market_result.get('probabilities') or {}).items():
+            h, a = map(int, str(score).split('-'))
+            probability = float(value)
+            if min(h, a) < 0 or max(h, a) > 15 or not math.isfinite(probability) or probability < 0:
+                raise ValueError('invalid prior probability')
+            prior[f'{h}-{a}'] = probability
+        if sum(value > 0 for value in prior.values()) < 3:
+            return matrix, {**trace, 'reason': 'insufficient_score_support'}
+        prior_mass = sum(prior.values())
+        if not math.isfinite(prior_mass) or not math.isclose(prior_mass, 1.0, abs_tol=1e-6):
+            raise ValueError('prior must be a complete normalized distribution')
+        model = {f'{h}-{a}': float(p) for (h, a), p in matrix.items()}
+        if not model or any(not math.isfinite(p) or p < 0 for p in model.values()):
+            raise ValueError('invalid model distribution')
+        if not math.isclose(sum(model.values()), 1.0, abs_tol=1e-6):
+            raise ValueError('model must be normalized')
+        from .market_db import blend_predictions
+        blended = blend_predictions(model, prior, weights={'poisson': 1.0-weight, 'market': weight})
+        result = {tuple(map(int, score.split('-'))): p for score, p in blended.items()}
+        # A historical 8-0 must not turn the complete 0..7 matrix into a Top-K
+        # shaped partial distribution. Extend the declared support with zeros;
+        # neither remove its observed mass nor fabricate extra tail probability.
+        max_home = max(h for h, _ in result)
+        max_away = max(a for _, a in result)
+        for h in range(max_home + 1):
+            for a in range(max_away + 1):
+                result.setdefault((h, a), 0.0)
+        return result, {**trace, 'applied': True, 'weight': weight, 'reason': 'qualified_bucket'}
+    except (AttributeError, TypeError, ValueError, OverflowError):
+        return matrix, {**trace, 'reason': 'invalid_prior_or_distribution'}
+
+
 def apply_market_change_prior(score_probs: Dict[str, float], asian: Dict, total: Dict,
                               weight: float = 0.08) -> Tuple[Dict[str, float], Dict]:
     """
@@ -968,148 +1033,51 @@ def predict_scores(asian, euro, total, team_strength=None, league_profile=None,
         matrix = calibrate_to_euro(matrix, p_home, p_draw, p_away)
         target_total = line
 
-    # ========== 新增：结合历史盘口比分库进行融合 ==========
+    # Static score history is a bounded prior. Movement history is applied
+    # once by the pipeline after the ensemble, never again in each member.
     market_db_used = False
-    change_db_used = False
+    static_market_prior = {'applied': False, 'weight': 0.0, 'reason': 'unavailable'}
+    time_layer_market_adjustment = {'applied': False, 'layer': current_time_layer}
+    market_data_quality = _assess_market_data_quality(asian, euro, total)
+    market_quality_factor = market_data_quality.get('weight_factor', 1.0)
     try:
-        from .market_db import get_market_score_prob, blend_predictions, MarketChangeDB, normalize_asian, normalize_ou
-        
-        # 获取历史盘口比分概率
+        from .market_db import get_market_score_prob
+        from .prediction_policy import get_prediction_policy
+
         handicap = asian.get('handicap', 0)
         close_line = total.get('close_line', 2.5)
-        log.debug("加载历史盘口比分库: 亚盘=%s, 大小球=%s", handicap, close_line)
-        
-        market_result = get_market_score_prob(handicap, close_line)
-        market_probs = market_result.get('probabilities', {})
-        sample_count = market_result.get('sample_count', 0)
-        distance = market_result.get('distance', float('inf'))
-        
-        log.debug(
-            "历史盘口数据: 样本数=%s, 比分种类=%s, 距离=%.3f",
-            sample_count, len(market_probs), distance,
-        )
-        
-        # 将矩阵转换为字典格式
-        model_probs = {f"{h}-{a}": prob for (h, a), prob in matrix.items()}
-        
-        # 融合权重初始化
-        try:
-            from .prediction_policy import get_prediction_policy
-            prediction_policy = get_prediction_policy(
-                league=league_profile.get('name') if league_profile else None,
-                total_line=close_line,
-                handicap=handicap,
-                league_profile=league_profile,
-            )
-        except Exception:
-            prediction_policy = {
-                'static_market_cap': 0.15,
-                'change_market_cap': 0.15,
-                'late_market_weight_bias': 0.0,
-            }
-
-        model_weight = 0.75
-        static_market_weight = prediction_policy.get('static_market_cap', 0.15)
-        change_market_weight = min(0.10, prediction_policy.get('change_market_cap', 0.15))
-        time_layer_market_adjustment = {'applied': False, 'layer': current_time_layer}
-        try:
-            late_bias = float(prediction_policy.get('late_market_weight_bias', 0.0) or 0.0)
-        except (TypeError, ValueError):
-            late_bias = 0.0
+        prediction_policy = get_prediction_policy(
+            league=league_profile.get('name') if league_profile else None,
+            total_line=close_line, handicap=handicap, league_profile=league_profile)
+        static_cap = prediction_policy.get('static_market_cap', 0.15)
+        late_bias = float(prediction_policy.get('late_market_weight_bias', 0.0) or 0.0)
         if abs(late_bias) > 1e-9 and current_time_layer:
             if current_time_layer in {'T-1h', 'T-15min', 'final'}:
                 layer_factor = 1.0 + late_bias
             elif current_time_layer in {'T-24h', 'T-6h'}:
-                layer_factor = 1.0 - (late_bias * 0.5)
+                layer_factor = 1.0 - late_bias * 0.5
             else:
                 layer_factor = 1.0
-            static_market_weight = max(0.0, min(0.30, static_market_weight * layer_factor))
-            change_market_weight = max(0.0, min(0.30, change_market_weight * layer_factor))
+            static_cap = max(0.0, min(0.30, static_cap * layer_factor))
             time_layer_market_adjustment = {
-                'applied': True,
-                'layer': current_time_layer,
-                'late_market_weight_bias': late_bias,
-                'factor': round(layer_factor, 4),
+                'applied': True, 'layer': current_time_layer,
+                'late_market_weight_bias': late_bias, 'factor': round(layer_factor, 4),
             }
-        market_data_quality = _assess_market_data_quality(asian, euro, total)
-        market_quality_factor = market_data_quality.get('weight_factor', 1.0)
-        
-        # ========== 静态盘口先验 ==========
-        if sample_count >= 30 and distance <= 0.5 and market_probs and len(market_probs) >= 3:
-            # 计算历史权重：样本越多、盘口越接近，权重越高
-            static_cap = static_market_weight
-            static_weight = min(static_cap, sample_count / 300 * static_cap) * market_quality_factor
-            static_market_weight = static_weight
-            
-            # 融合预测：模型概率 + 静态历史盘口概率
-            blended_probs = blend_predictions(model_probs, market_probs, 
-                                             weights={'model': model_weight + (0.15 - static_weight), 'market': static_weight})
-            model_probs = blended_probs
-            market_db_used = True
-            log.debug(
-                "静态盘口比分库融合: 模型=%.0f%%, 静态历史=%.0f%%",
-                (model_weight + (0.15 - static_weight)) * 100, static_weight * 100,
-            )
+        # Derived fallback lines are not observed markets and cannot identify
+        # a historical betting-line bucket.
+        if (not _sc._has_observed_market(asian) or not _sc._has_observed_market(total)
+                or asian.get('handicap') is None or total.get('close_line') is None):
+            static_market_prior['reason'] = 'missing_observed_market'
         else:
-            static_market_weight = 0
-            if sample_count < 30:
-                log.debug("静态盘口样本不足(%s<30)，跳过融合", sample_count)
-            elif distance > 0.5:
-                log.debug("盘口距离过远(%.3f>0.5)，跳过融合", distance)
-        
-        # ========== 盘口变化先验 ==========
-        # 获取开盘盘口数据
-        open_handicap = asian.get('open_handicap')
-        open_line = total.get('open_line')
-        
-        if open_handicap is not None and open_line is not None:
-            # 标准化盘口
-            asian_open = normalize_asian(open_handicap)
-            asian_close = normalize_asian(handicap)
-            ou_open = normalize_ou(open_line)
-            ou_close = normalize_ou(close_line)
-            
-            # 查询盘口变化统计
-            change_db = MarketChangeDB()
-            change_stats = change_db.get_change_stats(asian_open, asian_close, ou_open, ou_close)
-            
-            if change_stats:
-                # 估算样本数：假设最大概率对应的实际样本数
-                max_prob = max(change_stats.values()) if change_stats else 0
-                change_sample_count = int(round(1 / max_prob)) if max_prob > 0 else 0
-                
-                # 样本门槛
-                if change_sample_count >= 30:
-                    # 计算变化权重：5%～15%
-                    change_cap = change_market_weight
-                    change_weight = min(change_cap, change_sample_count / 300 * change_cap) * market_quality_factor
-                    change_market_weight = change_weight
-                    
-                    # 融合预测：当前概率 + 变化历史概率
-                    blended_probs = blend_predictions(model_probs, change_stats,
-                                                     weights={'current': 1 - change_weight, 'change': change_weight})
-                    model_probs = blended_probs
-                    change_db_used = True
-                    log.debug(
-                        "盘口变化数据库融合: 当前=%.0f%%, 变化历史=%.0f%%",
-                        (1 - change_weight) * 100, change_weight * 100,
-                    )
-                else:
-                    log.debug("盘口变化样本不足(%s<30)，跳过融合", change_sample_count)
-            else:
-                log.debug(
-                    "未找到盘口变化记录: %s→%s, %s→%s",
-                    asian_open, asian_close, ou_open, ou_close,
-                )
-        
-        # 更新矩阵
-        if market_db_used or change_db_used:
-            matrix = {}
-            for score, prob in model_probs.items():
-                h, a = map(int, score.split('-'))
-                matrix[(h, a)] = prob
+            market_result = get_market_score_prob(handicap, close_line)
+            matrix, static_market_prior = apply_static_score_prior(
+                matrix, market_result, max_weight=static_cap,
+                quality_factor=market_quality_factor)
+        market_db_used = static_market_prior['applied']
     except Exception as e:
-        log.debug(f"无法加载历史盘口比分库进行融合: {e}")
+        static_market_prior = {'applied': False, 'weight': 0.0,
+                               'reason': 'internal_error', 'error_type': type(e).__name__}
+        log.debug(f"静态盘口比分先验不可用: {e}")
 
     # 应用残差修正（如果有训练好的模型）
     features = _build_residual_features(asian, euro, total, team_strength, league_profile)
@@ -1146,6 +1114,7 @@ def predict_scores(asian, euro, total, team_strength=None, league_profile=None,
         'handicap_change': asian.get('handicap_change'),
         'line_change': total.get('line_change'),
         'market_db_used': market_db_used,
+        'static_market_prior': static_market_prior,
         'market_data_quality': locals().get('market_data_quality', {'score': 1.0, 'grade': 'unknown'}),
         'market_quality_factor': locals().get('market_quality_factor', 1.0),
         'current_time_layer': current_time_layer,
@@ -1177,10 +1146,6 @@ SCORE_CLUSTERS = {
     'away_win_2': [(0, 2), (1, 3), (2, 4), (3, 5)],      # 客胜2球
     'away_win_3': [(0, 3), (1, 4), (2, 5)],              # 客胜3球+
 }
-
-
-
-
 
 
 
