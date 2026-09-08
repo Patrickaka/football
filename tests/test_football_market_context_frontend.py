@@ -57,6 +57,8 @@ function getLotteryLinkedSelections() { return null; }
 function getFootballTopScoreReferences() { return []; }
 function renderProbabilityStrip() { return ''; }
 function renderWebMarketRecommendation() { return ''; }
+function getFootballDirectionState() { return {available:false}; }
+function renderFootballHandicapProbabilities() { return ''; }
 function renderFootballDirectionAnalysis() { return ''; }
 function renderMarketEvidence() { return ''; }
 let tier = {tier:'abstain', label:'观望', probability:.798, prediction:'主胜', market:'胜平负',
@@ -163,6 +165,7 @@ console.log('market evidence completeness cases passed');
 const assert = require('node:assert/strict');
 const item = {result:{lottery:{
   standard:{probabilities:{'胜':.3, '平':.3, '负':.4}},
+  handicap:{handicap:2},
   accuracy_gate:{
     spf:{selected:false, candidate:'负', reasons:['概率不足']},
     total_goals:{selected:false},
@@ -192,6 +195,7 @@ console.log('handicap selection presentation cases passed');
         html = (ROOT / "web/index.html").read_text(encoding="utf-8")
         functions = []
         for name in ("renderProbabilityStrip", "renderWebMarketRecommendation",
+                     "getFootballDirectionState", "renderFootballHandicapProbabilities",
                      "renderFootballDirectionAnalysis",
                      "getFootballMarketContext", "getFootballTotalCandidate", "renderMarketEvidence"):
             start = html.index("function " + name + "(")
@@ -228,11 +232,15 @@ assert.ok(card.includes('<details class="football-direction-reference">'));
 assert.ok(card.includes('<strong>让胜</strong>'), 'recommendation must follow selected gate.pick');
 const reference = card.match(/<details class="football-direction-reference">[\s\S]*?<\/details>/)[0];
 const main = card.replace(reference, '');
-for (const percentage of ['60.0%', '20.0%', '30.0%', '25.0%', '45.0%']) {
+for (const percentage of ['60.0%', '20.0%']) {
   assert.ok(main.includes(`<strong>${percentage}</strong>`), `${percentage} must be visible without expansion`);
 }
+for (const percentage of ['30.0%', '25.0%', '45.0%']) {
+  assert.ok(main.includes(percentage), `${percentage} full-match reference must remain visible`);
+  assert.ok(!main.includes(`<strong>${percentage}</strong>`), `${percentage} cannot replace missing conditional probabilities`);
+}
 assert.ok(!reference.includes('is-pick'));
-assert.ok(main.includes('probability-outcome is-pick'), 'validated gate picks may still be highlighted');
+assert.ok(!main.includes('probability-outcome is-pick'), 'conditional analyses must never highlight recommendation picks');
 assert.ok(!main.includes('模型候选'));
 states.rqspf.status = 'watch';
 card = renderMatchItem(item);
@@ -240,10 +248,99 @@ assert.ok(!card.includes('<strong>让胜</strong>'));
 assert.ok(!card.includes('probability-outcome is-pick'));
 console.log('expanded market probability cases passed');
 """
-        result = subprocess.run([shutil.which("node"), "-e", script],
+        result = subprocess.run([shutil.which("node"), "-"], input=script,
                                 capture_output=True, text=True, encoding="utf-8")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("expanded market probability cases passed", result.stdout)
+
+    def test_legacy_recommendation_flags_cannot_bypass_direction_compatibility(self):
+        html = (ROOT / "web/index.html").read_text(encoding="utf-8")
+        functions = []
+        for name in ("calculateFootballPredictionReliability", "accuracyGateReasonText",
+                     "getFootballMarketContext", "getFootballTotalCandidate",
+                     "formatAccuracyGateValidation", "getAccuracyGatePresentation",
+                     "getFootballResultTier", "renderWebMarketRecommendation",
+                     "renderProbabilityStrip", "getFootballDirectionState",
+                     "renderFootballHandicapProbabilities", "renderFootballDirectionAnalysis",
+                     "renderMarketEvidence"):
+            start = html.index("function " + name + "(")
+            end = re.search(r"\n(?:async )?function ", html[start + 1:])
+            functions.append(html[start:start + 1 + end.start()])
+        start = html.index('  function renderMatchItem(item) {')
+        end = html.index("    if (footballSort === 'time')", start)
+        functions.append(html[start:end])
+        script = "\n".join(functions) + r"""
+const assert = require('node:assert/strict');
+function esc(value) { return String(value ?? ''); }
+function uiIcon() { return ''; }
+function renderFixtureTeams() { return ''; }
+function getLotteryHandicapExplanation() { return ''; }
+function getLotteryLinkedSelections() { return null; }
+function getFootballTopScoreReferences() { return []; }
+function fixture(standard, handicap, rq, bothSelected) {
+  return {match:{home:'主队',away:'客队'}, result:{lottery:{
+    offer_matched:true, spf_available:true, rqspf_available:true,
+    spf_odds:{'胜':2,'平':3,'负':3}, rqspf_odds:{'让胜':2,'让平':3,'让负':3},
+    standard:{prediction:standard, probabilities:standard === '胜'
+      ? {'胜':.8,'平':.1,'负':.1} : {'胜':.1,'平':.1,'负':.8}},
+    handicap:{handicap, prediction:rq, probabilities:{'让胜':.3,'让平':.2,'让负':.5}},
+    // A legacy response may carry selected flags but lack direction_analysis.
+    accuracy_gate:{spf:{selected:bothSelected,candidate:standard,probability:.8,reasons:[]},
+      rqspf:{selected:true,candidate:rq,probability:.85,validation_status:'validated',reasons:[]},
+      total_goals:{selected:false,reasons:[]}}
+  }}};
+}
+for (const [handicap, standard, rq, compatible] of [
+  [-1,'胜','让负',false], [1,'负','让胜',false],
+  [-2,'胜','让负',true], [2,'负','让胜',true],
+  [2,'胜','让负',false], [-2,'负','让胜',false],
+  [-1,'胜','让平',true], [1,'负','让平',true]
+]) {
+  for (const bothSelected of [false,true]) {
+    const item = fixture(standard, handicap, rq, bothSelected);
+    const before = JSON.stringify(item);
+    const tier = getFootballResultTier(item);
+    assert.equal(tier.markets.rqspf.status, compatible ? 'selected' : 'abstain');
+    assert.equal(tier.markets.spf.status, compatible && bothSelected ? 'selected' : 'abstain');
+    assert.equal(tier.tier, compatible ? 'selected' : 'abstain');
+    const card = renderMatchItem(item);
+    if (compatible) assert.ok(card.includes(`<strong>${rq}</strong>`));
+    else {
+      assert.ok(!card.includes(`<strong>${rq}</strong>`));
+      assert.ok(card.includes('暂无通过筛选的推荐'));
+      assert.ok(tier.markets.rqspf.reasons.some(reason => reason.includes('互斥')));
+      if (bothSelected) assert.ok(tier.markets.spf.reasons.some(reason => reason.includes('互斥')));
+    }
+    assert.equal(JSON.stringify(item), before, 'presentation guards must not mutate saved gate/probability data');
+  }
+}
+for (const handicap of [null, undefined, 0.25, 6]) {
+  const item = fixture('胜', handicap, '让负', true);
+  const tier = getFootballResultTier(item);
+  assert.equal(tier.markets.spf.status, 'abstain');
+  assert.equal(tier.markets.rqspf.status, 'abstain');
+}
+for (const closed of [{spf_available:false}, {spf_available:true,spf_odds:{}}]) {
+  const item = fixture('负', 1, '让胜', true);
+  Object.assign(item.result.lottery, closed);
+  const tier = getFootballResultTier(item);
+  assert.equal(tier.markets.spf.status, 'abstain');
+  assert.equal(tier.markets.rqspf.status, 'selected');
+  assert.equal(tier.market, '让球胜平负');
+  assert.equal(tier.prediction, '让胜');
+}
+const declared = fixture('负', 1, '让胜', false);
+declared.result.lottery.standard.probabilities = {'胜':.4,'平':.2,'负':.4};
+assert.equal(getFootballResultTier(declared).markets.rqspf.status, 'abstain', 'tied anchors follow the server declaration');
+const selectedStandard = fixture('负', -1, '让负', true);
+selectedStandard.result.lottery.accuracy_gate.spf.candidate = '胜';
+assert.equal(getFootballResultTier(selectedStandard).markets.rqspf.status, 'abstain', 'paired recommendations are checked against the selected SPF pick');
+console.log('legacy recommendation compatibility cases passed');
+"""
+        result = subprocess.run([shutil.which("node"), "-"], input=script,
+                                capture_output=True, text=True, encoding="utf-8")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("legacy recommendation compatibility cases passed", result.stdout)
 
     def test_detail_page_does_not_promote_unvalidated_markets_to_recommendations(self):
         html = (ROOT / "web/index.html").read_text(encoding="utf-8")

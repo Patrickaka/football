@@ -3367,6 +3367,10 @@ html, body.ui-shell { overflow-x: clip; }
 .ui-shell #panel-football .football-direction-reference { grid-column: 1 / -1; order: 6; padding: var(--space-sm) 0; border-top: 1px solid var(--color-rule); font-size: 12px; }
 .ui-shell #panel-football .football-direction-reference summary { cursor: pointer; color: var(--color-muted); }
 .ui-shell #panel-football .football-direction-analysis { padding-top: var(--space-sm); }
+.ui-shell #panel-football .market-direction-label { margin: 0 0 var(--space-xs); font-size: 11px; color: var(--color-ink); }
+.ui-shell #panel-football .conditional-outcome-note { display: block; margin-top: var(--space-xs); font-size: 11px; color: var(--color-muted); line-height: 1.5; }
+.ui-shell #panel-football .handicap-marginal-reference { margin-top: var(--space-sm); font-size: 11px; color: var(--color-muted); }
+.ui-shell #panel-football .handicap-marginal-values { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-sm); margin-top: var(--space-xs); }
 .ui-shell #panel-football .direction-path { display: grid; grid-template-columns: minmax(140px, 1fr) auto minmax(0, 3fr); align-items: start; gap: var(--space-md); }
 .ui-shell #panel-football .direction-standard { display: flex; flex-direction: column; gap: var(--space-3xs); }
 .ui-shell #panel-football .direction-standard strong { font-size: 20px; font-weight: 600; }
@@ -4833,9 +4837,8 @@ function renderProbabilityStrip(probabilities, keys, odds = null, selected = '')
   }).join('')}</div>`;
 }
 
-function renderFootballDirectionAnalysis(lottery, spfEnabled = true) {
-  const heading = '<div class="market-section-heading"><h3>比赛方向分析</h3><span>情景分析 · 非推荐</span></div>';
-  const unavailable = message => `<section class="football-direction-analysis" data-available="false" aria-label="比赛方向分析">${heading}<p class="direction-note">${esc(message)}</p></section>`;
+function getFootballDirectionState(lottery, spfEnabled = true) {
+  const unavailable = reason => ({available:false, reason});
   if (!spfEnabled) return unavailable('竞彩胜平负未开售；让球胜平负按独立玩法展示，不生成联合方向。');
   const analysis = lottery?.direction_analysis;
   const keys = ['让胜', '让平', '让负'];
@@ -4880,7 +4883,6 @@ function renderFootballDirectionAnalysis(lottery, spfEnabled = true) {
     return unavailable(`待重新分析：暂无可用的胜平负与让球联合情景${reasons ? '；' + reasons : ''}。`);
   }
   const standardName = {'胜':'主胜', '平':'平局', '负':'客胜'}[standard];
-  const percentage = value => (value * 100).toFixed(1) + '%';
   const handicapText = (handicap > 0 ? '+' : '') + handicap;
   const marginMeaning = key => {
     if (standard === '平') return '双方打平';
@@ -4890,8 +4892,52 @@ function renderFootballDirectionAnalysis(lottery, spfEnabled = true) {
     return minimum === maximum ? `${team}赢${minimum}球`
       : maximum === Infinity ? `${team}赢至少${minimum}球` : `${team}赢${minimum}至${maximum}球`;
   };
-  const branches = keys.filter(key => compatible.includes(key)).map(key => `<div class="direction-branch" data-handicap-result="${esc(key)}">
-    <span>${esc(key)} · ${esc(marginMeaning(key))}</span><strong>条件概率 ${percentage(conditional[key])}</strong>
+  return {available:true, standard, standardName, probability, handicap, handicapText,
+    conditional, joint, compatible, incompatible,
+    branches:keys.filter(key => compatible.includes(key)).map(key => ({key, meaning:marginMeaning(key)}))};
+}
+
+function renderFootballHandicapProbabilities(lottery, spfEnabled = true) {
+  const keys = ['让胜', '让平', '让负'];
+  const probabilities = lottery?.handicap?.probabilities;
+  // 胜平负未开售时没有联合条件，仍按独立让球玩法显示整场概率。
+  if (!spfEnabled) return `<div data-probability-basis="full_match"><p class="market-direction-label">独立玩法 · 全场概率</p>${renderProbabilityStrip(probabilities, keys)}</div>`;
+  const fullPercentage = key => {
+    const value = probabilities?.[key];
+    return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1
+      ? (value * 100).toFixed(1) + '%' : '—';
+  };
+  const reference = `<div class="handicap-marginal-reference" data-probability-basis="full_match">
+    <span>全场概率参考 · 推荐筛选按此判断</span>
+    <div class="handicap-marginal-values">${keys.map(key => `<span>${esc(key)} <span>${fullPercentage(key)}</span></span>`).join('')}</div>
+  </div>`;
+  const state = getFootballDirectionState(lottery, spfEnabled);
+  if (!state.available) return `<p class="market-direction-label">${esc(state.reason)}</p>${reference}`;
+  const percentage = value => (value * 100).toFixed(1) + '%';
+  // 只展示审核后的条件分布，不能把独立玩法最高项或旧 linked 回退当作同向分析。
+  const outcomes = keys.map(key => {
+    const branch = state.branches.find(item => item.key === key);
+    return `<div class="probability-outcome" data-handicap-result="${esc(key)}" data-compatible="${Boolean(branch)}">
+      <div class="probability-value"><span>${esc(key)}</span><strong>${branch ? percentage(state.conditional[key]) : '—'}</strong></div>
+      <span class="probability-track" aria-hidden="true"><i style="width:${branch ? state.conditional[key] * 100 : 0}%"></i></span>
+      <span class="conditional-outcome-note">${branch ? `${esc(branch.meaning)}<br>联合估计 ${percentage(state.joint[key])}` : '该情景不成立'}</span>
+    </div>`;
+  }).join('');
+  return `<div class="handicap-conditional-probabilities" data-probability-basis="conditional_on_standard_result">
+    <p class="market-direction-label">在${esc(state.standardName)}（${esc(state.standard)}）成立时 · 条件概率</p>
+    <div class="probability-strip" style="--outcomes:3">${outcomes}</div>
+    <p class="direction-note">联合估计为两项同时发生的概率；条件100%不代表整场命中。</p>
+  </div>${reference}`;
+}
+
+function renderFootballDirectionAnalysis(lottery, spfEnabled = true) {
+  const heading = '<div class="market-section-heading"><h3>比赛方向分析</h3><span>情景分析 · 非推荐</span></div>';
+  const state = getFootballDirectionState(lottery, spfEnabled);
+  if (!state.available) return `<section class="football-direction-analysis" data-available="false" aria-label="比赛方向分析">${heading}<p class="direction-note">${esc(state.reason)}</p></section>`;
+  const {standard, standardName, probability, handicapText, conditional, joint, incompatible} = state;
+  const percentage = value => (value * 100).toFixed(1) + '%';
+  const branches = state.branches.map(({key, meaning}) => `<div class="direction-branch" data-handicap-result="${esc(key)}">
+    <span>${esc(key)} · ${esc(meaning)}</span><strong>条件概率 ${percentage(conditional[key])}</strong>
     <small>${esc(standard)}＋${esc(key)} · 联合估计 ${percentage(joint[key])}</small>
   </div>`).join('');
   return `<section class="football-direction-analysis" data-available="true" aria-label="比赛方向分析">
@@ -4973,6 +5019,47 @@ function getFootballResultTier(item) {
     accuracyGate.rqspf?.candidate,
     { officialBetAllowed, requireIndependent: true },
   );
+  // 审核旧缓存中的 selected 标记，保证列表和详情使用同一推荐约束。
+  // 只调整展示状态，不改赔率、整场概率、条件概率或持久化的门禁记录。
+  const lottery = r.lottery || {};
+  const spfOpen = !lottery.offer_matched || Boolean(lottery.spf_available
+    && lottery.spf_odds && Object.keys(lottery.spf_odds).length);
+  const rejectRecommendation = (state, reason) => {
+    state.status = 'abstain';
+    state.label = '观望';
+    state.reasons = [...new Set([...(state.reasons || []), reason])];
+  };
+  if (!spfOpen) rejectRecommendation(spfState, '竞彩胜平负未开售');
+  const standardDirection = (() => {
+    if (!spfOpen) return null;
+    const values = lottery.standard?.probabilities;
+    if (!values || Object.keys(values).length !== 3
+      || !['胜', '平', '负'].every(key => Object.hasOwn(values, key))) return null;
+    const rows = Object.entries(values).map(([key, value]) => [key,
+      typeof value === 'boolean' || value == null || value === '' ? NaN : Number(value)]);
+    if (rows.some(([, value]) => !Number.isFinite(value) || value < 0 || value > 1)
+      || Math.abs(rows.reduce((sum, [, value]) => sum + value, 0) - 1) > 0.000001) return null;
+    const top = rows.reduce((best, row) => row[1] > best[1] ? row : best);
+    const declared = rows.find(([key]) => key === lottery.standard?.prediction);
+    return declared && declared[1] === top[1] ? declared[0] : top[0];
+  })();
+  const bothSelected = spfState.status === 'selected' && rqspfState.status === 'selected';
+  if (rqspfState.status === 'selected' && (bothSelected || standardDirection)) {
+    const standardPick = bothSelected ? ({H:'胜', D:'平', A:'负', home:'胜', draw:'平', away:'负',
+      '主胜':'胜', '平局':'平', '客胜':'负'}[spfState.pick] || spfState.pick) : standardDirection;
+    const lineMatch = String(lottery.handicap?.handicap ?? '').match(/[-+]?\d+(?:\.\d+)?/);
+    const line = lineMatch ? Number(lineMatch[0]) : NaN;
+    const bounds = {'胜':[1, Infinity], '平':[0, 0], '负':[-Infinity, -1]}[standardPick];
+    const rqBounds = {'让胜':[1 - line, Infinity], '让平':[-line, -line], '让负':[-Infinity, -1 - line]}[rqspfState.pick];
+    const valid = Number.isInteger(line) && Math.abs(line) <= 5 && bounds && rqBounds;
+    const compatible = valid ? Math.max(bounds[0], rqBounds[0]) <= Math.min(bounds[1], rqBounds[1]) : null;
+    if (compatible !== true) {
+      const reason = compatible === false
+        ? (bothSelected ? '胜平负与让球胜平负方向互斥，不能同时推荐' : '让球推荐与胜平负主方向互斥，转为观望')
+        : '缺少有效体彩让球数，无法核验两玩法推荐是否兼容';
+      for (const state of bothSelected ? [spfState, rqspfState] : [rqspfState]) rejectRecommendation(state, reason);
+    }
+  }
   let primary = null;
   if (spfState.status === 'selected') {
     primary = { ...spfState, market: '胜平负', prediction: spfState.pick };
@@ -5471,11 +5558,15 @@ function renderFootballPredictions(results) {
         const totalDirection = getFootballTotalCandidate(accuracyGate.total_goals);
         const correctionLabel = r.model?.joint_market_state?.applied ? ' · 已修正' : ' · 联合分析';
         const marketContext = getFootballMarketContext(r);
+        const directionState = getFootballDirectionState(r.lottery, spfPredictionEnabled);
+        const standardCaption = directionState.available
+          ? `分析方向：${directionState.standardName}（${directionState.standard}） · 全场概率`
+          : '胜平负 · 全场概率';
         itemHtml += `<div class="football-compact-summary">
           <div class="market-section-heading"><h3>玩法分析</h3><span>赛前概率参考</span></div>
-          ${standardPrediction ? renderWebMarketRecommendation('胜平负', spfGateState, spfGateState.pick || selectedStandard, compactProbLine(standardPrediction.probs, ['胜','平','负'])) : ''}
+          ${standardPrediction ? renderWebMarketRecommendation('胜平负', spfGateState, spfGateState.pick || selectedStandard, `<p class="market-direction-label">${esc(standardCaption)}</p>${compactProbLine(standardPrediction.probs, ['胜','平','负'])}`) : ''}
           ${standardPrediction?.selectionProfile?.mode === 'draw_cover' && spfGateState.status === 'selected' ? '<div class="draw-cover-note">模型分布提示防平，仅作辅助参考</div>' : ''}
-          ${handicapCard ? renderWebMarketRecommendation(`让球胜平负（${Number(lotteryHandicap) > 0 ? '+' : ''}${lotteryHandicap}）`, rqspfGateState, rqspfGateState.pick || selectedHandicap, compactProbLine(handicapCard.prediction.marginalProbs, ['让胜','让平','让负'])) : ''}
+          ${handicapCard ? renderWebMarketRecommendation(`让球胜平负（${Number(lotteryHandicap) > 0 ? '+' : ''}${lotteryHandicap}）`, rqspfGateState, rqspfGateState.pick || selectedHandicap, renderFootballHandicapProbabilities(r.lottery, spfPredictionEnabled)) : ''}
           ${renderWebMarketRecommendation('大小球', totalGateState, totalDirection, `<span class="distribution-caption">比分矩阵进球数分布</span>${compactGoalText}`)}
           <div class="football-score-reference">
             <div class="score-section-heading">比分参考 Top3（非主推）</div>

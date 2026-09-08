@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import math
+
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 from .lottery import lottery_outcomes_compatible
@@ -107,6 +109,36 @@ def _top_pick(probabilities: Mapping[str, Any] | None) -> tuple[str | None, floa
 def _market_agrees(market: Mapping[str, Any] | None, prediction: str | None) -> bool:
     market_pick, _, _ = _top_pick(market)
     return bool(prediction and market_pick and prediction == market_pick)
+
+
+def _standard_direction_for_consistency(lottery: Mapping[str, Any]) -> str | None:
+    """Return a valid ordinary direction even when it is below selection gates.
+
+    An independently selected handicap must still describe a possible match
+    under the displayed ordinary direction.  Closed ordinary markets have no
+    such direction; the remaining handicap market stays a standalone play.
+    """
+    if (lottery.get('offer_matched')
+            and not (lottery.get('spf_available') and lottery.get('spf_odds'))):
+        return None
+    standard = lottery.get('standard') or {}
+    probabilities = standard.get('probabilities')
+    if not isinstance(probabilities, Mapping) or set(probabilities) != {'胜', '平', '负'}:
+        return None
+    try:
+        if any(isinstance(value, bool) for value in probabilities.values()):
+            return None
+        values = {key: float(value) for key, value in probabilities.items()}
+    except (TypeError, ValueError):
+        return None
+    if (not all(math.isfinite(value) and 0 <= value <= 1 for value in values.values())
+            or not math.isclose(sum(values.values()), 1.0, abs_tol=1e-6)):
+        return None
+    top = max(values, key=values.get)
+    declared = standard.get('prediction')
+    if declared in values and values[declared] == values[top]:
+        return declared
+    return top
 
 def prediction_reliability(probability: float, information_completeness: float) -> float:
     """Shrink a 3-way top-pick probability toward the 1/3 ignorance prior."""
@@ -250,8 +282,11 @@ def build_accuracy_gate(
         "policy": "selective_prediction_with_abstention",
     }
     spf_policy = _spf_policy(league, production_spf_policy)
+    spf_available = (not lottery.get('offer_matched')
+                     or bool(lottery.get('spf_available') and lottery.get('spf_odds')))
     configs = (
-        ("spf", lottery.get("standard"), spf_policy["minimum_probability"], True),
+        ("spf", lottery.get("standard") if spf_available else None,
+         spf_policy["minimum_probability"], True),
         ("rqspf", lottery.get("handicap"), RQSPF_MIN_PROBABILITY, False),
     )
     for key, market, threshold, historically_supported in configs:
@@ -291,6 +326,7 @@ def build_accuracy_gate(
         selected = not reasons
         decisions[key] = {
             "selected": selected,
+            "independent_selected": selected,
             "decision": prediction if selected else "观望",
             "candidate": prediction,
             "probability": probability,
@@ -309,21 +345,27 @@ def build_accuracy_gate(
             ),
             "validation": spf_policy["validation"] if historically_supported else None,
         }
-    # Independent marginal maxima are valid probabilities, but cannot always
-    # be recommended together.  Do not replace either pick with a conditional
-    # runner-up just to make the displayed directions agree.
-    if decisions["spf"]["selected"] and decisions["rqspf"]["selected"]:
+    # Keep independent qualification auditable, but do not issue a handicap
+    # recommendation impossible under the ordinary direction shown alongside
+    # it.  Ordinary abstention does not make that contradiction disappear.
+    # Conditional probabilities never replace full-match selection thresholds.
+    standard_direction = _standard_direction_for_consistency(lottery)
+    both_selected = decisions["spf"]["selected"] and decisions["rqspf"]["selected"]
+    if decisions["rqspf"]["selected"] and (both_selected or standard_direction):
         compatible = lottery_outcomes_compatible(
-            decisions["spf"]["decision"], decisions["rqspf"]["decision"],
+            decisions["spf"]["decision"] if both_selected else standard_direction,
+            decisions["rqspf"]["decision"],
             (lottery.get("handicap") or {}).get("handicap"),
         )
         if compatible is not True:
             reason = (
-                "胜平负与让球胜平负方向互斥，不能同时推荐"
+                ("胜平负与让球胜平负方向互斥，不能同时推荐" if both_selected else
+                 "让球推荐与胜平负主方向互斥，转为观望")
                 if compatible is False
-                else "缺少有效体彩让球数，无法核验两玩法推荐是否兼容"
+                else ("缺少有效体彩让球数，无法核验两玩法推荐是否兼容" if both_selected else
+                      "缺少有效体彩让球数，无法核验让球推荐与胜平负主方向是否兼容")
             )
-            for market_key in ("spf", "rqspf"):
+            for market_key in (("spf", "rqspf") if both_selected else ("rqspf",)):
                 decisions[market_key]["selected"] = False
                 decisions[market_key]["decision"] = "观望"
                 decisions[market_key]["reasons"].append(reason)
