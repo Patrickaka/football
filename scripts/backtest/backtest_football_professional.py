@@ -173,6 +173,12 @@ def main():
         'model_oos_samples': len(oos),
     }
     report['generated_at'] = datetime.now().astimezone().isoformat(timespec='seconds')
+    # This runner tests the CatBoost shadow path, not the full production rules.
+    # Keep it usable for research without certifying the current release.
+    report['evaluation_scope'] = 'catboost_shadow'
+    report['model_version'] = 'catboost-shadow-walk-forward-v1'
+    report['prediction_logic_version'] = None
+    report['data_cutoff_date'] = samples[-1]['match_date']
     os.makedirs(os.path.dirname(args.out), exist_ok=True)
     with open(args.out, 'w', encoding='utf-8') as handle:
         json.dump(report, handle, ensure_ascii=False, indent=2)

@@ -1794,9 +1794,15 @@ class PredictionHistory:
                     version_stats['correct'] += 1
                 decision = record.get('decision_snapshot') or _prediction_decision_snapshot(predicted_1x2)
                 if decision.get('eligible'):
-                    actionable_total += 1
-                    if pred_result == actual_result:
-                        actionable_correct += 1
+                    # Settle the direction actually recommended at prediction time.
+                    # Old snapshots without a direction retain their legacy fallback.
+                    selected_result = decision.get('prediction', pred_result)
+                    selected_result = {'胜': 'H', '平': 'D', '负': 'A'}.get(
+                        selected_result, selected_result)
+                    if selected_result in ('H', 'D', 'A'):
+                        actionable_total += 1
+                        if selected_result == actual_result:
+                            actionable_correct += 1
 
         hit_rate_top1 = correct_top1 / valid_score_predictions if valid_score_predictions > 0 else 0
         hit_rate_top3 = correct_top3 / valid_score_predictions if valid_score_predictions > 0 else 0
@@ -2597,6 +2603,8 @@ def get_prediction_export() -> Dict:
         'settled', 'sync_status', 'evaluation', 'hit_top1', 'hit_top3',
         'hit_top5', 'hit_1x2', 'hit_rqspf', 'actual_rqspf',
         'actual_score_rank', 'actual_score_prob',
+        'decision_snapshot', 'result_quality', 'result_source', 'sync_source',
+        'half_time_data_quality', 'exclude_from_calibration', 'params_snapshot',
     )
     records = [
         {key: record.get(key) for key in export_fields if key in record}
@@ -2604,7 +2612,7 @@ def get_prediction_export() -> Dict:
     ]
     records.sort(key=lambda item: item.get('match_time', ''))
     return {
-        'schema_version': 'football-prediction-export-v2',
+        'schema_version': 'football-prediction-export-v3',
         'exported_at': datetime.now().astimezone().isoformat(),
         'record_count': len(records),
         'settled_count': sum(

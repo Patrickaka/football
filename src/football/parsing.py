@@ -9,6 +9,7 @@
 """
 
 import urllib.error
+from datetime import datetime, timezone
 
 from ..common.logger import setup_logger
 from ..domain.sports.football import lottery as _lot
@@ -163,8 +164,9 @@ def fetch_team_strength(match_id, home, away, league_profile=None):
 
     返回 None 表示页面无数据（不影响主流程）。
     """
+    source_url = f'{BASE}/fenxi/shuju-{match_id}.shtml'
     try:
-        html = _fetching_mod.fetch(f'{BASE}/fenxi/shuju-{match_id}.shtml')
+        html = _fetching_mod.fetch(source_url)
     except (urllib.error.URLError, ValueError, OSError):
         return None
 
@@ -174,6 +176,20 @@ def fetch_team_strength(match_id, home, away, league_profile=None):
     result = _p.parse_team_strength(html, home, away)
     if result is None:
         return None
+
+    # This is when this observation became available to this prediction. It is
+    # not the provider's publication time: fetch may reuse its short TTL cache.
+    collected_at = datetime.now(timezone.utc).isoformat()
+    result['data_provenance'] = {
+        'team_form': {
+            'kind': 'historical_results',
+            'source': source_url,
+            'collected_at': collected_at,
+            'timestamp_basis': 'retrieved_at',
+            'source_published_at': None,
+            'fields': ['home_recent', 'away_recent', 'home_venue', 'away_venue'],
+        },
+    }
 
     if ELO_AVAILABLE:
         try:
@@ -190,6 +206,12 @@ def fetch_team_strength(match_id, home, away, league_profile=None):
                 'elo_strength_away': elo_to_strength_factor(elo_away),
                 'elo_prediction': elo.predict_match(home, away, league_type),
             })
+            result['data_provenance']['elo_expected_goals'] = {
+                'kind': 'elo_estimate',
+                'source': 'internal_elo_rating_model',
+                'collected_at': collected_at,
+                'timestamp_basis': 'computed_at',
+            }
             log.debug(f"ELO 评分: {home}={elo_home:.2f}, {away}={elo_away:.2f}")
             log.debug(f"ELO xG: {home}={result['elo_xg_home']:.2f}, {away}={result['elo_xg_away']:.2f}")
         except Exception as e:

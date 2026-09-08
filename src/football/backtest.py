@@ -78,6 +78,41 @@ def optimize_prediction_parameters(records, predict_func, **kwargs):
 log = logging.getLogger('football')
 
 
+def _settled_history_records(league=None, limit=None):
+    """Use model snapshots, not the deliberately reduced records-page payload."""
+    from .result_sync import get_history, _parse_match_datetime, _is_match_settle_due
+
+    records = []
+    for record in get_history().records:
+        if not record.get('settled') or not record.get('actual_score'):
+            continue
+        if league and record.get('league') != league:
+            continue
+        try:
+            reference = datetime.fromisoformat(record.get('created_at') or '')
+        except (TypeError, ValueError):
+            reference = None
+        kickoff = _parse_match_datetime(record.get('match_time'), now=reference)
+        if record.get('match_time') and (
+            kickoff is None or not _is_match_settle_due(kickoff.strftime('%Y-%m-%d %H:%M:%S'))
+        ):
+            continue
+        records.append(record)
+
+    def chronological_key(record):
+        # Legacy MM-DD times need the record's year, not the server's current year.
+        try:
+            reference = datetime.fromisoformat(record.get('created_at') or '')
+        except (TypeError, ValueError):
+            reference = None
+        kickoff = _parse_match_datetime(record.get('match_time'), now=reference)
+        return (kickoff.isoformat() if kickoff else str(record.get('created_at') or ''),
+                str(record.get('match_id') or ''))
+
+    records.sort(key=chronological_key)
+    return records[-limit:] if limit and limit > 0 else records
+
+
 
 
 
@@ -104,13 +139,7 @@ def rolling_backtest_from_history(league: str = None,
                                   **kwargs) -> Dict:
     """Load settled prediction history and run rolling-window diagnostics."""
     try:
-        from .result_sync import get_prediction_records
-
-        records = [r for r in get_prediction_records(include_hidden=True) if r.get('settled')]
-        if league:
-            records = [r for r in records if r.get('league') == league]
-        if limit:
-            records = records[-limit:]
+        records = _settled_history_records(league, limit)
         return rolling_backtest_report(
             records,
             windows=windows,
@@ -129,13 +158,7 @@ def apply_diagnostic_tuning_from_history(league: str = None,
                                          **kwargs) -> Dict:
     """Load settled history and plan/apply guarded diagnostic tuning."""
     try:
-        from .result_sync import get_prediction_records
-
-        records = [r for r in get_prediction_records(include_hidden=True) if r.get('settled')]
-        if league:
-            records = [r for r in records if r.get('league') == league]
-        if limit:
-            records = records[-limit:]
+        records = _settled_history_records(league, limit)
         return apply_diagnostic_tuning(records, league=league, **kwargs)
     except Exception as e:
         return {'applied': False, 'error': str(e)}

@@ -523,7 +523,7 @@ def _analyze_match_impl(match, force_refresh=False):
                 
                 predicted_scores = {
                     f"{h}-{a}": prob
-                    for (h, a), prob in candidates[:30]
+                    for (h, a), prob in candidates
                 }
                 
                 predicted_half_full = _half_full_probs_to_dict(model.get('half_full_time'))
@@ -1187,80 +1187,22 @@ def _analyze_match_impl(match, force_refresh=False):
     half_full_time = _adjust_half_full_with_score_context(half_full_time, candidates)
     half_full_time = _adjust_half_full_with_market_context(half_full_time, asian, total)
 
-    # 新增：进球数推荐（结合历史盘口数据 + 校准器）
+    # All displayed markets must aggregate the same final score matrix. The
+    # candidate pipeline has already applied history, total-line and movement
+    # corrections; applying them again only to totals creates contradictory bets.
     goal_count_result = None
     goal_dist_before_calibration = None
     goal_dist_after_calibration = None
     try:
         from .ml import predict_goal_counts_from_candidates
-        goal_count_result = predict_goal_counts_from_candidates(candidates, max_goals=MAX_GOALS, asian=asian, total=total)
-        
-        # 保存校准前的分布
-        goal_dist_before_calibration = goal_count_result.get('distribution_dict', {}).copy()
-        if not goal_dist_before_calibration:
-            raw_distribution = goal_count_result.get('distribution', {})
-            if isinstance(raw_distribution, list):
-                goal_dist_before_calibration = {
-                    item.get('goals'): item.get('probability', 0.0)
-                    for item in raw_distribution
-                    if item.get('goals') is not None
-                }
-            elif isinstance(raw_distribution, dict):
-                goal_dist_before_calibration = raw_distribution.copy()
-        
-        # 使用总球数校准器校准
-        try:
-            from .goal_count_calibrator import GoalCountCalibrator
-            calibrator = GoalCountCalibrator()
-            
-            # 计算期望总进球数
-            expected_total = sum(k * v for k, v in goal_dist_before_calibration.items())
-            
-            # 获取盘口参数
-            total_line = total.get('close_line', 2.5) if total else 2.5
-            asian_handicap = asian.get('handicap', 0) if asian else 0.0
-            league_name = match.get('league', '其他')
-            
-            # 应用校准
-            calibrated_dist = calibrator.calibrate_goal_dist(
-                league=league_name,
-                total_line=total_line,
-                goal_dist=goal_dist_before_calibration,
-                expected_total=expected_total,
-                asian=asian_handicap,
-                min_samples=10
-            )
-            
-            # 保存校准后的分布
-            calibrated_dist, goal_line_anchor = _anchor_goal_dist_to_total_line(calibrated_dist, total)
-            calibrated_dist, goal_movement_adjustment = _adjust_goal_dist_with_total_movement(calibrated_dist, total)
-            goal_dist_after_calibration = calibrated_dist
-            
-            # 更新结果中的分布
-            goal_count_result['distribution_dict'] = calibrated_dist
-            goal_count_result['line_anchor'] = goal_line_anchor
-            goal_count_result['movement_adjustment'] = goal_movement_adjustment
-            
-            # 重新计算推荐（基于校准后的分布）
-            from .ml import recommend_goal_counts_from_dist, get_goal_count_distribution_from_dist
-            high_risk = goal_count_result.get('sample_info', {}).get('quality', 'none') in ['low', 'none']
-            low_quality_sample = goal_count_result.get('sample_info', {}).get('quality', 'none') in ['low', 'none']
-            if goal_movement_adjustment.get('conflict'):
-                high_risk = True
-            
-            goal_count_result['recommendations'] = recommend_goal_counts_from_dist(
-                calibrated_dist, top_n=3, high_risk=high_risk, low_quality_sample=low_quality_sample
-            )
-            goal_count_result['distribution'] = get_goal_count_distribution_from_dist(calibrated_dist)
-            
-            # 更新大小球概率
-            goal_count_result['over_under'] = _goal_over_under_from_line(calibrated_dist, total)
-            
-            log.debug("进球数校准完成: 期望总进球 %.2f", expected_total)
-        except Exception as e:
-            log.warning(f"进球数校准失败: {e}，使用原始分布")
-        
-        log.debug("进球数推荐: %s", goal_count_result['recommendations'])
+        goal_count_result = predict_goal_counts_from_candidates(
+            candidates, max_goals=MAX_GOALS, asian=asian, total=total,
+            use_history=False,
+        )
+        goal_count_result['over_under'] = _goal_over_under_from_line(
+            goal_count_result['distribution_dict'], total)
+        goal_count_result['distribution_source'] = 'final_score_matrix'
+        meta['goal_distribution_policy'] = 'single_final_score_matrix'
     except Exception as e:
         log.warning(f"进球数推荐失败: {e}")
 
@@ -1710,7 +1652,7 @@ def _analyze_match_impl(match, force_refresh=False):
 
         predicted_scores = {
             f"{h}-{a}": prob
-            for (h, a), prob in candidates[:30]
+            for (h, a), prob in candidates
         }
 
         predicted_1x2 = ({

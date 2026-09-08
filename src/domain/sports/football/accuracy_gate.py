@@ -10,6 +10,9 @@ TARGET_ACCURACY = 0.80
 
 SPF_MIN_PROBABILITY = 0.70
 
+# Market confidence alone must not promote a weak model prediction.
+SPF_MIN_MODEL_PROBABILITY = 0.65
+
 RQSPF_MIN_PROBABILITY = 0.80
 
 MIN_TOP2_MARGIN = 0.18
@@ -262,6 +265,8 @@ def build_accuracy_gate(
         if qualifying_probability < threshold:
             label = "官方赔率去水概率" if key == "spf" else "最高概率"
             reasons.append(f"{label}低于{threshold:.0%}")
+        if key == "spf" and probability < SPF_MIN_MODEL_PROBABILITY:
+            reasons.append(f"模型最高概率低于{SPF_MIN_MODEL_PROBABILITY:.0%}")
         if margin < MIN_TOP2_MARGIN:
             reasons.append(f"领先第二选项不足{MIN_TOP2_MARGIN:.0%}")
         if key == "spf" and market_probs and market_margin < MIN_MARKET_MARGIN:

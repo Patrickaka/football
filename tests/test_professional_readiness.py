@@ -41,16 +41,118 @@ class ProfessionalReadinessTests(unittest.TestCase):
         self.assertNotIn("未取得可核验伤停", profile["blockers"])
         self.assertIn("未取得确认首发", profile["blockers"])
 
-    def test_existing_xg_consensus_and_analog_fields_are_recognized(self):
+    def test_elo_estimates_do_not_count_as_event_xg_or_team_form(self):
         profile = build_match_evidence_profile({
             "team": {"elo_xg_home": 1.8, "elo_xg_away": 1.1},
             "asian": {"bookmaker_consensus": {"available": True}},
             "similar_market": {"count": 35},
         })
         checks = {item["key"]: item["available"] for item in profile["checks"]}
-        self.assertTrue(checks["expected_goals"])
+        self.assertFalse(checks["expected_goals"])
+        self.assertFalse(checks["team_form"])
+        self.assertEqual(profile["data_provenance"]["elo_expected_goals"]["kind"], "elo_estimate")
         self.assertTrue(checks["bookmaker_consensus"])
         self.assertTrue(checks["historical_analogs"])
+
+    def test_elo_copied_into_total_remains_an_estimate(self):
+        profile = build_match_evidence_profile({
+            "team": {"elo_xg_home": 1.8, "elo_xg_away": 1.1},
+            "total": {"xg_home": 1.8, "xg_away": 1.1},
+        })
+        audit = profile["data_provenance"]
+        self.assertFalse(audit["expected_goals"]["verified"])
+        self.assertEqual(audit["total_expected_goals"]["kind"], "elo_estimate")
+
+    def test_unlabelled_total_xg_is_never_assumed_to_be_event_data(self):
+        audit = build_match_evidence_profile({"total": {"xg_home": 1.8, "xg_away": 1.1}})["data_provenance"]
+        self.assertFalse(audit["expected_goals"]["verified"])
+        self.assertEqual(audit["total_expected_goals"]["kind"], "model_estimate")
+
+    def test_sourced_timestamped_event_xg_and_history_count_separately(self):
+        profile = build_match_evidence_profile({"team": {
+            "home_xg_last5": 0.0, "away_xg_last5": 5.5,
+            "home_recent": {"games": 5, "gf": 0, "ga": 7},
+            "away_recent": {"games": 5, "gf": 6, "ga": 3},
+            "data_provenance": {
+                "expected_goals": {"kind": "event_xg", "source": "event-provider",
+                                   "collected_at": "2026-09-08T02:00:00Z"},
+                "team_form": {"kind": "historical_results", "source": "results-provider",
+                              "collected_at": "2026-09-08T02:00:00Z"},
+            },
+        }})
+        checks = {item["key"]: item["available"] for item in profile["checks"]}
+        self.assertTrue(checks["expected_goals"])
+        self.assertTrue(checks["team_form"])
+        self.assertEqual(profile["data_provenance"]["expected_goals"]["kind"], "event_xg")
+
+    def test_numeric_history_without_provenance_is_not_verified(self):
+        audit = build_match_evidence_profile({"team": {
+            "home_recent": {"games": 5, "gf": 6, "ga": 2},
+            "away_recent": {"games": 5, "gf": 6, "ga": 3},
+        }})["data_provenance"]["team_form"]
+        self.assertEqual(audit["kind"], "historical_results")
+        self.assertFalse(audit["verified"])
+        self.assertIn("source_missing", audit["reasons"])
+
+    def test_partial_invalid_and_default_xg_cannot_pass(self):
+        metadata = {"kind": "event_xg", "source": "provider", "collected_at": "2026-09-08T02:00:00Z"}
+        cases = [
+            {"home_xg_last5": 2.0},
+            {"home_xg_last5": float("nan"), "away_xg_last5": 2.0},
+            {"home_xg_last5": -1, "away_xg_last5": 2.0},
+            {"home_xg_last5": True, "away_xg_last5": 2.0},
+        ]
+        for fields in cases:
+            with self.subTest(fields=fields):
+                audit = build_match_evidence_profile({"team": {
+                    **fields, "data_provenance": {"expected_goals": metadata},
+                }})["data_provenance"]["expected_goals"]
+                self.assertFalse(audit["verified"])
+        audit = build_match_evidence_profile({"team": {
+            "home_xg_last5": 2.0, "away_xg_last5": 2.0,
+            "data_provenance": {"expected_goals": {**metadata, "is_default": True}},
+        }})["data_provenance"]["expected_goals"]
+        self.assertFalse(audit["verified"])
+        self.assertEqual(audit["kind"], "default")
+
+    def test_claimed_event_xg_requires_real_source_and_explicit_collection_time(self):
+        for source, timestamp in [("UNAVAILABLE", "2026-09-08T02:00:00Z"),
+                                  ("provider", "bad"), ("provider", "2026-09-08T02:00:00"),
+                                  ("provider", None)]:
+            with self.subTest(source=source, timestamp=timestamp):
+                audit = build_match_evidence_profile({"team": {
+                    "home_xg_last5": 6.0, "away_xg_last5": 4.0,
+                    "data_provenance": {"expected_goals": {
+                        "kind": "event_xg", "source": source, "collected_at": timestamp,
+                    }},
+                }})["data_provenance"]["expected_goals"]
+                self.assertFalse(audit["verified"])
+
+    def test_nonempty_default_strength_is_not_historical_form(self):
+        audit = build_match_evidence_profile({"team": {
+            "attack_home": 1.4, "defense_home": 1.4, "league_profile": {"source": "static"},
+        }})["data_provenance"]["team_form"]
+        self.assertFalse(audit["verified"])
+        self.assertEqual(audit["kind"], "default")
+
+    def test_zero_game_fallback_cannot_be_counted_as_observed_history(self):
+        profile = build_match_evidence_profile({"team": {
+            "home_recent": {"games": 1, "gf": 0, "ga": 0, "wins": 0, "draws": 0, "losses": 0},
+            "away_recent": {"games": 5, "gf": 6, "ga": 3},
+            "data_provenance": {"team_form": {
+                "kind": "historical_results", "source": "provider", "collected_at": "2026-09-08T02:00:00Z",
+            }},
+        }})
+        self.assertFalse(profile["data_provenance"]["team_form"]["verified"])
+
+    def test_lineup_needs_confirmation_and_stale_live_audit_cannot_turn_green(self):
+        live = {"lineup": {"source": "official", "ts": "2026-09-08T02:00:00Z"},
+                "injuries": [{"source": "official", "ts": "2026-09-08T02:00:00Z"}]}
+        profile = build_match_evidence_profile({"live_context": live,
+            "live_context_quality": {"checks": {"injuries": "unverified", "lineup": "unverified"}}})
+        checks = {item["key"]: item["available"] for item in profile["checks"]}
+        self.assertFalse(checks["confirmed_lineup"])
+        self.assertFalse(checks["injuries"])
 
     def test_unverifiable_live_context_does_not_turn_green(self):
         profile = build_match_evidence_profile({
@@ -132,6 +234,14 @@ class ProfessionalReadinessTests(unittest.TestCase):
         self.assertFalse(gate["official_bet_allowed"])
         self.assertEqual(gate["mode"], "research_only")
         self.assertTrue(any("样本外验证" in reason for reason in gate["reasons"]))
+
+    def test_professional_gate_exposes_version_acceptance_failure(self):
+        gate = build_professional_decision_gate({
+            "production_ready": False,
+            "acceptance": {"reasons": ["验证报告与当前模型版本不一致"]},
+        })
+        self.assertFalse(gate["official_bet_allowed"])
+        self.assertIn("验证报告与当前模型版本不一致", gate["reasons"])
 
 
 if __name__ == "__main__":

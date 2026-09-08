@@ -71,80 +71,79 @@ def load_module_cache(pkl_path: str) -> dict:
     return d
 
 
-def load_professional_validation_summary() -> dict:
-    """Load the lightweight strict-OOS summary without rerunning a backtest."""
-    from .professional_baseline import (
-        BASELINE_GENERATED_AT,
-        BASELINE_VERSION,
-        bundled_professional_baseline,
-    )
-    path = os.path.join(DEFAULT_REPORTS_DIR, "professional_football_backtest.json")
+def load_professional_validation_summary(*, now=None, report_path=None) -> dict:
+    """Cache report contents briefly, but re-evaluate release and expiry every call."""
+    from .professional_baseline import BASELINE_VERSION, bundled_professional_baseline
+    from .config import FOOTBALL_PREDICTION_LOGIC_VERSION
+    from ..domain.sports.football.settlement import PRODUCTION_MODEL_VERSION
+    from ..domain.sports.football.acceptance import assess_model_acceptance
+
+    path = os.fspath(report_path) if report_path is not None else os.path.join(
+        DEFAULT_REPORTS_DIR, "professional_football_backtest.json")
     try:
         report_exists = os.path.exists(path)
-        if (
-            not report_exists
-            and _PRO_VALIDATION_CACHE["value"]
-            and time.time() - _PRO_VALIDATION_CACHE["checked_at"] < 60
-        ):
-            return dict(_PRO_VALIDATION_CACHE["value"])
-        mtime = os.path.getmtime(path) if report_exists else None
-        if _PRO_VALIDATION_CACHE["value"] and _PRO_VALIDATION_CACHE["mtime"] == mtime:
-            return dict(_PRO_VALIDATION_CACHE["value"])
-        if report_exists:
-            with open(path, "r", encoding="utf-8") as handle:
-                report = json.load(handle)
-            generated_at = datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M")
-            source = "runtime_report"
+        stamp = os.stat(path) if report_exists else None
+        fingerprint = (os.path.abspath(path), stamp.st_mtime_ns, stamp.st_size) if stamp else (os.path.abspath(path), None, None)
+        cache_fresh = time.time() - _PRO_VALIDATION_CACHE["checked_at"] < 60
+        if (_PRO_VALIDATION_CACHE.get("value") and cache_fresh
+                and _PRO_VALIDATION_CACHE.get("report") is not None
+                and _PRO_VALIDATION_CACHE["mtime"] == fingerprint):
+            report = _PRO_VALIDATION_CACHE["report"]
+            source = _PRO_VALIDATION_CACHE["source"]
         else:
-            from ..common import kv_store
-            database_report, database_backend = kv_store.load_with_backend(
-                "football_professional_validation",
-            )
-            if isinstance(database_report, dict) and database_report.get("model_metrics"):
-                report = database_report
-                generated_at = report.get("generated_at") or "database"
-                source = (
-                    "database_kv_store" if database_backend == "mysql"
-                    else "local_kv_fallback"
-                )
-                mtime = f"{database_backend}:{generated_at}"
+            if report_exists:
+                with open(path, "r", encoding="utf-8") as handle:
+                    report = json.load(handle)
+                source = "runtime_report"
             else:
-                report = bundled_professional_baseline()
-                generated_at = BASELINE_GENERATED_AT
-                source = "bundled_audited_baseline"
-                mtime = "bundled"
+                from ..common import kv_store
+                report, backend = kv_store.load_with_backend("football_professional_validation")
+                if isinstance(report, dict) and report.get("model_metrics"):
+                    source = "database_kv_store" if backend == "mysql" else "local_kv_fallback"
+                else:
+                    report = bundled_professional_baseline()
+                    source = "bundled_audited_baseline"
+            _PRO_VALIDATION_CACHE.update({
+                "report": report, "source": source, "mtime": fingerprint,
+                "checked_at": time.time(),
+            })
+
+        acceptance = assess_model_acceptance(
+            report, model_version=PRODUCTION_MODEL_VERSION,
+            prediction_logic_version=FOOTBALL_PREDICTION_LOGIC_VERSION, now=now)
         model = report.get("model_metrics") or {}
         market = report.get("market_baseline_metrics") or {}
         strategy = report.get("strategy") or {}
         checks = {
-            "model_beats_market": (
-                float(model.get("logloss", 99)) < float(market.get("logloss", 99))
-            ),
+            "model_beats_market": float(model.get("logloss", 99)) < float(market.get("logloss", 99)),
             "positive_roi": float(strategy.get("roi", 0) or 0) > 0,
             "positive_clv": float(strategy.get("mean_clv", 0) or 0) > 0,
             "enough_samples": int(report.get("out_of_sample_n", 0) or 0) >= 1000,
             "enough_strategy_bets": int(strategy.get("bets", 0) or 0) >= 100,
+            "current_release_validated": acceptance["prediction_ready"] and source != "bundled_audited_baseline",
         }
         value = {
             "available": True,
             "out_of_sample_n": report.get("out_of_sample_n", 0),
-            "model": model,
-            "market": market,
-            "strategy": strategy,
+            "model": model, "market": market, "strategy": strategy,
             "checks": checks,
+            "prediction_ready": checks["current_release_validated"],
             "production_ready": all(checks.values()),
-            "generated_at": generated_at,
+            "acceptance": acceptance,
+            "audit": report.get("audit") or {},
+            "generated_at": report.get("generated_at"),
+            "data_cutoff_at": report.get("data_cutoff_at"),
+            "validated_model_version": report.get("model_version"),
+            "current_model_version": PRODUCTION_MODEL_VERSION,
+            "current_prediction_logic_version": FOOTBALL_PREDICTION_LOGIC_VERSION,
             "source": source,
-            "baseline_version": BASELINE_VERSION,
+            "baseline_version": BASELINE_VERSION if source == "bundled_audited_baseline" else report.get("baseline_version"),
         }
-        _PRO_VALIDATION_CACHE.update({
-            "mtime": mtime, "value": value, "checked_at": time.time(),
-        })
+        _PRO_VALIDATION_CACHE["value"] = value
         return dict(value)
     except Exception as exc:
-        return {"available": False, "production_ready": False, "reason": "internal_error",
-                "error_type": type(exc).__name__}
-
+        return {"available": False, "prediction_ready": False, "production_ready": False,
+                "reason": "internal_error", "error_type": type(exc).__name__}
 
 
 

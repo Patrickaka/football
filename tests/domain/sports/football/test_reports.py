@@ -342,16 +342,13 @@ class LiveContext(unittest.TestCase):
             context.assess_live_context(ctx, NOW, True)['quality_score'],
             context.assess_live_context(ctx, NOW, False)['quality_score'])
 
-    def test_an_empty_context_still_allows_official_betting(self):
-        """**没有任何情报也放行**：`quality_score` 0.6、`official_bet_allowed` True。
-
-        三项检查全是 `missing`、`freshness` 是 `unknown`，闸门却不拦。
-        行为照搬未改，记在这里是因为它不符合直觉。
-        """
+    def test_an_empty_context_blocks_official_betting(self):
+        """Missing live evidence cannot satisfy the professional source audit."""
         verdict = context.assess_live_context({}, NOW)
         self.assertEqual(verdict['quality_score'], 0.6)
-        self.assertTrue(verdict['official_bet_allowed'])
-        self.assertEqual(verdict['blockers'], [])
+        self.assertFalse(verdict['official_bet_allowed'])
+        self.assertIn('injuries_missing_or_unverified', verdict['blockers'])
+        self.assertIn('confirmed_lineup_missing', verdict['blockers'])
         self.assertEqual(verdict['checks']['lineup'], 'missing')
 
     def test_timestamps_parse_in_both_iso_forms(self):

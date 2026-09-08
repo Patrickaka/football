@@ -397,6 +397,8 @@ def football_diagnostics_payload(params):
         return {
             'result': {
                 'available_samples': rolling.get('available_samples', 0),
+                'error': rolling.get('error'),
+                'sample_quality': rolling.get('sample_quality', {}),
                 'latest_window': rolling.get('latest_window'),
                 'windows': compact_windows,
                 'diagnostic_suggestions': rolling.get('diagnostic_suggestions', {}),
@@ -449,22 +451,9 @@ def football_review_payload(params):
 def football_professional_status_payload():
     """严格样本外验证、投注门控和磁盘健康的轻量状态接口。"""
     try:
-        from src.football.professional_baseline import (
-            BASELINE_GENERATED_AT,
-            BASELINE_VERSION,
-            bundled_professional_baseline,
-        )
-        report_path = _jobs_mod.REPORTS_DIR / 'professional_football_backtest.json'
-        validation = bundled_professional_baseline()
-        generated_at = BASELINE_GENERATED_AT
-        validation_source = 'bundled_audited_baseline'
-        if report_path.exists():
-            with report_path.open(encoding='utf-8') as handle:
-                validation = json.load(handle)
-            generated_at = datetime.fromtimestamp(
-                report_path.stat().st_mtime
-            ).isoformat(timespec='seconds')
-            validation_source = 'runtime_report'
+        from src.football.bayes_report import load_professional_validation_summary
+        validation = load_professional_validation_summary(
+            report_path=_jobs_mod.REPORTS_DIR / 'professional_football_backtest.json')
 
         from src.common.maintenance import disk_status
         from src.football.professional_readiness import build_system_gap_assessment
@@ -474,35 +463,35 @@ def football_professional_status_payload():
         monitoring = build_professional_monitoring(
             get_prediction_export().get('records') or []
         )
-        model = validation.get('model_metrics') or {}
-        market = validation.get('market_baseline_metrics') or {}
+        model = validation.get('model') or {}
+        market = validation.get('market') or {}
         strategy = validation.get('strategy') or {}
+        source_checks = validation.get('checks') or {}
         checks = {
-            'model_beats_market_logloss': (
-                bool(model) and bool(market)
-                and float(model.get('logloss', 99)) < float(market.get('logloss', 99))
-            ),
-            'positive_oos_roi': float(strategy.get('roi', 0) or 0) > 0,
-            'positive_clv': float(strategy.get('mean_clv', 0) or 0) > 0,
-            'enough_oos_samples': int(validation.get('out_of_sample_n', 0) or 0) >= 1000,
+            'model_beats_market_logloss': source_checks.get('model_beats_market', False),
+            'positive_oos_roi': source_checks.get('positive_roi', False),
+            'positive_clv': source_checks.get('positive_clv', False),
+            'enough_oos_samples': source_checks.get('enough_samples', False),
+            'enough_strategy_bets': source_checks.get('enough_strategy_bets', False),
+            'current_release_validated': source_checks.get('current_release_validated', False),
             'disk_healthy': not disk['under_pressure'],
         }
-        production_ready = all((
-            checks['model_beats_market_logloss'],
-            checks['positive_oos_roi'],
-            checks['positive_clv'],
-            checks['enough_oos_samples'],
-        ))
+        production_ready = validation.get('production_ready') is True
         return {
             'result': {
                 'schema_version': 'football-professional-status-v1',
-                'baseline_version': BASELINE_VERSION,
-                'generated_at': generated_at,
-                'validation_source': validation_source,
-                'validation_available': bool(validation),
+                'baseline_version': validation.get('baseline_version'),
+                'generated_at': validation.get('generated_at'),
+                'validation_source': validation.get('source'),
+                'validation_available': validation.get('available', False),
+                'prediction_ready': validation.get('prediction_ready', False),
+                'acceptance': validation.get('acceptance') or {},
+                'current_model_version': validation.get('current_model_version'),
+                'validated_model_version': validation.get('validated_model_version'),
+                'data_cutoff_at': validation.get('data_cutoff_at'),
                 'production_ready': production_ready,
                 'official_betting_allowed': production_ready,
-                'status_label': '生产验证通过' if production_ready else '研究模式：暂未跑赢市场',
+                'status_label': '生产验证通过' if production_ready else '研究模式：当前版本尚未通过验收',
                 'checks': checks,
                 'model_metrics': model,
                 'market_metrics': market,
@@ -510,7 +499,7 @@ def football_professional_status_payload():
                 'out_of_sample_n': validation.get('out_of_sample_n', 0),
                 'audit': validation.get('audit') or {},
                 'disk': disk,
-                'professional_assessment': build_system_gap_assessment(validation),
+                'professional_assessment': build_system_gap_assessment({**validation, 'model_metrics': model, 'market_baseline_metrics': market}),
                 'monitoring': monitoring,
             }
         }
@@ -760,7 +749,7 @@ def predictions_export_payload():
             diagnostics = {}
         return {
             'result': {
-                'schema_version': 'football-prediction-export-v1',
+                'schema_version': full_export.get('schema_version', 'football-prediction-export-v3'),
                 'exported_at': datetime.now().isoformat(),
                 'record_count': len(records),
                 'settled_count': sum(

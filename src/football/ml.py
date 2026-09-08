@@ -170,7 +170,8 @@ def get_goal_count_distribution(prob_matrix: np.ndarray) -> List[Dict]:
 
 
 
-def predict_goal_counts_from_candidates(candidates: List[Tuple], max_goals: int = 7, asian=None, total=None) -> Dict:
+def predict_goal_counts_from_candidates(candidates: List[Tuple], max_goals: int = 7, asian=None, total=None,
+                                       use_history: bool = True) -> Dict:
     """从候选比分列表计算进球数推荐"""
     if NUMPY_AVAILABLE:
         prob_matrix = np.zeros((max_goals + 1, max_goals + 1))
@@ -205,7 +206,7 @@ def predict_goal_counts_from_candidates(candidates: List[Tuple], max_goals: int 
     sample_warnings = []
     
     # ========== 新增：结合历史盘口数据调整进球数分布 ==========
-    if asian and total:
+    if use_history and asian and total:
         try:
             from .market_db import MarketScoreDB
             
