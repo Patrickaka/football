@@ -7,6 +7,7 @@ import time
 import hashlib
 import uuid
 import threading
+from copy import deepcopy
 from collections import defaultdict, Counter
 from typing import List, Dict, Optional, Tuple
 from itertools import combinations
@@ -989,19 +990,23 @@ class KL8Analyzer:
         self,
         play_type: str,
         excluded: List[int],
+        *,
+        strategy: Optional[Dict] = None,
     ) -> Tuple[Dict, List[Tuple[int, float]]]:
         """计算一轮单式结果，但不落盘。
 
         选6单式和选5复式7码必须共用这一次排名与选池。把纯计算与
         `recalculate_play_excluding` 的记录落盘分开，可避免为了派生7码
         而额外写入一条选6记录。
+        离线回测可显式传入策略，避免读取或修改线上启用配置。
         """
         try:
             pick_n = int(play_type.split('_')[1])
         except (ValueError, IndexError):
             return {'error': f'无效玩法: {play_type}'}, []
 
-        strategy = _strategies_mod.resolve_play_strategy(play_type)
+        if strategy is None:
+            strategy = _strategies_mod.resolve_play_strategy(play_type)
         if strategy is None:
             return {'error': '当前玩法没有可用策略'}, []
 
@@ -1582,6 +1587,10 @@ class KL8Analyzer:
                 'is_validated': strategy['is_validated'],
             }
 
+            for key in ('exclusion_selection_mode', 'first_exclusion_strategy'):
+                if key in strategy:
+                    resolved_strategies[s_key][key] = deepcopy(strategy[key])
+
             # v9.1: 按策略独立生成候选池
             # 选5/6的遗漏特征可能把上期号码全部压到Top20之外。内部保留完整排名，
             # 让后续重号下限约束始终有候选可用；对外候选池仍只展示Top20。
@@ -1695,7 +1704,7 @@ class KL8Analyzer:
                     select6_candidates,
                     excluded_numbers=first_round_numbers,
                 )
-                linked_strategy = dict(resolved_strategies.get('select_6', {}))
+                linked_strategy = deepcopy(resolved_strategies.get('select_6', {}))
                 linked_strategy['ranking_source'] = 'select_6'
                 linked_strategy['linked_play_type'] = 'select_6'
                 resolved_strategies[fushi_key] = linked_strategy
@@ -1805,6 +1814,10 @@ class KL8Analyzer:
                 'prediction_mode': strategy['prediction_mode'],
                 'is_validated': strategy['is_validated'],
             }
+
+            for key in ('exclusion_selection_mode', 'first_exclusion_strategy'):
+                if key in strategy:
+                    resolved_strategies[fushi_key][key] = deepcopy(strategy[key])
 
             fu_pool_result = self.build_pool_by_strategy(strategy, pool_size=max(20, pool_size))
             fu_candidates = fu_pool_result.get('candidates', [])[:20]

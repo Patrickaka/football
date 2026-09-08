@@ -3,13 +3,44 @@ from unittest.mock import patch
 
 from scripts.backtest.backtest_kl8_early_rounds import (
     live_groups, objective, summarize, run_slice, slate, first_round_slate,
-    round_non_regression,
+    round_non_regression, promotion_checks, simplified_first_round_slate,
 )
 from src.kl8 import KL8Analyzer
 from src.kl8.strategies import resolve_exclusion_strategy
 
 
 class EarlyRoundAuditTests(unittest.TestCase):
+    def test_joint_objective_cannot_promote_a_losing_play(self):
+        baseline = [{'select_6': [1, 3, 3], 'fu_shi_7': [2, 4, 4]}] * 100
+        candidate = [{'select_6': [1, 5, 5], 'fu_shi_7': [2, 3, 3]}] * 100
+        self.assertGreater(objective(candidate[0]), objective(baseline[0]))
+        checks = promotion_checks('candidate', candidate, baseline, {'ci_95': [0.4, 0.6]})
+        self.assertTrue(checks['primary_mean_non_regression'])
+        self.assertFalse(checks['promotion_supported'])
+
+    def test_gain_in_first_round_cannot_pay_for_second_round_loss(self):
+        baseline = [{'select_6': [1, 3, 4], 'fu_shi_7': [2, 3, 4]}] * 100
+        candidate = [{'select_6': [1, 5, 3], 'fu_shi_7': [2, 5, 3]}] * 100
+        checks = promotion_checks('candidate', candidate, baseline, {'ci_95': [0.4, 0.6]})
+        self.assertTrue(checks['first_round_non_regression'])
+        self.assertFalse(checks['second_round_non_regression'])
+        self.assertFalse(checks['promotion_supported'])
+        improving = [{'select_6': [1, 5, 4], 'fu_shi_7': [2, 5, 4]}] * 100
+        self.assertTrue(promotion_checks('candidate', improving, baseline,
+                                        {'ci_95': [0.4, 0.6]})['promotion_supported'])
+
+    def test_simplified_candidates_are_opt_in_and_freeze_primary_configuration(self):
+        candidates = simplified_first_round_slate()
+        baseline = candidates['current']
+        self.assertEqual(len(candidates), 3)
+        for name, candidate in candidates.items():
+            if name == 'current':
+                continue
+            self.assertEqual({k: v for k, v in candidate.items() if k != 'first_exclusion_strategy'},
+                             baseline)
+            self.assertFalse(candidate['is_validated'])
+        self.assertNotIn('first_exclusion_strategy', slate()['current'])
+
     def test_promotion_guard_does_not_hide_compound_regression(self):
         baseline = [{'select_6': [1, 4, 4], 'fu_shi_7': [2, 4, 4]}]
         candidate = [{'select_6': [1, 5, 5], 'fu_shi_7': [2, 3, 3]}]

@@ -30,7 +30,7 @@ from .stats import (
     _parse_play_pick_n, _play_lift, _practical_validation_score, _prize_tier_thresholds, benjamini_hochberg_fdr, hypergeom_expected, hypergeom_p_ge, hypergeom_pmf,
 )
 from .candidates import (
-    _adaptive_repeat_cap, _select_final_candidate_pool,
+    _adaptive_repeat_cap, _enforce_minimum_repeats, _select_final_candidate_pool,
 )
 from .records import (
     load_prize_table,
@@ -38,6 +38,43 @@ from .records import (
 from .analyzer import (
     KL8Analyzer, _fushi7_from_select6, get_kl8_analyzer,
 )
+
+
+def _predict_select6_primary(analyzer: KL8Analyzer, strategy: Dict) -> Tuple[List[int], List[Tuple[int, float]]]:
+    """Use the live select-6 ranking and repeat limits without saving a prediction."""
+    ranking = analyzer.build_pool_by_strategy(strategy, pool_size=80).get('candidates', [])[:80]
+    adaptive_cap = _adaptive_repeat_cap(analyzer.history_data, 6)
+    repeat_cap = strategy.get(
+        'final_max_last_numbers',
+        min(strategy.get('pool_max_last_numbers') or adaptive_cap, adaptive_cap),
+    )
+    last_numbers = analyzer.statistics.get('last_numbers', set())
+    selected, _ = _select_final_candidate_pool(
+        ranking[:20], 6, last_numbers,
+        max_last_numbers=repeat_cap,
+        selection_mode=strategy.get('final_selection_mode', 'balanced'),
+    )
+    minimum_repeats = strategy.get('final_min_last_numbers')
+    if minimum_repeats is not None and minimum_repeats > 0:
+        selected = _enforce_minimum_repeats(selected, ranking, last_numbers, minimum_repeats)
+    return sorted(number for number, _ in selected), ranking
+
+
+def _predict_fushi7_from_select6(
+    analyzer: KL8Analyzer,
+    strategy: Dict,
+    primary: List[int],
+    ranking: List[Tuple[int, float]],
+) -> List[int]:
+    """Reserve the live first exclusion round before adding the seventh number."""
+    reserved = []
+    if len(primary) == 6:
+        first_round, _ = analyzer._calculate_select_recalculation(
+            'select_6', primary, strategy=strategy,
+        )
+        reserved = first_round.get('numbers') or []
+    numbers, _ = _fushi7_from_select6(primary, ranking, excluded_numbers=reserved)
+    return numbers
 
 
 class KL8RollingBacktest:
@@ -131,7 +168,7 @@ class KL8RollingBacktest:
 
         v6关键改动:
         - 使用multi_model_voting()而非get_ensemble_ranking()
-        - top20从投票结果截取，后续选3/5/7从同一份top20截取
+        - 选6沿用线上完整排名，复式7码补位预留选6第1轮；其余玩法沿用Top20
         - model_weights真正参与（bayesian/markov权重生效）
         """
         history = self.analyzer.history_data
@@ -146,6 +183,20 @@ class KL8RollingBacktest:
 
         # 使用指定窗口大小（如果不指定，用全部可用历史）
         effective_window = window_size or KL8_DEFAULT_HISTORY
+        voting_options = {
+            'feature_weights': feature_weights,
+            'model_weights': model_weights,
+            'repeat_direction': repeat_direction,
+            'repeat_avoid_score': repeat_avoid_score,
+            'repeat_non_avoid_score': repeat_non_avoid_score,
+            'repeat_follow_score': repeat_follow_score,
+            'repeat_non_follow_score': repeat_non_follow_score,
+            'pool_diversify': pool_diversify,
+            'pool_max_last_numbers': pool_max_last_numbers,
+            'frequency_mode': frequency_mode,
+            'final_selection_mode': final_selection_mode,
+        }
+        strategy = {**voting_options, 'window_size': effective_window}
 
         all_hits = defaultdict(list)
         all_fushi_pool_hits = defaultdict(list)
@@ -174,17 +225,7 @@ class KL8RollingBacktest:
             vote = temp_analyzer.multi_model_voting(
                 pick_n=20,
                 top_n=20,
-                feature_weights=feature_weights,
-                model_weights=model_weights,
-                repeat_direction=repeat_direction,
-                repeat_avoid_score=repeat_avoid_score,
-                repeat_non_avoid_score=repeat_non_avoid_score,
-                repeat_follow_score=repeat_follow_score,
-                repeat_non_follow_score=repeat_non_follow_score,
-                pool_diversify=pool_diversify,
-                pool_max_last_numbers=pool_max_last_numbers,
-                frequency_mode=frequency_mode,
-                final_selection_mode=final_selection_mode,
+                **voting_options,
             )
 
             # 无信号时，该期命中数记录为0
@@ -196,13 +237,17 @@ class KL8RollingBacktest:
                     all_fushi_combo_hits_detail[fushi_key].append([])
                 continue
 
-            # v6: 从投票结果截取top20（与线上逻辑一致）
+            # 其余玩法沿用原候选池；选6与其派生复式使用线上完整排名。
             candidate_items = vote.get('candidates', [])
-            top20 = [num for num, _ in candidate_items]
+            select6_numbers, select6_ranking = _predict_select6_primary(temp_analyzer, strategy)
 
             # 后续各选型都从同一份候选池取号，但按各自选型控制上期重号比例
             selected_numbers_by_pick = {}
             for select_type in SELECT_TYPES:
+                if select_type == 6:
+                    selected_numbers_by_pick[select_type] = select6_numbers
+                    all_hits[select_type].append(len(set(select6_numbers) & actual_numbers))
+                    continue
                 adaptive_cap = _adaptive_repeat_cap(temp_analyzer.history_data, select_type)
                 final_repeat_cap = min(
                     pool_max_last_numbers if pool_max_last_numbers is not None else adaptive_cap,
@@ -226,12 +271,11 @@ class KL8RollingBacktest:
                 pool_size = fushi_cfg['pool_size']
                 base_pick = fushi_cfg['base_pick']
                 if fushi_key == 'fu_shi_7':
-                    # 与线上预测保持同一不变量：完整保留选6，再从同一排名补1码。
-                    # 不能重新以 target_size=7 选池，否则未来切换非 concentrated
-                    # 模式时，回测结果会与实际出号逻辑悄悄分叉。
-                    core_numbers, _ = _fushi7_from_select6(
+                    core_numbers = _predict_fushi7_from_select6(
+                        temp_analyzer,
+                        strategy,
                         selected_numbers_by_pick.get(6, []),
-                        candidate_items,
+                        select6_ranking,
                     )
                 else:
                     adaptive_cap = _adaptive_repeat_cap(temp_analyzer.history_data, pool_size)
@@ -451,6 +495,20 @@ class KL8RollingBacktest:
         actual_draws = []  # 每期实际开奖号码
 
         effective_window = window_size or KL8_DEFAULT_HISTORY
+        voting_options = {
+            'feature_weights': feature_weights,
+            'model_weights': model_weights,
+            'repeat_direction': repeat_direction,
+            'repeat_avoid_score': repeat_avoid_score,
+            'repeat_non_avoid_score': repeat_non_avoid_score,
+            'repeat_follow_score': repeat_follow_score,
+            'repeat_non_follow_score': repeat_non_follow_score,
+            'pool_diversify': pool_diversify,
+            'pool_max_last_numbers': pool_max_last_numbers,
+            'frequency_mode': frequency_mode,
+            'final_selection_mode': final_selection_mode,
+        }
+        strategy = {**voting_options, 'window_size': effective_window}
 
         for t in range(actual_start, actual_end):
             train_data = history_asc[max(0, t - effective_window):t]
@@ -465,19 +523,15 @@ class KL8RollingBacktest:
             temp_analyzer._data_mtime = 0
             temp_analyzer.update_statistics()
 
+            if pick_n == 6:
+                pred_nums, _ = _predict_select6_primary(temp_analyzer, strategy)
+                predictions.append(set(pred_nums))
+                actual_draws.append(set(history_asc[t]['numbers']))
+                continue
+
             vote = temp_analyzer.multi_model_voting(
                 pick_n=20, top_n=20,
-                feature_weights=feature_weights,
-                model_weights=model_weights,
-                repeat_direction=repeat_direction,
-                repeat_avoid_score=repeat_avoid_score,
-                repeat_non_avoid_score=repeat_non_avoid_score,
-                repeat_follow_score=repeat_follow_score,
-                repeat_non_follow_score=repeat_non_follow_score,
-                pool_diversify=pool_diversify,
-                pool_max_last_numbers=pool_max_last_numbers,
-                frequency_mode=frequency_mode,
-                final_selection_mode=final_selection_mode,
+                **voting_options,
             )
 
             if vote.get('status') == 'no_validated_signal':
@@ -982,7 +1036,7 @@ class KL8RollingBacktest:
                     continue
                 final_metrics = final_result.get(play_type, {})
                 final_lift = _play_lift(final_result, play_type)
-                final_score, final_practical_detail = _practical_validation_score(final_metrics, play_type, final_lift)
+                _, final_practical_detail = _practical_validation_score(final_metrics, play_type, final_lift)
                 final_hit_rate_score = final_practical_detail['hit_rate_score']
                 final_hit_rate_detail = final_practical_detail['hit_rate_lifts']
                 item['final_test_lift'] = round(final_lift, 6)
@@ -990,25 +1044,13 @@ class KL8RollingBacktest:
                 item['final_test_hit_rate_lifts'] = final_hit_rate_detail
                 item['final_test_practical_score_detail'] = final_practical_detail
                 item['final_test_mean_hits'] = final_metrics.get('mean_hits', final_metrics.get('pool_mean_hits'))
-                item['score'] = round(
-                    item.get('score', 0)
-                    + max(final_score, 0) * 0.25,
-                    6,
-                )
 
         best_by_play = {}
         any_significant = False
         for play_type, items in rankings.items():
-            items.sort(
-                key=lambda item: (
-                    item.get('score') or 0,
-                    item.get('validation_hit_rate_score') or 0,
-                    item.get('final_test_hit_rate_score') or 0,
-                    item.get('validation_lift') or 0,
-                    item.get('final_test_lift') or 0,
-                ),
-                reverse=True,
-            )
+            # Keep the validation ordering frozen before opening the final set.
+            # Final metrics describe that choice; they cannot select a new winner
+            # or break a validation tie, even when the final result looks better.
             best = items[0] if items else None
             if best is not None:
                 # 排名第一只是候选排序，不等于有 edge：未通过显著性即视为噪声。

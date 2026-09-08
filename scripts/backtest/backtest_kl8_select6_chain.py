@@ -22,11 +22,11 @@ logging.disable(logging.CRITICAL)
 
 from src.kl8 import (  # noqa: E402
     KL8Analyzer,
+    KL8_NUM_RANGE,
     VALIDATION_CANDIDATES,
-    _adaptive_repeat_cap,
-    _select_final_candidate_pool,
     resolve_play_strategy,
 )
+from src.kl8.backtest import _predict_select6_primary  # noqa: E402
 
 
 SELECT_SIZE = 6
@@ -124,42 +124,32 @@ def _strategy_slate():
 
 
 def _one_chain(analyzer, strategy, rounds):
-    pool = analyzer.build_pool_by_strategy(strategy, pool_size=80)
-    candidates = pool.get('candidates', [])
-    if len(candidates) < SELECT_SIZE:
+    """Reproduce the live primary and pure cumulative-exclusion calculation."""
+    if rounds <= 0:
+        return []
+    primary, _ = _predict_select6_primary(analyzer, strategy)
+    if not primary:
         return []
 
-    cap = strategy.get('pool_max_last_numbers')
-    if cap is None:
-        cap = _adaptive_repeat_cap(analyzer.history_data, SELECT_SIZE)
-    cap = max(0, min(SELECT_SIZE, int(cap)))
-    selection_mode = strategy.get('final_selection_mode', 'concentrated')
-    last_numbers = analyzer.statistics.get('last_numbers', set())
+    groups, excluded = [], set()
 
-    selected, _ = _select_final_candidate_pool(
-        candidates[:20],
-        SELECT_SIZE,
-        last_numbers,
-        max_last_numbers=cap,
-        selection_mode=selection_mode,
-    )
-    groups = [[num for num, _ in selected]]
-    excluded = set(groups[0])
+    def append_group(numbers):
+        if (len(numbers) != SELECT_SIZE or len(set(numbers)) != SELECT_SIZE
+                or any(type(number) is not int or not 1 <= number <= KL8_NUM_RANGE
+                       for number in numbers)
+                or excluded.intersection(numbers)):
+            raise ValueError('select-6 chain must contain six distinct, previously unused numbers in 1..80')
+        groups.append(sorted(numbers))
+        excluded.update(numbers)
 
-    for _ in range(1, rounds):
-        remaining = [(num, score) for num, score in candidates if num not in excluded]
-        if len(remaining) < SELECT_SIZE:
-            break
-        selected, _ = _select_final_candidate_pool(
-            remaining,
-            SELECT_SIZE,
-            last_numbers,
-            max_last_numbers=cap,
-            selection_mode=selection_mode,
+    append_group(primary)
+    for _ in range(1, min(rounds, KL8_NUM_RANGE // SELECT_SIZE)):
+        result, _ = analyzer._calculate_select_recalculation(
+            'select_6', sorted(excluded), strategy=strategy,
         )
-        group = [num for num, _ in selected]
-        groups.append(group)
-        excluded.update(group)
+        if result.get('error'):
+            raise ValueError(f'select-6 round {len(groups)} recalculation failed: {result["error"]}')
+        append_group(result.get('numbers', []))
     return groups
 
 
@@ -298,6 +288,8 @@ def main():
     parser.add_argument('--strategies', default='', help='comma-separated strategy names')
     parser.add_argument('--output', default='reports/kl8_select6_chain_backtest.json')
     args = parser.parse_args()
+    if not 1 <= args.rounds <= KL8_NUM_RANGE // SELECT_SIZE:
+        parser.error('rounds must be 1..13, including primary round 0 (80-number space)')
 
     raw_doc = json.load(open(args.history, encoding='utf-8'))
     raw = raw_doc.get('results', raw_doc) if isinstance(raw_doc, dict) else raw_doc

@@ -197,6 +197,12 @@ def _strategy_fingerprint(strategy: Dict) -> str:
         'target_hits': strategy.get('target_hits'),
         'code_version': KL8_PREDICTOR_VERSION,
     }
+    # Exclusion rounds can use another selection mode or a nested first-round
+    # strategy while round 0 stays unchanged. Keep legacy hashes when neither
+    # option is configured, but include the complete override when present.
+    for key in ('exclusion_selection_mode', 'first_exclusion_strategy'):
+        if key in strategy:
+            fp_data[key] = strategy[key]
     return hashlib.sha256(
         json.dumps(fp_data, sort_keys=True, separators=(',', ':')).encode()
     ).hexdigest()[:12]

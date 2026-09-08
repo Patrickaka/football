@@ -1,5 +1,6 @@
 import unittest
 
+from src.kl8 import KL8Analyzer
 from scripts.backtest.backtest_kl8_select6_chain import (
     _one_chain,
     _paired_summary,
@@ -10,9 +11,10 @@ from scripts.backtest.backtest_kl8_select6_chain import (
 )
 
 
-class _FakeAnalyzer:
-    history_data = []
-    statistics = {'last_numbers': set()}
+class _FakeAnalyzer(KL8Analyzer):
+    def __init__(self):
+        self.history_data = []
+        self.statistics = {'last_numbers': set()}
 
     def build_pool_by_strategy(self, strategy, pool_size=80):
         return {

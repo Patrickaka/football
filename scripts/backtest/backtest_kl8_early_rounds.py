@@ -53,6 +53,34 @@ def first_round_slate():
     return result
 
 
+def simplified_first_round_slate():
+    """Two fixed ablations of the early ranking, not a weight search.
+
+    Keep primary select-6 unchanged. Test whether sparse conditional counts
+    hurt round 1, and compare a simple hot-frequency ranking as a control.
+    Both exclusion rounds and both plays still have to pass the holdout.
+    """
+    baseline = resolve_play_strategy('select_6', allow_reference=True)
+    result = {'current': baseline}
+    weights = deepcopy(baseline['feature_weights'])
+    weights.update(next_transition=0.0, pair_cooccurrence=0.0)
+    overrides = {
+        'first_without_sparse_pairs': {'feature_weights': weights},
+        'first_hot_frequency_100': {
+            'feature_weights': {'frequency': 1.0},
+            'frequency_mode': 'hot', 'window_size': 100,
+            'repeat_direction': 'neutral',
+        },
+    }
+    for name, override in overrides.items():
+        candidate = deepcopy(baseline)
+        candidate['first_exclusion_strategy'] = {
+            **override, 'strategy_id': f'candidate_{name}',
+        }
+        result[name] = candidate
+    return result
+
+
 def live_groups(analyzer, strategy):
     """Use production recalculation and linked fushi supplementation; no writes."""
     with patch('src.kl8.strategies.resolve_play_strategy', return_value=strategy), \
@@ -115,6 +143,23 @@ def round_non_regression(candidate, baseline, round_number):
     )
 
 
+def promotion_checks(winner, candidate, baseline, comparison):
+    """Never let an aggregate gain conceal a losing play or exclusion round."""
+    primary_guard = all(
+        sum(row[play][0] for row in candidate) >= sum(row[play][0] for row in baseline)
+        for play in ('select_6', 'fu_shi_7')
+    )
+    first_guard = round_non_regression(candidate, baseline, 1)
+    second_guard = round_non_regression(candidate, baseline, 2)
+    return {
+        'primary_mean_non_regression': primary_guard,
+        'first_round_non_regression': first_guard,
+        'second_round_non_regression': second_guard,
+        'promotion_supported': winner != 'current' and comparison['ci_95'][0] > 0
+                               and primary_guard and first_guard and second_guard,
+    }
+
+
 def run_slice(raw, indices, strategies):
     rows = {name: [] for name in strategies}
     for position, index in enumerate(indices, 1):
@@ -142,10 +187,12 @@ def main():
     parser.add_argument('--offset', type=int, default=0, help='skip newest draws to audit a separate historical interval')
     parser.add_argument('--expanded', action='store_true', help='also compare fixed alternative feature rankings')
     parser.add_argument('--first-round', action='store_true', help='freeze select-6 primary and optimize round 1 only')
+    parser.add_argument('--simplified-first-round', action='store_true',
+                        help='test two fixed simpler round-1 rankings; score both exclusion rounds')
     parser.add_argument('--output', default='reports/kl8_early_rounds_audit.json')
     args = parser.parse_args()
-    if args.first_round and args.expanded:
-        parser.error('--first-round and --expanded select different fixed slates')
+    if sum((args.first_round, args.expanded, args.simplified_first_round)) > 1:
+        parser.error('choose only one of --first-round, --expanded, --simplified-first-round')
     opener = gzip.open if args.history.endswith('.gz') else open
     with opener(args.history, 'rt', encoding='utf-8') as handle:
         doc = json.load(handle)
@@ -161,7 +208,8 @@ def main():
             type(n) is not int or not 1 <= n <= 80 for n in numbers
         ):
             parser.error(f'invalid draw: {row["issue"]}')
-    strategies = first_round_slate() if args.first_round else slate(expanded=args.expanded)
+    strategies = (simplified_first_round_slate() if args.simplified_first_round else
+                  first_round_slate() if args.first_round else slate(expanded=args.expanded))
     validation = run_slice(raw, range(args.offset + args.periods, args.offset + args.periods * 2), strategies)
     winner = max(strategies, key=lambda name: summarize(validation[name], args.first_round)['objective'])
     print(f'locked winner: {winner}', flush=True)
@@ -169,15 +217,6 @@ def main():
                       {n: strategies[n] for n in dict.fromkeys(['current', winner])})
     comparison = _paired_summary([objective(a, args.first_round) - objective(b, args.first_round)
                                   for a, b in zip(final[winner], final['current'])])
-    primary_guard = all(
-        sum(row[play][0] for row in final[winner]) >=
-        sum(row[play][0] for row in final['current'])
-        for play in ('select_6', 'fu_shi_7')
-    )
-    # Later exclusions depend on round 1 even when their ranking is unchanged.
-    # Do not trade away either play's round 2 to make round 1 look better.
-    first_guard = round_non_regression(final[winner], final['current'], 1)
-    second_guard = round_non_regression(final[winner], final['current'], 2)
     report = {
         'history_source': args.history,
         'history_sha256': hashlib.sha256(Path(args.history).read_bytes()).hexdigest(),
@@ -190,11 +229,7 @@ def main():
         'validation': {n: summarize(r, args.first_round) for n, r in validation.items()},
         'holdout': {n: summarize(r, args.first_round) for n, r in final.items()},
         'paired_objective_difference': comparison,
-        'primary_mean_non_regression': primary_guard,
-        'first_round_non_regression': first_guard,
-        'second_round_non_regression': second_guard,
-        'promotion_supported': winner != 'current' and comparison['ci_95'][0] > 0 and primary_guard
-                               and ((first_guard and second_guard) or not args.first_round),
+        **promotion_checks(winner, final[winner], final['current'], comparison),
         'note': 'Round 0 is primary; objective_rounds lists the separately scored exclusion rounds. '
                 'Fushi hits are 7-number pool hits (best 5-number ticket capped at 5). '
                 'No target or future draw enters training. No automatic promotion.',
