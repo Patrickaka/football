@@ -6499,6 +6499,30 @@ function renderResult(r) {
       html += `<div class="row"><span class="k">大/小方向</span><span class="v">≥3球 ${(overProb * 100).toFixed(1)}% / ≤2球 ${(underProb * 100).toFixed(1)}%</span></div>`;
       html += `</div>`;
     }
+
+    const highScoreAssessment = md && md.high_score_assessment;
+    const tailProbabilities = highScoreAssessment && highScoreAssessment.available === true
+      ? highScoreAssessment.tail_probabilities : null;
+    const highGoalParts = tailProbabilities && typeof tailProbabilities === 'object'
+      ? [4, 5, 6].flatMap(goals => {
+          const probability = tailProbabilities[`${goals}+`];
+          return typeof probability === 'number' && Number.isFinite(probability)
+            && probability >= 0 && probability <= 1
+            ? [`${goals}球及以上 ${(probability * 100).toFixed(1)}%`] : [];
+        }) : [];
+    if (highGoalParts.length) {
+      html += `<div class="row"><span class="k">大比分概率</span><span class="v">${highGoalParts.map(esc).join(' / ')}</span></div>`;
+      const movement = highScoreAssessment.market_movement;
+      const validMean = value => typeof value === 'number' && Number.isFinite(value) && value >= 0;
+      if (movement && movement.available === true
+          && validMean(movement.open_implied_total) && validMean(movement.implied_total)
+          && typeof movement.implied_change === 'number' && Number.isFinite(movement.implied_change)) {
+        html += `<div class="row"><span class="k">盘口折算总进球</span><span class="v">${esc(movement.open_implied_total.toFixed(2))} → ${esc(movement.implied_total.toFixed(2))}</span></div>`;
+      } else {
+        html += `<div style="font-size:12px;color:var(--muted)">暂无可比较的盘口变化</div>`;
+      }
+      html += `<div style="font-size:11px;color:var(--muted)">全场概率，区间重叠不可相加。</div>`;
+    }
     
     // 样本质量信息（保留历史盘口参考）
     if (goalCount && goalCount.sample_info) {

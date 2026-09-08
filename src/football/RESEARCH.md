@@ -1,11 +1,12 @@
 # 足球准确率改造：实现与运行说明
 
-更新日期：2026-09-08。生产版本 `football-v2026.09.08-score-learning-19`，预测逻辑版本 `2026-09-08-score-learning-v45`。
+更新日期：2026-09-08。生产版本 `football-v2026.09.08-total-movement-20`，预测逻辑版本 `2026-09-08-total-movement-v46`。
 
 本次在现有流程上增加可验证的训练、情报和评估闭环。没有改动主比赛卡片的三栏布局和整场胜平负百分比；深度报告的融合权重改为实际执行口径。以下功能已落地到本地代码，不能据此宣称未来比赛命中率已经提高。
 
 后续已补充缓存保留、重复事件去重和历史无损压缩，见 [存储维护说明](STORAGE.md)。
 比分历史学习与 Top3 修复的实现、回放结果及限制见 [比分学习说明](SCORE_LEARNING.md)。
+大小球变化的统一口径、赛前观测恢复及 4+/5+/6+ 概率见 [大比分识别说明](HIGH_TOTALS.md)。
 
 ## 已实现的四项改造
 
@@ -30,7 +31,7 @@
 ```powershell
 .venv/Scripts/python.exe scripts/tools/football_research.py status
 .venv/Scripts/python.exe scripts/tools/football_research.py evaluate --input reports/new-frozen-export.json --output reports/research-evaluation.json
-.venv/Scripts/python.exe scripts/tools/football_research.py train-intelligence --input reports/new-frozen-export.json --model-version football-v2026.09.08-score-learning-19 --output data/intelligence-candidate.json
+.venv/Scripts/python.exe scripts/tools/football_research.py train-intelligence --input reports/new-frozen-export.json --model-version football-v2026.09.08-total-movement-20 --output data/intelligence-candidate.json
 .venv/Scripts/python.exe scripts/tools/research_match_context.py --status
 ```
 

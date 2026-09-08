@@ -284,7 +284,7 @@ class PredictionPostprocessTests(unittest.TestCase):
         self.assertEqual(meta['direction'], 'under')
         self.assertLess(after, before)
 
-    def test_goal_distribution_total_movement_marks_conflict(self):
+    def test_goal_distribution_total_movement_compares_prices_on_their_own_lines(self):
         adjusted, meta = football._adjust_goal_dist_with_total_movement({2: 0.5, 3: 0.5}, {
             'open_line': 2.5,
             'close_line': 3.0,
@@ -292,7 +292,10 @@ class PredictionPostprocessTests(unittest.TestCase):
             'close_prob': {'over': 0.48, 'under': 0.52},
         })
 
-        self.assertTrue(meta['conflict'])
+        # Over 2.5 and over 3.0 are different events. These fair quotes imply
+        # 3.014 -> 3.089 goals, so the lower raw over price is not a conflict.
+        self.assertFalse(meta['conflict'])
+        self.assertGreater(meta['tempo']['implied_change'], 0)
         self.assertAlmostEqual(sum(adjusted.values()), 1.0)
 
     def test_score_total_line_factor_penalizes_low_score_on_high_line(self):

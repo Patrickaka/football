@@ -27,6 +27,7 @@ from . import fetching as _fetching_mod
 from ..domain.sports.football.analysis_result import build_analysis_result
 from ..domain.sports.football.market_anchoring import anchor_candidates_to_market
 from ..domain.sports.football.policy import select_top_score_candidates
+from ..domain.sports.football.score_tail import assess_score_tail
 from .config import (
     ACTIONABLE_1X2_MIN_MARGIN, ACTIONABLE_1X2_MIN_PROBABILITY, AVG_LEAGUE_GOAL, BAYESIAN_CALIBRATION_AVAILABLE, CACHE_AVAILABLE, DYNAMIC_ELO_AVAILABLE, DYNAMIC_WEIGHTS_AVAILABLE, FOOTBALL_PREDICTION_LOGIC_VERSION, LOTTERY_OFFICIAL_ODDS_WEIGHT, MAX_GOALS, SIMILAR_MARKET_AVAILABLE, STEAM_MOVE_AVAILABLE, calibrate_predictions, get_cache, get_calibrator, get_dynamic_weights, set_cache, similar_market_match, steam_move_detector,
 )
@@ -205,6 +206,9 @@ def _is_hkjc_cache_current(result: Dict, match: Dict) -> bool:
         return False
     if bool(cached_total.get('source_matched')) != bool(match.get('total_offer_matched')):
         return False
+    if (match.get('total_offer_matched')
+            and str(cached_total.get('source_event_id') or '') != str(match['hkjc_id'])):
+        return False
     expected_update = str(match.get('hkjc_updated_at') or '')
     cached_update = str(
         cached_asian.get('updated_at') or cached_total.get('updated_at') or ''
@@ -219,6 +223,19 @@ def _is_hkjc_cache_current(result: Dict, match: Dict) -> bool:
     if current_total and float(cached_total.get('close_line', 99)) != float(
             current_total.get('line', 98)):
         return False
+    # A same-line price move changes implied goals too. Some source refreshes
+    # retain the event timestamp, so timestamp/line checks alone miss it.
+    if current_total:
+        cached_water = cached_total.get('close_water') or {}
+        for side in ('over', 'under'):
+            try:
+                current_price = float(current_total[f'{side}_odds'])
+                cached_price = float(cached_water[side])
+            except (KeyError, TypeError, ValueError, OverflowError):
+                return False
+            if (not math.isfinite(current_price) or not math.isfinite(cached_price)
+                    or not math.isclose(current_price, cached_price, rel_tol=0, abs_tol=1e-9)):
+                return False
     return True
 
 
@@ -369,9 +386,10 @@ def build_match_analysis(result):
                     'probability': high_scenario['probability'],
                     'scenario_probability': high_scenario['tail_probability'],
                 })
-        goals_read['high_score_probability'] = (
-            high_scenario['tail_probability'] if high_scenario else 0.0
-        )
+        # Scenario selection has a display threshold; the underlying tail is
+        # still nonzero when that threshold is not met.
+        goals_read['high_score_probability'] = sum(
+            probability for goals, probability in goals_map.items() if goals >= 4)
 
         # ---- 4. 理由叙述（像分析师一样解释）----
         lam_home = model.get('lam_home')
@@ -646,6 +664,7 @@ def _analyze_match_impl(match, force_refresh=False):
         total.update({
             'source': 'hkjc' if match.get('total_offer_matched') else 'model_proxy',
             'source_matched': bool(match.get('total_offer_matched')),
+            'source_event_id': str(match.get('hkjc_id') or ''),
             'updated_at': match.get('hkjc_updated_at'),
             'history_available': False,
         })
@@ -726,6 +745,20 @@ def _analyze_match_impl(match, force_refresh=False):
     if not isinstance(raw_live_context, dict):
         raw_live_context = {}
     prediction_as_of = datetime.now(timezone.utc)
+    if total.get('source') == 'hkjc' and total.get('history_available') is False:
+        try:
+            from .research import kickoff_timestamp
+            from .result_sync import get_history
+            from .total_market_history import restore_total_market_history
+            total, history_trace = restore_total_market_history(
+                total, get_history().get_record(mid),
+                match={**match, 'kickoff': kickoff_timestamp(match, now=prediction_as_of)},
+                as_of=prediction_as_of,
+            )
+            total['history_reconstruction'] = history_trace
+        except Exception as exc:
+            # A missing history store must never prevent an ordinary analysis.
+            log.debug('local total history unavailable: %s', exc)
     from .research_runtime import completed_intelligence, team_strength_from_history
     intelligence_result = completed_intelligence(match, as_of=prediction_as_of)
     if team is None:
@@ -1136,6 +1169,9 @@ def _analyze_match_impl(match, force_refresh=False):
     candidates, ml_execution = ml_runtime_fusion(candidates, ml_response, as_of=prediction_as_of)
     ml_execution['feature_audit'] = ml_feature_audit
     meta['ml_fusion'] = ml_execution
+    # Tail events and exact scores share the final matrix. Do not move a lower
+    # probability high score into Top3 just to show a different total.
+    meta['high_score_assessment'] = assess_score_tail(candidates, total)
 
     try:
         from .ml import dixon_coles_score_matrix, dixon_coles_1x2_prob, get_dc_rho
@@ -1228,6 +1264,7 @@ def _analyze_match_impl(match, force_refresh=False):
         goal_count_result['over_under'] = _goal_over_under_from_line(
             goal_count_result['distribution_dict'], total)
         goal_count_result['distribution_source'] = 'final_score_matrix'
+        goal_count_result['high_score_assessment'] = meta['high_score_assessment']
         meta['goal_distribution_policy'] = 'single_final_score_matrix'
     except Exception as e:
         log.warning(f"进球数推荐失败: {e}")

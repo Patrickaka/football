@@ -201,7 +201,9 @@ def _append_market_timeline(
     if rows and rows[-1].get('signature') == signature:
         return rows, None
     snapshot = {
-        'captured_at': captured_at.isoformat(timespec='seconds'),
+        # Preserve the actual local UTC offset for future prematch observations;
+        # legacy naive timestamps cannot safely establish an as-of boundary.
+        'captured_at': captured_at.astimezone().isoformat(timespec='microseconds'),
         'layer': layer,
         'seconds_to_kickoff': seconds_to_kickoff,
         'is_prematch': is_prematch,

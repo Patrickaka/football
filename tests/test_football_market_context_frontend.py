@@ -390,7 +390,49 @@ for (tier of ['abstain', 'watch', 'selected']) {
     assert.ok(detail.includes('暂无通过筛选的推荐'));
     assert.ok(!detail.includes('胜平负 胜'));
   }
+  assert.ok(!detail.includes('大比分概率'), 'legacy responses have no invented tail assessment');
 }
+const assessment = {available:true,tail_probabilities:{'4+':.42,'5+':.21,'6+':.08},
+  market_movement:{available:true,open_implied_total:3.1,implied_total:3.4,implied_change:.3}};
+data.model.high_score_assessment = assessment;
+renderResult(data);
+let detail = app.innerHTML;
+const goalCard = detail.slice(detail.indexOf('进球数参考（非推荐）'));
+assert.ok(goalCard.includes('大比分概率'));
+for (const text of ['4球及以上 42.0%', '5球及以上 21.0%', '6球及以上 8.0%',
+  '盘口折算总进球', '3.10 → 3.40', '全场概率，区间重叠不可相加。']) {
+  assert.ok(goalCard.includes(text), `missing detail tail information: ${text}`);
+}
+assert.ok(detail.includes('比分概率 12.0%'), 'tail probabilities must not replace exact-score probabilities');
+assert.ok(!detail.includes('大比分推荐'));
+assert.ok(!detail.includes('class="star"'));
+for (const movement of [null, {available:false},
+  {available:true,open_implied_total:null,implied_total:3.4,implied_change:.3},
+  {available:true,open_implied_total:3.1,implied_total:Infinity,implied_change:.3},
+  {available:true,open_implied_total:-1,implied_total:3.4,implied_change:.3},
+  {available:true,open_implied_total:3.1,implied_total:3.4,implied_change:NaN}]) {
+  assessment.market_movement = movement;
+  renderResult(data);
+  assert.ok(app.innerHTML.includes('暂无可比较的盘口变化'));
+  assert.ok(!app.innerHTML.includes('盘口折算总进球'));
+  assert.ok(app.innerHTML.includes('4球及以上 42.0%'), 'missing movement must not hide valid full-match tails');
+}
+assessment.tail_probabilities = {'4+':0,'5+':null,'6+':'<img src=x onerror=alert(1)>'};
+renderResult(data);
+assert.ok(app.innerHTML.includes('4球及以上 0.0%'), 'zero is a valid probability');
+assert.ok(!app.innerHTML.includes('5球及以上'));
+assert.ok(!app.innerHTML.includes('6球及以上'));
+assert.ok(!app.innerHTML.includes('onerror=alert'));
+for (const probabilities of [null, {'4+':NaN,'5+':-0.1,'6+':1.1},
+  {'4+':Infinity,'5+':'0.2','6+':false}]) {
+  assessment.tail_probabilities = probabilities;
+  renderResult(data);
+  assert.ok(!app.innerHTML.includes('大比分概率'), 'invalid probabilities cannot create a tail row');
+}
+assessment.tail_probabilities = {'4+':.42,'5+':.21,'6+':.08};
+assessment.available = false;
+renderResult(data);
+assert.ok(!app.innerHTML.includes('大比分概率'), 'unavailable assessment cannot surface stale values');
 console.log('detail recommendation presentation cases passed');
 """
         result = subprocess.run([shutil.which("node"), "-"], input=script,

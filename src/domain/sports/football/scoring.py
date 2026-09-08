@@ -23,7 +23,7 @@ from .lambdas import (
     blend_lambdas_with_market, estimate_lambdas, market_implied_lambdas,
     team_poisson_lambdas, _fit_lambda_grid,
 )
-from .markets import implied_total_goals, remove_vig
+from .markets import fair_over_probability, implied_total_goals, remove_vig
 from .parsing import get_close_total_line
 from .parsing import blend_close_open as _blend_close_open  # noqa: E402
 from .scoring_model import (
@@ -567,50 +567,87 @@ def _has_observed_market(market) -> bool:
 
 
 def _total_market_tempo_signal(total: Dict) -> Dict:
-    """Return a conservative tempo signal from O/U line and water movement."""
-    total = total if _has_observed_market(total) else {}
-    try:
-        close_line = float(get_close_total_line(total, default=None))
-    except (TypeError, ValueError):
-        close_line = None
+    """Compare O/U quotes on one goal-mean scale, including push settlement.
 
-    try:
-        open_line = float(total.get('open_line'))
-    except (TypeError, ValueError):
-        open_line = close_line
+    Over 2.5 and over 3.5 are different events: subtracting their probabilities
+    can label a genuine rise in expected goals as conflicting water movement.
+    Infer each quote's mean independently instead.  The existing half-goal
+    signal scale and downstream tilt caps stay unchanged; this adds no second
+    lambda adjustment to the closing market target.
+    """
+    result = {
+        'signal': 0.0, 'line': None, 'line_delta': 0.0,
+        'over_delta': 0.0, 'over_delta_comparable': False,
+        'conflict': False, 'available': False,
+        'reason': 'missing_observed_total_market',
+        'open_implied_total': None, 'implied_total': None,
+        'implied_change': None,
+    }
+    if not _has_observed_market(total):
+        return result
 
+    def finite_number(value):
+        if isinstance(value, bool):
+            return None
+        try:
+            number = float(value)
+        except (TypeError, ValueError, OverflowError):
+            return None
+        return number if math.isfinite(number) else None
+
+    close_line = finite_number(get_close_total_line(total, default=None))
+    if close_line is not None and close_line > 0:
+        result['line'] = close_line
+    if total.get('history_available') is False:
+        result['reason'] = 'missing_total_history'
+        return result
+
+    open_line = finite_number(total.get('open_line'))
     open_prob = total.get('open_prob') or {}
     close_prob = total.get('close_prob') or {}
+    open_over = finite_number(open_prob.get('over')) if isinstance(open_prob, dict) else None
+    close_over = finite_number(close_prob.get('over')) if isinstance(close_prob, dict) else None
+    if (open_line is None or close_line is None or open_line <= 0 or close_line <= 0
+            or open_over is None or close_over is None
+            or not 0.0 < open_over < 1.0 or not 0.0 < close_over < 1.0):
+        result['reason'] = 'missing_or_invalid_total_quotes'
+        return result
+
+    result.update({
+        'line_delta': close_line - open_line,
+        'over_delta': close_over - open_over,
+        'over_delta_comparable': abs(close_line - open_line) < 1e-9,
+    })
     try:
-        over_delta = float(close_prob.get('over', 0.0)) - float(open_prob.get('over', 0.0))
-    except (TypeError, ValueError):
-        over_delta = 0.0
+        open_mean = implied_total_goals(open_line, open_over)
+        close_mean = implied_total_goals(close_line, close_over)
+        # The shared inverter deliberately bounds extreme prices and means.
+        # A clipped value cannot establish the direction of market movement.
+        supported = all(
+            math.isfinite(mean)
+            and abs(fair_over_probability(mean, line) - probability) <= 1e-6
+            for mean, line, probability in (
+                (open_mean, open_line, open_over),
+                (close_mean, close_line, close_over),
+            )
+        )
+    except (TypeError, ValueError, OverflowError, ZeroDivisionError):
+        supported = False
+    if not supported:
+        result['reason'] = 'outside_supported_total_range'
+        return result
 
-    line_delta = 0.0
-    if open_line is not None and close_line is not None:
-        line_delta = close_line - open_line
-
-    line_signal = max(-1.0, min(1.0, line_delta / 0.5))
-    water_signal = max(-1.0, min(1.0, over_delta / 0.08))
-    base_signal = (0.62 * line_signal) + (0.38 * water_signal)
-
-    if close_line is not None:
-        if close_line >= 3.0:
-            base_signal += 0.22
-        elif close_line <= 2.25:
-            base_signal -= 0.22
-
-    conflict = line_signal * water_signal < -0.15
-    if conflict:
-        base_signal *= 0.35
-
-    return {
-        'signal': max(-1.0, min(1.0, base_signal)),
-        'line': close_line,
-        'line_delta': line_delta,
-        'over_delta': over_delta,
-        'conflict': conflict,
-    }
+    mean_change = close_mean - open_mean
+    if abs(mean_change) < 1e-6:
+        mean_change = 0.0
+    result.update({
+        'available': True,
+        'reason': 'stable_total_market' if mean_change == 0 else 'comparable_total_movement',
+        'open_implied_total': open_mean, 'implied_total': close_mean,
+        'implied_change': mean_change,
+        'signal': max(-1.0, min(1.0, mean_change / 0.5)),
+    })
+    return result
 
 
 def _joint_market_state(asian: Dict, euro: Dict, total: Dict) -> Dict:
@@ -843,7 +880,11 @@ def _apply_joint_market_state(candidates, asian: Dict, euro: Dict, total: Dict):
 
 def _score_total_movement_factor(h: int, a: int, total: Dict) -> float:
     """Soft score-ranking factor from O/U movement so score picks follow goal picks."""
-    signal_info = _total_market_tempo_signal(total)
+    return _score_total_movement_factor_from_signal(h, a, _total_market_tempo_signal(total))
+
+
+def _score_total_movement_factor_from_signal(h: int, a: int, signal_info: Dict) -> float:
+    """Reuse the inferred means for every cell in a score distribution."""
     signal = signal_info.get('signal', 0.0)
     if abs(signal) < 0.12:
         return 1.0
@@ -898,7 +939,7 @@ def _adjust_score_probs_with_total_movement(score_probs: Dict[str, float], total
 
     expected_before = sum((h + a) * value for h, a, value in parsed.values()) / raw_total
     adjusted = {
-        score: value * _score_total_movement_factor(h, a, total)
+        score: value * _score_total_movement_factor_from_signal(h, a, signal_info)
         for score, (h, a, value) in parsed.items()
     }
 
@@ -1183,54 +1224,29 @@ def _goal_over_under_from_line(goal_dist: Dict[int, float], total: Dict) -> Dict
 
 
 def _adjust_goal_dist_with_total_movement(goal_dist: Dict[int, float], total: Dict) -> Tuple[Dict[int, float], Dict]:
-    """Softly tilt goal-count distribution with O/U line and water movement."""
+    """Use the same comparable O/U movement as the exact-score distribution."""
     normalized = _normalize_goal_dist(goal_dist)
     if not normalized:
         return goal_dist, {'applied': False, 'reason': 'empty_distribution'}
 
-    total = total or {}
-    try:
-        open_line = float(total.get('open_line'))
-        close_line = float(get_close_total_line(total))
-    except (TypeError, ValueError):
-        open_line = None
-        close_line = None
-
-    open_prob = total.get('open_prob') or {}
-    close_prob = total.get('close_prob') or {}
-    try:
-        over_delta = float(close_prob.get('over', 0.0)) - float(open_prob.get('over', 0.0))
-    except (TypeError, ValueError):
-        over_delta = 0.0
-
-    line_delta = 0.0
-    if open_line is not None and close_line is not None:
-        line_delta = close_line - open_line
-
-    if abs(line_delta) < 0.01 and abs(over_delta) < 0.015:
+    tempo = _total_market_tempo_signal(total)
+    movement_meta = {
+        'line_delta': round(tempo['line_delta'], 3),
+        'over_delta': round(tempo['over_delta'], 3),
+        'conflict': tempo['conflict'],
+        'tempo': tempo,
+    }
+    if not tempo['available'] or tempo['signal'] == 0:
         return normalized, {
-            'applied': False,
-            'reason': 'stable_total_market',
-            'line_delta': round(line_delta, 3),
-            'over_delta': round(over_delta, 3),
+            **movement_meta, 'applied': False, 'reason': tempo['reason'],
         }
 
-    line_signal = max(-1.0, min(1.0, line_delta / 0.5))
-    water_signal = max(-1.0, min(1.0, over_delta / 0.08))
-    conflict = line_signal * water_signal < -0.15
-
-    signal = (0.60 * line_signal) + (0.40 * water_signal)
-    if conflict:
-        signal *= 0.35
-
-    theta = max(-0.10, min(0.10, signal * 0.08))
+    theta = max(-0.10, min(0.10, tempo['signal'] * 0.08))
     if abs(theta) < 0.003:
         return normalized, {
+            **movement_meta,
             'applied': False,
             'reason': 'weak_or_conflicted_signal',
-            'line_delta': round(line_delta, 3),
-            'over_delta': round(over_delta, 3),
-            'conflict': conflict,
         }
 
     expected_before = sum(goals * prob for goals, prob in normalized.items())
@@ -1242,12 +1258,10 @@ def _adjust_goal_dist_with_total_movement(goal_dist: Dict[int, float], total: Di
     adjusted = {goals: prob / total_prob for goals, prob in tilted.items()}
     expected_after = sum(goals * prob for goals, prob in adjusted.items())
     return adjusted, {
+        **movement_meta,
         'applied': True,
         'theta': round(theta, 4),
-        'line_delta': round(line_delta, 3),
-        'over_delta': round(over_delta, 3),
         'direction': 'over' if theta > 0 else 'under',
-        'conflict': conflict,
         'expected_before': expected_before,
         'expected_after': expected_after,
     }

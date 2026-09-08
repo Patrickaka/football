@@ -152,15 +152,23 @@ class HomeMarketFreshness(unittest.TestCase):
         cached = {
             'model': {'prediction_logic_version': FOOTBALL_PREDICTION_LOGIC_VERSION},
             'asian': {'source_matched': True, 'updated_at': known['hkjc_updated_at'], 'handicap': -0.5},
-            'total': {'source_matched': True, 'updated_at': known['hkjc_updated_at'], 'close_line': 2.5},
+            'total': {'source_matched': True, 'updated_at': known['hkjc_updated_at'], 'close_line': 2.5,
+                      'source_event_id': known['hkjc_id'],
+                      'close_water': {'over': 1.95, 'under': 1.88}},
         }
-        for changed, expected_ready in ((False, 1), (True, 0)):
-            with self.subTest(changed=changed):
-                current = {**known, 'hkjc_updated_at': 'new-snapshot'} if changed else known
+        for change, expected_ready in (('same', 1), ('timestamp', 0), ('event', 0), ('missing_event', 0)):
+            with self.subTest(change=change):
+                current, previous = deepcopy(known), deepcopy(cached)
+                if change == 'timestamp':
+                    current['hkjc_updated_at'] = 'new-snapshot'
+                elif change == 'event':
+                    current['hkjc_id'] = 'another-event'
+                elif change == 'missing_event':
+                    previous['total'].pop('source_event_id')
                 with mock.patch.object(service, 'matches_payload', return_value={'matches': [current]}), \
                      mock.patch.object(bff, '_professional_status', return_value={}), \
                      mock.patch('src.football.config.CACHE_AVAILABLE', True), \
-                     mock.patch('src.football.config.get_cache', return_value=cached), \
+                     mock.patch('src.football.config.get_cache', return_value=previous), \
                      mock.patch('src.football.pipeline.analyze_match') as analyze:
                     payload = bff.football_home_payload()
                 self.assertEqual(payload['coverage']['ready'], expected_ready)

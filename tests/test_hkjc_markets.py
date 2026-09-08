@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import unittest
+from copy import deepcopy
 
 from src.football.hkjc_markets import (
     enrich_with_hkjc_markets,
@@ -94,9 +95,69 @@ class HkjcMarketTests(unittest.TestCase):
             'asian': {'source_matched': True, 'handicap': 0.25,
                       'updated_at': '2026-09-01T10:00:00+08:00'},
             'total': {'source_matched': True, 'close_line': 2.5,
+                      'source_event_id': '5001',
                       'updated_at': '2026-09-01T10:00:00+08:00'},
         }
         self.assertFalse(_is_hkjc_cache_current(cached, match))
+
+    def test_same_timestamp_and_line_still_compare_both_current_prices(self):
+        match = {
+            'hkjc_id': '5001', 'hkjc_updated_at': '2026-09-01T11:00:00+08:00',
+            'total_offer_matched': True,
+            'total_current': {'line': 2.75, 'over_odds': 1.95, 'under_odds': 1.75},
+        }
+        cached = {'total': {
+            'source_matched': True, 'close_line': 2.75, 'source_event_id': '5001',
+            'updated_at': match['hkjc_updated_at'],
+            'close_water': {'over': 1.95, 'under': 1.75},
+        }}
+        self.assertTrue(_is_hkjc_cache_current(cached, match))
+        for change in ({'over_odds': 1.85}, {'under_odds': 1.85},
+                       {'over_odds': 1.85, 'under_odds': 1.85}):
+            with self.subTest(change=change):
+                current = deepcopy(match)
+                current['total_current'].update(change)
+                self.assertFalse(_is_hkjc_cache_current(cached, current))
+        # Sources may encode an identical decimal price as text.
+        current = deepcopy(match)
+        current['total_current'].update(over_odds='1.950', under_odds='1.75')
+        self.assertTrue(_is_hkjc_cache_current(cached, current))
+
+    def test_missing_or_invalid_cached_price_cannot_claim_a_current_snapshot(self):
+        match = {
+            'hkjc_id': '5001', 'total_offer_matched': True,
+            'total_current': {'line': 2.75, 'over_odds': 1.95, 'under_odds': 1.75},
+        }
+        for water in (None, {}, {'over': 1.95}, {'under': 1.75},
+                      {'over': float('nan'), 'under': 1.75},
+                      {'over': 1.95, 'under': float('inf')}):
+            with self.subTest(water=water):
+                cached = {'total': {'source_matched': True, 'close_line': 2.75,
+                                    'source_event_id': '5001',
+                                    'close_water': water}}
+                self.assertFalse(_is_hkjc_cache_current(cached, match))
+
+    def test_same_market_values_do_not_reuse_another_or_unidentified_hkjc_event(self):
+        match = {
+            'hkjc_id': '5001', 'hkjc_updated_at': '2026-09-01T11:00:00+08:00',
+            'total_offer_matched': True,
+            'total_current': {'line': 2.75, 'over_odds': 1.95, 'under_odds': 1.75},
+        }
+        cached = {'total': {
+            'source_matched': True, 'source_event_id': '5001', 'close_line': 2.75,
+            'updated_at': match['hkjc_updated_at'],
+            'close_water': {'over': 1.95, 'under': 1.75},
+        }}
+        self.assertTrue(_is_hkjc_cache_current(cached, match))
+        self.assertFalse(_is_hkjc_cache_current(cached, {**match, 'hkjc_id': '5002'}))
+        for event_id in (None, '', '5002'):
+            with self.subTest(event_id=event_id):
+                previous = deepcopy(cached)
+                previous['total']['source_event_id'] = event_id
+                self.assertFalse(_is_hkjc_cache_current(previous, match))
+        previous = deepcopy(cached)
+        previous['total'].pop('source_event_id')
+        self.assertFalse(_is_hkjc_cache_current(previous, match))
 
 
 if __name__ == '__main__':
