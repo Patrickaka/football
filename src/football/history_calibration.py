@@ -48,20 +48,27 @@ def _load_fallback_profile() -> Dict:
         return {}
 
 
-def get_runtime_history_profile() -> Dict:
+def get_runtime_history_profile(*, as_of=None) -> Dict:
     """Read the current production history, caching until its latest record changes."""
     try:
         from .result_sync import get_history
 
         records = get_history().records
+        if as_of is not None:
+            from .research import timestamp
+            cutoff = timestamp(as_of)
+            if cutoff is None:
+                raise ValueError('as_of must include a timezone')
+            records = [r for r in records if timestamp(r.get('settled_at')) is not None
+                       and timestamp(r['settled_at']) < cutoff]
         latest = max((str(item.get('updated_at') or item.get('settled_at') or '') for item in records), default='')
-        cache_key = (len(records), latest)
+        cache_key = (len(records), latest, str(as_of) if as_of is not None else None)
         if _PROFILE_CACHE['key'] == cache_key and _PROFILE_CACHE['profile'] is not None:
             return _PROFILE_CACHE['profile']
         profile = estimate_history_calibration(records)
-        if not profile.get('applied'):
+        if not profile.get('applied') and as_of is None:
             profile = _load_fallback_profile() or profile
         _PROFILE_CACHE.update({'key': cache_key, 'profile': profile})
         return profile
     except Exception:
-        return _load_fallback_profile()
+        return _load_fallback_profile() if as_of is None else {}

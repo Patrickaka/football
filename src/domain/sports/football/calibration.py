@@ -95,10 +95,18 @@ def calibrate_with_platt(matrix, calibration_data):
     返回:
         校准后的概率矩阵
     """
-    if not calibration_data or 'platt_params' not in calibration_data:
+    if not isinstance(calibration_data, dict) or 'platt_params' not in calibration_data:
         return matrix
-    
-    A, B = calibration_data['platt_params']
+    try:
+        A, B = calibration_data['platt_params']
+        if not all(isinstance(value, (int, float)) and not isinstance(value, bool)
+                   and math.isfinite(value) for value in (A, B)):
+            return matrix
+        # (1, 0) is the historical insufficient-data sentinel, not sigmoid(p).
+        if (A, B) == (1.0, 0.0) or ('trained_on' in calibration_data and calibration_data['trained_on'] < 5):
+            return matrix
+    except (TypeError, ValueError):
+        return matrix
     calibrated = {}
     for (h, a), prob in matrix.items():
         calibrated[(h, a)] = _sigmoid(A * prob + B)

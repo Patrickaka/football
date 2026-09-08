@@ -17,7 +17,7 @@ import json
 import pickle
 import math
 import hashlib
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, List, Tuple, Any
 
 import numpy as np
@@ -26,8 +26,21 @@ from ..common import kv_store
 
 from ..domain.sports.football import ml_contract as _mlc
 
-# 纯计算转发给领域层
-split_by_time = _mlc.split_by_time
+def split_by_time(samples, train_ratio=0.7, val_ratio=0.15):
+    """Keep whole match dates together at both chronological boundaries."""
+    if not 0 < train_ratio < 1 or not 0 < val_ratio < 1 or train_ratio + val_ratio >= 1:
+        raise ValueError('invalid_training_split_ratios')
+    ordered = sorted(samples, key=_sample_date)
+    first, second = int(len(ordered) * train_ratio), int(len(ordered) * (train_ratio + val_ratio))
+    for boundary in ('first', 'second'):
+        value = first if boundary == 'first' else second
+        while 0 < value < len(ordered) and _sample_date(ordered[value - 1]).date() == _sample_date(ordered[value]).date():
+            value += 1
+        if boundary == 'first':
+            first = value
+        else:
+            second = max(first, value)
+    return ordered[:first], ordered[first:second], ordered[second:]
 
 
 # ==================== 常量配置 ====================
@@ -46,6 +59,14 @@ TEST_RATIO = 0.15
 # 目标标签映射
 LABEL_MAP = {'H': 0, 'D': 1, 'A': 2}
 REVERSE_LABEL_MAP = {0: 'H', 1: 'D', 2: 'A'}
+
+
+def _sample_date(sample):
+    try:
+        value = datetime.fromisoformat(str(sample['match_date']).replace('Z', '+00:00'))
+        return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError('invalid_training_match_date') from exc
 
 
 # ==================== 工具函数 ====================
@@ -73,7 +94,7 @@ def load_training_data(filepath: str) -> List[Dict]:
                     print(f"解析JSON失败: {e}")
     
     # 按日期排序
-    samples.sort(key=lambda x: x['match_date'])
+    samples.sort(key=_sample_date)
     return samples
 
 
@@ -97,13 +118,14 @@ def prepare_features_target(samples: List[Dict], feature_names: List[str]) -> Tu
         features = sample['features']
         target = sample['target']['result']
         
-        # 构建特征向量
-        feature_vec = []
-        for name in feature_names:
-            feature_vec.append(features.get(name, 0.0))
+        from .ml_features import build_prediction_features, feature_vector
+        payload = build_prediction_features(feature_snapshot=features)
+        feature_vec = feature_vector(payload['features'], feature_names)
+        if target not in LABEL_MAP:
+            raise ValueError('invalid_training_result')
         
         X.append(feature_vec)
-        y.append(LABEL_MAP.get(target, 1))  # 默认平局
+        y.append(LABEL_MAP[target])
     
     return np.array(X), np.array(y)
 
@@ -120,7 +142,11 @@ def calculate_metrics(y_true: np.ndarray, y_pred: np.ndarray, y_proba: np.ndarra
     返回：
         指标字典
     """
-    # 准确率
+    # CatBoost returns (n, 1); comparing it with (n,) broadcasts to an n*n matrix.
+    y_true = np.asarray(y_true).reshape(-1)
+    y_pred = np.asarray(y_pred).reshape(-1)
+    if y_true.shape != y_pred.shape or not len(y_true):
+        raise ValueError('invalid_metric_labels')
     accuracy = np.mean(y_true == y_pred)
     
     # LogLoss
@@ -170,6 +196,13 @@ class MLModelTrainer:
             训练指标
         """
         self.feature_names = feature_names
+        train_dates = [_sample_date(row) for row in train_data]
+        validation_dates = [_sample_date(row) for row in val_data]
+        if not train_dates or not validation_dates or max(train_dates) >= min(validation_dates):
+            raise ValueError('training_validation_dates_overlap_or_missing')
+        self.metadata.update({'train_count': len(train_data), 'validation_count': len(val_data),
+                              'train_end': max(train_dates).isoformat(),
+                              'validation_end': max(validation_dates).isoformat()})
         
         # 准备数据
         X_train, y_train = prepare_features_target(train_data, feature_names)
@@ -300,6 +333,13 @@ class MLModelTrainer:
         """
         if not self.model:
             return {'error': '模型未训练'}
+
+        test_dates = [_sample_date(row) for row in test_data]
+        previous = self.metadata.get('validation_end')
+        if (not test_dates or not previous
+                or min(test_dates) <= datetime.fromisoformat(previous)):
+            raise ValueError('validation_test_dates_overlap_or_missing')
+        self.metadata.update({'test_count': len(test_data), 'test_end': max(test_dates).isoformat()})
         
         X_test, y_test = prepare_features_target(test_data, self.feature_names)
         
@@ -326,16 +366,10 @@ class MLModelTrainer:
             print("警告：模型未训练，无法保存")
             return
         
-        # 确保目录存在
-        os.makedirs(DATA_DIR, exist_ok=True)
-        
-        # 保存模型
-        with open(MODEL_FILE, 'wb') as f:
-            pickle.dump(self.model, f)
-        print(f"模型已保存到: {MODEL_FILE}")
-        
         # 保存元数据
         from .ml_feature_schema import FEATURE_VERSION
+        from .ml_features import FEATURE_BUILDER_VERSION
+        from .ml import validate_model_contract
 
         dataset_sha256 = None
         if os.path.exists(TRAINING_DATA_FILE):
@@ -345,12 +379,25 @@ class MLModelTrainer:
                     digest.update(chunk)
             dataset_sha256 = digest.hexdigest()
 
+        trained_at = datetime.now(timezone.utc).isoformat()
+        for key in ('train_end', 'validation_end', 'test_end'):
+            if key not in self.metadata or datetime.fromisoformat(self.metadata[key]) > datetime.fromisoformat(trained_at):
+                raise ValueError(f'missing_or_future_{key}')
+        payload = pickle.dumps(self.model)
         self.metadata = {
-            'model_version': f"ml-{FEATURE_VERSION}-{datetime.now().strftime('%Y%m%d')}",
+            'model_version': (
+                f"ml-{FEATURE_VERSION}-{datetime.fromisoformat(trained_at).strftime('%Y%m%dT%H%M%S%fZ')}"
+                f"-{hashlib.sha256(payload).hexdigest()[:12]}"
+            ),
             'model_type': type(self.model).__name__,
-            'trained_at': datetime.now().isoformat(),
+            'trained_at': trained_at,
+            'training_cutoff_at': trained_at,
+            'split_dates': {key: self.metadata[key] for key in ('train_end', 'validation_end', 'test_end')},
             'feature_version': FEATURE_VERSION,
+            'feature_builder_version': FEATURE_BUILDER_VERSION,
             'features': self.feature_names,
+            'classes': [int(label) for label in self.model.classes_],
+            'model_sha256': hashlib.sha256(payload).hexdigest(),
             'train_count': self.metadata.get('train_count', 0),
             'validation_count': self.metadata.get('validation_count', 0),
             'test_count': self.metadata.get('test_count', 0),
@@ -359,17 +406,26 @@ class MLModelTrainer:
                 'path': os.path.basename(TRAINING_DATA_FILE),
                 'sha256': dataset_sha256,
                 'split_method': 'chronological-70-15-15',
+                'date_grouped': True,
             },
         }
-        
-        kv_store.save('ml_metadata', self.metadata)
+        validate_model_contract(self.model, self.metadata)
+        os.makedirs(DATA_DIR, exist_ok=True)
+        with open(MODEL_FILE + '.tmp', 'wb') as handle:
+            handle.write(payload)
+        os.replace(MODEL_FILE + '.tmp', MODEL_FILE)
         # Keep a portable sidecar next to the pickle even when MySQL/KV storage
         # is unavailable. It is part of the deployable model artifact.
         temp_metadata = METADATA_FILE + '.tmp'
         with open(temp_metadata, 'w', encoding='utf-8') as handle:
             json.dump(self.metadata, handle, ensure_ascii=False, indent=2)
         os.replace(temp_metadata, METADATA_FILE)
-        print("元数据已保存到 MySQL kv_store: ml_metadata")
+        # The adjacent, hash-bound sidecar is authoritative. KV is diagnostic.
+        try:
+            kv_store.save('ml_metadata', self.metadata)
+        except Exception:
+            pass
+        print("模型和校验元数据已保存")
     
     def load(self) -> bool:
         """
@@ -378,27 +434,13 @@ class MLModelTrainer:
         返回：
             是否加载成功
         """
-        if not os.path.exists(MODEL_FILE):
-            print(f"模型文件不存在: {MODEL_FILE}")
-            return False
-        
         try:
-            with open(MODEL_FILE, 'rb') as f:
-                self.model = pickle.load(f)
-            print(f"模型加载成功")
-            
-            _meta = kv_store.load('ml_metadata')
-            if _meta is None and os.path.exists(METADATA_FILE):
-                with open(METADATA_FILE, encoding='utf-8') as handle:
-                    _meta = json.load(handle)
-            if _meta is not None:
-                self.metadata = _meta
-                self.feature_names = self.metadata.get('features', [])
-                print(f"元数据加载成功")
-            
+            from .ml import read_model_artifact
+            self.model, self.metadata = read_model_artifact(MODEL_FILE, METADATA_FILE)
+            self.feature_names = self.metadata['features']
             return True
-        except Exception as e:
-            print(f"加载模型失败: {e}")
+        except Exception:
+            self.model, self.metadata, self.feature_names = None, {}, []
             return False
     
     def predict(self, features: Dict) -> Dict:
@@ -417,29 +459,8 @@ class MLModelTrainer:
                 'reason': 'model_not_trained'
             }
         
-        # 构建特征向量
-        feature_vec = []
-        for name in self.feature_names:
-            feature_vec.append(features.get(name, 0.0))
-        
-        # 预测
-        X = np.array([feature_vec])
-        y_pred = self.model.predict(X)[0]
-        y_proba = self.model.predict_proba(X)[0]
-        
-        # 归一化概率
-        total = y_proba.sum()
-        if total > 0:
-            y_proba = y_proba / total
-        
-        return {
-            'H': float(y_proba[0]),
-            'D': float(y_proba[1]),
-            'A': float(y_proba[2]),
-            'predicted_label': REVERSE_LABEL_MAP.get(y_pred, 'D'),
-            'model_version': self.metadata.get('model_version', 'unknown'),
-            'available': True
-        }
+        from .ml import predict_with_model
+        return predict_with_model(self.model, self.metadata, features)
 
 
 # ==================== 主函数 ====================

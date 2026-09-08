@@ -22,7 +22,7 @@ from ..common.paths import data_path
 log = setup_logger('football')
 
 
-FOOTBALL_PREDICTION_LOGIC_VERSION = '2026-09-08-linked-market-analysis-v43'
+FOOTBALL_PREDICTION_LOGIC_VERSION = '2026-09-08-agent-research-v44'
 # Official 1X2 prices are the strongest observable production signal.  Raising
 # their share from 40% to 80% improved the pooled high-confidence proxy from
 # 61.67% to 62.55%; the model retains 20% for team/Asian/context information.

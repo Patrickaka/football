@@ -12,6 +12,7 @@ import urllib.request
 import urllib.error
 import random
 import threading
+from datetime import datetime, timezone
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, Tuple
@@ -572,12 +573,15 @@ def _analyze_match_impl(match, force_refresh=False):
                         'live_context_quality': cached_result.get('live_context_quality'),
                         'accuracy_gate': (cached_lottery or {}).get('accuracy_gate'),
                     },
+                    prediction_event=(cached_result.get('research') or {}).get('prediction_event'),
                 )
                 model_status = cached_result.get('model_status')
                 # 仅在标记真正翻转时才回写缓存：否则每次命中都要 pickle 整个
                 # 分析结果并落盘，54 场一轮就是 54 次无谓的整对象序列化。
                 if model_status is not None and not model_status.get('prediction_saved'):
-                    model_status['prediction_saved'] = True
+                    model_status['prediction_saved'] = bool((persistence_result or {}).get('saved') or
+                        (persistence_result or {}).get('persistence_backend') == 'unchanged')
+                    model_status['prediction_event'] = (persistence_result or {}).get('prediction_event')
                     model_status['persistence_backend'] = (
                         (persistence_result or {}).get('persistence_backend')
                     )
@@ -691,7 +695,7 @@ def _analyze_match_impl(match, force_refresh=False):
             raise
     if team:
         team['league_profile'] = league_profile
-    
+
     # ========== 新增：抓取 Bet365 和 Pinnacle 独赔数据 ==========
     single_odds = None
     if not lottery_only:
@@ -706,6 +710,32 @@ def _analyze_match_impl(match, force_refresh=False):
             log.warning(f"抓取独赔数据失败: {e}")
     
     # ========== 计算博彩公司分歧指数（在替换之前保存原始平均盘口） ==========
+    # All network observations and local context files are collected before
+    # the immutable knowledge cutoff used by features, research and fusion.
+    raw_live_context = match.get('live_context') or {}
+    if not raw_live_context:
+        try:
+            safe_mid = re.sub(r'[^0-9A-Za-z_-]', '', str(mid))
+            context_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+                                        'reports', f'live_context_{safe_mid}.json')
+            if safe_mid and os.path.isfile(context_path):
+                with open(context_path, encoding='utf-8') as context_file:
+                    raw_live_context = json.load(context_file)
+        except (OSError, ValueError):
+            raw_live_context = {}
+    if not isinstance(raw_live_context, dict):
+        raw_live_context = {}
+    prediction_as_of = datetime.now(timezone.utc)
+    from .research_runtime import completed_intelligence, team_strength_from_history
+    intelligence_result = completed_intelligence(match, as_of=prediction_as_of)
+    if team is None:
+        try:
+            from .result_sync import get_history
+            team = team_strength_from_history(get_history().records, match, as_of=prediction_as_of)
+            if team:
+                team['league_profile'] = league_profile
+        except Exception as e:
+            log.debug('local team history unavailable: %s', e)
     bookmaker_consensus = None
     original_handicap = asian.get('handicap')
     if single_odds and single_odds.get('bet365') and single_odds.get('pinnacle') and original_handicap:
@@ -847,50 +877,28 @@ def _analyze_match_impl(match, force_refresh=False):
     ml_model_version = "unknown"
     ml_available = False
     ml_feature_snapshot = {}
+    ml_response = None
+    ml_feature_audit = {}
     
     try:
         if lottery_only:
             raise RuntimeError('官方竞彩单源模式不启用 ML 融合')
         # 准备特征
-        ml_features = {
-            'elo_home': team.get('elo_home', 1500) if team else 1500,
-            'elo_away': team.get('elo_away', 1500) if team else 1500,
-            'euro_home': euro['raw_odds']['close']['home'],
-            'euro_draw': euro['raw_odds']['close']['draw'],
-            'euro_away': euro['raw_odds']['close']['away'],
-            'asian_handicap': asian['handicap'],
-            'asian_home_water': asian['close_water']['home'],
-            'asian_away_water': asian['close_water']['away'],
-            'total_line': total['close_line'],
-            'total_over_water': total['close_water']['over'],
-            'total_under_water': total['close_water']['under'],
-            'home_attack': team.get('attack_home', 1.3) if team else 1.3,
-            'home_defense': team.get('defense_home', 1.2) if team else 1.2,
-            'away_attack': team.get('attack_away', 1.2) if team else 1.2,
-            'away_defense': team.get('defense_away', 1.3) if team else 1.3,
-            'home_form': team['home_recent']['form_pts'] / 3.0 if team else 0.5,
-            'away_form': team['away_recent']['form_pts'] / 3.0 if team else 0.5
-        }
-        
-        # 构建特征快照（用于后续排查）
-        elo_diff = ml_features['elo_home'] - ml_features['elo_away']
-        ml_feature_snapshot = {
-            'elo_diff': elo_diff,
-            'total_line': ml_features['total_line'],
-            'asian_handicap': ml_features['asian_handicap'],
-            'euro_home': ml_features['euro_home'],
-            'euro_draw': ml_features['euro_draw'],
-            'euro_away': ml_features['euro_away'],
-            'home_attack': ml_features['home_attack'],
-            'home_defense': ml_features['home_defense'],
-            'away_attack': ml_features['away_attack'],
-            'away_defense': ml_features['away_defense'],
-            'home_form': ml_features['home_form'],
-            'away_form': ml_features['away_form'],
-            'home_elo': ml_features['elo_home'],
-            'away_elo': ml_features['elo_away']
-        }
-        
+        from .ml_features import build_prediction_features
+        from .result_sync import get_history
+        from .research import kickoff_timestamp
+        feature_kickoff = kickoff_timestamp(match, now=prediction_as_of)
+        feature_payload = build_prediction_features(
+            euro=euro, asian=asian, total=total, team=team,
+            league_profile=league_profile,
+            match_time=feature_kickoff.isoformat() if feature_kickoff else match_time,
+            history_records=get_history().records, home=home, away=away,
+            league=match.get('league'), as_of=prediction_as_of,
+        )
+        ml_features = feature_payload['features']
+        ml_feature_snapshot = dict(ml_features)
+        ml_feature_audit = feature_payload['audit']
+
         from .ml import predict_1x2_by_ml
         
         ml_response = predict_1x2_by_ml(ml_features)
@@ -944,7 +952,7 @@ def _analyze_match_impl(match, force_refresh=False):
         asian, euro, total, team_strength=team, league_profile=league_profile,
         model_type='negative_binomial',
         enable_draw_calibration=True,
-        enable_calibration=True,
+        enable_calibration=False,
         calibration_method='platt',
         enable_ensemble=True,
         ensemble_size=2,
@@ -1019,12 +1027,14 @@ def _analyze_match_impl(match, force_refresh=False):
     # Apply Bayesian score calibration to the live candidate distribution so
     # downstream score ranking, recommendations, and goal-count aggregation all
     # use the calibrated probabilities.
+    bayesian_stage_effect = []
     if BAYESIAN_CALIBRATION_AVAILABLE:
         try:
             score_probs = {
                 f"{h}-{a}": prob
                 for (h, a), prob in candidates
             }
+            calibration_before = dict(score_probs)
             score_probs = calibrate_predictions(
                 score_probs,
                 league=match.get('league', ''),
@@ -1036,7 +1046,15 @@ def _analyze_match_impl(match, force_refresh=False):
                 for score, prob in score_probs.items()
             ]
             candidates.sort(key=lambda x: -x[1])
-            meta['bayesian_candidate_calibrated'] = True
+            meta['bayesian_candidate_calibrated'] = any(
+                abs(score_probs.get(score, 0) - probability) > 1e-12
+                for score, probability in calibration_before.items())
+            bayesian_stage_effect = [
+                {'score': score, 'before': calibration_before.get(score, 0), 'after': probability,
+                 'delta': probability-calibration_before.get(score, 0), 'sample_count': None,
+                 'stage': 'bayesian_candidates'}
+                for score, probability in sorted(score_probs.items(), key=lambda item: -item[1])[:6]
+            ]
             log.debug("贝叶斯比分校准已写回候选比分排序")
         except Exception as e:
             meta['bayesian_candidate_calibrated'] = False
@@ -1075,22 +1093,22 @@ def _analyze_match_impl(match, force_refresh=False):
     # Structured H2H / motivation context participates in the same score
     # distribution as 1X2 and totals. Free-form previews are never converted
     # into probabilities; only sourced, quality-scored fields are accepted.
-    live_context = match.get('live_context') or {}
+    live_context = dict(raw_live_context)
+    if intelligence_result and intelligence_result.get('live_context'):
+        live_context.update({key: value for key, value in intelligence_result['live_context'].items()
+                             if value and key != 'quality'})
     live_context_quality = {}
     try:
-        if not live_context:
-            safe_mid = re.sub(r'[^0-9A-Za-z_-]', '', str(mid))
-            context_path = os.path.join(
-                os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
-                'reports', f'live_context_{safe_mid}.json',
-            )
-            if safe_mid and os.path.exists(context_path):
-                with open(context_path, encoding='utf-8') as context_file:
-                    live_context = json.load(context_file)
         from .contextual_fusion import apply_contextual_fusion
         from .live_context_quality import assess_live_context
-        live_context_quality = assess_live_context(live_context)
-        candidates, contextual_adjustment = apply_contextual_fusion(candidates, live_context)
+        live_context_quality = assess_live_context(live_context, now=prediction_as_of)
+        if intelligence_result and intelligence_result.get('status') in ('partial', 'complete'):
+            research_quality = (intelligence_result.get('live_context') or {}).get('quality') or {}
+            if research_quality.get('official_bet_allowed') is False:
+                live_context_quality['official_bet_allowed'] = False
+                live_context_quality['blockers'] = list(dict.fromkeys(
+                    live_context_quality.get('blockers', []) + research_quality.get('blockers', [])))
+        candidates, contextual_adjustment = apply_contextual_fusion(candidates, live_context, now=prediction_as_of)
         meta['contextual_fusion'] = contextual_adjustment
     except Exception as e:
         meta['contextual_fusion'] = {'applied': False, 'reason': 'internal_error',
@@ -1103,7 +1121,7 @@ def _analyze_match_impl(match, force_refresh=False):
     # 生产历史档案要读存储、带缓存，在这一层取好注入进去（判据 16）。
     try:
         from .history_calibration import get_runtime_history_profile
-        history_profile = get_runtime_history_profile()
+        history_profile = get_runtime_history_profile(as_of=prediction_as_of)
     except Exception as e:
         history_profile = None
         log.warning(f"production history profile unavailable: {e}")
@@ -1111,6 +1129,13 @@ def _analyze_match_impl(match, force_refresh=False):
     candidates, anchor_meta = anchor_candidates_to_market(
         candidates, total, euro, asian, history_profile)
     meta.update(anchor_meta)
+
+    # Final matrix boundary: all score, goal and lottery marginals below use
+    # the actual qualified ML result, not a display-only weight.
+    from .research_runtime import ml_runtime_fusion
+    candidates, ml_execution = ml_runtime_fusion(candidates, ml_response, as_of=prediction_as_of)
+    ml_execution['feature_audit'] = ml_feature_audit
+    meta['ml_fusion'] = ml_execution
 
     try:
         from .ml import dixon_coles_score_matrix, dixon_coles_1x2_prob, get_dc_rho
@@ -1273,65 +1298,13 @@ def _analyze_match_impl(match, force_refresh=False):
         })
     
     # ========== 获取模型融合权重 ==========
-    model_weights = {
-        'market': 0.55,
-        'team': 0.18,
-        'elo': 0.17,
-        'similar': 0.10,
-        'ml': 0.0
-    }
-    try:
-        if DYNAMIC_WEIGHTS_AVAILABLE:
-            match_data = {
-                'league': match.get('league', '其他'),
-                'handicap': asian.get('handicap', 0),
-                'euro_std': euro.get('kelly', {}).get('spread', 0.05),
-                'kelly_std': euro.get('kelly', {}).get('spread', 0.02),
-                'odds_changes': len(euro_raw.get('series', [])),
-                'elo_diff': abs(team.get('elo_home', 1500) - team.get('elo_away', 1500)) if team else 0,
-                'total_line': total.get('close_line', 2.5),
-            }
-            log.debug(f"构建动态权重特征: {match_data}")
-            
-            market_w, team_w, elo_w, ml_w = get_dynamic_weights(confidence.get('score', 0.5), match_data)
-            model_weights = {
-                'market': market_w,
-                'team': team_w,
-                'elo': elo_w,
-                'similar': 0.10,
-                'ml': ml_w
-            }
-            log.debug(
-                "动态权重: market=%.3f, team=%.3f, elo=%.3f, ml=%.3f",
-                market_w, team_w, elo_w, ml_w,
-            )
-    except Exception as e:
-        log.warning(f"获取动态权重失败: {e}")
-    
-    # ========== 贝叶斯校准影响分析 ==========
-    calibration_effect = []
-    if BAYESIAN_CALIBRATION_AVAILABLE:
-        try:
-            calibrator = get_calibrator()
-            # 计算校准前后的概率变化
-            for (h, a), prob in candidates[:6]:
-                score_str = f"{h}-{a}"
-                calibrated_prob = calibrator.calibrate(score_str, prob)
-                delta = calibrated_prob - prob
-                record = calibrator.history.get(score_str, {})
-                calibration_effect.append({
-                    'score': score_str,
-                    'before': prob,
-                    'after': calibrated_prob,
-                    'delta': delta,
-                    'sample_count': record.get('count', 0)
-                })
-        except ImportError as e:
-            log.warning(f"贝叶斯校准模块导入失败: {e}")
-        except Exception as e:
-            log.warning(f"计算贝叶斯校准影响失败: {e}")
-    
-    # ========== 相似盘口样本质量详情 ==========
+    model_weights = {'scope': 'final_stage_mixture', 'market': 0.0, 'team': 0.0, 'elo': 0.0, 'similar': 0.0,
+                     'ml': ml_execution['weight'], 'existing_pipeline': 1.0-ml_execution['weight']}
+    meta['weight_semantics'] = 'final_stage_mixture; existing_pipeline_is_not_decomposable'
+
+    # Actual before/after of the executed stage; do not simulate a second calibration.
+    calibration_effect = bayesian_stage_effect
+
     similar_market_detail = {}
     if similar_market_result:
         detail = similar_market_result.get('sample_quality', {})
@@ -1388,57 +1361,13 @@ def _analyze_match_impl(match, force_refresh=False):
         log.debug(f"获取赛后回填状态失败: {e}")
     
     # ========== 模型状态汇总 ==========
-    ml_enabled = False
-    ml_reason = "模型未训练，未参与融合"
-    ml_participating = False
-    ml_fusion_weight = 0.0
-    ml_eligibility = None
-    
-    try:
-        from .result_sync import get_history, check_ml_fusion_eligibility, get_ml_fusion_weight
-        import src.football.ml as ml_module
-        
-        ml_enabled = ml_module.load_trained_ml_model()
-        
-        if ml_enabled:
-            # 获取测试集样本数
-            test_set_samples = ml_module._trained_ml_metadata.get('test_count', 0) if ml_module._trained_ml_metadata else 0
-            
-            # 检查是否满足融合条件
-            history = get_history()
-            ml_stats = history.get_ml_evaluation_stats()
-            eligibility = check_ml_fusion_eligibility(ml_stats, test_set_samples)
-            ml_eligibility = eligibility
-            shadow_samples = eligibility['shadow_samples']
-            
-            if eligibility['eligible']:
-                ml_fusion_weight = get_ml_fusion_weight(True, shadow_samples, 0.0)
-                if ml_fusion_weight > 0:
-                    metrics_hint = '，指标已达标' if eligibility.get('metrics_passed') else '，指标待观察'
-                    ml_reason = f"已参与融合，权重 {ml_fusion_weight*100:.1f}%{metrics_hint}"
-                    ml_participating = True
-                else:
-                    ml_reason = "已训练，等待权重分配"
-            else:
-                pending = []
-                conds = eligibility['conditions']
-                if not conds['test_set_samples']['passed']:
-                    pending.append(
-                        f"测试集 {conds['test_set_samples']['actual']}/{conds['test_set_samples']['required']}"
-                    )
-                if not conds['shadow_samples']['passed']:
-                    pending.append(
-                        f"影子样本 {conds['shadow_samples']['actual']}/{conds['shadow_samples']['required']}"
-                    )
-                ml_reason = f"已训练，样本收集中（{', '.join(pending)}）" if pending else "已训练，样本收集中"
-        else:
-            ml_reason = "模型文件不存在或加载失败"
-    except Exception as e:
-        ml_reason = "ML模块不可用"
-    
-    # 将参与状态保存到状态字典中供前端显示
+    ml_participating = ml_execution['applied']
     ml_enabled = ml_participating
-    
+    ml_fusion_weight = ml_execution['weight']
+    ml_eligibility = ml_execution.get('eligibility')
+    ml_reason = (f"已参与融合，权重 {ml_fusion_weight*100:.1f}%" if ml_participating
+                 else "未参与融合：" + ml_execution['reason'])
+
     # 获取真实统计数据
     pending_count = 0
     settled_count = 0
@@ -1511,6 +1440,10 @@ def _analyze_match_impl(match, force_refresh=False):
         },
         'ml': {
             'enabled': ml_enabled,
+            'loaded': ml_execution['loaded'],
+            'eligible': ml_execution['eligible'],
+            'executed': ml_execution['executed'],
+            'applied': ml_execution['applied'],
             'reason': ml_reason,
             'weight': ml_fusion_weight,
             'metrics_passed': ml_eligibility.get('metrics_passed') if ml_eligibility else None,
@@ -1635,6 +1568,47 @@ def _analyze_match_impl(match, force_refresh=False):
     except Exception as e:
         log.warning(f"赛果分析注入失败: {e}")
         result['analysis'] = None
+
+    # Freeze explicit research branches, separate from the production fallback.
+    # Missing team history is unavailable A/B/C, never a relabelled market model.
+    prediction_event = None
+    try:
+        from .research import build_research_variants, kickoff_timestamp, load_residual_artifact, variant
+        from .result_sync import PRODUCTION_MODEL_VERSION
+        research_euro = dict(euro)
+        if lottery_only:
+            research_euro['ordinary_market_observed'] = bool(match.get('lottery_spf_odds') or match.get('hkjc_had_odds'))
+        variants = build_research_variants(
+            team=team, league_profile=league_profile, euro=research_euro, asian=asian,
+            total=total, as_of=prediction_as_of, intelligence=intelligence_result,
+            residual_artifact=load_residual_artifact(),
+        )
+        variants['production'] = variant(candidates, source=PRODUCTION_MODEL_VERSION,
+                                         captured_at=prediction_as_of.isoformat())
+        kickoff = kickoff_timestamp(match, now=prediction_as_of)
+        prediction_event = {
+            'schema_version': 'football-prediction-event-v1',
+            'as_of': prediction_as_of.isoformat(),
+            'kickoff_at': kickoff.isoformat() if kickoff else None,
+            'model_version': PRODUCTION_MODEL_VERSION,
+            'prediction_logic_version': FOOTBALL_PREDICTION_LOGIC_VERSION,
+            # The legacy stack has no single verifiable training cutoff. Do not
+            # invent one from today's timestamp to pass release acceptance.
+            'training_cutoff_at': None,
+            'variants': variants,
+            'execution_trace': {'ml_candidate': ml_execution, 'calibration': {
+                'base': meta.get('calibration'),
+                'bayesian_applied': meta.get('bayesian_candidate_calibrated', False),
+                'history': meta.get('production_history_calibration'),
+            }},
+            'context': {'team': team, 'league_profile': league_profile,
+                        'intelligence': intelligence_result, 'market': {
+                            'euro': euro, 'asian': asian, 'total': total}},
+        }
+        result['research'] = {'status': 'shadow', 'prediction_event': prediction_event}
+    except Exception as e:
+        result['research'] = {'status': 'unavailable', 'reason': type(e).__name__}
+        log.warning('research snapshot failed: %s', e)
     
     # 保存结果到缓存
     if CACHE_AVAILABLE:
@@ -1661,7 +1635,7 @@ def _analyze_match_impl(match, force_refresh=False):
 
         # 影子预测：base_1x2 是现有基础模型的预测结果
         predicted_half_full = _half_full_probs_to_dict(model.get('half_full_time'))
-        base_1x2 = predicted_1x2.copy()
+        base_1x2 = ml_execution['base_probabilities'] if spf_prediction_enabled else {}
 
         persistence_result = save_prediction(
             match_id=mid,
@@ -1701,11 +1675,14 @@ def _analyze_match_impl(match, force_refresh=False):
                 'accuracy_gate': (lottery or {}).get('accuracy_gate'),
                 'upset': result.get('upset'),
             },
+            prediction_event=prediction_event,
         )
-        prediction_saved = True
+        prediction_saved = bool((persistence_result or {}).get('saved') or
+            (persistence_result or {}).get('persistence_backend') == 'unchanged')
         # 更新模型状态中的保存状态
         if 'model_status' in result:
-            result['model_status']['prediction_saved'] = True
+            result['model_status']['prediction_saved'] = prediction_saved
+            result['model_status']['prediction_event'] = (persistence_result or {}).get('prediction_event')
             result['model_status']['persistence_backend'] = (
                 (persistence_result or {}).get('persistence_backend')
             )

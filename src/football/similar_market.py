@@ -145,6 +145,10 @@ class MatchRecord:
         
         # 新增元数据
         self.season = data.get('season', '')
+        self.match_id = str(data.get('match_id') or '')
+        self.available_at = data.get('available_at') or data.get('settled_at')
+        self.as_of = data.get('as_of')
+        self.exclude_match_id = str(data.get('exclude_match_id') or '')
         self.is_friendly = self._check_friendly()
     
     def _check_friendly(self) -> bool:
@@ -175,6 +179,8 @@ class MatchRecord:
             'away_team': self.away_team,
             'season': self.season,
             'is_friendly': self.is_friendly,
+            'match_id': self.match_id,
+            'available_at': self.available_at,
         }
 
 
@@ -194,6 +200,19 @@ class SimilarMarketDB:
     def __init__(self):
         self.records: List[MatchRecord] = []
         self._load()
+
+    @staticmethod
+    def _available_for_query(query, record):
+        if query.exclude_match_id and record.match_id == query.exclude_match_id:
+            return False
+        if query.as_of is None:
+            return True
+        from .research import timestamp
+        cutoff = timestamp(query.as_of)
+        available = timestamp(record.available_at)
+        # Historical replay requires a real observation/settlement cutoff;
+        # a fixture date alone is not proof that its result was then known.
+        return cutoff is not None and available is not None and available < cutoff
     
     def _filter_record(self, record: MatchRecord, query_league: str = '', 
                       filter_friendly: bool = True, 
@@ -276,7 +295,7 @@ class SimilarMarketDB:
         distances = []
         for record in self.records:
             # 跳过结果为空的记录
-            if not record.result:
+            if not record.result or not self._available_for_query(query, record):
                 continue
             dist = self._distance(query, record)
             distances.append((dist, record))
@@ -304,7 +323,7 @@ class SimilarMarketDB:
         
         distances = []
         for record in self.records:
-            if not record.result:
+            if not record.result or not self._available_for_query(query, record):
                 continue
             # 联赛过滤
             if league_filter and record.league not in league_filter:
@@ -378,7 +397,7 @@ class SimilarMarketDB:
         
         distances = []
         for record in self.records:
-            if not record.result:
+            if not record.result or not self._available_for_query(query, record):
                 continue
             # 联赛过滤
             if league_filter and record.league not in league_filter:
@@ -662,7 +681,7 @@ def similar_market_match(asian: float, total: float, euro_home: float,
                          total_over: float = 0.0,
                          total_under: float = 0.0,
                          k: int = DEFAULT_K,
-                         league: str = '') -> Dict:
+                         league: str = '', *, as_of=None, exclude_match_id=None) -> Dict:
     """
     相似盘口匹配主接口（距离加权 + 动态K值 + 联赛分层）
     
@@ -693,6 +712,8 @@ def similar_market_match(asian: float, total: float, euro_home: float,
     """
     # 创建查询记录
     query = MatchRecord({
+        'as_of': as_of,
+        'exclude_match_id': exclude_match_id,
         'asian': asian,
         'asian_odds_home': asian_odds_home,
         'asian_odds_away': asian_odds_away,

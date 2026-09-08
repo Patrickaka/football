@@ -48,6 +48,7 @@
 """
 
 import os
+from copy import deepcopy
 import re
 import json
 import time
@@ -61,6 +62,10 @@ from threading import Thread, RLock
 from ..common import repositories
 
 from ..domain.sports.football import settlement as _st
+from ..domain.sports.football.prediction_evaluation import (
+    canonical_hash, event_hash, evaluate_frozen_events, evaluate_frozen_ml, score_metrics,
+)
+from .prediction_events import append_prediction_event
 
 # 27 个纯计算转发给领域层（时间解析的"当前年"由调用方注入）
 normalize_1x2_probs = _st.normalize_1x2_probs
@@ -460,7 +465,8 @@ class PredictionHistory:
                        goal_count: Dict = None,
                        professional_snapshot: Dict = None,
                        model_version: str = PRODUCTION_MODEL_VERSION,
-                       match_num: str = None):
+                       match_num: str = None,
+                       prediction_event: Dict = None):
         """
         添加预测记录
         
@@ -519,7 +525,14 @@ class PredictionHistory:
         existing = self._find_existing_record(match_id, match_num, match_time)
         if existing is not None:
             record = self._hydrate_timeline(existing)
+            before_prediction = deepcopy(record)
             newly_aliased = self._register_alias_match_id(record, match_id)
+            if record.get('settled'):
+                backend = self._save_record(record) if newly_aliased else 'unchanged'
+                return {'saved': newly_aliased, 'persistence_backend': backend,
+                        'prediction_event': {'status': 'rejected', 'appended': False,
+                                             'reason': 'match_already_settled'}}
+            event_audit = append_prediction_event(record, prediction_event)
             # 跳过无变化的重复写入：缓存命中时同一场比赛会被反复「预测」，
             # 但内容与时间层其实一字未变。此时直接返回，不写库、不更新时间戳，
             # 消灭每请求整表重写的写入风暴。
@@ -540,7 +553,15 @@ class PredictionHistory:
                 and (not match_num or record.get('match_num') == match_num)
                 and not newly_aliased
             ):
-                return {'saved': False, 'persistence_backend': 'unchanged'}
+                if event_audit['appended']:
+                    backend = self._save_record(record)
+                    if backend == 'failed':
+                        record.clear()
+                        record.update(before_prediction)
+                        event_audit = {**event_audit, 'status': 'persistence_failed', 'appended': False}
+                    return {'saved': backend != 'failed', 'persistence_backend': backend,
+                            'prediction_event': event_audit}
+                return {'saved': False, 'persistence_backend': 'unchanged', 'prediction_event': event_audit}
 
             # 更新现有记录
             update_data = {
@@ -610,7 +631,11 @@ class PredictionHistory:
                     record['closing_odds_source'] = 'last_observed_prematch_proxy'
 
             backend = self._save_record(record)
-            return {'saved': True, 'persistence_backend': backend}
+            if backend == 'failed':
+                record.clear()
+                record.update(before_prediction)
+                event_audit = {**event_audit, 'status': 'persistence_failed', 'appended': False}
+            return {'saved': backend != 'failed', 'persistence_backend': backend, 'prediction_event': event_audit}
         
         # 新增记录
         # 时间分层预测记录
@@ -717,10 +742,14 @@ class PredictionHistory:
                 predicted_rqspf=predicted_rqspf,
             ),
         }
+        event_audit = append_prediction_event(record_data, prediction_event)
         self.records.append(record_data)
         backend = self._save_record(record_data)
+        if backend == 'failed':
+            self.records.remove(record_data)
+            event_audit = {**event_audit, 'status': 'persistence_failed', 'appended': False}
         log.info(f"添加预测记录: {home} vs {away} (match_id={match_id})")
-        return {'saved': True, 'persistence_backend': backend}
+        return {'saved': backend != 'failed', 'persistence_backend': backend, 'prediction_event': event_audit}
     
     def get_record(self, match_id: str) -> Optional[Dict]:
         """按比赛ID获取单条记录，无则返回 None"""
@@ -775,6 +804,8 @@ class PredictionHistory:
         """
         for record in self.records:
             if record.get('match_id') == match_id:
+                if record.get('settled'):
+                    return False
                 if 'time_layers' not in record:
                     record['time_layers'] = {}
                 record['time_layers'][time_layer] = predicted_scores
@@ -788,38 +819,20 @@ class PredictionHistory:
         """计算命中标志和失败原因"""
         actual_score = record.get('actual_score')
         actual_result = record.get('actual_result')
-        predicted_scores = record.get('predicted_scores', {})
+        predicted_scores = record.get('predicted_scores') or {}
         predicted_1x2 = normalize_1x2_probs(record.get('predicted_1x2', {}))
         
         # 半全场相关
         actual_half_full = record.get('actual_half_full')
         predicted_half_full = record.get('predicted_half_full', {})
         
-        sorted_scores = sorted(predicted_scores.items(), key=lambda x: -x[1])
-        top1 = sorted_scores[0][0] if sorted_scores else None
-        top3 = [s for s, _ in sorted_scores[:3]]
-        top5 = [s for s, _ in sorted_scores[:5]]
-        top10 = [s for s, _ in sorted_scores[:10]]
-        top20 = [s for s, _ in sorted_scores[:20]]
-        top30 = [s for s, _ in sorted_scores[:30]]
-        
-        # 计算真实比分的排名和概率
-        actual_score_rank = None
-        actual_score_prob = predicted_scores.get(actual_score, 0)
-        
-        for i, (score, prob) in enumerate(sorted_scores):
-            if score == actual_score:
-                actual_score_rank = i + 1  # 排名从1开始
-                break
+        score_evaluation = score_metrics(predicted_scores, actual_score)
+        sorted_scores = (sorted(((score, float(p)) for score, p in predicted_scores.items()),
+                                key=lambda item: -item[1])
+                         if score_evaluation['hit_top1'] is not None else [])
         
         pred_result = max(predicted_1x2.items(), key=lambda x: x[1])[0] if predicted_1x2 else None
         
-        hit_top1 = actual_score == top1
-        hit_top3 = actual_score in top3
-        hit_top5 = actual_score in top5
-        hit_top10 = actual_score in top10
-        hit_top20 = actual_score in top20
-        hit_top30 = actual_score in top30
         hit_1x2 = (pred_result == actual_result) if pred_result and actual_result else None
 
         actual_rqspf = None
@@ -860,16 +873,10 @@ class PredictionHistory:
                 hit_half_1x2 = pred_half_result == actual_half_result
         
         fail_reasons = []
-        if not hit_top3:
+        if score_evaluation['hit_top3'] is False:
             fail_reasons = self._analyze_fail_reasons(record, sorted_scores, predicted_1x2)
         
         return {
-            'hit_top1': hit_top1,
-            'hit_top3': hit_top3,
-            'hit_top5': hit_top5,
-            'hit_top10': hit_top10,
-            'hit_top20': hit_top20,
-            'hit_top30': hit_top30,
             'hit_1x2': hit_1x2,
             'hit_rqspf': hit_rqspf,
             'actual_rqspf': actual_rqspf,
@@ -877,9 +884,8 @@ class PredictionHistory:
             'hit_half_full_top1': hit_half_full_top1,
             'hit_half_full_top3': hit_half_full_top3,
             'hit_half_1x2': hit_half_1x2,
-            'actual_score_rank': actual_score_rank,
-            'actual_score_prob': actual_score_prob,
             'fail_reasons': fail_reasons,
+            **score_evaluation,
         }
     
     def _analyze_fail_reasons(self, record: Dict, sorted_scores: List[Tuple[str, float]], 
@@ -1012,6 +1018,13 @@ class PredictionHistory:
     def update_result(self, match_id: str, actual_score: str, actual_result: str,
                       actual_half_score: str = None, error: str = None,
                       source: str = None, now: datetime = None):
+        with self._records_lock:
+            return self._update_result(match_id, actual_score, actual_result,
+                                       actual_half_score, error, source, now)
+
+    def _update_result(self, match_id: str, actual_score: str, actual_result: str,
+                       actual_half_score: str = None, error: str = None,
+                       source: str = None, now: datetime = None):
         """
         更新比赛结果
         
@@ -1026,7 +1039,16 @@ class PredictionHistory:
                 而那种测试会在那天到来之后自己变红（这里踩过一次）。
         """
         for record in self.records:
-            if record.get('match_id') == match_id:
+            if record.get('match_id') == match_id or match_id in (record.get('alias_match_ids') or []):
+                previously_settled = bool(record.get('settled'))
+                if previously_settled and (not actual_score or not actual_result):
+                    return True
+                if (previously_settled and record.get('actual_score') == actual_score
+                        and record.get('actual_result') == actual_result
+                        and (not actual_half_score or record.get('actual_half_score') == actual_half_score)):
+                    return True
+                before_settlement = deepcopy(record)
+                ingest_claim_persisted = False
                 if actual_score and actual_result:
                     if not _is_match_settle_due(record.get('match_time'), minutes=180, now=now):
                         record['sync_status'] = 'pending'
@@ -1059,8 +1081,9 @@ class PredictionHistory:
                     record['actual_result'] = actual_result
                     record['result_quality'] = result_quality
                     record['settled'] = True
-                    settled_at = datetime.now().isoformat()
+                    settled_at = (now or datetime.now()).astimezone().isoformat()
                     record['settled_at'] = settled_at
+                    record.setdefault('first_settled_at', before_settlement.get('settled_at') or settled_at)
                     record['last_sync_at'] = settled_at
                     record['sync_status'] = 'synced'
                     
@@ -1078,8 +1101,10 @@ class PredictionHistory:
                             record['half_time_data_quality'] = 'real'
                         except:
                             record['half_time_data_quality'] = 'invalid'
-                    else:
+                    elif not record.get('actual_half_score'):
                         record['half_time_data_quality'] = 'missing'
+                    elif record.get('actual_half_result') in ('H', 'D', 'A'):
+                        record['actual_half_full'] = f"{record['actual_half_result']}{actual_result}"
                     
                     # 计算命中结果（包含半全场）
                     record.update(self._calculate_hit_flags(record))
@@ -1090,22 +1115,49 @@ class PredictionHistory:
                     # 更新各模块。跨源重复记录（换源期间同一场比赛留下的另一条）
                     # 的派生库已由先结算的那条写过，再灌一次会让 ELO 多走一步、
                     # 校准与盘口库多收一份同场样本。
-                    if record.get('skip_training_ingest'):
+                    if previously_settled:
+                        # Corrections are audited but cannot apply the same match to Elo
+                        # or calibrators twice. A deliberate chronological rebuild is needed.
+                        record.setdefault('settlement_corrections', []).append({
+                            'previous_score': before_settlement.get('actual_score'),
+                            'previous_result': before_settlement.get('actual_result'),
+                            'previous_half_score': before_settlement.get('actual_half_score'),
+                            'score': actual_score, 'result': actual_result,
+                            'half_score': record.get('actual_half_score'), 'recorded_at': settled_at,
+                        })
+                        record['training_ingest_requires_rebuild'] = True
+                    elif record.get('skip_training_ingest'):
                         log.info(
                             "跨源重复记录，仅回填赛果不重复灌入派生库: "
                             f"{record.get('home')} vs {record.get('away')} "
                             f"match_id={record.get('match_id')}"
                         )
-                    elif _is_result_quality_usable(record):
-                        self._update_calibrator(record)
-                        self._update_market_db(record)
-                        self._update_score_frequency_db(record)
-                        self._update_elo_ratings(record)
-                        self._update_half_time_stats(record)  # 新增：更新半场统计
-                        self._update_goal_count_stats(record)  # 新增：更新总进球校准闭环
-
-                        # 最后写入盘口变化库
-                        self._update_market_change_db(record)
+                    elif _is_result_quality_usable(record) and not record.get('training_ingest'):
+                        # Persist an at-most-once claim BEFORE nontransactional derived
+                        # stores. A crash may need a rebuild, but must never double ingest.
+                        record['training_ingest'] = {'status': 'claimed', 'claimed_at': settled_at,
+                                                     'result': actual_score, 'policy': 'at-most-once-v1'}
+                        if self._save_record(record) == 'failed':
+                            record.clear()
+                            record.update(before_settlement)
+                            return False
+                        ingest_claim_persisted = True
+                        try:
+                            self._update_calibrator(record)
+                            self._update_market_db(record)
+                            self._update_score_frequency_db(record)
+                            self._update_elo_ratings(record)
+                            self._update_half_time_stats(record)
+                            self._update_goal_count_stats(record)
+                            self._update_market_change_db(record)
+                            # Existing adapters handle errors internally; do not claim
+                            # transactional success across these independent stores.
+                            record['training_ingest']['status'] = 'attempted'
+                        except Exception as exc:
+                            record['training_ingest']['status'] = 'interrupted'
+                            record['training_ingest']['error'] = str(exc)
+                            record['training_ingest_requires_rebuild'] = True
+                            log.exception('派生库写入中断，保留去重标记并等待重建')
                     else:
                         log.warning(
                             f"赛果质量不足，仅保存结果不更新训练库: "
@@ -1117,8 +1169,11 @@ class PredictionHistory:
                     # 同步失败
                     self._handle_sync_failure(record, error or '无法获取赛果')
 
-                self._save_record(record)
-                return True
+                backend = self._save_record(record)
+                if backend == 'failed' and not ingest_claim_persisted:
+                    record.clear()
+                    record.update(before_settlement)
+                return backend != 'failed'
         return False
     
     def defer_sync(self, match_id: str, reason: str,
@@ -1243,7 +1298,7 @@ class PredictionHistory:
             last_sync_at = record.get('last_sync_at')
             if last_sync_at:
                 try:
-                    sync_time = datetime.fromisoformat(last_sync_at)
+                    sync_time = datetime.fromisoformat(last_sync_at).astimezone()
                     if last_sync is None or sync_time > last_sync:
                         last_sync = sync_time
                 except:
@@ -1253,7 +1308,7 @@ class PredictionHistory:
                 settled_at = record.get('settled_at') or record.get('last_sync_at')
                 if settled_at:
                     try:
-                        settled_time = datetime.fromisoformat(settled_at)
+                        settled_time = datetime.fromisoformat(settled_at).astimezone()
                         if last_settled is None or settled_time > last_settled:
                             last_settled = settled_time
                     except:
@@ -1284,6 +1339,7 @@ class PredictionHistory:
             'actual_half_full', 'settled_at', 'evaluation', 'hit_top1', 'hit_top3',
             'hit_top5', 'hit_top10', 'hit_top20', 'hit_top30', 'hit_1x2',
             'actual_score_rank', 'actual_score_prob',
+            'score_brier', 'score_logloss', 'score_distribution_valid',
         ]
 
         for record in self.records:
@@ -1299,6 +1355,8 @@ class PredictionHistory:
                 if field in record:
                     record[field] = None
             record['settled'] = False
+            if record.get('training_ingest'):
+                record['training_ingest_requires_rebuild'] = True
             record['sync_status'] = 'pending'
             record['last_sync_error'] = '已撤销提前回填，等待比赛结束后重新同步'
             record['updated_at'] = now.isoformat()
@@ -1694,394 +1752,141 @@ class PredictionHistory:
             log.debug(f"更新盘口变化数据库失败: {e}")
     
     def get_stats(self) -> Dict:
-        """获取统计信息（包含时间分层统计）"""
-        total = len(self.records)
-        settled = len([r for r in self.records if r.get('settled', False)])
-        unsettled = total - settled
-        
-        # 时间分层统计
-        time_layers = ['T-24h', 'T-6h', 'T-1h', 'T-15min', 'final']
-        layer_stats = {
-            layer: {
-                'correct_top1': 0,
-                'correct_top3': 0,
-                'correct_top5': 0,
-                'total': 0,
-                'weighted_correct_top1': 0.0,
-                'weighted_correct_top3': 0.0,
-                'weighted_correct_top5': 0.0,
-                'weighted_total': 0.0,
-            }
-            for layer in time_layers
-        }
-        
-        # 计算命中率
-        correct_top1 = 0
-        correct_top3 = 0
-        correct_top5 = 0
-        correct_1x2 = 0
-        valid_score_predictions = 0
-        valid_1x2_predictions = 0
-        actionable_total = 0
-        actionable_correct = 0
-        version_1x2 = {}
-        
+        """Descriptive legacy metrics with explicit denominators, plus frozen-event research."""
+        ks = (1, 3, 5, 10)
+        totals, hits = dict.fromkeys(ks, 0), dict.fromkeys(ks, 0)
+        layers = {key: {'total': 0, 'weight': time_layer_weight(key),
+                        **{f'correct_top{k}': 0 for k in ks},
+                        **{f'valid_top{k}': 0 for k in ks}}
+                  for key in ('T-24h', 'T-6h', 'T-1h', 'T-15min', 'final')}
+        versions, proper_scores, ranks, actual_probabilities = {}, [], [], []
+        settled = valid_1x2 = correct_1x2 = actionable_total = actionable_correct = 0
         for record in self.records:
-            if not record.get('settled', False):
+            if not record.get('settled'):
                 continue
-            
-            actual_score = record.get('actual_score', '')
-            predicted_scores = record.get('predicted_scores', {})
-            actual_result = record.get('actual_result', '')
-            predicted_1x2 = normalize_1x2_probs(record.get('predicted_1x2', {}))
-            time_layers_data = record.get('time_layers', {})
-            
-            if not predicted_scores or not actual_score:
+            settled += 1
+            if record.get('exclude_from_stats') or record.get('skip_training_ingest'):
                 continue
-            valid_score_predictions += 1
-            
-            # 统计各时间层命中率
-            for layer in time_layers:
-                layer_pred = time_layers_data.get(layer)
-                if layer == 'final' and not layer_pred:
-                    layer_pred = predicted_scores
-                if not layer_pred:
+            metrics = score_metrics(record.get('predicted_scores'), record.get('actual_score'))
+            for k in ks:
+                hit = metrics[f'hit_top{k}']
+                if hit is not None:
+                    totals[k] += 1
+                    hits[k] += hit
+            if metrics['score_distribution_valid']:
+                proper_scores.append(metrics)
+            if metrics['actual_score_rank'] is not None:
+                ranks.append(metrics['actual_score_rank'])
+            if metrics['actual_score_prob'] is not None:
+                actual_probabilities.append(metrics['actual_score_prob'])
+            for key, values in layers.items():
+                scores = (record.get('time_layers') or {}).get(key)
+                if key == 'final' and not scores:
+                    scores = record.get('predicted_scores')
+                if not scores:
                     continue
-                layer_weight = time_layer_weight(layer)
-                
-                sorted_scores = sorted(layer_pred.items(), key=lambda x: -x[1])
-                layer_stats[layer]['total'] += 1
-                layer_stats[layer]['weighted_total'] += layer_weight
-                
-                if sorted_scores and sorted_scores[0][0] == actual_score:
-                    layer_stats[layer]['correct_top1'] += 1
-                    layer_stats[layer]['weighted_correct_top1'] += layer_weight
-                
-                top3_scores = [s[0] for s in sorted_scores[:3]]
-                if actual_score in top3_scores:
-                    layer_stats[layer]['correct_top3'] += 1
-                    layer_stats[layer]['weighted_correct_top3'] += layer_weight
-                
-                top5_scores = [s[0] for s in sorted_scores[:5]]
-                if actual_score in top5_scores:
-                    layer_stats[layer]['correct_top5'] += 1
-                    layer_stats[layer]['weighted_correct_top5'] += layer_weight
-            
-            # 最终预测统计
-            sorted_scores = sorted(predicted_scores.items(), key=lambda x: -x[1])
-            
-            if sorted_scores and sorted_scores[0][0] == actual_score:
-                correct_top1 += 1
-            
-            top3_scores = [s[0] for s in sorted_scores[:3]]
-            if actual_score in top3_scores:
-                correct_top3 += 1
-            
-            top5_scores = [s[0] for s in sorted_scores[:5]]
-            if actual_score in top5_scores:
-                correct_top5 += 1
-            
-            # 胜平负
-            if actual_result and actual_result in predicted_1x2:
-                valid_1x2_predictions += 1
-                pred_result = max(predicted_1x2.items(), key=lambda x: x[1])[0]
-                if pred_result == actual_result:
-                    correct_1x2 += 1
-                version = record.get('model_version') or 'legacy-unversioned'
-                version_stats = version_1x2.setdefault(version, {'total': 0, 'correct': 0})
-                version_stats['total'] += 1
-                if pred_result == actual_result:
-                    version_stats['correct'] += 1
-                decision = record.get('decision_snapshot') or _prediction_decision_snapshot(predicted_1x2)
-                if decision.get('eligible'):
-                    # Settle the direction actually recommended at prediction time.
-                    # Old snapshots without a direction retain their legacy fallback.
-                    selected_result = decision.get('prediction', pred_result)
-                    selected_result = {'胜': 'H', '平': 'D', '负': 'A'}.get(
-                        selected_result, selected_result)
-                    if selected_result in ('H', 'D', 'A'):
-                        actionable_total += 1
-                        if selected_result == actual_result:
-                            actionable_correct += 1
-
-        hit_rate_top1 = correct_top1 / valid_score_predictions if valid_score_predictions > 0 else 0
-        hit_rate_top3 = correct_top3 / valid_score_predictions if valid_score_predictions > 0 else 0
-        hit_rate_top5 = correct_top5 / valid_score_predictions if valid_score_predictions > 0 else 0
-        hit_rate_1x2 = correct_1x2 / valid_1x2_predictions if valid_1x2_predictions > 0 else 0
-
-        # 计算各时间层命中率
-        layer_hit_rates = {}
-        for layer in time_layers:
-            total_layer = layer_stats[layer]['total']
-            if total_layer > 0:
-                layer_hit_rates[layer] = {
-                    'hit_rate_top1': layer_stats[layer]['correct_top1'] / total_layer,
-                    'hit_rate_top3': layer_stats[layer]['correct_top3'] / total_layer,
-                    'hit_rate_top5': layer_stats[layer]['correct_top5'] / total_layer,
-                    'correct_top1': layer_stats[layer]['correct_top1'],
-                    'correct_top3': layer_stats[layer]['correct_top3'],
-                    'correct_top5': layer_stats[layer]['correct_top5'],
-                    'total': total_layer,
-                    'weight': time_layer_weight(layer),
-                    'weighted_hit_rate_top1': (
-                        layer_stats[layer]['weighted_correct_top1'] / layer_stats[layer]['weighted_total']
-                        if layer_stats[layer]['weighted_total'] > 0 else 0.0
-                    ),
-                    'weighted_hit_rate_top3': (
-                        layer_stats[layer]['weighted_correct_top3'] / layer_stats[layer]['weighted_total']
-                        if layer_stats[layer]['weighted_total'] > 0 else 0.0
-                    ),
-                    'weighted_hit_rate_top5': (
-                        layer_stats[layer]['weighted_correct_top5'] / layer_stats[layer]['weighted_total']
-                        if layer_stats[layer]['weighted_total'] > 0 else 0.0
-                    ),
-                    'weighted_total': round(layer_stats[layer]['weighted_total'], 3),
-                }
-            else:
-                layer_hit_rates[layer] = {
-                    'hit_rate_top1': 0.0,
-                    'hit_rate_top3': 0.0,
-                    'hit_rate_top5': 0.0,
-                    'correct_top1': 0,
-                    'correct_top3': 0,
-                    'correct_top5': 0,
-                    'total': 0,
-                    'weight': time_layer_weight(layer),
-                    'weighted_hit_rate_top1': 0.0,
-                    'weighted_hit_rate_top3': 0.0,
-                    'weighted_hit_rate_top5': 0.0,
-                    'weighted_total': 0.0,
-                }
-        
+                layer_metrics = (metrics if scores is record.get('predicted_scores')
+                                 else score_metrics(scores, record.get('actual_score')))
+                for k in ks:
+                    hit = layer_metrics[f'hit_top{k}']
+                    if hit is not None:
+                        values[f'valid_top{k}'] += 1
+                        values[f'correct_top{k}'] += hit
+                values['total'] = values['valid_top1']
+            # A missing score distribution must not erase a valid 1x2 observation.
+            probabilities = normalize_1x2_probs(record.get('predicted_1x2') or {})
+            actual = record.get('actual_result')
+            if actual not in ('H', 'D', 'A') or not probabilities:
+                continue
+            valid_1x2 += 1
+            prediction = max(probabilities, key=probabilities.get)
+            correct_1x2 += prediction == actual
+            version = record.get('model_version') or 'legacy-unversioned'
+            values = versions.setdefault(version, {'total': 0, 'correct': 0})
+            values['total'] += 1
+            values['correct'] += prediction == actual
+            decision = record.get('decision_snapshot') or _prediction_decision_snapshot(probabilities)
+            if decision.get('eligible'):
+                selected = decision.get('prediction', prediction)
+                selected = {'胜': 'H', '平': 'D', '负': 'A'}.get(selected, selected)
+                if selected in ('H', 'D', 'A'):
+                    actionable_total += 1
+                    actionable_correct += selected == actual
+        for values in layers.values():
+            values['weighted_total'] = round(values['total'] * values['weight'], 3)
+            for k in ks:
+                rate = values[f'correct_top{k}'] / values[f'valid_top{k}'] if values[f'valid_top{k}'] else None
+                values[f'hit_rate_top{k}'] = rate
+                values[f'weighted_hit_rate_top{k}'] = rate
+        mean = lambda values: sum(values)/len(values) if values else None
         return {
-            'total_predictions': total,
-            'settled': settled,
-            'unsettled': unsettled,
-            'hit_rate_top1': hit_rate_top1,
-            'hit_rate_top3': hit_rate_top3,
-            'hit_rate_top5': hit_rate_top5,
-            'hit_rate_1x2': hit_rate_1x2,
-            'by_time_layer': layer_hit_rates,
-            'correct_top1': correct_top1,
-            'correct_top3': correct_top3,
-            'correct_top5': correct_top5,
-            'correct_1x2': correct_1x2,
-            'valid_score_predictions': valid_score_predictions,
-            'valid_1x2_predictions': valid_1x2_predictions,
+            'total_predictions': len(self.records), 'settled': settled,
+            'unsettled': len(self.records) - settled,
+            **{f'hit_rate_top{k}': hits[k]/totals[k] if totals[k] else None for k in ks},
+            **{f'correct_top{k}': hits[k] for k in ks},
+            **{f'valid_top{k}_predictions': totals[k] for k in ks},
+            'hit_rate_1x2': correct_1x2/valid_1x2 if valid_1x2 else None,
+            'correct_1x2': correct_1x2, 'valid_score_predictions': totals[1],
+            'valid_1x2_predictions': valid_1x2, 'by_time_layer': layers,
+            'score_brier': mean([m['score_brier'] for m in proper_scores]),
+            'score_logloss': mean([m['score_logloss'] for m in proper_scores]),
+            'valid_score_probability_predictions': len(proper_scores),
+            'mean_actual_score_rank': mean(ranks), 'actual_score_rank_n': len(ranks),
+            'mean_actual_score_probability': mean(actual_probabilities),
+            'actual_score_probability_n': len(actual_probabilities),
+            'descriptive_scope': 'stored_predictions_not_necessarily_frozen',
             'actionable_1x2': {
                 'policy_version': ACTIONABLE_POLICY_VERSION,
-                'total': actionable_total,
-                'correct': actionable_correct,
-                'hit_rate': actionable_correct / actionable_total if actionable_total else 0.0,
-                'coverage': actionable_total / valid_1x2_predictions if valid_1x2_predictions else 0.0,
-                'min_probability': ACTIONABLE_MIN_PROBABILITY,
-                'min_margin': ACTIONABLE_MIN_MARGIN,
+                'total': actionable_total, 'correct': actionable_correct,
+                'hit_rate': actionable_correct/actionable_total if actionable_total else None,
+                'coverage': actionable_total/valid_1x2 if valid_1x2 else None,
+                'min_probability': ACTIONABLE_MIN_PROBABILITY, 'min_margin': ACTIONABLE_MIN_MARGIN,
             },
-            'by_model_version': {
-                version: {
-                    **values,
-                    'hit_rate_1x2': values['correct'] / values['total'] if values['total'] else 0.0,
-                }
-                for version, values in version_1x2.items()
-            },
-        }
-    
-    def get_ml_evaluation_stats(self, min_samples: int = 45) -> Dict:
-        """
-        获取 ML 模型评估统计（按维度）
-        
-        参数：
-            min_samples: 最小样本数阈值
-        
-        返回：
-            按维度统计的评估结果
-        """
-        # 五大联赛列表
-        top_leagues = ['英超', '西甲', '德甲', '意甲', '法甲']
-        
-        # 初始化统计结构
-        stats = {
-            'overall': {
-                'sample_count': 0,
-                'base_1x2_logloss': [],
-                'base_1x2_brier': [],
-                'base_1x2_hit': [],
-                'ml_1x2_logloss': [],
-                'ml_1x2_brier': [],
-                'ml_1x2_hit': [],
-                'fused_5pct_logloss': [],
-                'fused_5pct_brier': [],
-                'fused_10pct_logloss': [],
-                'fused_10pct_brier': [],
-            },
-            'by_league': {},
-            'by_handicap_type': {
-                'strong_favorite': {},  # 让球 >= 1.0
-                'balanced': {},         # -0.5 < 让球 < 0.5
-                'weak_favorite': {},    # 让球 <= -1.0
-            },
-            'by_total_line': {
-                'low': {},              # <= 2.25
-                'medium': {},           # 2.25 < x < 3.0
-                'high': {},             # >= 3.0
-            },
-            'by_result': {
-                'H': {},
-                'D': {},
-                'A': {},
-            },
-        }
-        
-        # 初始化联赛统计
-        for league in top_leagues:
-            stats['by_league'][league] = {
-                'sample_count': 0,
-                'base_1x2_logloss': [],
-                'base_1x2_brier': [],
-                'base_1x2_hit': [],
-                'ml_1x2_logloss': [],
-                'ml_1x2_brier': [],
-                'ml_1x2_hit': [],
-                'fused_5pct_logloss': [],
-                'fused_5pct_brier': [],
-                'fused_10pct_logloss': [],
-                'fused_10pct_brier': [],
-            }
-        
-        # 初始化其他维度统计
-        for dim in ['by_handicap_type', 'by_total_line', 'by_result']:
-            for key in stats[dim]:
-                stats[dim][key] = {
-                    'sample_count': 0,
-                    'base_1x2_logloss': [],
-                    'base_1x2_brier': [],
-                    'base_1x2_hit': [],
-                    'ml_1x2_logloss': [],
-                    'ml_1x2_brier': [],
-                    'ml_1x2_hit': [],
-                    'fused_5pct_logloss': [],
-                    'fused_5pct_brier': [],
-                    'fused_10pct_logloss': [],
-                    'fused_10pct_brier': [],
-                }
-        
-        # 遍历记录收集数据
-        for record in self.records:
-            if not record.get('settled', False):
-                continue
-            
-            actual_result = record.get('actual_result')
-            if actual_result not in ['H', 'D', 'A']:
-                continue
-            
-            evaluation = record.get('evaluation', {})
-            league = record.get('league', '')
-            handicap = record.get('asian', 0.0)
-            total_line = record.get('total_line', 2.5)
-            
-            # 确定维度分类
-            if league in top_leagues:
-                league_key = league
-            else:
-                league_key = None
-            
-            # 让球盘类型
-            if handicap >= 1.0:
-                handicap_key = 'strong_favorite'
-            elif handicap <= -1.0:
-                handicap_key = 'weak_favorite'
-            else:
-                handicap_key = 'balanced'
-            
-            # 大小球类型
-            if total_line <= 2.25:
-                total_key = 'low'
-            elif total_line >= 3.0:
-                total_key = 'high'
-            else:
-                total_key = 'medium'
-            
-            # 结果类型
-            result_key = actual_result
-            
-            # 收集评估数据到各维度
-            dimensions = [('overall', None), 
-                          ('by_handicap_type', handicap_key),
-                          ('by_total_line', total_key),
-                          ('by_result', result_key)]
-            
-            # 只有当联赛在五大联赛列表中时才添加联赛维度
-            if league_key is not None:
-                dimensions.insert(1, ('by_league', league_key))
-            
-            for dim_key, key in dimensions:
-                if key is None:
-                    target = stats[dim_key]
-                elif key in stats[dim_key]:
-                    target = stats[dim_key][key]
-                else:
-                    continue
-                
-                target['sample_count'] += 1
-                
-                # 添加评估指标
-                for metric in ['base_1x2_logloss', 'base_1x2_brier', 'base_1x2_hit',
-                               'ml_1x2_logloss', 'ml_1x2_brier', 'ml_1x2_hit',
-                               'fused_5pct_logloss', 'fused_5pct_brier',
-                               'fused_10pct_logloss', 'fused_10pct_brier']:
-                    value = evaluation.get(metric)
-                    if value is not None and not math.isnan(value):
-                        target[metric].append(value)
-        
-        # 计算汇总统计
-        def summarize_dimension(dim_stats):
-            result = {}
-            for key, data in dim_stats.items():
-                if data['sample_count'] == 0:
-                    result[key] = {
-                        'sample_count': 0,
-                        'base_1x2_logloss': None,
-                        'base_1x2_brier': None,
-                        'base_1x2_hit_rate': None,
-                        'ml_1x2_logloss': None,
-                        'ml_1x2_brier': None,
-                        'ml_1x2_hit_rate': None,
-                        'fused_5pct_logloss': None,
-                        'fused_5pct_brier': None,
-                        'fused_10pct_logloss': None,
-                        'fused_10pct_brier': None,
-                        'qualified': False,
-                    }
-                    continue
-                
-                # 计算均值
-                result[key] = {
-                    'sample_count': data['sample_count'],
-                    'base_1x2_logloss': sum(data['base_1x2_logloss']) / len(data['base_1x2_logloss']) if data['base_1x2_logloss'] else None,
-                    'base_1x2_brier': sum(data['base_1x2_brier']) / len(data['base_1x2_brier']) if data['base_1x2_brier'] else None,
-                    'base_1x2_hit_rate': sum(data['base_1x2_hit']) / len(data['base_1x2_hit']) if data['base_1x2_hit'] else None,
-                    'ml_1x2_logloss': sum(data['ml_1x2_logloss']) / len(data['ml_1x2_logloss']) if data['ml_1x2_logloss'] else None,
-                    'ml_1x2_brier': sum(data['ml_1x2_brier']) / len(data['ml_1x2_brier']) if data['ml_1x2_brier'] else None,
-                    'ml_1x2_hit_rate': sum(data['ml_1x2_hit']) / len(data['ml_1x2_hit']) if data['ml_1x2_hit'] else None,
-                    'fused_5pct_logloss': sum(data['fused_5pct_logloss']) / len(data['fused_5pct_logloss']) if data['fused_5pct_logloss'] else None,
-                    'fused_5pct_brier': sum(data['fused_5pct_brier']) / len(data['fused_5pct_brier']) if data['fused_5pct_brier'] else None,
-                    'fused_10pct_logloss': sum(data['fused_10pct_logloss']) / len(data['fused_10pct_logloss']) if data['fused_10pct_logloss'] else None,
-                    'fused_10pct_brier': sum(data['fused_10pct_brier']) / len(data['fused_10pct_brier']) if data['fused_10pct_brier'] else None,
-                    'qualified': data['sample_count'] >= min_samples,
-                }
-            return result
-        
-        return {
-            'overall': summarize_dimension({'overall': stats['overall']})['overall'],
-            'by_league': summarize_dimension(stats['by_league']),
-            'by_handicap_type': summarize_dimension(stats['by_handicap_type']),
-            'by_total_line': summarize_dimension(stats['by_total_line']),
-            'by_result': summarize_dimension(stats['by_result']),
-            'min_samples_required': min_samples,
+            'by_model_version': {key: {**values, 'hit_rate_1x2': values['correct']/values['total']}
+                                 for key, values in versions.items()},
+            'frozen_event_evaluation': self.get_frozen_evaluation_stats(include_confidence_intervals=False),
         }
 
+    def get_frozen_evaluation_stats(self, model_version=None, as_of=None,
+                                    include_confidence_intervals=True) -> Dict:
+        # Point estimates are requested repeatedly while rendering fixtures. Rehash
+        # immutable inputs (also detecting accidental mutation) before reusing one
+        # bounded cached report; explicit audit/CI requests always revalidate fully.
+        cache_key = None
+        if not include_confidence_intervals and as_of is None:
+            state = []
+            try:
+                for record in self.records:
+                    events = record.get('prediction_events') or []
+                    first = events[0] if events else None
+                    state.append((record.get('match_id'), record.get('settled'),
+                                  record.get('actual_score'), record.get('actual_result'),
+                                  record.get('settled_at'), record.get('selected_prediction_event_id'),
+                                  record.get('exclude_from_stats'), record.get('skip_training_ingest'),
+                                  record.get('result_quality'),
+                                  (event_hash(first), first.get('hash'), first.get('event_id')) if first else None))
+                cache_key = (model_version, int(time.time()/60), canonical_hash(state))
+            except (TypeError, ValueError, KeyError, AttributeError):
+                pass
+            cached = getattr(self, '_point_evaluation_cache', None)
+            if cache_key is not None and cached and cached[0] == cache_key:
+                return deepcopy(cached[1])
+        result = evaluate_frozen_events(self.records, model_version=model_version, as_of=as_of,
+                                        include_confidence_intervals=include_confidence_intervals)
+        if cache_key is not None:
+            self._point_evaluation_cache = (cache_key, deepcopy(result))
+        return result
 
-# 全局实例
+    def get_ml_evaluation_stats(self, min_samples: int = 45,
+                                model_version: str = None, as_of=None,
+                                include_confidence_intervals=True) -> Dict:
+        """Only same-event base/ML pairs from this ML version can support eligibility."""
+        return evaluate_frozen_ml(self.records, min_samples=min_samples,
+                                  model_version=model_version, as_of=as_of,
+                                  include_confidence_intervals=include_confidence_intervals)
+
+
+
 _global_history = PredictionHistory()
 
 
@@ -2109,7 +1914,8 @@ def save_prediction(match_id: str, league: str, home: str, away: str,
                    goal_count: Dict = None,
                    professional_snapshot: Dict = None,
                    model_version: str = PRODUCTION_MODEL_VERSION,
-                   match_num: str = None):
+                   match_num: str = None,
+                   prediction_event: Dict = None):
     """保存预测记录"""
     return _global_history.add_prediction(
         match_id, league, home, away, match_time,
@@ -2126,6 +1932,7 @@ def save_prediction(match_id: str, league: str, home: str, away: str,
         professional_snapshot=professional_snapshot,
         model_version=model_version,
         match_num=match_num,
+        prediction_event=prediction_event,
     )
 
 
@@ -2601,16 +2408,24 @@ def get_prediction_export() -> Dict:
         'ml_feature_snapshot', 'actual_score', 'actual_result',
         'actual_half_score', 'actual_half_result', 'actual_half_full',
         'settled', 'sync_status', 'evaluation', 'hit_top1', 'hit_top3',
-        'hit_top5', 'hit_1x2', 'hit_rqspf', 'actual_rqspf',
+        'hit_top5', 'hit_top10', 'hit_top20', 'hit_top30', 'hit_1x2', 'hit_rqspf', 'actual_rqspf',
         'actual_score_rank', 'actual_score_prob',
+        'score_brier', 'score_logloss', 'score_distribution_valid',
+        'prediction_events', 'selected_prediction_event_id', 'prediction_event_selection_policy',
+        'first_settled_at', 'settlement_corrections', 'training_ingest', 'training_ingest_requires_rebuild',
+        'alias_match_ids', 'exclude_from_stats', 'skip_training_ingest',
         'decision_snapshot', 'result_quality', 'result_source', 'sync_source',
         'half_time_data_quality', 'exclude_from_calibration', 'params_snapshot',
     )
     records = [
-        {key: record.get(key) for key in export_fields if key in record}
+        {**{key: deepcopy(record.get(key)) for key in export_fields if key in record},
+         **(score_metrics(record.get('predicted_scores'), record.get('actual_score'))
+            if record.get('settled') else {})}
         for record in map(_global_history._persistable, _global_history.records)
     ]
     records.sort(key=lambda item: item.get('match_time', ''))
+    stats = _global_history.get_stats()
+    stats['frozen_event_evaluation'] = _global_history.get_frozen_evaluation_stats()
     return {
         'schema_version': 'football-prediction-export-v3',
         'exported_at': datetime.now().astimezone().isoformat(),
@@ -2619,7 +2434,7 @@ def get_prediction_export() -> Dict:
             1 for record in records
             if record.get('settled') or record.get('actual_score')
         ),
-        'stats': _global_history.get_stats(),
+        'stats': stats,
         'records': records,
     }
 

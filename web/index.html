@@ -3912,6 +3912,27 @@ function renderModelStatus(status) {
 function renderModelWeights(weights) {
   if (!weights) return '';
 
+  // Keep the existing card/rows; the composite pipeline has no meaningful
+  // single global share for its nested market, team, Elo and calibration steps.
+  if (weights.scope === 'final_stage_mixture') {
+    const base = Number(weights.existing_pipeline), ml = Number(weights.ml);
+    const valid = Number.isFinite(base) && Number.isFinite(ml)
+      && base >= 0 && base <= 1 && ml >= 0 && ml <= 1 && Math.abs(base + ml - 1) < 1e-6;
+    const rows = [['统计与盘口模型', valid ? base : null, '原模型内部多阶段计算'],
+      ['球队近期', null, '内部步骤，不单独分配总权重'],
+      ['ELO', null, '内部步骤，不单独分配总权重'],
+      ['相似盘口', null, '参考模块，不另计融合权重'],
+      ['ML', valid ? ml : null, valid ? (ml > 0 ? '实际最终融合' : '未参与') : '执行权重待核验']];
+    let html = `<div class="card"><h3>⚖️ 模型融合权重</h3>`;
+    for (const [label, value, note] of rows) {
+      html += `<div class="zhixuan"><span class="rank">${esc(label)}</span>
+        <span class="num">${value === null ? '—' : (value * 100).toFixed(0) + '%'}</span>
+        <span class="bar"><i style="width:${value === null ? 0 : value * 100}%"></i></span>
+        <span class="score">${esc(note)}</span></div>`;
+    }
+    return html + `</div>`;
+  }
+
   const labels = {
     market: '市场盘口',
     team: '球队近期',

@@ -14,8 +14,11 @@
 from __future__ import annotations
 
 import math
+import hashlib
+import json
 import os
 import pickle
+from datetime import datetime
 from typing import Tuple, Dict, List, Optional, Callable
 
 from ..common import kv_store
@@ -898,117 +901,118 @@ from ..domain.sports.football.parsing import get_close_total_line
 _trained_ml_model = None
 _trained_ml_metadata = None
 _trained_ml_feature_names = []
+_trained_ml_artifact = None
 
 
-def load_trained_ml_model() -> bool:
-    """
-    加载训练好的ML模型
-    
-    返回：
-        是否加载成功
-    """
-    global _trained_ml_model, _trained_ml_metadata, _trained_ml_feature_names
-    
-    data_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'data')
-    model_file = os.path.join(data_dir, 'ml_model.pkl')
-    metadata_file = os.path.join(data_dir, 'ml_metadata.json')
-    
-    # 检查模型文件是否存在
-    if not os.path.exists(model_file):
-        print(f"ML模型文件不存在: {model_file}")
-        return False
-    
+def validate_model_contract(model, metadata):
+    """Reject stale/mismatched artifacts before any prediction is produced."""
+    from .ml_feature_schema import FEATURE_VERSION, get_feature_names
+    from .ml_features import FEATURE_BUILDER_VERSION
+    names = get_feature_names()
+    if not isinstance(metadata, dict):
+        raise ValueError('missing_model_metadata')
+    if (metadata.get('feature_version') != FEATURE_VERSION
+            or metadata.get('features') != names
+            or metadata.get('feature_builder_version') != FEATURE_BUILDER_VERSION):
+        raise ValueError('incompatible_feature_contract')
+    if not isinstance(metadata.get('model_version'), str) or not metadata['model_version'].strip():
+        raise ValueError('missing_model_version')
+    if (not isinstance(metadata.get('train_count'), int) or isinstance(metadata['train_count'], bool)
+            or metadata['train_count'] <= 0):
+        raise ValueError('missing_training_evidence')
+    for key in ('validation_count', 'test_count'):
+        if (not isinstance(metadata.get(key), int) or isinstance(metadata[key], bool)
+                or metadata[key] <= 0):
+            raise ValueError('missing_validation_evidence')
     try:
-        # 加载模型
-        with open(model_file, 'rb') as f:
-            _trained_ml_model = pickle.load(f)
-        print("ML模型加载成功")
-        
-        # 加载元数据
-        _meta = kv_store.load('ml_metadata')
-        if _meta is None and os.path.exists(metadata_file):
-            with open(metadata_file, encoding='utf-8') as metadata_handle:
-                _meta = json.load(metadata_handle)
-        if _meta is not None:
-            _trained_ml_metadata = _meta
-            _trained_ml_feature_names = _trained_ml_metadata.get('features', [])
-            print(f"ML元数据加载成功，特征数: {len(_trained_ml_feature_names)}")
-        else:
-            # The feature contract is deterministic; using it is safer than an
-            # empty vector when an older deployment lacks the metadata sidecar.
-            from .ml_feature_schema import get_feature_names
-            _trained_ml_feature_names = get_feature_names()
-            _trained_ml_metadata = {
-                'model_version': 'legacy-with-v2-feature-contract',
-                'features': _trained_ml_feature_names,
-            }
-        
+        cutoff = datetime.fromisoformat(metadata['training_cutoff_at'].replace('Z', '+00:00'))
+        if cutoff.tzinfo is None:
+            raise ValueError('training_cutoff_requires_timezone')
+    except (KeyError, TypeError, ValueError, AttributeError) as exc:
+        raise ValueError('invalid_training_cutoff') from exc
+    dates = metadata.get('split_dates') or {}
+    try:
+        boundaries = [datetime.fromisoformat(dates[key].replace('Z', '+00:00'))
+                      for key in ('train_end', 'validation_end', 'test_end')]
+        if (any(value.tzinfo is None for value in boundaries)
+                or not boundaries[0] < boundaries[1] < boundaries[2] <= cutoff):
+            raise ValueError('invalid_split_dates')
+    except (KeyError, TypeError, ValueError, AttributeError) as exc:
+        raise ValueError('invalid_split_dates') from exc
+    if getattr(model, 'n_features_in_', None) != len(names):
+        raise ValueError('model_feature_dimension_mismatch')
+    classes = list(getattr(model, 'classes_', []))
+    if (len(classes) != 3 or any(isinstance(label, bool) for label in classes)
+            or set(classes) != {0, 1, 2} or metadata.get('classes') != classes):
+        raise ValueError('incompatible_model_classes')
+    fitted = getattr(model, 'is_fitted', None)
+    if (callable(fitted) and not fitted()) or getattr(model, 'is_trained', True) is False:
+        raise ValueError('model_not_trained')
+    if not callable(getattr(model, 'predict_proba', None)):
+        raise ValueError('model_cannot_predict_probabilities')
+
+
+def read_model_artifact(model_file, metadata_file):
+    """Metadata must travel with, and hash-match, its local pickle."""
+    with open(metadata_file, encoding='utf-8') as handle:
+        metadata = json.load(handle)
+    with open(model_file, 'rb') as handle:
+        payload = handle.read()
+    if not isinstance(metadata, dict) or metadata.get('model_sha256') != hashlib.sha256(payload).hexdigest():
+        raise ValueError('model_metadata_hash_mismatch')
+    model = pickle.loads(payload)
+    validate_model_contract(model, metadata)
+    return model, metadata
+
+
+def load_trained_ml_model(model_file=None, metadata_file=None) -> bool:
+    """Load only a complete, compatible artifact; never guess old metadata."""
+    global _trained_ml_model, _trained_ml_metadata, _trained_ml_feature_names, _trained_ml_artifact
+    data_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'data')
+    model_file = model_file or os.path.join(data_dir, 'ml_model.pkl')
+    metadata_file = metadata_file or os.path.join(data_dir, 'ml_metadata.json')
+    try:
+        model, metadata = read_model_artifact(model_file, metadata_file)
+        _trained_ml_model, _trained_ml_metadata = model, metadata
+        _trained_ml_feature_names = metadata['features']
+        _trained_ml_artifact = (model, metadata)
         return True
-    except Exception as e:
-        print(f"加载ML模型失败: {e}")
+    except Exception:
         _trained_ml_model = None
         _trained_ml_metadata = None
         _trained_ml_feature_names = []
+        _trained_ml_artifact = None
         return False
 
 
-def predict_1x2_by_ml(features: dict) -> dict:
-    """
-    使用训练好的ML模型预测胜平负概率
-    
-    参数：
-        features: 特征字典
-    
-    返回：
-        预测结果字典
-    """
-    global _trained_ml_model, _trained_ml_metadata, _trained_ml_feature_names
-    
-    # 检查模型是否加载
-    if _trained_ml_model is None:
-        # 尝试加载模型
-        if not load_trained_ml_model():
-            return {
-                'available': False,
-                'reason': 'model_not_trained'
-            }
-    
+def predict_with_model(model, metadata, features):
+    from .ml_features import audit_prediction_features, feature_vector
+    audit = audit_prediction_features(features)
+    if not audit['complete']:
+        return {'available': False, 'reason': 'invalid_feature_payload', 'feature_audit': audit}
     try:
-        # 获取特征名称列表
-        feature_names = _trained_ml_feature_names
-        
-        # 构建特征向量（按元数据中的顺序）
-        feature_vec = []
-        for name in feature_names:
-            feature_vec.append(features.get(name, 0.0))
-        
-        # 转换为numpy数组
-        X = np.array([feature_vec])
-        
-        # 预测概率
-        y_proba = _trained_ml_model.predict_proba(X)[0]
-        
-        # 归一化概率（确保和为1）
-        total = y_proba.sum()
-        if total > 0:
-            y_proba = y_proba / total
-        
-        # 确定预测标签
-        label_map = {0: 'H', 1: 'D', 2: 'A'}
-        predicted_label = label_map.get(y_proba.argmax(), 'D')
-        
-        return {
-            'H': float(y_proba[0]),
-            'D': float(y_proba[1]),
-            'A': float(y_proba[2]),
-            'predicted_label': predicted_label,
-            'model_version': _trained_ml_metadata.get('model_version', 'unknown') if _trained_ml_metadata else 'unknown',
-            'available': True
-        }
-    
-    except Exception as e:
-        print(f"ML预测失败: {e}")
-        return {
-            'available': False,
-            'reason': 'prediction_error'
-        }
+        validate_model_contract(model, metadata)
+        values = feature_vector(features, metadata['features'])
+        output = np.asarray(model.predict_proba(np.asarray([values], dtype=float)), dtype=float)
+        if (output.shape != (1, 3) or not np.isfinite(output).all()
+                or (output < 0).any() or (output > 1).any() or abs(float(output.sum()) - 1.0) > 1e-5):
+            return {'available': False, 'reason': 'invalid_model_probabilities'}
+        labels = {0: 'H', 1: 'D', 2: 'A'}
+        probabilities = {labels[int(label)]: float(value / output.sum())
+                         for label, value in zip(model.classes_, output[0])}
+        return {**probabilities, 'predicted_label': max(probabilities, key=probabilities.get),
+                'model_version': metadata['model_version'], 'model_type': type(model).__name__,
+                'training_cutoff_at': metadata['training_cutoff_at'],
+                'test_count': metadata.get('test_count', 0),
+                'feature_audit': audit, 'available': True}
+    except Exception:
+        return {'available': False, 'reason': 'incompatible_model_or_prediction_error'}
+
+
+def predict_1x2_by_ml(features: dict) -> dict:
+    if not load_trained_ml_model():
+        return {'available': False, 'reason': 'model_not_trained_or_artifact_invalid'}
+    artifact = _trained_ml_artifact
+    if artifact is None:
+        return {'available': False, 'reason': 'model_artifact_unavailable'}
+    return predict_with_model(artifact[0], artifact[1], features)

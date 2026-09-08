@@ -2,7 +2,8 @@
 """足球的概率校准：Platt / 保序回归 / 分层校准 / 分桶与整数键还原。
 
 参照物是从迁移前的三个模块生成的黄金文件
-（`tests/fixtures/golden/football_calibration.json.gz`，636 条），**逐条相同**。
+（`tests/fixtures/golden/football_calibration.json.gz`）。不足样本的 Platt
+恒等退化修复后，仅更新对应的 18 条期望，其余迁移参照保持不变。
 迁移当时另跑过 **674 条**新旧双跑差分，零差异。
 
 **保序回归返回的是闭包**——黄金存的是它在一组探针概率上的输出，
@@ -178,33 +179,17 @@ class TeamAliasResolutionIsVeryWide(unittest.TestCase):
 
 class PlattScaling(unittest.TestCase):
 
-    def test_the_default_parameters_are_not_the_identity_they_flatten_hard(self):
-        """**`(1.0, 0.0)` 不是恒等**——它是 `sigmoid(1.0*p + 0.0)`，
-        而 sigmoid 在 [0, 1] 上只从 0.5 走到 0.731。归一之后整张矩阵被压平。
+    def test_insufficient_data_sentinel_preserves_even_sharp_probabilities(self):
+        """The fallback must keep the baseline, including structural zeroes."""
+        for matrix in ({(0, 0): .25, (1, 0): .5, (1, 1): .25},
+                       {(0, 0): .001, (1, 0): .998, (1, 1): .001},
+                       {(0, 0): 0, (1, 0): 1}):
+            with self.subTest(matrix=matrix):
+                self.assertEqual(calibration.calibrate_with_platt(
+                    matrix, {'platt_params': (1.0, 0.0)}), matrix)
 
-        要紧的是：`train_league_platt_params` 在**历史数据不足 5 场**时正是
-        返回 `(1.0, 0.0)` 当「默认参数」——那不是安全兜底，是把模型的判别度
-        几乎抹平。实测一张 998:1 的矩阵会被压成 1.46:1，top1 从 0.998 → 0.422。
-
-        线上走不到（`pipeline.py:727` 虽然开着校准，但贝叶斯那条一直成功，
-        7 天零「贝叶斯校准失败」）。**行为原样保留**，见交接文档 §四。
-        """
-        matrix = {(0, 0): 0.25, (1, 0): 0.5, (1, 1): 0.25}
-        flattened = calibration.calibrate_with_platt(matrix, {'platt_params': (1.0, 0.0)})
-        self.assertNotAlmostEqual(flattened[(1, 0)], 0.5, places=2)
-        self.assertAlmostEqual(sum(flattened.values()), 1.0, places=9)
-
-        def ratio(m):
-            return max(m.values()) / min(m.values())
-        self.assertAlmostEqual(ratio(matrix), 2.0)
-        self.assertLess(ratio(flattened), 1.2)
-
-        sharp = {(0, 0): 0.001, (1, 0): 0.998, (1, 1): 0.001}
-        self.assertLess(ratio(calibration.calibrate_with_platt(
-            sharp, {'platt_params': (1.0, 0.0)})), 1.5)
-
-    def test_only_a_missing_platt_params_key_is_a_true_no_op(self):
-        """真正原样返回的只有「没有 platt_params」这一种——**同一个对象**。"""
+    def test_missing_platt_params_are_a_no_op(self):
+        """No calibration information leaves the same matrix object intact."""
         matrix = {(0, 0): 0.25, (1, 0): 0.75}
         for data in (None, {}, {'isotonic': []}):
             with self.subTest(data=data):

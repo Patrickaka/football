@@ -119,8 +119,39 @@ def perturb_parameters(base_params):
     return perturbed
 
 
+def _calibrate_score_matrix(matrix, team_strength, league_profile, line, asian, method):
+    """Calibrate once and report the transform that actually changed the matrix."""
+    original = dict(matrix)
+    actual_method = 'bayesian'
+    try:
+        probabilities = calibrate_predictions(
+            {f'{h}-{a}': probability for (h, a), probability in matrix.items()},
+            (team_strength or {}).get('league', ''), line, asian or 0,
+        )
+        calibrated = {tuple(map(int, key.split('-'))): float(value)
+                      for key, value in probabilities.items()}
+        if (set(calibrated) != set(original)
+                or any(not math.isfinite(value) or value < 0 for value in calibrated.values())
+                or sum(calibrated.values()) <= 0):
+            raise ValueError('invalid_calibrated_distribution')
+    except Exception:
+        actual_method = method
+        try:
+            data = get_league_calibration_data((league_profile or {}).get('name', 'default'))
+            calibrated = calibrate_probabilities(matrix, method=method, calibration_data=data)
+        except Exception:
+            return original, {'calibration_requested': True, 'calibrated': False,
+                              'calibration_method': None, 'calibration_reason': 'unavailable'}
+    changed = any(abs(calibrated.get(key, 0.0) - value) > 1e-12 for key, value in original.items())
+    return calibrated, {'calibration_requested': True, 'calibrated': changed,
+                        'calibration_method': actual_method if changed else None,
+                        'calibration_reason': 'applied' if changed else 'no_probability_change'}
+
+
 def ensemble_predict_scores(asian, euro, total, team_strength=None, league_profile=None,
-                           num_models=5, method='average', current_time_layer=None):
+                           num_models=5, method='average', current_time_layer=None,
+                           enable_calibration=False, calibration_method='platt',
+                           enable_draw_calibration=True):
     """
     多模型集成预测。
     
@@ -155,6 +186,8 @@ def ensemble_predict_scores(asian, euro, total, team_strength=None, league_profi
                 team_strength=team_strength, 
                 league_profile=league_profile,
                 model_type=model_type,
+                enable_draw_calibration=enable_draw_calibration,
+                enable_calibration=False,
                 current_time_layer=current_time_layer,
             )
             
@@ -169,7 +202,11 @@ def ensemble_predict_scores(asian, euro, total, team_strength=None, league_profi
     
     if not all_matrices:
         # 如果所有模型都失败，返回基础预测
-        return predict_scores(asian, euro, total, team_strength, league_profile, current_time_layer=current_time_layer)
+        return predict_scores(asian, euro, total, team_strength, league_profile,
+                              enable_draw_calibration=enable_draw_calibration,
+                              enable_calibration=enable_calibration,
+                              calibration_method=calibration_method,
+                              current_time_layer=current_time_layer)
     
     # 融合多个矩阵
     if len(all_matrices) == 2:
@@ -206,6 +243,12 @@ def ensemble_predict_scores(asian, euro, total, team_strength=None, league_profi
     avg_lam_home = sum(l[0] for l in all_lams) / len(all_lams)
     avg_lam_away = sum(l[1] for l in all_lams) / len(all_lams)
     
+    calibration_meta = {'calibration_requested': enable_calibration, 'calibrated': False,
+                        'calibration_method': None, 'calibration_reason': 'disabled'}
+    if enable_calibration:
+        ensemble_matrix, calibration_meta = _calibrate_score_matrix(
+            ensemble_matrix, team_strength, league_profile, total_line,
+            asian.get('handicap'), calibration_method)
     # 准备返回结果
     candidates = sorted(ensemble_matrix.items(), key=lambda kv: -kv[1])
     
@@ -221,8 +264,7 @@ def ensemble_predict_scores(asian, euro, total, team_strength=None, league_profi
         'supremacy_euro': meta.get('supremacy_euro'),
         'supremacy_blended': meta.get('supremacy_blended'),
         'target_total': meta.get('target_total'),
-        'calibrated': True,
-        'calibration_method': 'platt',
+        **calibration_meta,
         'market_db_used': meta.get('market_db_used', False),
     }
     
@@ -757,6 +799,9 @@ def predict_scores(asian, euro, total, team_strength=None, league_profile=None,
     if enable_ensemble:
         return ensemble_predict_scores(asian, euro, total, team_strength, league_profile,
                                       num_models=ensemble_size, method='average',
+                                      enable_calibration=enable_calibration,
+                                      calibration_method=calibration_method,
+                                      enable_draw_calibration=enable_draw_calibration,
                                       current_time_layer=current_time_layer)
     p_home = euro['close']['home']
     p_draw = euro['close']['draw']
@@ -1070,28 +1115,12 @@ def predict_scores(asian, euro, total, team_strength=None, league_profile=None,
     features = _build_residual_features(asian, euro, total, team_strength, league_profile)
     matrix = apply_residual_correction(matrix, features)
 
+    calibration_meta = {'calibration_requested': enable_calibration, 'calibrated': False,
+                        'calibration_method': None, 'calibration_reason': 'disabled'}
     # 应用概率输出校准
     if enable_calibration:
-        # 优先使用贝叶斯校准（基于真实历史预测记录），失败退回 Platt
-        try:
-            # 获取联赛和盘口信息用于市场环境校准
-            league_info = team_strength.get('league', '') if team_strength else ''
-            # 转换为字典格式 {"1-1": 0.108, ...}
-            score_probs = {f"{h}-{a}": p for (h, a), p in matrix.items()}
-            # 使用贝叶斯校准（带市场环境信息）
-            score_probs = calibrate_predictions(score_probs, league_info, line, sup_asian or 0)
-            # 转换回原始格式
-            matrix = {
-                tuple(map(int, score.split("-"))): prob
-                for score, prob in score_probs.items()
-            }
-            log.debug("已应用贝叶斯概率校准")
-        except Exception as e:
-            log.warning(f"贝叶斯校准失败，降级使用Platt校准: {e}")
-            # 降级到 Platt 校准
-            league_name = league_profile.get('name', 'default') if league_profile else 'default'
-            calibration_data = get_league_calibration_data(league_name)
-            matrix = calibrate_probabilities(matrix, method=calibration_method, calibration_data=calibration_data)
+        matrix, calibration_meta = _calibrate_score_matrix(
+            matrix, team_strength, league_profile, line, sup_asian, calibration_method)
 
     policy_adjustment = {'applied': False}
     try:
@@ -1113,8 +1142,7 @@ def predict_scores(asian, euro, total, team_strength=None, league_profile=None,
         'target_total': target_total,
         'model_type': model_type,
         'distribution': distribution,
-        'calibrated': enable_calibration,
-        'calibration_method': calibration_method if enable_calibration else None,
+        **calibration_meta,
         'handicap_change': asian.get('handicap_change'),
         'line_change': total.get('line_change'),
         'market_db_used': market_db_used,
