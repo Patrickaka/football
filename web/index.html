@@ -8729,7 +8729,7 @@ async function loadPredictions() {
   app.innerHTML = `<div class="status"><span class="spinner"></span>正在加载预测记录…</div>`;
   
   try {
-    // 预测记录是主数据；同步状态和诊断只是辅助卡片。辅助接口失败时也必须
+    // 预测记录是主数据；同步状态和导出诊断是辅助数据。辅助接口失败时也必须
     // 展示已保存记录，不能因为当前没有赛程或诊断暂不可用把历史一起隐藏。
     const optionalResult = async promise => {
       try {
@@ -8836,7 +8836,7 @@ async function loadPredictions() {
       </div>
     </div>`;
     
-    html += renderFootballDiagnostics(diagnostics);
+    // 诊断数据保留在 JSON 导出中，记录页不展示内部诊断与调参面板。
 
     // ── 操作按钮 ──
     html += `<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px">
