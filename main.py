@@ -22,11 +22,18 @@ def server_config():
     }
 
 
-def main():
+def main(*, sockets=None):
     # 编码设置属于进程入口——库模块顶层做这件事会换掉调用方的 stdout，
     # 在 pytest 下表现为整套测试从某个用例起全红且查不出关联。
     sys.stdout.reconfigure(encoding='utf-8')
     config = server_config()
+    if sockets is not None:
+        # 本地启动器已预留端口；沿用原 socket，避免初始化完成后再抢端口。
+        server = uvicorn.Server(uvicorn.Config('main:app', **config))
+        server.run(sockets=sockets)
+        if not server.started:
+            raise SystemExit(3)
+        return
     uvicorn.run(
         'main:app',
         host=config['host'],
