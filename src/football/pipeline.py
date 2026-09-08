@@ -414,24 +414,21 @@ def build_match_analysis(result):
             verdict = f"平局概率 {d:.0%}，双方势均力敌"
 
         lottery_info = result.get('lottery') or {}
-        lottery_primary = lottery_info.get('primary') or {}
         lottery_verdict = None
-        if lottery_info.get('primary_market') == 'rqspf':
-            rq_probs = lottery_primary.get('probabilities') or {}
-            standard_market = lottery_info.get('standard') or {}
-            handicap_market = lottery_info.get('handicap') or {}
-            linked_pick = lottery_info.get('linked_recommendation') or {}
-            standard_pick = linked_pick.get('standard_prediction') or standard_market.get('prediction')
-            rq_pick = linked_pick.get('handicap_prediction') or handicap_market.get('prediction')
-            if rq_probs and standard_pick and rq_pick:
-                rq_value = linked_pick.get('conditional_probability', rq_probs.get(rq_pick, 0.0))
-                rq_handicap = handicap_market.get('handicap')
-                handicap_text = f"{rq_handicap:+d}" if isinstance(rq_handicap, int) else str(rq_handicap)
-                lottery_verdict = (
-                    f"先按不让球最高概率选择{standard_pick}；主队{handicap_text}球口径下，"
-                    f"兼容结果为{'/'.join(linked_pick.get('compatible_handicap_predictions') or [rq_pick])}，"
-                    f"条件分析首选{rq_pick} {rq_value:.0%}"
-                )
+        direction = lottery_info.get('direction_analysis') or {}
+        if direction.get('available'):
+            standard_label = {'胜': '主胜', '平': '平局', '负': '客胜'}[
+                direction['standard_prediction']]
+            rq_pick = direction['handicap_prediction']
+            lottery_verdict = (
+                f"情景分析（非推荐）：{standard_label}整场概率"
+                f" {direction['standard_probability']:.1%}；"
+                f"若{standard_label}成立，主队{direction['handicap']:+d}球下，"
+                f"{rq_pick}条件概率 {direction['conditional_probability']:.1%}；"
+                f"两项同时发生的联合估计 {direction['joint_probability']:.1%}"
+            )
+        elif lottery_info.get('standard') and lottery_info.get('handicap'):
+            lottery_verdict = '统一情景暂不可用，需完整比分分布重新分析'
 
         conf_level = confidence.get('level') if isinstance(confidence, dict) else None
         if conf_level is None:

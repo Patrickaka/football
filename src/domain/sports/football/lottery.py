@@ -6,6 +6,7 @@
 取值，是公开契约的一部分，要有不传参数的用例守着（判据 29）。
 """
 
+import math
 import re
 
 # 迁移当时 config 的真实取值
@@ -227,6 +228,129 @@ def _linked_recommendation(spf, rqspf, model_rqspf, joint_probs):
     }
 
 
+def _direction_analysis(spf, rqspf, model_rqspf, joint_probs, handicap, *,
+                        score_probability_mass):
+    """Describe the handicap conditional on the ordinary top direction.
+
+    This is a scenario analysis, separate from both full-match market
+    distributions.  Reconstruct every row of a coherent joint distribution
+    using the ordinary market's mass and the market-adjusted score
+    conditional.  This is not a new calibrated forecast, and must never
+    overwrite persisted RQSPF values.
+
+    Missing score support is not evidence that a possible outcome has zero
+    probability.  In particular, a truncated score list must not turn the
+    remaining conditional scenario into an apparent certainty.
+    """
+    outcomes = ('让胜', '让平', '让负')
+    analysis = {
+        'available': False,
+        'standard_prediction': None,
+        'standard_probability': None,
+        'handicap': handicap,
+        'handicap_prediction': None,
+        'conditional_probabilities': None,
+        'conditional_probability': None,
+        'joint_probabilities': None,
+        'joint_probability': None,
+        'joint_distribution': None,
+        'compatible_handicap_predictions': [],
+        'incompatible_handicap_predictions': [],
+        'probability_basis': 'conditional_on_standard_result',
+        'probability_method': 'standard_anchored_joint_reweighting',
+        'method_note': ('以胜平负概率为基准重构联合分布，用于同方向情景分析；'
+                        '与独立让球盘口的整场概率估计不同，不替代整场预测'),
+        'score_probability_mass': (
+            score_probability_mass if math.isfinite(score_probability_mass) else None),
+        'label': None,
+        'reasons': [],
+    }
+
+    def valid_distribution(values, keys):
+        return (isinstance(values, dict) and set(values) == set(keys)
+                and all(math.isfinite(value) and 0 <= value <= 1
+                        for value in values.values())
+                and math.isclose(sum(values.values()), 1.0, abs_tol=1e-6))
+
+    if not valid_distribution(spf, ('胜', '平', '负')):
+        analysis['reasons'].append('缺少有效的胜平负整场概率，无法确定分析方向')
+        return analysis
+    standard_pick = max(spf, key=spf.get)
+    analysis['standard_prediction'] = standard_pick
+    analysis['standard_probability'] = spf[standard_pick]
+    if handicap is None:
+        analysis['reasons'].append('缺少有效的竞彩整数让球，无法分析同向让球结果')
+        return analysis
+    compatible = [outcome for outcome in outcomes
+                  if lottery_outcomes_compatible(standard_pick, outcome, handicap)]
+    analysis['compatible_handicap_predictions'] = compatible
+    analysis['incompatible_handicap_predictions'] = [
+        outcome for outcome in outcomes if outcome not in compatible]
+    if (not math.isfinite(score_probability_mass)
+            or not math.isclose(score_probability_mass, 1.0, abs_tol=1e-6)
+            or not joint_probs
+            or any(not math.isfinite(value) or value < 0
+                   for value in joint_probs.values())):
+        analysis['reasons'].append('缺少完整的比分概率分布，暂不推断同向让球结果')
+        return analysis
+    unsupported = [outcome for outcome in compatible
+                   if joint_probs.get((standard_pick, outcome), 0.0) <= 0]
+    if unsupported:
+        analysis['reasons'].append(
+            '比分支持不足，兼容结果缺少概率依据：' + '、'.join(unsupported))
+        return analysis
+    if (not valid_distribution(rqspf, outcomes)
+            or not valid_distribution(model_rqspf, outcomes)):
+        analysis['reasons'].append('缺少有效的让球整场概率，暂不分析条件概率')
+        return analysis
+
+    joint_distribution = []
+    for standard_result, standard_probability in spf.items():
+        if standard_probability <= 0:
+            continue
+        adjusted = {}
+        for outcome in outcomes:
+            score_mass = joint_probs.get((standard_result, outcome), 0.0)
+            if score_mass <= 0:
+                continue
+            model_value = model_rqspf[outcome]
+            market_factor = rqspf[outcome] / model_value if model_value > 0 else 1.0
+            adjusted[outcome] = score_mass * market_factor
+        adjusted_total = sum(adjusted.values())
+        if not math.isfinite(adjusted_total) or adjusted_total <= 0:
+            analysis['reasons'].append(
+                f'胜平负“{standard_result}”缺少比分支持，无法建立完整联合分布')
+            return analysis
+        for outcome, mass in adjusted.items():
+            joint_distribution.append({
+                'standard': standard_result,
+                'handicap': outcome,
+                'probability': standard_probability * mass / adjusted_total,
+            })
+
+    joint = {outcome: 0.0 for outcome in outcomes}
+    for entry in joint_distribution:
+        if entry['standard'] == standard_pick:
+            joint[entry['handicap']] = entry['probability']
+    conditional = {outcome: min(1.0, probability / spf[standard_pick])
+                   for outcome, probability in joint.items()}
+    if not valid_distribution(conditional, outcomes):
+        analysis['reasons'].append('让球条件概率无效，暂不输出同向判断')
+        return analysis
+    handicap_pick = max(conditional, key=conditional.get)
+    analysis.update({
+        'available': True,
+        'handicap_prediction': handicap_pick,
+        'conditional_probabilities': conditional,
+        'conditional_probability': conditional[handicap_pick],
+        'joint_probabilities': joint,
+        'joint_probability': joint[handicap_pick],
+        'joint_distribution': joint_distribution,
+        'label': f'{standard_pick} ⇒ {handicap_pick}',
+    })
+    return analysis
+
+
 def lottery_market_probabilities(candidates, lottery_handicap=None,
                                  spf_odds=None, rqspf_odds=None, *,
                                  market_weight=LOTTERY_OFFICIAL_ODDS_WEIGHT,
@@ -234,6 +358,7 @@ def lottery_market_probabilities(candidates, lottery_handicap=None,
     """Build JCZQ probabilities from scores and independently priced official markets."""
     handicap = parse_lottery_handicap(lottery_handicap)
     spf, rqspf, joint_probs = _accumulate_outcomes(candidates, handicap)
+    score_probability_mass = sum(spf.values())
 
     spf = _normalize(spf)
     if rqspf is not None:
@@ -291,6 +416,9 @@ def lottery_market_probabilities(candidates, lottery_handicap=None,
         },
         'joint_recommendation': joint_recommendation,
         'linked_recommendation': linked_recommendation,
+        'direction_analysis': _direction_analysis(
+            spf, rqspf, model_rqspf, joint_probs, handicap,
+            score_probability_mass=score_probability_mass),
         'settlement_rule': SETTLEMENT_RULE,
     }
 
@@ -309,4 +437,5 @@ def apply_lottery_market_availability(lottery):
         lottery['standard'] = None
         lottery['joint_recommendation'] = None
         lottery['linked_recommendation'] = None
+        lottery['direction_analysis'] = None
     return spf_prediction_enabled

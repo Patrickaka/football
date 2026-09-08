@@ -57,6 +57,8 @@ function getLotteryLinkedSelections() { return null; }
 function getFootballTopScoreReferences() { return []; }
 function renderProbabilityStrip() { return ''; }
 function renderWebMarketRecommendation() { return ''; }
+function renderFootballDirectionAnalysis() { return ''; }
+function renderFootballMarginalReference() { return ''; }
 function renderMarketEvidence() { return ''; }
 let tier = {tier:'abstain', label:'观望', probability:.798, prediction:'主胜', market:'胜平负',
   downgradeReasons:[], markets:{spf:{status:'abstain'}, rqspf:{status:'abstain'}, total_goals:{status:'abstain'}}};
@@ -187,18 +189,26 @@ console.log('handicap selection presentation cases passed');
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("handicap selection presentation cases passed", result.stdout)
 
-    def test_expanded_cards_use_marginal_probabilities_and_gate_picks(self):
+    def test_expanded_cards_use_the_same_direction_and_reference_presenter(self):
         html = (ROOT / "web/index.html").read_text(encoding="utf-8")
+        functions = []
+        for name in ("renderProbabilityStrip", "renderWebMarketRecommendation",
+                     "renderFootballDirectionAnalysis", "renderFootballMarginalReference",
+                     "getFootballMarketContext", "getFootballTotalCandidate", "renderMarketEvidence"):
+            start = html.index("function " + name + "(")
+            end = re.search(r"\n(?:async )?function ", html[start + 1:])
+            functions.append(html[start:start + 1 + end.start()])
         start = html.index('  function renderMatchItem(item) {')
         end = html.index("    if (footballSort === 'time')", start)
         renderer = html[start:end].replace('const compactFootballView = true;',
                                            'const compactFootballView = false;')
-        script = renderer + r"""
+        script = "\n".join(functions) + renderer + r"""
 const assert = require('node:assert/strict');
 function esc(value) { return String(value); }
 function uiIcon() { return ''; }
 function renderFixtureTeams() { return ''; }
 function getLotteryHandicapExplanation() { return ''; }
+function getFootballTopScoreReferences() { return []; }
 function getLotteryLinkedSelections() {
   return {primaryPrediction:'胜', standardPredictions:['胜'], handicapPredictions:['让平'],
     handicapConditionalProbabilities:{'让胜':0, '让平':1, '让负':0}};
@@ -212,17 +222,19 @@ const item = {match:{home:'主队',away:'客队'}, result:{lottery:{
   handicap:{handicap:-1, prediction:'让负', probabilities:{'让胜':.3,'让平':.25,'让负':.45}}
 }}};
 let card = renderMatchItem(item);
-assert.ok(card.includes('30%'));
-assert.ok(card.includes('25%'));
-assert.ok(card.includes('45%'));
+assert.ok(card.includes('30.0%'));
+assert.ok(card.includes('25.0%'));
+assert.ok(card.includes('45.0%'));
 assert.ok(!card.includes('100%'), 'conditional certainty must never replace marginal probability');
 assert.ok(!card.includes('⇒ 首选'));
-// Outcome markup has whitespace after its opening element.
-const highlighted = [...card.matchAll(/font-weight:bold">\s*<div>([^<]+)<\/div>/g)].map(m => m[1]);
-assert.deepEqual(highlighted, ['让胜'], 'highlight must follow selected gate.pick');
+assert.ok(card.includes('待重新分析'), 'legacy linked recommendation cannot stand in for audited direction analysis');
+assert.ok(card.includes('<details class="football-marginal-reference">'));
+assert.ok(card.includes('<strong>让胜</strong>'), 'recommendation must follow selected gate.pick');
+const reference = card.match(/<details class="football-marginal-reference">[\s\S]*?<\/details>/)[0];
+assert.ok(!reference.includes('is-pick'), 'independent probability maxima are not recommendations');
 states.rqspf.status = 'watch';
 card = renderMatchItem(item);
-assert.ok(!/font-weight:bold">\s*<div>让/.test(card));
+assert.ok(!card.includes('<strong>让胜</strong>'));
 console.log('expanded market probability cases passed');
 """
         result = subprocess.run([shutil.which("node"), "-e", script],

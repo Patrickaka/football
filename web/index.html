@@ -3364,6 +3364,23 @@ html, body.ui-shell { overflow-x: clip; }
 .ui-shell #panel-football .alert-details { padding-bottom: var(--space-xs); }
 .ui-shell #panel-football .fixture-actions { padding: var(--space-xs) var(--space-md); margin: 0; gap: var(--space-md); border-top: 1px solid var(--color-rule) !important; background: var(--color-inset); }
 .ui-shell #panel-football .fixture-actions .bayes-report-btn { min-height: 32px; font-size: 12px; }
+.ui-shell #panel-football .football-direction-analysis { grid-column: 1 / -1; order: 0; padding-bottom: var(--space-sm); margin-bottom: var(--space-sm); border-bottom: 1px solid var(--color-rule); }
+.ui-shell #panel-football .direction-path { display: grid; grid-template-columns: minmax(140px, 1fr) auto minmax(0, 3fr); align-items: start; gap: var(--space-md); }
+.ui-shell #panel-football .direction-standard { display: flex; flex-direction: column; gap: var(--space-3xs); }
+.ui-shell #panel-football .direction-standard strong { font-size: 20px; font-weight: 600; }
+.ui-shell #panel-football .direction-standard span, .ui-shell #panel-football .direction-note, .ui-shell #panel-football .direction-impossible { font-size: 11px; color: var(--color-muted); }
+.ui-shell #panel-football .direction-arrow { color: var(--color-dim); padding-top: 16px; }
+.ui-shell #panel-football .direction-condition { margin: 0 0 var(--space-xs); font-size: 12px; font-weight: 600; }
+.ui-shell #panel-football .direction-branches { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: var(--space-sm); }
+.ui-shell #panel-football .direction-branch { display: flex; flex-direction: column; gap: var(--space-3xs); padding-left: var(--space-sm); border-left: 2px solid var(--color-rule); font-size: 12px; }
+.ui-shell #panel-football .direction-branch strong { font-size: 18px; font-weight: 600; }
+.ui-shell #panel-football .direction-branch small { font-size: 11px; color: var(--color-muted); }
+.ui-shell #panel-football .direction-impossible { margin: var(--space-xs) 0 0; }
+.ui-shell #panel-football .direction-note { margin: var(--space-xs) 0 0; line-height: 1.75; }
+.ui-shell #panel-football .football-marginal-reference { grid-column: 1 / -1; order: 2; padding: var(--space-sm) 0; border-top: 1px solid var(--color-rule); font-size: 12px; }
+.ui-shell #panel-football .football-marginal-reference summary { cursor: pointer; color: var(--color-muted); }
+.ui-shell #panel-football .marginal-reference-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: var(--space-md); margin-top: var(--space-sm); }
+.ui-shell #panel-football .marginal-reference-grid h4 { margin: 0 0 var(--space-xs); font-size: 12px; }
 .ui-shell .fixture-actions .action-arrow { display: none; }
 .ui-shell :is(.pro-modal-window, .kl8-modal-window, .bayes-modal, .prediction-calendar-popover) { border-radius: var(--radius-card); }
 .ui-shell :is(.prediction-date-trigger-icon, .prediction-calendar-nav), .ui-shell .prediction-date-label::before { color: var(--color-accent); }
@@ -3421,6 +3438,8 @@ body.ui-shell .bottom-nav-item.active { color: var(--color-accent) !important; b
   .ui-shell #panel-football .fixture-actions { padding-inline: var(--space-sm); }
 }
 @media (max-width: 719px) {
+  .ui-shell #panel-football .direction-path { grid-template-columns: minmax(0, 1fr); gap: var(--space-sm); }
+  .ui-shell #panel-football .direction-arrow { display: none; }
   .ui-shell #panel-football .fixture-identity { flex-basis: 100%; }
   .ui-shell #panel-football .football-compact-summary { display: flex; flex-direction: column; }
   .ui-shell #panel-football .market-section-heading { margin-bottom: 0; }
@@ -4816,6 +4835,90 @@ function renderProbabilityStrip(probabilities, keys, odds = null, selected = '')
   }).join('')}</div>`;
 }
 
+function renderFootballDirectionAnalysis(lottery, spfEnabled = true) {
+  const heading = '<div class="market-section-heading"><h3>比赛方向分析</h3><span>情景分析 · 非推荐</span></div>';
+  const unavailable = message => `<section class="football-direction-analysis" data-available="false" aria-label="比赛方向分析">${heading}<p class="direction-note">${esc(message)}</p></section>`;
+  if (!spfEnabled) return unavailable('竞彩胜平负未开售；让球胜平负按独立玩法展示，不生成联合方向。');
+  const analysis = lottery?.direction_analysis;
+  const keys = ['让胜', '让平', '让负'];
+  const validProbability = value => typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1;
+  const compatible = analysis?.compatible_handicap_predictions;
+  const incompatible = analysis?.incompatible_handicap_predictions;
+  const standard = analysis?.standard_prediction;
+  const probability = analysis?.standard_probability;
+  const handicap = analysis?.handicap;
+  const conditional = analysis?.conditional_probabilities;
+  const joint = analysis?.joint_probabilities;
+  const standardKeys = ['胜', '平', '负'];
+  const standardMarket = lottery?.standard;
+  const marginBounds = {'胜':[1, Infinity], '平':[0, 0], '负':[-Infinity, -1]}[standard];
+  const branchBounds = key => {
+    const handicapBounds = {'让胜':[1 - handicap, Infinity], '让平':[-handicap, -handicap], '让负':[-Infinity, -1 - handicap]}[key];
+    return marginBounds && handicapBounds
+      ? [Math.max(marginBounds[0], handicapBounds[0]), Math.min(marginBounds[1], handicapBounds[1])] : null;
+  };
+  const possible = key => { const bounds = branchBounds(key); return bounds && bounds[0] <= bounds[1]; };
+  // 旧数据不能把独立让球最高项作为联合方向的回退值。
+  const valid = analysis?.available === true
+    && analysis.probability_basis === 'conditional_on_standard_result'
+    && ['胜', '平', '负'].includes(standard) && validProbability(probability) && probability > 0
+    && typeof handicap === 'number' && Number.isInteger(handicap) && Math.abs(handicap) <= 5
+    && handicap === lottery?.handicap?.handicap && standard === standardMarket?.prediction
+    && standardKeys.every(key => validProbability(standardMarket?.probabilities?.[key])
+      && probability + 0.000001 >= standardMarket.probabilities[key])
+    && Math.abs(standardMarket.probabilities[standard] - probability) < 0.000001
+    && Math.abs(standardKeys.reduce((sum, key) => sum + standardMarket.probabilities[key], 0) - 1) < 0.00001
+    && Array.isArray(compatible) && compatible.length > 0 && Array.isArray(incompatible)
+    && compatible.length + incompatible.length === keys.length
+    && keys.every(key => compatible.includes(key) !== incompatible.includes(key))
+    && keys.every(key => compatible.includes(key) === Boolean(possible(key)))
+    && [...compatible, ...incompatible].every(key => keys.includes(key))
+    && keys.every(key => validProbability(conditional?.[key]) && validProbability(joint?.[key])
+      && Math.abs(joint[key] - probability * conditional[key]) < 0.00001)
+    && Math.abs(keys.reduce((sum, key) => sum + conditional[key], 0) - 1) < 0.00001
+    && incompatible.every(key => conditional[key] === 0 && joint[key] === 0);
+  if (!valid) {
+    const reasons = Array.isArray(analysis?.reasons) ? analysis.reasons.filter(Boolean).join('；') : '';
+    return unavailable(`待重新分析：暂无可用的胜平负与让球联合情景${reasons ? '；' + reasons : ''}。`);
+  }
+  const standardName = {'胜':'主胜', '平':'平局', '负':'客胜'}[standard];
+  const percentage = value => (value * 100).toFixed(1) + '%';
+  const handicapText = (handicap > 0 ? '+' : '') + handicap;
+  const marginMeaning = key => {
+    if (standard === '平') return '双方打平';
+    const [lower, upper] = branchBounds(key);
+    const [minimum, maximum] = standard === '胜' ? [lower, upper] : [-upper, -lower];
+    const team = standard === '胜' ? '主队' : '客队';
+    return minimum === maximum ? `${team}赢${minimum}球`
+      : maximum === Infinity ? `${team}赢至少${minimum}球` : `${team}赢${minimum}至${maximum}球`;
+  };
+  const branches = keys.filter(key => compatible.includes(key)).map(key => `<div class="direction-branch" data-handicap-result="${esc(key)}">
+    <span>${esc(key)} · ${esc(marginMeaning(key))}</span><strong>条件概率 ${percentage(conditional[key])}</strong>
+    <small>${esc(standard)}＋${esc(key)} · 联合估计 ${percentage(joint[key])}</small>
+  </div>`).join('');
+  return `<section class="football-direction-analysis" data-available="true" aria-label="比赛方向分析">
+    ${heading}<div class="direction-path">
+      <div class="direction-standard"><span>胜平负方向 · 全场概率</span><strong>${esc(standardName)}（${esc(standard)}） ${percentage(probability)}</strong><span>三个赛果中概率最高</span></div>
+      <span class="direction-arrow" aria-hidden="true">→</span>
+      <div class="direction-conditional"><p class="direction-condition">假设${esc(standardName)}成立 · 主队让球 ${esc(handicapText)}</p>
+        <div class="direction-branches">${branches}</div>
+        ${incompatible.length ? `<p class="direction-impossible">${incompatible.map(key => `${esc(key)}：该情景下不可能`).join('；')}</p>` : ''}
+      </div>
+    </div><p class="direction-note">条件概率只在${esc(standardName)}成立时适用；两项同时发生的概率估计见“联合估计”。条件概率 100% 也不代表整场必然命中。以胜平负概率为基准重构联合分布，用于情景分析。</p>
+  </section>`;
+}
+
+function renderFootballMarginalReference(standard, handicap, handicapValue) {
+  if (!standard && !handicap) return '';
+  const handicapText = `${Number(handicapValue) > 0 ? '+' : ''}${handicapValue}`;
+  return `<details class="football-marginal-reference"><summary>全场玩法概率（独立参考）</summary>
+    <p class="direction-note">以下分别统计全部赛果，各玩法的最高项可能互斥，不能拼成同一比赛方向或组合推荐。</p>
+    <div class="marginal-reference-grid">
+      ${standard ? `<section aria-label="胜平负全场概率"><h4>胜平负 · 全场概率</h4>${renderProbabilityStrip(standard, ['胜', '平', '负'])}</section>` : ''}
+      ${handicap ? `<section aria-label="让球胜平负全场概率"><h4>让球胜平负（${esc(handicapText)}） · 全场概率</h4>${renderProbabilityStrip(handicap, ['让胜', '让平', '让负'])}</section>` : ''}
+    </div></details>`;
+}
+
 function renderMarketEvidence(markets) {
   const rows = markets.filter(([, state, reasonsShown]) => state &&
     (state.validation || (!reasonsShown && state.reasons?.length)));
@@ -5346,7 +5449,7 @@ function renderFootballPredictions(results) {
       const compactGoalDist = r.model && r.model.candidates && r.model.candidates.length
         ? getGoalDistributionFromCandidates(r.model.candidates)
         : [];
-      if (compactFootballView && (standardPrediction || marketCards.some(card => card.handicap))) {
+      if (standardPrediction || marketCards.some(card => card.handicap)) {
         const compactProbLine = (probabilities, keys) => {
           const gate = keys.includes('让胜') ? resultTier.markets.rqspf : resultTier.markets.spf;
           return renderProbabilityStrip(probabilities, keys, null, gate.status === 'selected' ? gate.pick : '');
@@ -5382,11 +5485,13 @@ function renderFootballPredictions(results) {
         const correctionLabel = r.model?.joint_market_state?.applied ? ' · 已修正' : ' · 联合分析';
         const marketContext = getFootballMarketContext(r);
         itemHtml += `<div class="football-compact-summary">
-          <div class="market-section-heading"><h3>玩法分析</h3><span>赛前概率参考</span></div>
-          ${standardPrediction ? renderWebMarketRecommendation('胜平负', spfGateState, spfGateState.pick || selectedStandard, compactProbLine(standardPrediction.probs, ['胜','平','负'])) : ''}
+          ${renderFootballDirectionAnalysis(r.lottery, spfPredictionEnabled)}
+          <div class="market-section-heading"><h3>推荐筛选</h3><span>与情景分析分别判断</span></div>
+          ${standardPrediction ? renderWebMarketRecommendation('胜平负', spfGateState, spfGateState.pick || selectedStandard) : ''}
           ${standardPrediction?.selectionProfile?.mode === 'draw_cover' && spfGateState.status === 'selected' ? '<div class="draw-cover-note">模型分布提示防平，仅作辅助参考</div>' : ''}
-          ${handicapCard ? renderWebMarketRecommendation(`让球胜平负（${Number(lotteryHandicap) > 0 ? '+' : ''}${lotteryHandicap}）`, rqspfGateState, rqspfGateState.pick || selectedHandicap, compactProbLine(handicapCard.prediction.marginalProbs, ['让胜','让平','让负'])) : ''}
+          ${handicapCard ? renderWebMarketRecommendation(`让球胜平负（${Number(lotteryHandicap) > 0 ? '+' : ''}${lotteryHandicap}）`, rqspfGateState, rqspfGateState.pick || selectedHandicap, spfPredictionEnabled ? '' : `<span class="distribution-caption">独立玩法 · 全场概率</span>${compactProbLine(handicapCard.prediction.marginalProbs, ['让胜','让平','让负'])}`) : ''}
           ${renderWebMarketRecommendation('大小球', totalGateState, totalDirection, `<span class="distribution-caption">比分矩阵进球数分布</span>${compactGoalText}`)}
+          ${renderFootballMarginalReference(standardPrediction?.probs, handicapCard?.prediction.marginalProbs, lotteryHandicap)}
           <div class="football-score-reference">
             <div class="score-section-heading">比分参考 Top3（非主推）</div>
             <div class="score-options">${compactScoreHtml || '<span class="empty-reference">暂无比分分布</span>'}</div>
@@ -5398,54 +5503,6 @@ function renderFootballPredictions(results) {
           ${renderMarketEvidence([['胜平负', spfGateState, Boolean(standardPrediction)], ['让球胜平负', rqspfGateState, Boolean(handicapCard)], ['大小球', totalGateState, true]])}
         </div>`;
       }
-      if (!compactFootballView) marketCards.forEach(card => {
-        const cardState = card.handicap ? resultTier.markets.rqspf : resultTier.markets.spf;
-        itemHtml += '<div style="margin-top:8px;padding:8px;background:var(--bg2);border-radius:8px">';
-        itemHtml += `<div style="font-size:12px;color:var(--muted);margin-bottom:6px">${card.title}</div>`;
-        itemHtml += '<div style="display:flex;gap:12px">';
-        card.keys.forEach(key => {
-          const prob = card.prediction.probs[key] || 0;
-          const probabilityAvailable = Object.prototype.hasOwnProperty.call(card.prediction.probs, key);
-          const odd = card.odds?.[key];
-          const isPred = cardState.status === 'selected' && cardState.pick === key;
-          const colors = {
-            '胜': 'var(--color-danger)', '平': 'var(--color-warning)', '负': 'var(--color-positive)',
-            '让胜': 'var(--color-danger)', '让平': 'var(--color-warning)', '让负': 'var(--color-positive)'
-          };
-          itemHtml += `<div style="flex:1;text-align:center;padding:6px;border-radius:6px${isPred ? `;background:color-mix(in srgb, ${colors[key]} 12%, transparent);color:${colors[key]};font-weight:bold` : ''}">
-            <div>${key}</div>
-            <div style="font-size:11px;color:var(--muted)">${probabilityAvailable ? `${(prob * 100).toFixed(0)}%` : '—'}</div>
-            ${odd ? `<div style="font-size:10px;color:var(--color-info)">中国足彩网 ${Number(odd).toFixed(2)}</div>` : ''}
-          </div>`;
-        });
-        itemHtml += '</div>';
-        if (card.prediction.marketProbs && card.prediction.pred) {
-          const sourceKey = cardState.status === 'selected' ? cardState.pick : card.prediction.pred;
-          const modelValue = Number(card.prediction.modelProbs?.[sourceKey] || 0);
-          const marketValue = Number(card.prediction.marketProbs?.[sourceKey] || 0);
-          const fusedValue = Number(card.prediction.probs?.[sourceKey] || 0);
-          const marketWeight = Math.round(Number(card.prediction.marketWeight || 0) * 100);
-          itemHtml += `<div style="font-size:10px;color:var(--color-info);margin-top:6px">
-                ${esc(sourceKey)}：比分模型 ${(modelValue * 100).toFixed(0)}% · 中国足彩网赔率去水 ${(marketValue * 100).toFixed(0)}% · 综合 ${(fusedValue * 100).toFixed(0)}%（赔率权重 ${marketWeight}%）
-              </div>`;
-        }
-        itemHtml += '</div>';
-        if (!card.handicap && cardState.status === 'selected' && card.prediction.selectionProfile?.mode === 'draw_cover') {
-          itemHtml += '<div style="font-size:11px;color:var(--color-warning);margin-top:6px">模型分布提示防平，仅作辅助参考</div>';
-        }
-      });
-      if (!compactFootballView && resultTier.markets.spf.status === 'selected' && resultTier.markets.rqspf.status === 'selected') {
-        itemHtml += `<div style="margin-top:6px;padding:7px 9px;border:1px solid rgba(59,130,246,.35);background:rgba(59,130,246,.08);border-radius:7px;font-size:12px;color:var(--color-info)">
-          已通过筛选：<b>胜平负 ${esc(resultTier.markets.spf.pick)} · 让球胜平负 ${esc(resultTier.markets.rqspf.pick)}</b>
-          <span style="color:var(--muted)">（各玩法百分比均为全场概率）</span>
-        </div>`;
-      }
-      if (!compactFootballView && r.model?.joint_market_state?.applied) {
-        itemHtml += `<div style="margin-top:6px;font-size:11px;color:var(--color-info)">
-          📈 胜平负、让球胜平负和进球数已统一应用亚盘水位/大小球变化修正
-        </div>`;
-      }
-      
       const htfProbs = r.model && r.model.half_full_time && r.model.half_full_time.probs ? r.model.half_full_time.probs : [];
       if (!compactFootballView && htfProbs.length) {
         const htfTop3 = [...htfProbs].sort((a, b) => b.raw_prob - a.raw_prob).slice(0, 3);
