@@ -23,7 +23,6 @@ from ..common.paths import data_path
 log = setup_logger('football')
 from . import parsing as _parsing_mod
 from . import fetching as _fetching_mod
-from . import analysis_budget as _budget
 
 from ..domain.sports.football.analysis_result import build_analysis_result
 from ..domain.sports.football.market_anchoring import anchor_candidates_to_market
@@ -63,10 +62,7 @@ def _run_analysis_singleflight(match, force_refresh=False, cache_key=None):
     HTTP 客户端超时不会终止服务端线程；没有这一层时，每次刷新都会再起一套
     赔率抓取，最容易把 500.com 推到 428/429 限流。
     """
-    # Share only the same inputs. A new handicap/price or explicit refresh
-    # must not inherit an in-flight result computed for the previous context.
-    key = (cache_key or analysis_cache_key(match), bool(force_refresh),
-           json.dumps(match, sort_keys=True, ensure_ascii=False, default=str))
+    key = cache_key or analysis_cache_key(match)
     with _ANALYSIS_FLIGHTS_LOCK:
         flight = _ANALYSIS_FLIGHTS.get(key)
         owner = flight is None
@@ -75,14 +71,13 @@ def _run_analysis_singleflight(match, force_refresh=False, cache_key=None):
             _ANALYSIS_FLIGHTS[key] = flight
 
     if not owner:
-        _budget.wait(flight['event'])
+        flight['event'].wait()
         if flight['error'] is not None:
             raise flight['error']
         return flight['result']
 
     try:
         flight['result'] = _analyze_match_impl(match, force_refresh=force_refresh)
-        _budget.check()
         return flight['result']
     except BaseException as exc:
         flight['error'] = exc
@@ -95,13 +90,12 @@ def _run_analysis_singleflight(match, force_refresh=False, cache_key=None):
 
 
 def analyze_match(match, force_refresh=False):
-    with _budget.limit():
-        cache_key = analysis_cache_key(match)
-        return _run_analysis_singleflight(
-            match,
-            force_refresh=force_refresh,
-            cache_key=cache_key,
-        )
+    cache_key = analysis_cache_key(match)
+    return _run_analysis_singleflight(
+        match,
+        force_refresh=force_refresh,
+        cache_key=cache_key,
+    )
 
 def _cached_prediction_logic_version(result: Dict) -> str:
     if not isinstance(result, dict):
@@ -500,7 +494,6 @@ def _analyze_match_impl(match, force_refresh=False):
     mid = match['match_id']
     home, away = match.get('home', ''), match.get('away', '')
     league_profile = resolve_league_profile(match.get('league', ''))
-    _budget.check()
     log.debug('分析比赛 %s vs %s (id=%s)', home, away, mid)
     
     # 尝试从缓存获取结果
@@ -566,7 +559,6 @@ def _analyze_match_impl(match, force_refresh=False):
                     'A': sum(prob for (h, a), prob in candidates if h < a),
                 } if cached_spf_enabled else {})
                 
-                _budget.check()
                 persistence_result = save_prediction(
                     match_id=mid,
                     league=match.get('league', ''),
@@ -601,7 +593,6 @@ def _analyze_match_impl(match, force_refresh=False):
                     },
                     prediction_event=(cached_result.get('research') or {}).get('prediction_event'),
                 )
-                _budget.check()
                 model_status = cached_result.get('model_status')
                 # 仅在标记真正翻转时才回写缓存：否则每次命中都要 pickle 整个
                 # 分析结果并落盘，54 场一轮就是 54 次无谓的整对象序列化。
@@ -612,10 +603,7 @@ def _analyze_match_impl(match, force_refresh=False):
                     model_status['persistence_backend'] = (
                         (persistence_result or {}).get('persistence_backend')
                     )
-                    _budget.check()
                     set_cache('match_analysis', cache_key, cached_result, match_time)
-            except _budget.AnalysisTimeout:
-                raise
             except Exception as e:
                 log.error(f"保存缓存结果的预测记录失败: {e}")
             return cached_result
@@ -692,67 +680,54 @@ def _analyze_match_impl(match, force_refresh=False):
         # 对源站的实际压力由 _fetching_mod.fetch() 的发号器统一控速，重复 URL 也只会打一次。
         pool = ThreadPoolExecutor(max_workers=5, thread_name_prefix='FootballOdds')
         try:
-            yazhi_task = _budget.submit(pool, _parsing_mod.fetch_yazhi, mid)
-            euro_task = _budget.submit(pool, _parsing_mod.fetch_ouzhi, mid)
-            daxiao_task = _budget.submit(pool, _parsing_mod.fetch_daxiao, mid)
-            team_task = _budget.submit(pool, _parsing_mod.fetch_team_strength, mid, home, away, league_profile)
-            single_odds_task = _budget.submit(pool, _parsing_mod.fetch_single_company_odds, mid)
-        except BaseException:
-            pool.shutdown(wait=True, cancel_futures=True)
-            raise
+            yazhi_task = pool.submit(_parsing_mod.fetch_yazhi, mid)
+            euro_task = pool.submit(_parsing_mod.fetch_ouzhi, mid)
+            daxiao_task = pool.submit(_parsing_mod.fetch_daxiao, mid)
+            team_task = pool.submit(_parsing_mod.fetch_team_strength, mid, home, away, league_profile)
+            single_odds_task = pool.submit(_parsing_mod.fetch_single_company_odds, mid)
+        finally:
+            pool.shutdown(wait=False)
         try:
             # 解析顺序与串行版一致，保证失败时抛出的仍是最先失败那一环的错误
             try:
-                yazhi_raw = _budget.result(yazhi_task)
+                yazhi_raw = yazhi_task.result()
                 asian = analyze_asian(yazhi_raw)
                 log.debug(f"亚盘数据获取成功: keys={list(asian.keys())}")
-            except _budget.AnalysisTimeout:
-                raise
             except Exception as e:
                 raise ValueError(f"亚盘数据获取失败: {e}")
             try:
-                euro_raw = _budget.result(euro_task)
+                euro_raw = euro_task.result()
                 euro = analyze_euro(euro_raw)
-            except _budget.AnalysisTimeout:
-                raise
             except Exception as e:
                 raise ValueError(f"欧赔数据获取/分析失败: {e}")
             try:
-                daxiao_raw = _budget.result(daxiao_task)
+                daxiao_raw = daxiao_task.result()
                 total = analyze_total(daxiao_raw)
-            except _budget.AnalysisTimeout:
-                raise
             except Exception as e:
                 raise ValueError(f"大小球数据获取失败: {e}")
-            team = _budget.result(team_task)
+            team = team_task.result()
         except BaseException:
             # 这一场已经判失败了，剩下几路抓取纯属白打；而失败往往正是源站
             # 在限流，继续打只会加重。等它们收尾再把异常抛出去，否则线程会
             # 挂在调用方生命周期之外继续发请求。
-            pool.shutdown(wait=True, cancel_futures=True)
+            pool.shutdown(wait=True)
             raise
+    if team:
+        team['league_profile'] = league_profile
 
     # ========== 新增：抓取 Bet365 和 Pinnacle 独赔数据 ==========
     single_odds = None
     if not lottery_only:
         try:
-            single_odds = _budget.result(single_odds_task)
+            single_odds = single_odds_task.result()
             log.debug(
                 "独赔数据抓取结果: Bet365=%s, Pinnacle=%s",
                 '有' if single_odds.get('bet365') else '无',
                 '有' if single_odds.get('pinnacle') else '无',
             )
-        except _budget.AnalysisTimeout:
-            raise
         except Exception as e:
             log.warning(f"抓取独赔数据失败: {e}")
-        finally:
-            # Keep the real match worker occupied until all five children exit.
-            pool.shutdown(wait=True, cancel_futures=True)
     
-    _budget.check()
-    if team:
-        team['league_profile'] = league_profile
     # ========== 计算博彩公司分歧指数（在替换之前保存原始平均盘口） ==========
     # All network observations and local context files are collected before
     # the immutable knowledge cutoff used by features, research and fusion.
@@ -1675,7 +1650,6 @@ def _analyze_match_impl(match, force_refresh=False):
         result['research'] = {'status': 'unavailable', 'reason': type(e).__name__}
         log.warning('research snapshot failed: %s', e)
     
-    _budget.check()
     # 保存结果到缓存
     if CACHE_AVAILABLE:
         set_cache('match_analysis', cache_key, result, match_time)
@@ -1703,7 +1677,6 @@ def _analyze_match_impl(match, force_refresh=False):
         predicted_half_full = _half_full_probs_to_dict(model.get('half_full_time'))
         base_1x2 = ml_execution['base_probabilities'] if spf_prediction_enabled else {}
 
-        _budget.check()
         persistence_result = save_prediction(
             match_id=mid,
             league=match.get('league', ''),
@@ -1744,7 +1717,6 @@ def _analyze_match_impl(match, force_refresh=False):
             },
             prediction_event=prediction_event,
         )
-        _budget.check()
         prediction_saved = bool((persistence_result or {}).get('saved') or
             (persistence_result or {}).get('persistence_backend') == 'unchanged')
         # 更新模型状态中的保存状态
@@ -1756,10 +1728,7 @@ def _analyze_match_impl(match, force_refresh=False):
             )
             # 更新缓存以包含最新的 prediction_saved 状态
             if CACHE_AVAILABLE:
-                _budget.check()
                 set_cache('match_analysis', cache_key, result, match_time)
-    except _budget.AnalysisTimeout:
-        raise
     except Exception as e:
         log.error(f"保存预测记录失败: {e}", exc_info=True)
     

@@ -39,7 +39,7 @@ class FootballRecordsWithoutMatches(unittest.TestCase):
         load_matches = HTML.split('async function loadMatches()', 1)[1].split(
             'let footballProfessionalStatus', 1,
         )[0]
-        self.assertIn('throw new Error(`${data.error}', load_matches)
+        self.assertIn('return showFootballLoadError(`${data.error}', load_matches)
         self.assertIn("showFootballLoadError('网络请求失败：'", load_matches)
 
     def test_auxiliary_failures_do_not_hide_saved_records(self):

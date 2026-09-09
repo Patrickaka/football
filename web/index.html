@@ -3793,9 +3793,6 @@ let allMatches = [];
 let allPredictions = [];
 let footballAnalysisProgress = null;
 let footballAnalysisFailures = [];
-let footballAnalysisNotice = '';
-let footballLoadGeneration = 0;
-let footballLoadSession = null;
 let predictionExportData = null;
 let listFilter = '';
 let groupMode = 'league';
@@ -4036,16 +4033,9 @@ async function fetchJson(path, options = {}) {
   const r = await fetch(url, { cache: 'no-store', ...options });
   const text = await r.text();
   if (!r.ok) {
-    let payload;
-    try { payload = JSON.parse(text); } catch { payload = null; }
     const htmlTitle = text.match(/<h1[^>]*>(.*?)<\/h1>/i) || text.match(/<title[^>]*>(.*?)<\/title>/i);
-    const serverMessage = typeof payload?.error === 'string' ? payload.error
-      : htmlTitle ? htmlTitle[1].replace(/<[^>]+>/g, '') : text.slice(0, 120);
-    const error = new Error(r.status === 404 && !payload?.code
-      ? `接口不存在: ${url}` : `HTTP ${r.status}: ${serverMessage}`);
-    error.httpStatus = r.status;
-    if (typeof payload?.code === 'string') error.code = payload.code;
-    throw error;
+    const serverMessage = htmlTitle ? htmlTitle[1].replace(/<[^>]+>/g, '') : text.slice(0, 120);
+    throw new Error(r.status === 404 ? `接口不存在: ${url}` : `HTTP ${r.status}: ${serverMessage}`);
   }
   try {
     return JSON.parse(text);
@@ -4111,19 +4101,16 @@ function showFootballLoadError(text) {
 }
 
 async function loadMatches() {
-  const session = beginFootballLoad();
-  session.phase = 'schedule';
-  if (!allPredictions.length) loading('正在联网获取今日比赛列表…');
+  loading('正在联网获取今日比赛列表…');
   try {
     // 首屏走 BFF：一次拿到比赛列表、职业化状态、以及后台已经算好的预测。
-    // 赛程刷新可能等待源站，因此仍设等待上限；预测部分只读缓存，
-    // 没算好的场次列在 pending 里，由 loadAllPredictions 提交后台任务。
-    const data = await footballJobRequest('/api/bff/football/home', session, {}, 30000);
-    if (!isCurrentFootballLoad(session)) return;
+    // 后端只读缓存、绝不代跑分析，所以这一次请求很快；没算好的那几场
+    // 会如实列在 pending 里，由 loadAllPredictions 单独去补。
+    const data = await fetchJson('/api/bff/football/home');
     if (data.error) {
       const source = data.source_status?.source || 'unknown';
       const errorType = data.error_type ? ` (${data.error_type})` : '';
-      throw new Error(`${data.error}${errorType} · 赛程源状态: ${source}。请确认部署包含最新后端代码并已重启进程。`);
+      return showFootballLoadError(`${data.error}${errorType} · 赛程源状态: ${source}。请确认部署包含最新后端代码并已重启进程。`);
     }
     allMatches = data.matches || [];
     if (data.professional_status && !data.professional_status.error) {
@@ -4132,15 +4119,9 @@ async function loadMatches() {
     } else {
       loadFootballProfessionalStatus();
     }
-    session.phase = 'schedule_ready';
     await loadAllPredictions(data.predictions);
   } catch (e) {
-    if (!isCurrentFootballLoad(session)) return;
-    footballAnalysisProgress = null;
-    if (allPredictions.length) {
-      footballAnalysisNotice = `赛程加载失败：${e.message}；已保留完成结果，可继续/刷新。`;
-      renderFootballPredictions(allPredictions);
-    } else showFootballLoadError('网络请求失败：' + e.message);
+    showFootballLoadError('网络请求失败：' + e.message);
   }
 }
 
@@ -4527,99 +4508,18 @@ function setFootballPageSize(size) {
 function setFootballSort(sort) {
   footballSort = sort;
   footballPage = 1;
-  renderFootballPredictions(allPredictions);
+  loadAllPredictions();
 }
 
-// 浏览器只提交后台任务和读取进度，计算由服务端限流；取消页面等待不取消共享任务。
-const FOOTBALL_JOB_MAX_MATCHES = 80;
-const FOOTBALL_JOB_POLL_MS = 1000;
-const FOOTBALL_JOB_WAIT_MS = 20 * 60 * 1000;
+// 冷缓存时一场分析会抓多个源站页面。批次顺序执行，让服务端稳定消化，
+// 避免多个批次叠加内部线程池后瞬间触发 428/429。
+const FOOTBALL_ANALYSIS_CONCURRENCY = 1;
+// 每完成一场就整表重绘会造成 50+ 次全量 DOM 重建，按间隔合并重绘。
 const FOOTBALL_RENDER_INTERVAL_MS = 400;
-
-function cancelFootballLoad() {
-  footballLoadGeneration += 1;
-  footballLoadSession?.controller.abort();
-  footballLoadSession = null;
-  footballAnalysisProgress = null;
-}
-
-function beginFootballLoad() {
-  cancelFootballLoad();
-  footballAnalysisNotice = '';
-  const session = { generation: footballLoadGeneration, controller: new AbortController(),
-                    deadline: Date.now() + FOOTBALL_JOB_WAIT_MS, phase: 'analysis' };
-  footballLoadSession = session;
-  return session;
-}
-
-function isCurrentFootballLoad(session) {
-  return session === footballLoadSession && session.generation === footballLoadGeneration
-    && !session.controller.signal.aborted && activeTab === 'football';
-}
-
-function checkFootballLoad(session) {
-  if (!isCurrentFootballLoad(session)) throw new DOMException('页面等待已取消', 'AbortError');
-  if (Date.now() >= session.deadline) throw new Error('本轮等待已达20分钟；后台任务仍可继续，稍后刷新接续');
-}
-
-function footballJobDelay(ms, session) {
-  checkFootballLoad(session);
-  return new Promise((resolve, reject) => {
-    const signal = session.controller.signal;
-    const cleanup = () => signal.removeEventListener('abort', cancelled);
-    const timer = setTimeout(() => { cleanup(); resolve(); }, Math.min(ms, session.deadline - Date.now()));
-    const cancelled = () => { clearTimeout(timer); cleanup(); reject(new DOMException('页面等待已取消', 'AbortError')); };
-    signal.addEventListener('abort', cancelled, { once: true });
-  });
-}
-
-async function footballJobRequest(path, session, options = {}, timeoutMs = 10000) {
-  checkFootballLoad(session);
-  const controller = new AbortController();
-  const cancel = () => controller.abort();
-  session.controller.signal.addEventListener('abort', cancel, { once: true });
-  const timer = setTimeout(cancel, Math.min(timeoutMs, session.deadline - Date.now()));
-  try {
-    const data = await fetchJson(path, { ...options, signal: controller.signal });
-    checkFootballLoad(session);
-    return data;
-  } catch (error) {
-    if (!isCurrentFootballLoad(session)) throw error;
-    checkFootballLoad(session);
-    if (error.code === 'job_not_found') {
-      error.message = '任务已过期或服务已重启，请刷新后接续分析';
-      throw error;
-    }
-    if (error.httpStatus === 404 && !error.code) {
-      const upgrade = new Error('后台任务接口尚未部署，请升级并重启后端后再刷新');
-      upgrade.code = 'BACKEND_UPGRADE_REQUIRED';
-      throw upgrade;
-    }
-    if (error.name === 'AbortError') throw new Error(`进度请求超时（${Math.round(timeoutMs / 1000)}秒）`);
-    throw error;
-  } finally {
-    clearTimeout(timer);
-    session.controller.signal.removeEventListener('abort', cancel);
-  }
-}
-
-async function footballJobRequestWithRetry(path, session, options = {}) {
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    try {
-      const data = await footballJobRequest(path, session, options);
-      if (data.error || !data.result) {
-        const error = new Error(data.error || '后台任务未返回状态');
-        error.code = data.code;
-        throw error;
-      }
-      return data.result;
-    } catch (error) {
-      if (!isCurrentFootballLoad(session) || ['BACKEND_UPGRADE_REQUIRED', 'job_not_found'].includes(error.code)
-          || attempt === 2) throw error;
-      await footballJobDelay(1000 * (attempt + 1), session);
-    }
-  }
-}
+// /api/predict 是单场接口，一场一次往返，50+ 场就是 50+ 次 HTTP。打包成批后
+// 往返次数降到 ceil(总场次/批大小)。仍分多批而非一次全量，是为了保住渐进渲染：
+// 每批落地即可先行展示，冷缓存时不会退化成长时间白屏。
+const FOOTBALL_BATCH_SIZE = 6;
 
 function buildPredictQuery(m) {
   return new URLSearchParams({
@@ -4662,128 +4562,170 @@ function buildBatchMatch(m) {
   };
 }
 
-function footballMatchContextKey(match) {
-  // Compare every JSON field, including nested odds; object key order is immaterial.
-  const canonicalize = value => Array.isArray(value) ? value.map(canonicalize)
-    : value && typeof value === 'object'
-      ? Object.fromEntries(Object.keys(value).sort().map(key => [key, canonicalize(value[key])]))
-      : value;
-  return JSON.stringify(canonicalize(match));
-}
-
 async function loadAllPredictions(warmed) {
-  const session = footballLoadSession?.phase === 'schedule_ready'
-    ? footballLoadSession : beginFootballLoad();
-  session.phase = 'analysis';
-  const matches = [...allMatches];
-  const total = matches.length;
-  const indexes = new Map(matches.map((match, index) => [String(match.match_id), index]));
-  const previous = new Map(allPredictions.filter(item => {
-    const index = indexes.get(String(item.match?.match_id));
-    return index !== undefined && footballMatchContextKey(item.match) === footballMatchContextKey(matches[index]);
-  }).map(item => [String(item.match.match_id), item]));
-  const slots = new Array(total).fill(null);
-  const failures = new Map();
-  const terminal = new Set();
-  const entryRevisions = new Map();
+  loading('正在分析比赛数据…');
+  allPredictions = [];
   footballAnalysisFailures = [];
+  const total = allMatches.length;
+  if (!total) {
+    footballAnalysisProgress = null;
+    return renderFootballPredictions([]);
+  }
+
+  // 按赛程下标占位，保证并发完成顺序不打乱列表顺序
+  const slots = new Array(total).fill(null);
+
+  // BFF 已经把后台算好的那部分带回来了，直接填进占位槽——**这几场不必
+  // 再发请求**。首屏能立刻画出多少，取决于后台预热跑到哪儿。
+  const readyById = new Map((warmed?.ready || []).map(e => [String(e.match_id), e.result]));
+  const doneResults = () => slots.filter(Boolean);
+  let completed = 0;
+  let cursor = 0;
   let renderTimer = null;
+  let painted = false;
 
   const paint = () => {
     renderTimer = null;
-    if (!isCurrentFootballLoad(session)) return;
-    footballAnalysisFailures = [...failures.values()];
-    const completed = terminal.size;
-    footballAnalysisProgress = session.phase === 'analysis' && completed < total
-      ? { active: true, completed, total } : null;
-    // Retain unchanged prior results for display only; they do not complete this run.
-    const results = slots.map((item, index) => item || previous.get(String(matches[index].match_id))).filter(Boolean);
-    if (results.length || session.phase !== 'analysis') {
-      renderFootballPredictions(results);
-    } else loading(`正在分析比赛数据（${completed}/${total}）…`);
+    footballAnalysisProgress = completed < total
+      ? { active: true, completed, total }
+      : null;
+    const results = doneResults();
+    if (!results.length && !painted) {
+      loading(`正在分析比赛数据（${completed}/${total}）…`);
+      return;
+    }
+    painted = true;
+    renderFootballPredictions(results);
   };
+
   const schedulePaint = () => {
     if (renderTimer === null) renderTimer = setTimeout(paint, FOOTBALL_RENDER_INTERVAL_MS);
   };
 
-  for (const entry of warmed?.ready || []) {
-    const id = String(entry.match_id);
-    const index = indexes.get(id);
-    if (index === undefined || !entry.result) continue;
-    slots[index] = { match: matches[index], result: entry.result };
-    terminal.add(id);
+  let prefilled = 0;
+  allMatches.forEach((m, index) => {
+    const cached = readyById.get(String(m.match_id));
+    if (cached) {
+      slots[index] = { match: m, result: cached };
+      prefilled += 1;
+    }
+  });
+  if (prefilled) {
+    completed = prefilled;
+    renderFootballPredictions(slots.filter(Boolean));
   }
-  paint();
-  const pending = matches.filter(match => !terminal.has(String(match.match_id)));
 
-  const consume = (job, allowed, cursor) => {
-    if (!job || !['queued', 'running', 'completed', 'failed'].includes(job.status)
-        || !Number.isInteger(job.revision) || job.revision < 0 || !Array.isArray(job.results)) {
-      throw new Error('后台任务状态格式异常，请刷新后重试');
+  // 只给没算好的那几场排批次
+  const remaining = allMatches
+    .map((m, index) => ({ match: m, index }))
+    .filter(({ index }) => !slots[index]);
+
+  const chunks = [];
+  for (let start = 0; start < remaining.length; start += FOOTBALL_BATCH_SIZE) {
+    const slice = remaining.slice(start, start + FOOTBALL_BATCH_SIZE);
+    chunks.push({ start: slice[0].index, matches: slice.map(e => e.match),
+                  indexes: slice.map(e => e.index) });
+  }
+
+  const analyzeSingle = async (m, index) => {
+    try {
+      const data = await fetchJsonWithTimeout('/api/predict?' + buildPredictQuery(m), 30000);
+      if (!data.error && data.result) slots[index] = { match: m, result: data.result };
+      else footballAnalysisFailures.push({ match: m, reason: data.error || '未返回预测结果' });
+    } catch (e) {
+      footballAnalysisFailures.push({ match: m, reason: e.message || '分析失败' });
+      console.warn(`预测 ${m.home} vs ${m.away} 失败:`, e);
     }
-    if (job.revision < cursor) return cursor;
-    for (const entry of job.results) {
-      const id = String(entry.match_id);
-      if (!allowed.has(id) || !indexes.has(id)) continue;
-      if (!['completed', 'failed', 'timed_out'].includes(entry.status)) continue;
-      const revision = Number(entry.revision ?? job.revision);
-      if (!Number.isFinite(revision) || revision <= (entryRevisions.get(id) ?? -1)) continue;
-      const index = indexes.get(id);
-      if (entry.status === 'completed' && entry.result) {
-        slots[index] = { match: matches[index], result: entry.result };
-        failures.delete(id);
-      } else failures.set(id, { match: matches[index], reason: entry.error || '后台分析未返回结果' });
-      terminal.add(id);
-      entryRevisions.set(id, revision);
+  };
+
+  // 浏览器中止请求只会断开等待，不会杀掉服务端正在跑的分析线程。
+  // 超时后轮询缓存接回已完成结果，禁止立刻再发一轮单场抓取制造重复流量。
+  const recoverTimedOutChunk = async (matches, indexes) => {
+    const pendingIds = new Set(matches.map(m => String(m.match_id)));
+    let lastError = '';
+    for (let attempt = 0; attempt < 3 && pendingIds.size; attempt += 1) {
+      await new Promise(resolve => setTimeout(resolve, 4000 * (attempt + 1)));
+      try {
+        const warmed = await fetchJsonWithTimeout('/api/bff/football/home', 20000);
+        if (warmed.error) throw new Error(warmed.error);
+        const recovered = new Map(
+          (warmed.predictions?.ready || []).map(entry => [String(entry.match_id), entry.result])
+        );
+        matches.forEach((match, offset) => {
+          const matchId = String(match.match_id);
+          const result = recovered.get(matchId);
+          if (!result || !pendingIds.has(matchId)) return;
+          slots[indexes[offset]] = { match, result };
+          pendingIds.delete(matchId);
+        });
+      } catch (pollError) {
+        lastError = pollError.message || String(pollError);
+      }
     }
+    matches.forEach(match => {
+      if (!pendingIds.has(String(match.match_id))) return;
+      footballAnalysisFailures.push({
+        match,
+        reason: lastError
+          ? `后台分析尚未完成：${lastError}`
+          : '后台分析尚未完成，请稍后刷新接续缓存结果',
+      });
+    });
+  };
+
+  // 整批失败（旧后端没有该接口、网关拦 POST、批量超时）时逐场重试，
+  // 保证新前端配旧后端也能出结果，只是退回到原来的往返次数。
+  // **槽位用显式的 indexes，不能再用 start + offset**：BFF 预填之后
+  // 剩下要算的场次在赛程里不再连续，按偏移写会把结果落到别人的位置上。
+  const analyzeChunk = async ({ matches, indexes }) => {
+    try {
+      const data = await fetchJsonWithTimeout('/api/predict/batch', 90000, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ matches: matches.map(buildBatchMatch) })
+      });
+      if (data.error || !Array.isArray(data.results)) {
+        throw new Error(data.error || '批量接口未返回结果');
+      }
+      matches.forEach((m, offset) => {
+        const entry = data.results[offset];
+        if (entry && !entry.error && entry.result) slots[indexes[offset]] = { match: m, result: entry.result };
+        else footballAnalysisFailures.push({ match: m, reason: (entry && entry.error) || '未返回预测结果' });
+      });
+    } catch (e) {
+      if (e.code === 'ANALYSIS_TIMEOUT') {
+        console.warn('批量预测超时，等待后台结果写入缓存:', e);
+        await recoverTimedOutChunk(matches, indexes);
+      } else {
+        console.warn('批量预测接口失败，回退到单场请求:', e);
+        for (let offset = 0; offset < matches.length; offset++) {
+          await analyzeSingle(matches[offset], indexes[offset]);
+        }
+      }
+    }
+    completed += matches.length;
     schedulePaint();
-    return Math.max(cursor, job.revision);
+  };
+
+  const worker = async () => {
+    while (cursor < chunks.length) {
+      await analyzeChunk(chunks[cursor++]);
+    }
   };
 
   try {
-    // 大于80场才拆分任务；后端控制并发，逐场完成即可展示。
-    for (let offset = 0; offset < pending.length; offset += FOOTBALL_JOB_MAX_MATCHES) {
-      checkFootballLoad(session);
-      const chunk = pending.slice(offset, offset + FOOTBALL_JOB_MAX_MATCHES);
-      const allowed = new Set(chunk.map(match => String(match.match_id)));
-      let job = await footballJobRequestWithRetry('/api/predict/batch/start', session, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ matches: chunk.map(buildBatchMatch), force_refresh: false }),
-      });
-      checkFootballLoad(session);
-      if (!job.job_id) throw new Error('后台任务未返回任务ID');
-      const jobId = job.job_id;
-      let cursor = consume(job, allowed, -1);
-      while (job.status === 'queued' || job.status === 'running') {
-        await footballJobDelay(FOOTBALL_JOB_POLL_MS, session);
-        checkFootballLoad(session);
-        const update = await footballJobRequestWithRetry(
-          '/api/predict/batch/status?job_id=' + encodeURIComponent(jobId) + '&after_revision=' + cursor,
-          session,
-        );
-        checkFootballLoad(session);
-        if (update.job_id !== jobId) throw new Error('后台返回了不同任务，已停止等待，请刷新重试');
-        if (Number(update.revision) < cursor) continue;
-        cursor = consume(update, allowed, cursor);
-        job = update;
-      }
-      for (const match of chunk) {
-        const id = String(match.match_id);
-        if (terminal.has(id)) continue;
-        failures.set(id, { match, reason: job.error || '后台任务结束，但本场尚无完成结果' });
-        terminal.add(id);
-      }
-      schedulePaint();
+    const workers = Math.min(FOOTBALL_ANALYSIS_CONCURRENCY, chunks.length);
+    await Promise.all(Array.from({ length: workers }, worker));
+    if (renderTimer !== null) {
+      clearTimeout(renderTimer);
+      renderTimer = null;
     }
-  } catch (error) {
-    if (!isCurrentFootballLoad(session)) return;
-    footballAnalysisNotice = `${error.message || '暂时无法读取后台进度'}；已保留完成结果，点击继续/刷新接续后台任务。`;
-  } finally {
+    footballAnalysisProgress = null;
+    renderFootballPredictions(doneResults());
+  } catch (e) {
     if (renderTimer !== null) clearTimeout(renderTimer);
-    if (isCurrentFootballLoad(session)) {
-      session.phase = 'finished';
-      paint();
-    }
+    footballAnalysisProgress = null;
+    showError('预测分析失败：' + e.message);
   }
 }
 
@@ -5425,10 +5367,6 @@ function renderFootballPredictions(results) {
     </div>`;
   }
   
-  if (footballAnalysisNotice) {
-    html += `<div class="status" style="font-size:12px;color:var(--warn)">${esc(footballAnalysisNotice)}
-      <button type="button" class="tb-btn" onclick="loadMatches()">继续/刷新</button></div>`;
-  }
   if (!results.length) {
     html += allMatches.length
       ? '<div class="status">暂无预测数据</div>'
@@ -6642,7 +6580,6 @@ function renderResult(r) {
 }
 
 function switchTab(tab) {
-  if (tab !== 'football') cancelFootballLoad();
   activeTab = tab;
   document.body.dataset.module = tab;
   document.body.classList.toggle('kl8-view', tab === 'kl8');

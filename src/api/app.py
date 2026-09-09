@@ -13,7 +13,7 @@ from src.api.rate_limit import ClientRateLimiters, install_rate_limit
 from src.api.routers import auth as auth_routes
 from src.api.routers import basketball, bff, football, health, kl8, pages
 from src.api import startup as startup_orchestration
-from src.api.runtime import background, football_analysis_jobs, shared_cache
+from src.api.runtime import background, shared_cache
 
 log = logging.getLogger('api.app')
 
@@ -65,13 +65,12 @@ def create_app(settings=None, auth_settings=None):
         #    `finally: self.l2.unlock(key)` 得不到执行，会在 Redis 残留一把
         #    TTL 最长 lock_timeout 秒的锁——重启后第一个请求撞上这把锁，
         #    复现 P1 惊群。必须在关闭序列的最前面排空。
-        # 2. tasks.shutdown → football jobs → shutdown_executor：先停消费者
-        #    （调度器、逐场分析 worker 与线程池），再释放依赖的 db。顺序不能反——旧写法先
+        # 2. tasks.shutdown → shutdown_executor：先停消费者（任务调度器与
+        #    线程池），再释放它们依赖的资源（db），顺序不能反——旧写法先
         #    dispose db 再关 executor，executor 里仍在跑的任务可能这期间
         #    还在用 db。
         app.state.cache.wait_for_refreshes(timeout=app.state.cache.lock_timeout)
         background.shutdown(wait=True)
-        football_analysis_jobs.shutdown(wait=True)
         shutdown_executor()
         shared_cache.reset()
         app.state.db.dispose()

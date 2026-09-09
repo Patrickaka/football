@@ -59,11 +59,6 @@ class Orchestration(unittest.TestCase):
 class BackgroundTasks(unittest.TestCase):
 
     def setUp(self):
-        # Test real scheduling/stop signals without executing lottery/network work.
-        patcher = mock.patch.object(background.TaskScheduler, '_run_periodic', autospec=True,
-                                    side_effect=lambda scheduler, *_: scheduler._stop.wait())
-        patcher.start()
-        self.addCleanup(patcher.stop)
         self.addCleanup(background.reset)
         background.reset()
 
@@ -144,14 +139,9 @@ class AppLifespan(unittest.TestCase):
         patcher = mock.patch.object(startup, 'WARMUP_THREADS', ())
         patcher.start()
         self.addCleanup(patcher.stop)
-        for name in ('run_startup_maintenance', 'start_maintenance_schedule'):
-            maintenance = mock.patch.object(startup, name)
-            maintenance.start()
-            self.addCleanup(maintenance.stop)
-        periodic = mock.patch.object(background.TaskScheduler, '_run_periodic', autospec=True,
-                                     side_effect=lambda scheduler, *_: scheduler._stop.wait())
-        periodic.start()
-        self.addCleanup(periodic.stop)
+
+
+    def setUp(self):
         self.addCleanup(background.reset)
         background.reset()
 
