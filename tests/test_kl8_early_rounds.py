@@ -137,7 +137,9 @@ class EarlyRoundAuditTests(unittest.TestCase):
         for play, size in [('select_6', 6), ('fu_shi_7', 7)]:
             self.assertEqual([len(g) for g in groups[play]], [size] * 3)
             self.assertEqual(len(set(sum(groups[play], []))), size * 3)
-        self.assertTrue(set(groups['select_6'][1]) <= set(groups['fu_shi_7'][1]))
+        self.assertEqual(groups['fu_shi_7'][0], list(range(1, 8)))
+        unused = set(groups['select_6'][1]) - set(groups['fu_shi_7'][0])
+        self.assertTrue(unused <= set(groups['fu_shi_7'][1]))
 
     def test_exclusion_mode_override_is_used(self):
         analyzer = KL8Analyzer.__new__(KL8Analyzer)

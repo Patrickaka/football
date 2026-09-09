@@ -1060,13 +1060,11 @@ class KL8PredictionGuardTests(unittest.TestCase):
         select6_numbers = set(result['select_6']['numbers'])
         fushi7_numbers = set(result['fu_shi_7']['top7_numbers'])
         self.assertTrue(select6_numbers.issubset(fushi7_numbers))
-        reserved = set(result['fu_shi_7']['reserved_select6_first_round'])
-        self.assertEqual(len(reserved), 6)
-        self.assertFalse(fushi7_numbers & reserved)
+        self.assertEqual(result['fu_shi_7']['primary_supplement_policy'], 'next_ranked_after_primary')
         expected_supplement = next(
             number
             for number, _ in result['all_candidate_pools']['select_6']['candidates']
-            if number not in select6_numbers and number not in reserved
+            if number not in select6_numbers
         )
         self.assertEqual(
             result['fu_shi_7']['supplemental_number'],
@@ -1157,7 +1155,7 @@ class KL8PredictionGuardTests(unittest.TestCase):
             'automatic',
         )
 
-    def test_fushi7_first_round_keeps_all_six_numbers_without_repeating_round_zero(self):
+    def test_fushi7_primary_keeps_best_supplement_and_later_rounds_replace_used_numbers(self):
         from unittest.mock import patch
 
         analyzer = KL8Analyzer.__new__(KL8Analyzer)
@@ -1167,7 +1165,7 @@ class KL8PredictionGuardTests(unittest.TestCase):
         analyzer._data_mtime = 0
         analyzer.statistics = {}
         analyzer.update_statistics()
-        # 截图中的第0轮及第1轮：原补位68会抢占选6第1轮。
+        # 当前票面优先用排名最高的68，后续轮次补齐已用号。
         primary = [5, 32, 34, 46, 52, 67]
         first_six = [26, 41, 68, 71, 74, 79]
         ranked = primary + [68, 26, 41, 71, 74, 79, 8, 13]
@@ -1184,9 +1182,9 @@ class KL8PredictionGuardTests(unittest.TestCase):
             fushi_chain = result['fu_shi_7_recalculation_chain']
             self.assertEqual(result['select_6']['numbers'], primary)
             self.assertEqual(select6_chain[0]['numbers'], first_six)
-            self.assertEqual(result['fu_shi_7']['top7_numbers'], sorted(primary + [8]))
-            self.assertEqual(fushi_chain['records'][0]['numbers'], sorted(first_six + [13]))
-            self.assertEqual(fushi_chain['records'][0]['replaced_numbers'], [])
+            self.assertEqual(result['fu_shi_7']['top7_numbers'], sorted(primary + [68]))
+            self.assertEqual(fushi_chain['records'][0]['numbers'], sorted((set(first_six) - {68}) | {8, 13}))
+            self.assertEqual(fushi_chain['records'][0]['replaced_numbers'], [68])
             seen = set(result['fu_shi_7']['top7_numbers'])
             for row, source in zip(fushi_chain['records'], select6_chain):
                 self.assertFalse(seen & set(row['numbers']))
@@ -1522,7 +1520,7 @@ class KL8PredictionGuardTests(unittest.TestCase):
             backtest._rolling_backtest_parametric = fake_rolling
             backtest._permutation_test = fake_permutation
             kl8_snapshots.activate_verified_strategy = lambda *args, **kwargs: None
-            kl8_records._persist_trial_results = lambda: None
+            kl8_records._persist_trial_results = lambda: True
             kl8_config.STRATEGY_TRIAL_RESULTS = []
 
             result = backtest.run_candidate_tournament_per_play_type(
@@ -1545,7 +1543,7 @@ class KL8PredictionGuardTests(unittest.TestCase):
             kl8_config.STRATEGY_TRIAL_RESULTS = original_trials
 
         self.assertTrue(result.get('activated'))
-        final_calls = [c for c in captured if c['start_idx'] == 600 and c['end_idx'] == 820]
+        final_calls = [c for c in captured if c['start_idx'] == 600 and c['end_idx'] == 800]
         self.assertTrue(final_calls)
         self.assertTrue(all(c['pool_diversify'] is False for c in final_calls))
         self.assertTrue(all(c['pool_max_last_numbers'] == 2 for c in final_calls))
@@ -1711,7 +1709,16 @@ class KL8PredictionGuardTests(unittest.TestCase):
 
             try:
                 kl8_config.KL8_SETTLEMENT_DIR = str(settlement_dir)
-                result = kl8_module._build_recent_settlement_performance(windows=(2,))
+                # Selection/hash/time eligibility has separate integration tests;
+                # this case exercises arithmetic within a verified cohort.
+                from unittest.mock import patch
+                for row in rows:
+                    row['prediction_version'] = kl8_config.KL8_PREDICTOR_VERSION
+                    row['strategy_cohorts'] = {play: {'key': play, 'version': kl8_config.KL8_PREDICTOR_VERSION,
+                                                     'strategy_id': 'test', 'play_type': play}
+                                               for play in (*kl8_module.SELECT_PLAY_KEYS, *kl8_module.FUSHI_PLAY_KEYS)}
+                with patch('src.kl8.records._load_recent_settlements', return_value=rows):
+                    result = kl8_module._build_recent_settlement_performance(windows=(2,))
             finally:
                 kl8_config.KL8_SETTLEMENT_DIR = original_settlement_dir
 

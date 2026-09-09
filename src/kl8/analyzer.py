@@ -91,6 +91,17 @@ def _fushi7_from_select6(
     return [], None
 
 
+def _strategy_warning(strategy: Dict) -> str:
+    """Describe the configured reference without claiming a validated edge."""
+    if strategy.get('is_validated'):
+        return ''
+    if strategy.get('baseline_type') == 'adaptive_pattern_reference':
+        return '未验证多特征参考：使用频率、遗漏、趋势等历史统计评分，尚未通过严格样本外验证，不代表下期命中概率提高。'
+    if str(strategy.get('baseline_type', '')).startswith('single_hot'):
+        return '未验证热号参考：按历史频率评分选号，尚未通过严格样本外验证，不代表下期命中概率提高。'
+    return '未验证参考：按当前配置的特征评分选号，尚未通过严格样本外验证，不代表下期命中概率提高。'
+
+
 class KL8Analyzer:
     """快乐8预测分析器（v5: 严格三段式+预测就绪判断+纯参数化回测）"""
 
@@ -251,18 +262,19 @@ class KL8Analyzer:
 
     # ─── 统计计算 ───
 
-    def update_statistics(self):
+    def update_statistics(self, window_size: Optional[int] = None):
         """更新所有统计量。
 
         具体算法都在 `domain/numeric/statistics.py`——它们对任何数字彩票
         都是同一批概念（频率、遗漏、冷热、共现、跨期转移、区间分布），
         变的只是号码空间。这里只负责把 kl8 的空间参数喂进去。
+        未指定窗口时沿用默认250期；策略临时分析器可显式使用更长窗口。
         """
         if not self.history_data:
             self.statistics = {}
             return
 
-        recent = min(len(self.history_data), KL8_DEFAULT_HISTORY)
+        recent = min(len(self.history_data), window_size or KL8_DEFAULT_HISTORY)
         recent_data = self.history_data[:recent]
         draws = [record['numbers'] for record in recent_data]
 
@@ -823,7 +835,7 @@ class KL8Analyzer:
         temp.history_file = self.history_file
         temp._data_mtime = self._data_mtime
         temp.statistics = {}
-        temp.update_statistics()
+        temp.update_statistics(window_size=recent)
 
         return temp
 
@@ -1672,12 +1684,7 @@ class KL8Analyzer:
                 'baseline_type': strategy.get('baseline_type', ''),
                 'strategy_evidence': strategy.get('strategy_evidence'),
                 'final_selection_mode': selected_mode,
-                'warning': (
-                    '' if strategy['is_validated']
-                    else '近100期热度仅显示微弱历史优势，未通过显著性验证，不代表下期概率必然提高。'
-                    if str(strategy.get('baseline_type', '')).startswith('single_hot')
-                    else '公平单组基线：不使用未经验证的冷热、遗漏或趋势猜号。'
-                ),
+                'warning': _strategy_warning(strategy),
             }
 
 
@@ -1687,22 +1694,15 @@ class KL8Analyzer:
             pool_size = fushi_cfg['pool_size']
             base_pick = fushi_cfg['base_pick']
 
-            # 复式第0轮保留选6主推；补位预留选6第1轮的全部6码，
-            # 避免第0轮先用掉其中一个号，导致复式第1轮无法完整对应。
+            # 复式第0轮保留选6主推，补当前排名最高的未选号码。
+            # 后续轮次按复式自身的累计排除集补齐，不为轮次对齐牺牲主推排名。
             if fushi_key == 'fu_shi_7':
                 select6_result = results.get('select_6', {})
                 select6_numbers = select6_result.get('numbers', [])
                 select6_candidates = select_candidate_rankings.get('select_6', [])
-                first_round_numbers = []
-                if len(select6_numbers) == 6:
-                    first_round, _ = self._calculate_select_recalculation(
-                        'select_6', select6_numbers,
-                    )
-                    first_round_numbers = first_round.get('numbers') or []
                 core_numbers, supplemental_number = _fushi7_from_select6(
                     select6_numbers,
                     select6_candidates,
-                    excluded_numbers=first_round_numbers,
                 )
                 linked_strategy = deepcopy(resolved_strategies.get('select_6', {}))
                 linked_strategy['ranking_source'] = 'select_6'
@@ -1746,7 +1746,7 @@ class KL8Analyzer:
                     numbers_field: core_numbers,
                     'core_numbers': core_numbers,
                     'select_6_numbers': sorted(select6_numbers),
-                    'reserved_select6_first_round': first_round_numbers,
+                    'primary_supplement_policy': 'next_ranked_after_primary',
                     'supplemental_number': supplemental_number,
                     'ranking_source': 'select_6',
                     'shape_profile': _shape_profile(
@@ -1864,8 +1864,7 @@ class KL8Analyzer:
                 'is_validated': strategy['is_validated'],
                 'baseline_type': strategy.get('baseline_type', ''),
                 'final_selection_mode': selected_mode,
-                'warning': '' if strategy['is_validated']
-                    else '公平单组基线：不使用未经验证的冷热、遗漏或趋势猜号。',
+                'warning': _strategy_warning(strategy),
             }
 
         # v9.1: 本期变化对比
@@ -1909,7 +1908,7 @@ class KL8Analyzer:
         backfill_target = KL8_BACKFILL_MIN_PERIODS
 
         stats = self.statistics
-        recent_performance = _build_recent_settlement_performance()
+        recent_performance = _build_recent_settlement_performance(history_data=self.history_data)
         results['statistics'] = {
             'total_periods': stats.get('total_periods', 0),
             'min_prediction_periods': KL8_MIN_PREDICTION_PERIODS,

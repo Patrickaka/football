@@ -254,7 +254,9 @@ def _persist_trial_results():
     unique_trials = []
     seen_keys = set()
     for trial in _cfg.STRATEGY_TRIAL_RESULTS:
-        key = f"{trial.get('strategy_id', '')}_{trial.get('play_type', '')}_{trial.get('tournament_round', '')}_{trial.get('tested_at', '')}"
+        key = trial.get('trial_id') or (
+            f"{trial.get('strategy_id', '')}_{trial.get('play_type', '')}_{trial.get('tournament_round', '')}_{trial.get('tested_at', '')}"
+        )
         if key not in seen_keys:
             seen_keys.add(key)
             unique_trials.append(trial)
@@ -271,6 +273,8 @@ def _persist_trial_results():
         log.warning(f'持久化策略试验结果失败: {e}')
         if temp_path.exists():
             temp_path.unlink()
+        return False
+    return True
 
 
 def _load_trial_results():
@@ -513,22 +517,65 @@ def _load_last_snapshot() -> Optional[Dict]:
     return candidates[0][1]
 
 
-def _load_recent_settlements(limit: int = 100) -> List[Dict]:
+def _load_record_draws(history_data=None) -> Dict:
+    """Read actual issue dates/numbers without constructing an analyzer or syncing."""
+    try:
+        raw = history_data if history_data is not None else json.loads(
+            Path(data_path('kl8_history.json')).read_text(encoding='utf-8'))
+        rows = raw.get('results', raw.get('data', [])) if isinstance(raw, dict) else raw
+        if not isinstance(rows, list):
+            return {}
+        return {str(row['issue']): row for row in rows if isinstance(row, dict) and row.get('issue')}
+    except (OSError, ValueError, TypeError):
+        return {}
+
+
+def _load_recent_settlements(limit: int = 100, *, history_data=None) -> List[Dict]:
+    """Only a verified first formal forecast counts once for each independent draw."""
+    from .record_selection import select_canonical_snapshots, audit_settlement, strategy_cohort
+
     settlements_dir = Path(_cfg.KL8_SETTLEMENT_DIR)
     if not settlements_dir.exists():
         return []
-
+    draws = _load_record_draws(history_data)
+    snapshots, hashes = [], {}
+    for path in Path(_cfg.KL8_SNAPSHOT_DIR).glob('snapshot_*.json'):
+        try:
+            raw = path.read_text(encoding='utf-8')
+            snapshot = json.loads(raw)
+            if not isinstance(snapshot, dict):
+                continue
+            snapshots.append(snapshot)
+            hashes[str(snapshot.get('snapshot_id'))] = hashlib.sha256(raw.encode()).hexdigest()
+        except (OSError, ValueError, TypeError):
+            continue
+    selected = {str(row.get('snapshot_id')): row for row in select_canonical_snapshots(snapshots, draws)
+                if row['prediction_audit']['eligible']}
     items = []
     for path in settlements_dir.glob('settlement_*.json'):
         try:
             data = json.loads(path.read_text(encoding='utf-8'))
-            sort_key = data.get('settled_at') or data.get('actual_issue') or ''
-            items.append((sort_key, path.stat().st_mtime, data))
+            snapshot_id = str(data.get('snapshot_id'))
+            snapshot = selected.get(snapshot_id)
+            if snapshot is None:
+                continue
+            audit = audit_settlement(snapshot, data, draws.get(str(snapshot.get('target_issue'))),
+                                     snapshot_sha256=hashes.get(snapshot_id))
+            if not audit['eligible']:
+                continue
+            data = {**data, 'prediction_version': snapshot.get('version'),
+                    'prediction_audit': audit,
+                    'strategy_cohorts': {play: strategy_cohort(snapshot, play)
+                                         for play in (*SELECT_PLAY_KEYS, *FUSHI_PLAY_KEYS)}}
+            items.append(data)
         except Exception:
             continue
-
-    items.sort(key=lambda item: (item[0], item[1]), reverse=True)
-    return [data for _, _, data in items[:limit]]
+    items.sort(key=lambda item: str(item.get('actual_issue') or ''), reverse=True)
+    # A duplicate settlement file must not count as another independent trial.
+    unique = {}
+    for item in items:
+        unique.setdefault(str(item['actual_issue']), item)
+    return list(unique.values())[:limit]
 
 
 def _summarize_settlement_window(settlements: List[Dict], window_size: int) -> Dict:
@@ -621,17 +668,37 @@ def _summarize_settlement_window(settlements: List[Dict], window_size: int) -> D
     }
 
 
-def _build_recent_settlement_performance(windows: Tuple[int, ...] = (30, 100)) -> Dict:
+def _build_recent_settlement_performance(windows: Tuple[int, ...] = (30, 100), *, history_data=None) -> Dict:
     max_window = max(windows) if windows else 100
-    settlements = _load_recent_settlements(max_window)
-    summaries = [
-        _summarize_settlement_window(settlements, window)
-        for window in windows
-    ]
+    settlements = _load_recent_settlements(max_window, history_data=history_data)
+    current = [row for row in settlements if row.get('prediction_version') == KL8_PREDICTOR_VERSION]
+    summaries = []
+    for window in windows:
+        summary = _summarize_settlement_window(current, window)
+        for play in (*SELECT_PLAY_KEYS, *FUSHI_PLAY_KEYS):
+            latest = next((row['strategy_cohorts'][play] for row in current
+                           if (row.get('strategy_cohorts') or {}).get(play)), None)
+            cohort = [row for row in current if latest and
+                      (row.get('strategy_cohorts') or {}).get(play, {}).get('key') == latest['key']]
+            summary['play_stats'][play] = {
+                **_summarize_settlement_window(cohort, window)['play_stats'][play],
+                'cohort': latest,
+            }
+        summaries.append(summary)
+    cohorts = {}
+    for row in settlements:
+        for play, meta in (row.get('strategy_cohorts') or {}).items():
+            cohorts.setdefault(meta['key'], {'meta': meta, 'rows': []})['rows'].append(row)
+    cohort_stats = [{**group['meta'], **_summarize_settlement_window(group['rows'], max_window)[
+        'play_stats'][group['meta']['play_type']]} for group in cohorts.values()]
     return {
-        'available_count': len(settlements),
+        'available_count': len(current),
+        'all_versions_available_count': len(settlements),
+        'version': KL8_PREDICTOR_VERSION,
         'windows': summaries,
-        'note': '实际命中与随机理论期望对照；快乐8为公平摇奖，短期高低可能只是随机波动。',
+        'strategy_cohorts': cohort_stats,
+        'selection_policy': 'first-formal-predraw-v1',
+        'note': '仅统计可证明开奖前生成的正式初推，同一期只计一次；当前表现按当前版本及各玩法最近策略分别计算，历史版本另列，实验与时间不明记录不计入。快乐8为公平摇奖，短期高低可能只是随机波动。',
     }
 
 
@@ -657,6 +724,8 @@ def _build_strategy_health(performance: Optional[Dict] = None) -> Dict:
         is_validated = bool(strategy_id and strategy.get('is_validated', False))
         report = strategy.get('validation_report', {}) if isinstance(strategy.get('validation_report', {}), dict) else {}
         stat = play_stats.get(play_type, {})
+        if stat.get('cohort') and stat['cohort'].get('strategy_id') != strategy_id:
+            stat = {}  # Another strategy's settled results are not this strategy's evidence.
         settled_count = int(stat.get('settled_count', 0) or 0)
 
         validation_lift = report.get('validation_lift')

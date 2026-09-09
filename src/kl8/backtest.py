@@ -66,15 +66,20 @@ def _predict_fushi7_from_select6(
     primary: List[int],
     ranking: List[Tuple[int, float]],
 ) -> List[int]:
-    """Reserve the live first exclusion round before adding the seventh number."""
-    reserved = []
-    if len(primary) == 6:
-        first_round, _ = analyzer._calculate_select_recalculation(
-            'select_6', primary, strategy=strategy,
-        )
-        reserved = first_round.get('numbers') or []
-    numbers, _ = _fushi7_from_select6(primary, ranking, excluded_numbers=reserved)
+    """Keep the live primary six and add the next available ranked number."""
+    numbers, _ = _fushi7_from_select6(primary, ranking)
     return numbers
+
+
+def _safe_fdr_p_value(value) -> float:
+    """Malformed legacy evidence counts as a failed trial, never significance."""
+    if isinstance(value, bool):
+        return 1.0
+    try:
+        value = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return 1.0
+    return value if math.isfinite(value) and 0 <= value <= 1 else 1.0
 
 
 class KL8RollingBacktest:
@@ -168,7 +173,7 @@ class KL8RollingBacktest:
 
         v6关键改动:
         - 使用multi_model_voting()而非get_ensemble_ranking()
-        - 选6沿用线上完整排名，复式7码补位预留选6第1轮；其余玩法沿用Top20
+        - 选6沿用线上完整排名，复式7码按剩余排名补位；其余玩法沿用Top20
         - model_weights真正参与（bayesian/markov权重生效）
         """
         history = self.analyzer.history_data
@@ -219,7 +224,7 @@ class KL8RollingBacktest:
             temp_analyzer.using_simulated_data = False
             temp_analyzer.history_file = ''
             temp_analyzer._data_mtime = 0
-            temp_analyzer.update_statistics()
+            temp_analyzer.update_statistics(window_size=len(train_data))
 
             # v6: 使用真实投票管道（model_weights真正参与）
             vote = temp_analyzer.multi_model_voting(
@@ -452,6 +457,7 @@ class KL8RollingBacktest:
         pool_max_last_numbers: Optional[int] = None,
         frequency_mode: str = 'mean_reversion',
         final_selection_mode: str = 'balanced',
+        play_type: Optional[str] = None,
     ) -> Dict:
         """置换检验: 打乱实际开奖期顺序（v9重大改动）
 
@@ -460,6 +466,13 @@ class KL8RollingBacktest:
         - 更准确地模拟"模型预测与实际开奖没有时间关系"的零假设
         - p值使用加一修正: p = (n_ge + 1) / (n_perm + 1)
         """
+        s_key = play_type or f'select_{pick_n}'
+        if play_type is not None:
+            effective_pick_n = _parse_play_pick_n(play_type)
+            if effective_pick_n is None or effective_pick_n < 1:
+                return {'error': f'无效玩法: {play_type}'}
+            # Compound play names describe tickets, not the core pool size.
+            pick_n = effective_pick_n
         history = self.analyzer.history_data
         history_asc = sorted(history, key=lambda x: x['issue'])
 
@@ -482,10 +495,6 @@ class KL8RollingBacktest:
 
         if 'error' in real_result:
             return real_result
-
-        s_key = f'select_{pick_n}'
-        real_lift = real_result.get(s_key, {}).get('lift', 0)
-        real_mean_hits = real_result.get(s_key, {}).get('mean_hits', 0)
 
         # v9: 先收集每一期真实预测号码和对应实际开奖
         actual_start = max(start_idx, min_train)
@@ -521,10 +530,14 @@ class KL8RollingBacktest:
             temp_analyzer.using_simulated_data = False
             temp_analyzer.history_file = ''
             temp_analyzer._data_mtime = 0
-            temp_analyzer.update_statistics()
+            temp_analyzer.update_statistics(window_size=len(train_data))
 
-            if pick_n == 6:
-                pred_nums, _ = _predict_select6_primary(temp_analyzer, strategy)
+            if s_key in {'select_6', 'fu_shi_7'}:
+                pred_nums, ranking = _predict_select6_primary(temp_analyzer, strategy)
+                if s_key == 'fu_shi_7':
+                    pred_nums = _predict_fushi7_from_select6(
+                        temp_analyzer, strategy, pred_nums, ranking,
+                    )
                 predictions.append(set(pred_nums))
                 actual_draws.append(set(history_asc[t]['numbers']))
                 continue
@@ -1378,7 +1391,6 @@ class KL8RollingBacktest:
 
         # ── 第二轮：验证段 — 对该玩法所有候选比较 ──
         val_results = {}
-        val_p_values = []  # 收集所有候选的p值，用于BH-FDR校正
         val_candidates = []
 
         for name, strategy in train_survivors.items():
@@ -1427,6 +1439,7 @@ class KL8RollingBacktest:
                 start_idx=val_range[0],
                 end_idx=val_range[1],
                 pick_n=pick_n,
+                play_type=play_type,
                 n_permutations=n_permutations,
                 window_size=ws,
                 repeat_direction=repeat_dir,
@@ -1440,7 +1453,7 @@ class KL8RollingBacktest:
                 final_selection_mode=final_selection_mode,
             )
 
-            raw_p = perm_result.get('p_value', 1.0) if 'error' not in perm_result else 1.0
+            raw_p = _safe_fdr_p_value(perm_result.get('p_value')) if 'error' not in perm_result else 1.0
 
             # 稳定性检查（4子窗口）
             val_len = val_range[1] - val_range[0]
@@ -1495,7 +1508,6 @@ class KL8RollingBacktest:
             )
 
             # 收集
-            val_p_values.append(raw_p)
             val_candidates.append({
                 'name': name,
                 'strategy': strategy,
@@ -1521,6 +1533,7 @@ class KL8RollingBacktest:
 
             # 记录试验结果
             trial_record = {
+                'trial_id': uuid.uuid4().hex,
                 'strategy_id': strategy.get('strategy_id', name),
                 'play_type': play_type,
                 'feature_weights': fw,
@@ -1537,29 +1550,40 @@ class KL8RollingBacktest:
                 'n_permutations': n_permutations,
                 'tested_at': time.strftime('%Y-%m-%dT%H:%M:%S'),
                 'tournament_round': 'per_play_validation',
+                'evidence_schema': 2,
             }
             _cfg.STRATEGY_TRIAL_RESULTS.append(trial_record)
+            # Keep this attempt's identity even if another run appends a trial.
+            val_candidates[-1]['trial_identity'] = id(trial_record)
             _records_mod._persist_trial_results()
 
-        # ── BH-FDR 校正（对同玩法的所有候选p值）───
-        if len(val_p_values) > 1:
-            adjusted_p_values = benjamini_hochberg_fdr(val_p_values)
-        else:
-            adjusted_p_values = val_p_values
-
-        # 将FDR校正值写入试验记录
-        same_play_trials = [t for t in _cfg.STRATEGY_TRIAL_RESULTS if t['play_type'] == play_type and t.get('tournament_round') == 'per_play_validation']
-        same_play_p_values_list = [t['raw_p_value'] for t in same_play_trials]
-        if len(same_play_p_values_list) > 1:
-            fdr_adjusted = benjamini_hochberg_fdr(same_play_p_values_list)
-            for i, trial in enumerate(same_play_trials):
-                trial['fdr_adjusted_p'] = round(fdr_adjusted[i], 6)
+        # The gate and persisted report must use the identical cumulative
+        # family, including earlier standalone and tournament attempts.
+        same_play_trials = [trial for trial in list(_cfg.STRATEGY_TRIAL_RESULTS)
+                            if isinstance(trial, dict) and trial.get('play_type') == play_type
+                            and trial.get('tournament_round') != 'holdout_exposure']
+        fdr_adjusted = benjamini_hochberg_fdr([
+            _safe_fdr_p_value(trial.get('raw_p_value')) for trial in same_play_trials
+        ])
+        adjusted_by_trial = {}
+        for trial, adjusted in zip(same_play_trials, fdr_adjusted):
+            adjusted_by_trial[id(trial)] = adjusted
+            trial['fdr_adjusted_p'] = round(adjusted, 6)
+        if same_play_trials:
             _records_mod._persist_trial_results()
+        fdr_audit = {
+            'method': 'benjamini_hochberg',
+            'scope': 'all_recorded_trials_same_play',
+            'family_size': len(same_play_trials),
+            'current_candidates': len(val_candidates),
+            'controls_repeated_final_test_access': True,
+        }
 
         # ── 选验证段最优（Lift最高 + FDR校正后p<0.05 + 稳定性>=3/4 + 奖级>=随机 + ROI>=随机）───
         qualified_candidates = []
-        for i, cand in enumerate(val_candidates):
-            adjusted_p = adjusted_p_values[i] if i < len(adjusted_p_values) else cand['raw_p']
+        for cand in val_candidates:
+            adjusted_p = adjusted_by_trial.get(cand['trial_identity'], 1.0)
+            val_results[cand['name']]['fdr_adjusted_p'] = round(adjusted_p, 6)
 
             if (
                 cand['val_lift'] > 0
@@ -1583,6 +1607,7 @@ class KL8RollingBacktest:
                 'train_results': train_results,
                 'val_results': val_results,
                 'qualified_candidates': [],
+                'fdr_audit': fdr_audit,
             }
 
         # Pick by prize-threshold score first; mean-hit lift is a tie-breaker.
@@ -1606,6 +1631,17 @@ class KL8RollingBacktest:
         frequency_mode = strategy.get('frequency_mode', 'mean_reversion')
         final_selection_mode = strategy.get('final_selection_mode', 'balanced')
 
+        from .holdout import reserve_final_holdout
+        holdout = reserve_final_holdout(
+            play_type, strategy, self.analyzer.history_data, final_test_range,
+            _cfg.STRATEGY_TRIAL_RESULTS, _records_mod._persist_trial_results,
+            version=KL8_PREDICTOR_VERSION, minimum=BACKTEST_FINAL_TEST_PERIODS,
+        )
+        if not holdout['available']:
+            return {'play_type': play_type, 'all_failed': True, 'activated': False,
+                    'summary': '缺少未使用的最终测试数据，保持当前参考策略',
+                    'holdout_audit': holdout, 'fdr_audit': fdr_audit}
+        final_test_range = holdout['range']
         final_test_result = self._rolling_backtest_parametric(
             fw, mw,
             start_idx=final_test_range[0],
@@ -1630,6 +1666,7 @@ class KL8RollingBacktest:
                 'summary': '最终封存测试失败',
                 'best_candidate': best_candidate['name'],
                 'final_test_error': final_test_result['error'],
+                'fdr_audit': fdr_audit,
             }
 
         # 该玩法的最终测试Lift
@@ -1637,17 +1674,17 @@ class KL8RollingBacktest:
 
         # 最终测试关键奖级不低于随机
         ft_prize_probs = final_test_result.get(play_type, {}).get('probabilities', {})
-        ft_theoretical_probs = final_test_result.get(play_type, {}).get('theoretical_probs', {})
         ft_prize_tier_passed = True
         for tier in threshold_tiers:
-            ft_actual_prob = ft_prize_probs.get(tier, 0)
-            ft_random_prob = ft_theoretical_probs.get(tier, hypergeom_p_ge(pick_n, int(tier.replace('>=', ''))))
-            if ft_actual_prob < ft_random_prob:
+            ft_actual_prob = ft_prize_probs.get(tier)
+            ft_random_prob = hypergeom_p_ge(pick_n, int(tier.replace('>=', '')))
+            if (not isinstance(ft_actual_prob, (int, float)) or isinstance(ft_actual_prob, bool)
+                    or not math.isfinite(ft_actual_prob) or not ft_random_prob <= ft_actual_prob <= 1):
                 ft_prize_tier_passed = False
 
         # v9.2: 最终测试不用于"挑选策略"，但可以作为"是否允许上线"的门槛
         # 最终测试失败 → 不重试，直接判定该轮无可激活策略
-        final_test_passed = final_test_lift > 0 and ft_prize_tier_passed
+        final_test_passed = math.isfinite(final_test_lift) and final_test_lift > 0 and ft_prize_tier_passed
 
         if not final_test_passed:
             log.info(
@@ -1663,6 +1700,7 @@ class KL8RollingBacktest:
                 'val_lift': round(best_candidate['val_lift'], 4),
                 'final_test_lift': round(final_test_lift, 4),
                 'final_test_passed': False,
+                'fdr_audit': fdr_audit,
                 'note': '最终测试失败，不重新调权重再用同一段测试集试一次',
             }
 
@@ -1674,11 +1712,13 @@ class KL8RollingBacktest:
             'practical_score': round(best_candidate.get('practical_score', 0), 6),
             'practical_detail': best_candidate.get('practical_detail', {}),
             'adjusted_p': round(best_candidate['adjusted_p'], 6),
+            'fdr_audit': fdr_audit,
             'n_positive_sub_windows': best_candidate['n_positive'],
             'prize_tier_passed': best_candidate['prize_tier_passed'],
             'roi_not_worse': best_candidate['roi_not_worse'],
             'final_test_lift': round(final_test_lift, 4),
             'final_test_prize_tier_passed': ft_prize_tier_passed,
+            'holdout_audit': holdout,
             'frequency_mode': frequency_mode,
             'final_selection_mode': final_selection_mode,
             'data_cutoff_issue': self.analyzer.history_data[0]['issue'] if self.analyzer.history_data else '',
@@ -1693,6 +1733,7 @@ class KL8RollingBacktest:
             'activated': True,
             'best_candidate': best_candidate['name'],
             'strategy_id': _cfg.ACTIVE_STRATEGIES[play_type]['strategy_id'],
+            'fdr_audit': fdr_audit,
             'val_lift': round(best_candidate['val_lift'], 4),
             'practical_score': round(best_candidate.get('practical_score', 0), 6),
             'final_test_lift': round(final_test_lift, 4),
@@ -1974,7 +2015,8 @@ class KL8RollingBacktest:
                 }
 
         # ── 全量 BH-FDR 校正 ──
-        same_play_trials = [t for t in _cfg.STRATEGY_TRIAL_RESULTS if t['play_type'] == 'select_5']
+        same_play_trials = [t for t in _cfg.STRATEGY_TRIAL_RESULTS if t['play_type'] == 'select_5'
+                            and t.get('tournament_round') != 'holdout_exposure']
         same_play_p_values = [t['raw_p_value'] for t in same_play_trials]
         if len(same_play_p_values) > 1:
             fdr_adjusted = benjamini_hochberg_fdr(same_play_p_values)

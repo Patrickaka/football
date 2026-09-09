@@ -40,7 +40,7 @@ def _history(latest_issue='2026232'):
 
 class CurrentVersionRecordSelectionTests(unittest.TestCase):
 
-    def test_same_issue_prefers_latest_current_version_snapshot(self):
+    def test_same_issue_preserves_earliest_formal_forecast_instead_of_latest_experiment(self):
         current = service._current_kl8_predictor_version()
         snapshots = [
             {
@@ -83,11 +83,11 @@ class CurrentVersionRecordSelectionTests(unittest.TestCase):
         selected = service._dedupe_kl8_snapshots(snapshots)
         by_issue = {row['target_issue']: row for row in selected}
 
-        self.assertEqual(by_issue['2026233']['snapshot_id'], 'current-experiment')
+        self.assertEqual(by_issue['2026233']['snapshot_id'], 'current-formal')
         self.assertEqual(
             by_issue['2026234']['snapshot_id'],
-            'other-latest',
-            '没有当前版本正式快照时仍按生成时间选择，不能删掉历史期记录',
+            'other-older',
+            '历史正式初推保留，不能被当前版本的实验刷新替换',
         )
 
     def test_snapshot_index_preserves_nanosecond_order_for_same_second(self):
@@ -129,29 +129,33 @@ class CurrentVersionRecordSelectionTests(unittest.TestCase):
             {'same-second-old': 100, 'same-second-new': 200},
         )
         selected = service._dedupe_kl8_snapshots(indexed)
-        self.assertEqual(selected[0]['snapshot_id'], 'same-second-new')
+        self.assertEqual(selected[0]['snapshot_id'], 'same-second-old')
 
-    def test_same_version_prefers_current_strategy_configuration(self):
+    def test_same_version_preserves_first_formal_even_after_strategy_changes(self):
         current = service._current_kl8_predictor_version()
         current_config = service._current_kl8_config_fingerprint()
         selected = service._dedupe_kl8_snapshots([
             {
-                'snapshot_id': 'stale-config-newer-clock',
+                'snapshot_id': 'original-config',
                 'target_issue': '2026233',
+                'based_on_issue': '2026232',
+                'is_experiment': False,
                 'version': current,
                 'strategy_config_fingerprint': 'stale-config',
-                'predicted_at_ns': 999,
+                'predicted_at': '2026-09-01T10:00:00+08:00',
             },
             {
                 'snapshot_id': 'current-config',
                 'target_issue': '2026233',
+                'based_on_issue': '2026232',
+                'is_experiment': False,
                 'version': current,
                 'strategy_config_fingerprint': current_config,
-                'predicted_at_ns': 100,
+                'predicted_at': '2026-09-01T11:00:00+08:00',
             },
-        ])
+        ], draw_records={'2026233': {'issue': '2026233', 'date': '2026-09-01'}})
 
-        self.assertEqual(selected[0]['snapshot_id'], 'current-config')
+        self.assertEqual(selected[0]['snapshot_id'], 'original-config')
 
 
 class SnapshotIdentityAcrossVersionsTests(unittest.TestCase):

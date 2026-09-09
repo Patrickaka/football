@@ -530,54 +530,24 @@ def _kl8_records_page_options(params, total):
     return page, page_size, total_pages, True
 
 
-def _dedupe_kl8_snapshots(snapshots):
-    """同一目标期优先显示当前代码及当前策略配置的最新预测。"""
-    current_version = _current_kl8_predictor_version()
-    current_config = _current_kl8_config_fingerprint()
+def _dedupe_kl8_snapshots(snapshots, draw_records=None):
+    """Historical initial forecasts cannot be replaced by a later experiment."""
+    from src.kl8.record_selection import select_canonical_snapshots
+    from src.kl8.records import _load_record_draws
 
-    def _selection_key(item):
-        is_current = str(item.get('version') or '') == current_version
-        is_current_config = (
-            str(item.get('strategy_config_fingerprint') or '') == current_config
-        )
-        try:
-            predicted_at_ns = int(item.get('predicted_at_ns') or 0)
-        except (TypeError, ValueError):
-            predicted_at_ns = 0
-        return (
-            str(item.get('target_issue') or ''),
-            is_current,
-            is_current_config,
-            predicted_at_ns,
-            str(item.get('predicted_at') or ''),
-            str(item.get('snapshot_id') or item.get('file') or ''),
-        )
-
-    ordered = sorted(
-        snapshots,
-        key=_selection_key,
-        reverse=True,
-    )
-    seen = set()
-    result = []
-    for snapshot in ordered:
-        issue = str(snapshot.get('target_issue') or '')
-        if not issue or issue in seen:
-            continue
-        seen.add(issue)
-        result.append(snapshot)
-    return result
+    draws = _load_record_draws() if draw_records is None else draw_records
+    return select_canonical_snapshots(snapshots, draws)
 
 
 def _load_kl8_record(snapshot, snapshot_dir, settlement_dir, fushi_config,
-                     clean_pick_numbers):
+                     clean_pick_numbers, draw=None):
     """只读取一个可见页所需的完整预测和结算。"""
     predicted = {}
     main_pool = {}
+    raw, raw_text = {}, ''
     try:
-        raw = json.loads(
-            (snapshot_dir / snapshot['file']).read_text(encoding='utf-8')
-        )
+        raw_text = (snapshot_dir / snapshot['file']).read_text(encoding='utf-8')
+        raw = json.loads(raw_text)
         for key, block in raw.items():
             if not (key.startswith('select_') or key.startswith('fu_shi')):
                 continue
@@ -614,6 +584,9 @@ def _load_kl8_record(snapshot, snapshot_dir, settlement_dir, fushi_config,
         'predicted': predicted,
         'main_pool': main_pool,
         'settlement': None,
+        'prediction_audit': snapshot.get('prediction_audit'),
+        'accuracy_eligible': False,
+        'accuracy_exclusion_reason': 'not_settled',
     }
     snapshot_id = snapshot.get('snapshot_id')
     if snapshot.get('has_settlement') and snapshot_id:
@@ -625,6 +598,16 @@ def _load_kl8_record(snapshot, snapshot_dir, settlement_dir, fushi_config,
                 )
             except Exception:
                 record['settlement'] = None
+    if record['settlement']:
+        import hashlib
+        from src.kl8.record_selection import audit_settlement
+        audit = audit_settlement({**snapshot, **raw}, record['settlement'], draw,
+                                 snapshot_sha256=hashlib.sha256(raw_text.encode()).hexdigest())
+        record['prediction_audit'] = audit
+        record['accuracy_eligible'] = audit['eligible']
+        record['accuracy_exclusion_reason'] = None if audit['eligible'] else audit['reason']
+    elif snapshot.get('prediction_audit') and not snapshot['prediction_audit']['eligible']:
+        record['accuracy_exclusion_reason'] = snapshot['prediction_audit']['reason']
     return record
 
 
@@ -693,7 +676,9 @@ def kl8_records_payload(params=None):
             _clean_pick_numbers,
         )
 
-        snapshots = _dedupe_kl8_snapshots(kl8_list_snapshots())
+        from src.kl8.records import _load_record_draws
+        draw_records = _load_record_draws()
+        snapshots = _dedupe_kl8_snapshots(kl8_list_snapshots(), draw_records)
         total = len(snapshots)
         page, page_size, total_pages, paginated = _kl8_records_page_options(
             params, total,
@@ -710,6 +695,7 @@ def kl8_records_payload(params=None):
             _load_kl8_record(
                 snapshot, snapshot_dir, settlement_dir,
                 FUSHI_CONFIG, _clean_pick_numbers,
+                draw=draw_records.get(str(snapshot.get('target_issue'))),
             )
             for snapshot in visible_snapshots
         ]

@@ -99,8 +99,7 @@ def live_groups(analyzer, strategy):
                 strategy['final_min_last_numbers'],
             )
         primary = sorted(n for n, _ in primary_pool)
-        first, _ = analyzer._calculate_select_recalculation('select_6', primary)
-        fushi, _ = _fushi7_from_select6(primary, ranking, first['numbers'])
+        fushi, _ = _fushi7_from_select6(primary, ranking)
         groups = {'select_6': [primary], 'fu_shi_7': [fushi]}
         excluded6, excluded7 = set(primary), set(fushi)
         for _ in range(2):

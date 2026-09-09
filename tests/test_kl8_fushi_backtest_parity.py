@@ -50,7 +50,7 @@ class FushiBacktestParityTests(unittest.TestCase):
         with patch.object(config, 'ACTIVE_STRATEGIES', {}), patch.object(config, 'VERIFY_ONLY_MODE', False):
             cls.strategy = strategies.resolve_play_strategy('select_6')
 
-    def test_same_ranking_reserves_first_six_and_preserves_both_round_sizes(self):
+    def test_primary_seventh_uses_best_available_rank_and_later_rounds_stay_disjoint(self):
         analyzer = _analyzer(self.history[:100])
         analyzer.statistics['last_numbers'] = set(range(61, 81))
         strategy = {**deepcopy(self.strategy), 'pool_max_last_numbers': 6}
@@ -68,12 +68,12 @@ class FushiBacktestParityTests(unittest.TestCase):
 
         self.assertEqual(primary, [1, 2, 3, 4, 5, 6])
         self.assertEqual(first['numbers'], [7, 8, 9, 10, 11, 12])
-        self.assertEqual(compound, [1, 2, 3, 4, 5, 6, 13])
+        self.assertEqual(compound, [1, 2, 3, 4, 5, 6, 7])
         self.assertEqual(compound, live['fu_shi_7']['top7_numbers'])
-        self.assertEqual(compound_first['top7_numbers'], [7, 8, 9, 10, 11, 12, 14])
-        self.assertEqual(compound_first['replaced_numbers'], [])
+        self.assertEqual(compound_first['top7_numbers'], [8, 9, 10, 11, 12, 13, 14])
+        self.assertEqual(compound_first['replaced_numbers'], [7])
         self.assertEqual(compound_first['total_combinations'], 21)
-        self.assertTrue(set(first['numbers']).issubset(compound_first['top7_numbers']))
+        self.assertTrue((set(first['numbers']) - set(compound)).issubset(compound_first['top7_numbers']))
         self.assertTrue(set(compound).isdisjoint(compound_first['top7_numbers']))
 
     def test_real_history_primary_and_compound_match_live_for_multiple_shapes(self):
@@ -92,7 +92,8 @@ class FushiBacktestParityTests(unittest.TestCase):
                     self.assertEqual(len(primary), 6)
                     self.assertEqual(len(set(compound)), 7)
                     self.assertTrue(set(primary).issubset(compound))
-                    self.assertTrue(set(compound).isdisjoint(live['fu_shi_7']['reserved_select6_first_round']))
+                    expected_seventh = next(n for n, _ in ranking if n not in primary)
+                    self.assertEqual(set(compound), set(primary) | {expected_seventh})
                     if mode == 'balanced':
                         self.assertLessEqual(
                             len(set(primary) & analyzer.statistics['last_numbers']),

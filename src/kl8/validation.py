@@ -21,7 +21,7 @@ from . import records as _records_mod
 from . import config as _cfg
 
 from .config import (
-    BACKTEST_PERMUTATION_COUNT, BACKTEST_STABILITY_THRESHOLD, BACKTEST_STABILITY_WINDOWS, KL8_PREDICTOR_VERSION,
+    BACKTEST_FINAL_TEST_PERIODS, BACKTEST_PERMUTATION_COUNT, BACKTEST_STABILITY_THRESHOLD, BACKTEST_STABILITY_WINDOWS, KL8_PREDICTOR_VERSION,
 )
 from .stats import (
     _parse_play_pick_n, _play_lift, _prize_tier_thresholds, benjamini_hochberg_fdr, bonferroni_correction, hypergeom_p_ge,
@@ -58,7 +58,7 @@ def validate_and_activate_strategy(
     1. 验证集 Lift > 0
     2. FDR 校正后 p < 0.05
     3. 稳定性窗口至少 3/4 为正（将验证段分成4个子窗口，各检查Lift）
-    4. 最终封存测试集只做结果确认，不参与激活决策
+    4. 参数冻结后只打开未使用的最终测试集；最终测试未通过不得激活
 
     参数:
         play_type: 玩法名称，如 'select_5', 'fu_shi_7'
@@ -166,6 +166,7 @@ def validate_and_activate_strategy(
         start_idx=val_range[0],
         end_idx=val_range[1],
         pick_n=pick_n,
+        play_type=play_type,
         metric='mean_hits',
         n_permutations=n_permutations,
         window_size=window_size,  # v8: 确保与回测使用相同窗口
@@ -183,34 +184,49 @@ def validate_and_activate_strategy(
     if 'error' in perm_result:
         return {'error': f'置换检验失败: {perm_result["error"]}'}
 
-    raw_p_value = perm_result.get('p_value', 1.0)
+    from .backtest import _safe_fdr_p_value
+    raw_p_value = _safe_fdr_p_value(perm_result.get('p_value'))
 
-    # v8: 记录到策略试验结果表（供后续全量FDR校正）
-    trial_record = {
+    strategy_dict = {
         'strategy_id': f'{play_type}_w{window_size}_{hashlib.sha256(json.dumps(feature_weights, sort_keys=True, separators=(",", ":")).encode()).hexdigest()[:6]}',
-        'play_type': play_type,
         'feature_weights': feature_weights,
         'model_weights': model_weights,
         'window_size': window_size,
+        'repeat_direction': repeat_direction,
+        'repeat_avoid_score': repeat_avoid_score,
+        'repeat_non_avoid_score': repeat_non_avoid_score,
+        'repeat_follow_score': repeat_follow_score,
+        'repeat_non_follow_score': repeat_non_follow_score,
+        'pool_diversify': pool_diversify,
+        'pool_max_last_numbers': pool_max_last_numbers,
+        'frequency_mode': frequency_mode,
+        'final_selection_mode': final_selection_mode,
+    }
+    # Each attempt has its own identity, even for repeated requests in one second.
+    trial_record = {
+        **strategy_dict,
+        'trial_id': uuid.uuid4().hex,
+        'play_type': play_type,
         'raw_p_value': raw_p_value,
         'validation_lift': round(val_lift, 4),
         'n_permutations': n_permutations,
         'tested_at': time.strftime('%Y-%m-%dT%H:%M:%S'),
+        'evidence_schema': 2,
     }
     _cfg.STRATEGY_TRIAL_RESULTS.append(trial_record)
     _records_mod._persist_trial_results()  # v9: 每次新增试验后持久化
 
     # v8: 全量BH FDR校正 — 对同一玩法下所有候选策略的p值统一校正
     # 收集同玩法的所有试验记录
-    same_play_trials = [t for t in _cfg.STRATEGY_TRIAL_RESULTS if t['play_type'] == play_type]
-    same_play_p_values = [t['raw_p_value'] for t in same_play_trials]
+    same_play_trials = [t for t in _cfg.STRATEGY_TRIAL_RESULTS if t.get('play_type') == play_type
+                        and t.get('tournament_round') != 'holdout_exposure']
+    same_play_p_values = [_safe_fdr_p_value(t.get('raw_p_value')) for t in same_play_trials]
 
     # 如果只有1个p值（当前刚添加的），FDR校正等于不校正
     # 但随着候选策略增多，FDR校正越来越有意义
     if len(same_play_p_values) > 1:
         adjusted_p_values = benjamini_hochberg_fdr(same_play_p_values)
-        # 找到当前试验在列表中的索引
-        current_idx = len(same_play_p_values) - 1  # 刚添加的是最后一个
+        current_idx = next(i for i, trial in enumerate(same_play_trials) if trial is trial_record)
         adjusted_p = adjusted_p_values[current_idx]
     else:
         adjusted_p = raw_p_value  # 单次检验时FDR校正等于原始p值
@@ -262,7 +278,17 @@ def validate_and_activate_strategy(
     n_positive_sub_windows = sum(1 for l in sub_window_lifts if l > 0)
     condition_3_stability = n_positive_sub_windows >= BACKTEST_STABILITY_THRESHOLD
 
-    # ── 条件4: 最终封存测试集结果确认（只报告，不参与激活决策）───
+    # A failed/previously opened final period cannot qualify an activation.
+    from .holdout import reserve_final_holdout
+    holdout = {'available': False, 'reason': 'validation_not_qualified'}
+    if condition_1_lift_positive and condition_2_fdr_significant and condition_3_stability:
+        holdout = reserve_final_holdout(
+            play_type, strategy_dict, analyzer.history_data, final_test_range,
+            _cfg.STRATEGY_TRIAL_RESULTS, _records_mod._persist_trial_results,
+            version=KL8_PREDICTOR_VERSION, minimum=BACKTEST_FINAL_TEST_PERIODS,
+        )
+    if holdout['available']:
+        final_test_range = holdout['range']
     final_test_result = bt._rolling_backtest_parametric(
         feature_weights, model_weights,
         start_idx=final_test_range[0],
@@ -278,7 +304,7 @@ def validate_and_activate_strategy(
         pool_max_last_numbers=pool_max_last_numbers,
         frequency_mode=frequency_mode,
         final_selection_mode=final_selection_mode,
-    )
+    ) if holdout['available'] else {'error': holdout['reason']}
 
     final_test_lift = None
     if 'error' not in final_test_result:
@@ -311,10 +337,22 @@ def validate_and_activate_strategy(
     roi_not_significantly_worse = val_roi >= random_roi * 0.8  # 允许80%即可
 
     # ── 激活判断（v9: 5个条件）───
+    final_block = final_test_result.get(s_key, {})
+    final_probabilities = final_block.get('probabilities') or {}
+    condition_4_final_passed = (
+        holdout['available'] and final_test_lift is not None and math.isfinite(final_test_lift)
+        and final_test_lift > 0
+        and all(isinstance(final_probabilities.get(tier), (int, float))
+                and not isinstance(final_probabilities[tier], bool)
+                and math.isfinite(final_probabilities[tier])
+                and hypergeom_p_ge(pick_n, int(tier.replace('>=', ''))) <= final_probabilities[tier] <= 1
+                for tier in threshold_tiers)
+    )
     all_conditions_passed = (
         condition_1_lift_positive
         and condition_2_fdr_significant
         and condition_3_stability
+        and condition_4_final_passed
         and prize_tier_passed
         and roi_not_significantly_worse
     )
@@ -365,8 +403,10 @@ def validate_and_activate_strategy(
                 'detail': f'稳定性 {n_positive_sub_windows}/{BACKTEST_STABILITY_WINDOWS} 窗口为正，要求 ≥ {BACKTEST_STABILITY_THRESHOLD}',
             },
             'condition_4_final_test_confirmation': {
+                'passed': condition_4_final_passed,
                 'final_test_lift': round(final_test_lift, 4) if final_test_lift is not None else None,
-                'note': '最终封存测试集只做结果确认，不参与激活决策',
+                'note': '仅使用未读过的最终测试期，失败不得激活或复用同一测试段调参',
+                'holdout_audit': holdout,
             },
             'condition_5_prize_tier_thresholds': {
                 'passed': prize_tier_passed,
@@ -406,21 +446,6 @@ def validate_and_activate_strategy(
 
     # ── 激活（若条件通过 + auto_activate=True）───
     if all_conditions_passed and auto_activate:
-        strategy_dict = {
-            'strategy_id': strategy_id,
-            'feature_weights': feature_weights,
-            'model_weights': model_weights,
-            'window_size': window_size,
-            'repeat_direction': repeat_direction,
-            'repeat_avoid_score': repeat_avoid_score,
-            'repeat_non_avoid_score': repeat_non_avoid_score,
-            'repeat_follow_score': repeat_follow_score,
-            'repeat_non_follow_score': repeat_non_follow_score,
-            'pool_diversify': pool_diversify,
-            'pool_max_last_numbers': pool_max_last_numbers,
-            'frequency_mode': frequency_mode,
-            'final_selection_mode': final_selection_mode,
-        }
         _snapshots_mod.activate_verified_strategy(play_type, strategy_dict, report)
         activated = True
         report['activated'] = True
