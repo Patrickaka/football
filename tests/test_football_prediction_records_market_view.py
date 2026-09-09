@@ -125,7 +125,7 @@ class FootballPredictionRecordsMarketViewTests(unittest.TestCase):
         self.assertEqual(saved['predicted_rqspf'], rqspf)
         self.assertEqual(saved['lottery_handicap'], 3)
 
-    def test_list_exposes_market_predictions_and_only_actual_score(self):
+    def test_list_exposes_saved_score_reference_alongside_market_predictions(self):
         record = {
             'match_id': 'market-view-1',
             'home': '主队',
@@ -155,7 +155,8 @@ class FootballPredictionRecordsMarketViewTests(unittest.TestCase):
         self.assertEqual(row['actual_score'], '2-1')
         self.assertTrue(row['hit_1x2'])
         self.assertTrue(row['hit_rqspf'])
-        self.assertNotIn('predicted_scores', row)
+        self.assertEqual(row['predicted_scores'], {'2-1': 0.3})
+        self.assertIsNot(row['predicted_scores'], record['predicted_scores'])
 
     def test_list_hides_legacy_spf_prediction_when_official_market_was_closed(self):
         record = {

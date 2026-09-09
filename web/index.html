@@ -8775,6 +8775,22 @@ function preparePredictionCalendar(records) {
   if (!predictionCalendarMonth || predictionDateFilter) predictionCalendarMonth = anchor.slice(0, 7);
 }
 
+function renderPredictionScoreReference(record) {
+  const scores = Object.entries(record.predicted_scores || {})
+    .filter(([score, probability]) => /^\d+-\d+$/.test(score)
+      && probability !== null && probability !== '' && typeof probability !== 'boolean'
+      && Number.isFinite(Number(probability))
+      && Number(probability) > 0 && Number(probability) <= 1)
+    .sort((a, b) => Number(b[1]) - Number(a[1]))
+    .slice(0, 3);
+  const detail = scores.length
+    ? scores.map(([score, probability]) =>
+      `<span style="white-space:nowrap"><b>${esc(score)}</b> <span style="color:var(--muted)">${(Number(probability) * 100).toFixed(1)}%</span></span>`
+    ).join('<span style="color:var(--muted)"> · </span>')
+    : '<span style="color:var(--muted)">暂无已保存的比分预测</span>';
+  return `<div style="margin-top:8px;font-size:12px"><span style="color:var(--muted)">比分参考 Top3（非主推）：</span>${detail}</div>`;
+}
+
 async function loadPredictions() {
   const app = document.getElementById('app-predictions');
   app.innerHTML = `<div class="status"><span class="spinner"></span>正在加载预测记录…</div>`;
@@ -9023,6 +9039,7 @@ async function loadPredictions() {
           </div>`;
         }
         
+        html += renderPredictionScoreReference(record);
         html += `</div>`;
       });
       if (records.length > PREDICTIONS_PAGE_SIZE) {

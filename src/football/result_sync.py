@@ -2381,8 +2381,8 @@ def get_prediction_records(include_hidden: bool = False,
             'next_sync_at': record.get('next_sync_at'),
             'hit_top1': None if is_future_settled else record.get('hit_top1'),
             'hit_top3': None if is_future_settled else record.get('hit_top3'),
-            # 预测记录页以两个竞彩赛果市场为主。精确比分仍保留在存储和
-            # 完整导出中，列表只在赛后输出 actual_score。
+            # 直接返回当时保存的比分概率，记录页仅作 Top3 参考，不重新预测。
+            'predicted_scores': deepcopy(record.get('predicted_scores') or {}),
             'predicted_1x2': predicted_1x2 if spf_was_offered else {},
             'predicted_rqspf': predicted_rqspf if rqspf_was_offered else {},
             'lottery_handicap': lottery_handicap,
