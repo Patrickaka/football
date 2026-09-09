@@ -16,14 +16,16 @@ def tournament(history_trials, *, play='select_6', raw_p=.01):
     ]))
     metrics = {'lift': .1, 'mean_hits': 2.0, 'pool_mean_hits': 2.0,
                'pool_expected_random': 1.75, 'n_tests': 300,
-               'probabilities': {'>=3': .3, '>=4': .15, '>=5': .08},
+               'probabilities': {'>=1': .9, '>=3': .3, '>=4': .15, '>=5': .08, '>=6': .005, '>=7': .001},
                'theoretical_probs': {'>=3': .2, '>=4': .1, '>=5': .05},
                'profit_roi': -.3, 'random_profit_roi': -.5}
     trials = deepcopy(history_trials)
     with patch.object(config, 'STRATEGY_TRIAL_RESULTS', trials), \
          patch.object(records, '_persist_trial_results', return_value=True), \
-         patch.object(snapshots, 'activate_verified_strategy') as activation, \
-         patch.object(backtest, '_rolling_backtest_parametric', return_value={play: metrics}) as rolling, \
+         patch.object(snapshots, 'activate_verified_strategy', return_value=True) as activation, \
+         patch.object(backtest, '_rolling_backtest_parametric', side_effect=lambda *a, **kw: {
+             key: {**metrics, 'n_tests': kw['end_idx'] - kw['start_idx']}
+             for key in {'select_6', 'fu_shi_7', play}}) as rolling, \
          patch.object(backtest, '_permutation_test', return_value={'p_value': raw_p}) as permutation:
         report = backtest.run_candidate_tournament_per_play_type(play, {
             'current': {'strategy_id': 'current', 'feature_weights': {'frequency': 1.0},
@@ -60,7 +62,7 @@ def test_other_plays_do_not_contaminate_the_family_and_new_attempt_uses_its_own_
     assert trials[-2]['fdr_adjusted_p'] == pytest.approx(.02)
     assert trials[-1]['tournament_round'] == 'holdout_exposure'
     assert trials[0]['fdr_adjusted_p'] == .9
-    assert permutation.call_args.kwargs['play_type'] == 'select_6'
+    assert {call.kwargs['play_type'] for call in permutation.call_args_list} == {'select_6', 'fu_shi_7'}
     assert report['fdr_audit']['controls_repeated_final_test_access'] is True
 
 
@@ -114,7 +116,7 @@ def test_compound_permutation_measures_actual_linked_seven_number_pool():
 
 def test_both_validation_entrypoints_declare_the_compound_play():
     _, _, _, _, permutation = tournament([], play='fu_shi_7')
-    assert permutation.call_args.kwargs['play_type'] == 'fu_shi_7'
+    assert {call.kwargs['play_type'] for call in permutation.call_args_list} == {'select_6', 'fu_shi_7'}
     with patch.object(validation, 'get_kl8_analyzer', return_value=SimpleNamespace(history_data=[{}] * 800)), \
          patch.object(KL8RollingBacktest, '_rolling_backtest_parametric', return_value={
              'fu_shi_7': {'pool_mean_hits': 2, 'pool_expected_random': 1.75}}), \

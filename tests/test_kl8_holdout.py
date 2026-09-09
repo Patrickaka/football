@@ -83,29 +83,30 @@ def test_same_second_attempts_survive_persistence_and_restart(tmp_path, monkeypa
 
 
 @pytest.mark.parametrize('final_lift,probabilities,expected', [
-    (-.1, {'>=3': .3, '>=4': .1, '>=5': .05}, False),
-    (.1, {'>=3': .3, '>=4': .1, '>=5': .05}, True),
-    (.1, {'>=3': .3, '>=4': float('nan'), '>=5': .05}, False),
+    (-.1, {'>=1': .9, '>=3': .3, '>=4': .1, '>=5': .05, '>=6': .005}, False),
+    (.1, {'>=1': .9, '>=3': .3, '>=4': .1, '>=5': .05, '>=6': .005}, True),
+    (.1, {'>=1': .9, '>=3': .3, '>=4': float('nan'), '>=5': .05, '>=6': .005}, False),
     (.1, {}, False),
 ])
 def test_standalone_activation_requires_final_success_and_cannot_retry(final_lift, probabilities, expected):
-    metrics = {'lift': .1, 'mean_hits': 2., 'n_tests': 300,
-               'probabilities': {'>=3': .3, '>=4': .1, '>=5': .05},
+    metrics = {'lift': .1, 'mean_hits': 2., 'pool_mean_hits': 2., 'n_tests': 300,
+               'probabilities': {'>=1': .9, '>=3': .3, '>=4': .1, '>=5': .05, '>=6': .005, '>=7': .001},
                'profit_roi': -.3, 'random_profit_roi': -.5}
     final_calls = []
     def rolling(*args, **kwargs):
         result = deepcopy(metrics)
-        if kwargs['start_idx'] == 600:
+        result['n_tests'] = kwargs['end_idx'] - kwargs['start_idx']
+        if kwargs['start_idx'] == 600 and len(args[0]) == 1:
             final_calls.append(kwargs)
             result.update(lift=final_lift, probabilities=probabilities)
-        return {'select_6': result}
+        return {'select_6': result, 'fu_shi_7': {**deepcopy(metrics), 'n_tests': result['n_tests']}}
     trials = []
     with patch.object(validation, 'get_kl8_analyzer', return_value=SimpleNamespace(history_data=history())), \
          patch.object(config, 'STRATEGY_TRIAL_RESULTS', trials), \
          patch.object(records, '_persist_trial_results', return_value=True), \
          patch.object(KL8RollingBacktest, '_rolling_backtest_parametric', side_effect=rolling), \
          patch.object(KL8RollingBacktest, '_permutation_test', return_value={'p_value': .001}), \
-         patch.object(snapshots, 'activate_verified_strategy') as activate:
+         patch.object(snapshots, 'activate_verified_strategy', return_value=True) as activate:
         report = validation.validate_and_activate_strategy('select_6', {'frequency': 1}, {'rank': 1},
                                                           100, auto_activate=True)
         assert report['all_conditions_passed'] is expected

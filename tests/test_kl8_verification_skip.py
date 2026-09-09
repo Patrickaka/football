@@ -57,7 +57,7 @@ class VerificationSkipTests(unittest.TestCase):
         kl8_scheduler.run_verified_strategy_selection_if_needed()
 
         self.assertEqual(_Backtest.calls, [
-            'select_3', 'select_4', 'select_5', 'select_6', 'select_7', 'fu_shi_7'])
+            'select_6', 'select_3', 'select_4', 'select_5', 'select_7'])
         state = json.loads(Path(self.state_file).read_text(encoding='utf-8'))
         self.assertEqual(state['latest_issue'], '2026239')
         self.assertEqual(state['play_types'], _Backtest.calls)
@@ -78,7 +78,7 @@ class VerificationSkipTests(unittest.TestCase):
 
         kl8_scheduler.run_verified_strategy_selection_if_needed()
 
-        self.assertEqual(len(_Backtest.calls), 6)
+        self.assertEqual(len(_Backtest.calls), 5)
 
     def test_a_play_type_left_out_last_time_still_gets_verified(self):
         Path(self.state_file).write_text(json.dumps(
@@ -87,7 +87,7 @@ class VerificationSkipTests(unittest.TestCase):
         kl8_scheduler.run_verified_strategy_selection_if_needed()
 
         self.assertEqual(_Backtest.calls, [
-            'select_4', 'select_5', 'select_6', 'select_7', 'fu_shi_7'])
+            'select_6', 'select_4', 'select_5', 'select_7'])
 
 
 if __name__ == '__main__':

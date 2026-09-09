@@ -2,6 +2,9 @@
 """快乐8预测记录页面必须使用服务端分页和短期页面缓存。"""
 
 import unittest
+import json
+import shutil
+import subprocess
 from pathlib import Path
 
 
@@ -9,6 +12,49 @@ HTML = Path('web/index.html').read_text(encoding='utf-8')
 
 
 class KL8RecordsFrontend(unittest.TestCase):
+
+    @unittest.skipUnless(shutil.which('node'), 'Node.js is needed to execute the record renderer')
+    def test_original_and_current_reference_keep_their_own_versions_and_numbers(self):
+        start = HTML.index('function renderKL8RecordCard(rec) {')
+        end = HTML.index('\nasync function runKL8KillRecalculate', start)
+        record = {
+            'target_issue': '2026242', 'based_on_issue': '2026241',
+            'version': 'kl8-v10.17', 'runtime_version': 'kl8-v10.19',
+            'predicted': {'select_6': [1, 2, 3, 4, 5, 6]},
+            'current_version_reference': {
+                'target_issue': '2026242', 'based_on_issue': '2026241',
+                'version': 'kl8-v10.19', 'record_role': 'current_version_reference',
+                'predicted': {'select_6': [31, 32, 33, 34, 35, 36]},
+            },
+        }
+        script = HTML[start:end] + r"""
+const assert = require('node:assert/strict');
+function esc(value) { return String(value ?? ''); }
+function renderKL8Balls(nums) { return nums.join(','); }
+function p2(value) { return String(value).padStart(2, '0'); }
+""" + 'const record = ' + json.dumps(record) + r""";
+const before = JSON.stringify(record);
+const card = renderKL8RecordCard(record);
+const reference = card.match(/<details[^>]*>[\s\S]*?<\/details>/)[0];
+const original = card.replace(reference, '');
+assert.ok(original.includes('首推模型 kl8-v10.17'));
+assert.ok(original.includes('当前运行模型 kl8-v10.19'));
+assert.ok(original.includes('1,2,3,4,5,6'));
+assert.ok(!original.includes('31,32,33,34,35,36'));
+assert.ok(reference.includes('查看本期新版参考（kl8-v10.19）'));
+assert.ok(reference.includes('本次模型 kl8-v10.19'));
+assert.ok(reference.includes('31,32,33,34,35,36'));
+assert.ok(reference.includes('本条不计入首推命中统计'));
+assert.ok(!reference.slice(0, reference.indexOf('>')).includes('open'));
+assert.equal(JSON.stringify(record), before);
+delete record.current_version_reference;
+assert.ok(!renderKL8RecordCard(record).includes('查看本期新版参考'));
+delete record.runtime_version;
+assert.ok(!renderKL8RecordCard(record).includes('当前运行模型'));
+"""
+        result = subprocess.run([shutil.which('node'), '-'], input=script,
+                                capture_output=True, text=True, encoding='utf-8', timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_records_request_contains_server_side_pagination(self):
         self.assertIn("fetchJson('/api/kl8/records?page='", HTML)

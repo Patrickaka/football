@@ -418,13 +418,18 @@ def run_verified_strategy_selection_if_needed():
         log.info(f'快乐8: 历史数据不足800期({current_periods}期)，暂不验证策略')
         return
 
-    # v9.2: 所有支持的玩法类型（不依赖 ACTIVE_STRATEGIES 是否已有条目）
-    all_play_types = [f'select_{st}' for st in [3, 4, 5, 6, 7]] + ['fu_shi_7']
+    # The main ticket and linked compound pool share one strategy. Validate
+    # that pair first, once; a compound-only registry entry is not live state.
+    from .main_play_validation import has_main_play_evidence
+    all_play_types = ['select_6', 'select_3', 'select_4', 'select_5', 'select_7']
 
     # 检查是否所有玩法都已有验证策略
     unverified_play_types = [
         pt for pt in all_play_types
         if ACTIVE_STRATEGIES.get(pt, {}).get('status') != 'validated'
+        or (pt == 'select_6' and (
+            not has_main_play_evidence(ACTIVE_STRATEGIES.get(pt, {}).get('validation_report'))
+            or ACTIVE_STRATEGIES.get(pt, {}).get('degradation_status') == 'yellow_watch'))
     ]
 
     if not unverified_play_types:

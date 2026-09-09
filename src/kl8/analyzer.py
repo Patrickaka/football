@@ -1707,6 +1707,9 @@ class KL8Analyzer:
                 linked_strategy = deepcopy(resolved_strategies.get('select_6', {}))
                 linked_strategy['ranking_source'] = 'select_6'
                 linked_strategy['linked_play_type'] = 'select_6'
+                linked_status = _strategies_mod.resolve_play_strategy('fu_shi_7', allow_reference=True) or {}
+                linked_strategy['is_validated'] = linked_status.get('is_validated', False)
+                linked_strategy['prediction_mode'] = linked_status.get('prediction_mode', 'reference_unvalidated')
                 resolved_strategies[fushi_key] = linked_strategy
 
                 all_candidate_pools[fushi_key] = {
@@ -1730,10 +1733,8 @@ class KL8Analyzer:
                         'pool_size': pool_size,
                         'desc': fushi_cfg['desc'],
                         'status': 'verification_pending',
-                        'prediction_mode': select6_result.get(
-                            'prediction_mode', 'not_verified'
-                        ),
-                        'is_validated': select6_result.get('is_validated', False),
+                        'prediction_mode': linked_strategy['prediction_mode'],
+                        'is_validated': linked_strategy['is_validated'],
                         'warning': '选6主推或候选排名不完整，暂不输出7码复式。',
                     }
                     continue
@@ -1763,13 +1764,13 @@ class KL8Analyzer:
                     'pool_size': pool_size,
                     'desc': fushi_cfg['desc'],
                     'strategy_id': select6_result.get('strategy_id', ''),
-                    'prediction_mode': select6_result.get('prediction_mode', ''),
-                    'is_validated': select6_result.get('is_validated', False),
+                    'prediction_mode': linked_strategy['prediction_mode'],
+                    'is_validated': linked_strategy['is_validated'],
                     'baseline_type': select6_result.get('baseline_type', ''),
                     'final_selection_mode': select6_result.get(
                         'final_selection_mode', ''
                     ),
-                    'warning': select6_result.get('warning', ''),
+                    'warning': linked_status.get('warning', _strategy_warning(linked_status)),
                 }
                 continue
 

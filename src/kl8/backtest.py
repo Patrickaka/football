@@ -35,6 +35,7 @@ from .candidates import (
 from .records import (
     load_prize_table,
 )
+from .main_play_validation import MAIN_PLAYS, MainPlayGate, is_main_play, joint_candidate_rank, play_family, unsupported_main_options
 from .analyzer import (
     KL8Analyzer, _fushi7_from_select6, get_kl8_analyzer,
 )
@@ -1335,11 +1336,20 @@ class KL8RollingBacktest:
         val_range = split['val']
         final_test_range = split['final_test']
 
+        main_gate = MainPlayGate(self) if is_main_play(play_type) else None
+        if main_gate and main_gate.error:
+            return {'play_type': play_type, 'all_failed': True, 'activated': False,
+                    'error': main_gate.error}
+
         # ── 第一轮：训练段筛掉明显无效策略 ──
         train_results = {}
         train_survivors = {}
 
         for name, strategy in candidate_strategies.items():
+            if main_gate and unsupported_main_options(strategy):
+                train_results[name] = {'error': 'unsupported_main_play_configuration',
+                                       'unsupported_options': unsupported_main_options(strategy), 'survived': False}
+                continue
             fw = strategy.get('feature_weights', {})
             mw = strategy.get('model_weights', {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0})
             ws = strategy.get('window_size', KL8_DEFAULT_HISTORY)
@@ -1432,6 +1442,8 @@ class KL8RollingBacktest:
             # 该玩法的验证 Lift
             s_key = play_type
             val_lift = _play_lift(val_result, play_type)
+            main_val_check = main_gate.compare(strategy, val_result, val_range,
+                                               minimum=BACKTEST_MIN_OOS_PERIODS) if main_gate else None
 
             # 置换检验
             perm_result = self._permutation_test(
@@ -1454,6 +1466,24 @@ class KL8RollingBacktest:
             )
 
             raw_p = _safe_fdr_p_value(perm_result.get('p_value')) if 'error' not in perm_result else 1.0
+            main_p_values = {play_type: raw_p}
+            if main_gate:
+                for companion in MAIN_PLAYS:
+                    if companion == play_type:
+                        continue
+                    companion_perm = self._permutation_test(
+                        fw, mw, start_idx=val_range[0], end_idx=val_range[1],
+                        pick_n=_parse_play_pick_n(companion), play_type=companion,
+                        n_permutations=n_permutations, window_size=ws,
+                        repeat_direction=repeat_dir, repeat_avoid_score=repeat_avoid_score,
+                        repeat_non_avoid_score=repeat_non_avoid_score, repeat_follow_score=repeat_follow_score,
+                        repeat_non_follow_score=repeat_non_follow_score, pool_diversify=pool_diversify,
+                        pool_max_last_numbers=pool_max_last_numbers, frequency_mode=frequency_mode,
+                        final_selection_mode=final_selection_mode,
+                    )
+                    main_p_values[companion] = (1.0 if 'error' in companion_perm
+                                                else _safe_fdr_p_value(companion_perm.get('p_value')))
+                raw_p = max(main_p_values.values())
 
             # 稳定性检查（4子窗口）
             val_len = val_range[1] - val_range[0]
@@ -1481,6 +1511,8 @@ class KL8RollingBacktest:
                 )
 
                 sub_lift = _play_lift(sub_result, play_type) if 'error' not in sub_result else 0
+                if main_gate and 'error' not in sub_result:
+                    sub_lift = min(_play_lift(sub_result, companion) for companion in MAIN_PLAYS)
                 sub_lifts.append(sub_lift)
 
             n_positive = sum(1 for l in sub_lifts if l > 0)
@@ -1519,6 +1551,8 @@ class KL8RollingBacktest:
                 'practical_score': round(practical_score, 6),
                 'practical_detail': practical_detail,
                 'sub_lifts': sub_lifts,
+                'main_play_validation': main_val_check,
+                'main_play_p_values': main_p_values,
             })
 
             val_results[name] = {
@@ -1529,13 +1563,18 @@ class KL8RollingBacktest:
                 'prize_tier_passed': prize_tier_passed,
                 'roi_not_worse': roi_not_worse,
                 'strategy_id': strategy.get('strategy_id', name),
+                'main_play_validation': main_val_check,
+                'main_play_p_values': main_p_values,
             }
 
             # 记录试验结果
             trial_record = {
                 'trial_id': uuid.uuid4().hex,
                 'strategy_id': strategy.get('strategy_id', name),
+                'main_play_validation': main_val_check,
+                'main_play_p_values': main_p_values,
                 'play_type': play_type,
+                'validation_family': play_family(play_type),
                 'feature_weights': fw,
                 'model_weights': mw,
                 'window_size': ws,
@@ -1560,7 +1599,7 @@ class KL8RollingBacktest:
         # The gate and persisted report must use the identical cumulative
         # family, including earlier standalone and tournament attempts.
         same_play_trials = [trial for trial in list(_cfg.STRATEGY_TRIAL_RESULTS)
-                            if isinstance(trial, dict) and trial.get('play_type') == play_type
+                            if isinstance(trial, dict) and play_family(trial.get('play_type')) == play_family(play_type)
                             and trial.get('tournament_round') != 'holdout_exposure']
         fdr_adjusted = benjamini_hochberg_fdr([
             _safe_fdr_p_value(trial.get('raw_p_value')) for trial in same_play_trials
@@ -1574,6 +1613,7 @@ class KL8RollingBacktest:
         fdr_audit = {
             'method': 'benjamini_hochberg',
             'scope': 'all_recorded_trials_same_play',
+            'validation_family': play_family(play_type),
             'family_size': len(same_play_trials),
             'current_candidates': len(val_candidates),
             'controls_repeated_final_test_access': True,
@@ -1591,6 +1631,7 @@ class KL8RollingBacktest:
                 and cand['n_positive'] >= BACKTEST_STABILITY_THRESHOLD
                 and cand['prize_tier_passed']
                 and cand['roi_not_worse']
+                and (not main_gate or cand['main_play_validation']['passed'])
             ):
                 qualified_candidates.append({
                     **cand,
@@ -1613,7 +1654,8 @@ class KL8RollingBacktest:
         # Pick by prize-threshold score first; mean-hit lift is a tie-breaker.
         best_candidate = max(
             qualified_candidates,
-            key=lambda c: (c.get('practical_score', 0), c.get('val_lift', 0)),
+            key=lambda c: ((joint_candidate_rank(c['main_play_validation']) if main_gate else ())
+                           + (c.get('practical_score', 0), c.get('val_lift', 0))),
         )
 
         # ── 第三轮：最终封存测试段只跑1次确认 ──
@@ -1671,6 +1713,8 @@ class KL8RollingBacktest:
 
         # 该玩法的最终测试Lift
         final_test_lift = _play_lift(final_test_result, play_type)
+        main_final_check = main_gate.compare(strategy, final_test_result, final_test_range,
+                                             minimum=BACKTEST_FINAL_TEST_PERIODS) if main_gate else None
 
         # 最终测试关键奖级不低于随机
         ft_prize_probs = final_test_result.get(play_type, {}).get('probabilities', {})
@@ -1684,7 +1728,8 @@ class KL8RollingBacktest:
 
         # v9.2: 最终测试不用于"挑选策略"，但可以作为"是否允许上线"的门槛
         # 最终测试失败 → 不重试，直接判定该轮无可激活策略
-        final_test_passed = math.isfinite(final_test_lift) and final_test_lift > 0 and ft_prize_tier_passed
+        final_test_passed = (math.isfinite(final_test_lift) and final_test_lift > 0 and ft_prize_tier_passed
+                             and (not main_gate or main_final_check['passed']))
 
         if not final_test_passed:
             log.info(
@@ -1700,6 +1745,7 @@ class KL8RollingBacktest:
                 'val_lift': round(best_candidate['val_lift'], 4),
                 'final_test_lift': round(final_test_lift, 4),
                 'final_test_passed': False,
+                'main_play_validation': main_final_check,
                 'fdr_audit': fdr_audit,
                 'note': '最终测试失败，不重新调权重再用同一段测试集试一次',
             }
@@ -1726,13 +1772,26 @@ class KL8RollingBacktest:
             'version': KL8_PREDICTOR_VERSION,
         }
 
-        _snapshots_mod.activate_verified_strategy(play_type, strategy, report)
+        if main_gate:
+            report['main_play_validation'] = main_gate.evidence(
+                strategy, best_candidate['main_play_validation'], main_final_check,
+                adjusted_p=best_candidate['adjusted_p'],
+                permutation_p_values=best_candidate['main_play_p_values'],
+                positive_sub_windows=best_candidate['n_positive'],
+            )
+        activated = _snapshots_mod.activate_verified_strategy(play_type, strategy, report)
+        if main_gate and activated is not True:
+            return {'play_type': play_type, 'all_failed': True, 'activated': False,
+                    'summary': '联合证据未通过激活检查，或当前策略在验证期间已改变',
+                    'main_play_validation': report['main_play_validation'], 'fdr_audit': fdr_audit}
 
         return {
             'play_type': play_type,
             'activated': True,
             'best_candidate': best_candidate['name'],
-            'strategy_id': _cfg.ACTIVE_STRATEGIES[play_type]['strategy_id'],
+            'strategy_id': _cfg.ACTIVE_STRATEGIES[play_family(play_type)]['strategy_id'],
+            'activation_target': play_family(play_type),
+            'main_play_validation': report.get('main_play_validation'),
             'fdr_audit': fdr_audit,
             'val_lift': round(best_candidate['val_lift'], 4),
             'practical_score': round(best_candidate.get('practical_score', 0), 6),

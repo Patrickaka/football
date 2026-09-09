@@ -122,6 +122,18 @@ def resolve_play_strategy(play_type: str, allow_reference: bool = False) -> Opti
             return None
         linked['ranking_source'] = 'select_6'
         linked['linked_play_type'] = 'select_6'
+        if linked.get('is_validated'):
+            from .main_play_validation import has_main_play_evidence
+            from .records import _strategy_fingerprint
+            report = linked.get('validation_report') or {}
+            evidence = report.get('main_play_validation') or {}
+            joint_verified = (has_main_play_evidence(report)
+                              and evidence.get('candidate_fingerprint') == _strategy_fingerprint(linked))
+            linked['is_validated'] = joint_verified
+            linked['validation_scope'] = 'joint_main_plays' if joint_verified else 'select_6_only'
+            if not joint_verified:
+                linked['prediction_mode'] = 'reference_unvalidated'
+                linked['warning'] = '沿用选6排名生成7码复式；尚无选6与选5复式共同通过验证的证据。'
         return linked
 
     strategy = _cfg.ACTIVE_STRATEGIES.get(play_type, {})

@@ -7714,6 +7714,7 @@ function renderKL8RecordsPage() {
 }
 
 function renderKL8RecordCard(rec) {
+  const isReference = rec.record_role === 'current_version_reference';
   const st = rec.settlement;
   const settled = rec.has_settlement && st;
   const statusBadge = settled
@@ -7722,13 +7723,21 @@ function renderKL8RecordCard(rec) {
 
   let html = `<article class="kl8-record-card ${settled ? '' : 'pending'}">`;
   html += `<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
-    <div style="font-weight:720;font-size:15px">第 ${esc(rec.target_issue || '?')} 期预测</div>
+    <div style="font-weight:720;font-size:15px">第 ${esc(rec.target_issue || '?')} 期${isReference ? '新版参考' : '预测'}</div>
     <div style="display:flex;gap:8px;align-items:center">
       ${statusBadge}
       <span style="font-size:11px;color:var(--muted)">${esc(rec.predicted_at || '')}</span>
     </div>
   </div>`;
-  html += `<div style="font-size:11px;color:var(--muted);margin:2px 0 8px">基于第 ${esc(rec.based_on_issue || '?')} 期 · 模型 ${esc(rec.version || '?')}</div>`;
+  html += `<div style="font-size:11px;color:var(--muted);margin:2px 0 8px">基于第 ${esc(rec.based_on_issue || '?')} 期 · ${isReference ? '本次模型' : '首推模型'} ${esc(rec.version || '?')}</div>`;
+  if (isReference) {
+    html += `<div class="note" style="margin-bottom:8px">本期新版独立计算，原首推记录保留；本条不计入首推命中统计。</div>`;
+  } else if (rec.runtime_version && rec.runtime_version !== rec.version) {
+    html += `<div style="font-size:11px;color:var(--muted);margin-bottom:8px">当前运行模型 ${esc(rec.runtime_version)} · 此处保留首次预测时的版本</div>`;
+  }
+  if (!isReference && rec.current_version_reference) {
+    html += `<details style="margin:8px 0"><summary style="cursor:pointer;color:var(--color-positive)">查看本期新版参考（${esc(rec.current_version_reference.version || '?')}）</summary>${renderKL8RecordCard({...rec.current_version_reference, record_role: 'current_version_reference'})}</details>`;
+  }
 
   // 预测主推号码
   const plays = [['select_5', '选5'], ['select_6', '选6'], ['select_10', '选10'], ['fu_shi_7', '选5复式7码']];
@@ -7741,7 +7750,7 @@ function renderKL8RecordCard(rec) {
     }
   }
   if (predHtml) {
-    html += `<div style="font-size:12px;color:var(--color-muted);margin:6px 0 2px">预测主推</div>${predHtml}`;
+    html += `<div style="font-size:12px;color:var(--color-muted);margin:6px 0 2px">${isReference ? '新版参考号码' : '预测主推'}</div>${predHtml}`;
   }
 
   const recalculations = Array.isArray(rec.exclude_recalculations) ? rec.exclude_recalculations : [];

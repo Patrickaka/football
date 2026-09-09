@@ -453,5 +453,147 @@ class MaintenanceFastExit(unittest.TestCase):
         analyzer.assert_not_called()
 
 
+class CurrentVersionReference(unittest.TestCase):
+    runtime_version = 'kl8-current-reference-test'
+
+    def _snapshot(self, identity, hour, *, version=None, experiment=False, start=1, **updates):
+        return {
+            'snapshot_id': identity, 'file': f'snapshot_{identity}.json',
+            'target_issue': '2026242', 'based_on_issue': '2026241',
+            'version': version or self.runtime_version, 'is_experiment': experiment,
+            'predicted_at': f'2026-09-08T{hour:02d}:00:00+08:00',
+            'has_settlement': False,
+            'select_6': list(range(start, start + 6)),
+            'fu_shi_7': list(range(start, start + 7)),
+            **updates,
+        }
+
+    def _payload(self, snapshots, *, draws=None, rounds=None, missing=(), file_overrides=None):
+        with tempfile.TemporaryDirectory() as root:
+            root = Path(root)
+            snapshot_dir, settlement_dir = root / 'snapshots', root / 'settlements'
+            snapshot_dir.mkdir()
+            settlement_dir.mkdir()
+            for snapshot in snapshots:
+                if snapshot['snapshot_id'] in missing:
+                    continue
+                raw = (file_overrides or {}).get(snapshot['snapshot_id'], snapshot)
+                (snapshot_dir / snapshot['file']).write_text(json.dumps(raw), encoding='utf-8')
+            before = {path.name: path.read_bytes() for path in snapshot_dir.iterdir()}
+            with mock.patch.object(service, 'kl8_list_snapshots', return_value=snapshots), \
+                    mock.patch.object(service, 'kl8_list_recalculations', return_value=rounds or []), \
+                    mock.patch.object(service, '_current_kl8_predictor_version', return_value=self.runtime_version), \
+                    mock.patch('src.kl8.records._load_record_draws', return_value=draws or {}), \
+                    mock.patch.object(service, '_schedule_kl8_records_maintenance', return_value=False) as maintenance, \
+                    mock.patch.object(service, 'kl8_run_prediction') as predict, \
+                    mock.patch.object(kl8_module, 'KL8_SNAPSHOT_DIR', snapshot_dir), \
+                    mock.patch.object(kl8_module, 'KL8_SETTLEMENT_DIR', settlement_dir):
+                payload = service.kl8_records_payload({'page': ['1'], 'page_size': ['8']})
+            predict.assert_not_called()
+            self.assertEqual(before, {path.name: path.read_bytes() for path in snapshot_dir.iterdir()})
+            self.assertEqual(list(settlement_dir.iterdir()), [])
+            self.assertNotIn('error', payload)
+            return payload['result'], maintenance.call_args.args[0]
+
+    def test_keeps_original_and_reads_only_latest_current_formal_reference(self):
+        original = self._snapshot('original', 10, version='kl8-v10.17')
+        first_new = self._snapshot('new-first', 11, start=11)
+        latest_new = self._snapshot('new-latest', 12, start=21)
+        experiment = self._snapshot('experiment', 13, experiment=True, start=41)
+        result, maintained = self._payload([experiment, latest_new, original, first_new])
+        self.assertEqual(result['runtime_version'], self.runtime_version)
+        self.assertEqual(result['count'], 1)
+        self.assertEqual(result['pending_count'], 1)
+        record = result['records'][0]
+        self.assertEqual(record['record_role'], 'original_forecast')
+        self.assertEqual(record['runtime_version'], self.runtime_version)
+        self.assertEqual(record['version'], 'kl8-v10.17')
+        self.assertEqual(record['snapshot_id'], 'original')
+        self.assertEqual(record['predicted']['select_6'], list(range(1, 7)))
+        reference = record['current_version_reference']
+        self.assertEqual(reference['snapshot_id'], 'new-latest')
+        self.assertEqual(reference['version'], self.runtime_version)
+        self.assertEqual(reference['predicted_at'], latest_new['predicted_at'])
+        self.assertEqual(reference['predicted']['select_6'], list(range(21, 27)))
+        self.assertEqual(reference['predicted']['fu_shi_7'], list(range(21, 28)))
+        self.assertEqual(reference['record_role'], 'current_version_reference')
+        self.assertTrue(reference['reference_only'])
+        self.assertFalse(reference['accuracy_eligible'])
+        self.assertEqual(reference['accuracy_exclusion_reason'], 'current_version_reference')
+        self.assertEqual([row['snapshot_id'] for row in maintained], ['original'])
+
+    def test_original_and_reference_keep_their_own_recalculation_chains(self):
+        original = self._snapshot('original', 10, version='kl8-v10.17')
+        reference = self._snapshot('new', 11, start=21)
+        rounds = [
+            {'source_snapshot_id': 'original', 'play_type': 'select_6', 'round': 1,
+             'numbers': [2, 3, 4, 5, 6, 7]},
+            {'source_snapshot_id': 'new', 'play_type': 'select_6', 'round': 1,
+             'numbers': [22, 23, 24, 25, 26, 27]},
+            {'source_snapshot_id': 'hidden', 'play_type': 'select_6', 'round': 1,
+             'numbers': [42, 43, 44, 45, 46, 47]},
+        ]
+        result, _ = self._payload([reference, original], rounds=rounds)
+        record = result['records'][0]
+        self.assertEqual([row['source_snapshot_id'] for row in record['exclude_recalculations']], ['original'])
+        self.assertEqual([row['source_snapshot_id'] for row in
+                          record['current_version_reference']['exclude_recalculations']], ['new'])
+
+    def test_post_draw_reference_retains_time_audit_but_never_counts_as_primary(self):
+        original = self._snapshot('original', 10, version='kl8-v10.17')
+        after_draw = self._snapshot('after-draw', 22, start=21)
+        draws = {'2026242': {'issue': '2026242', 'date': '2026-09-08',
+                             'numbers': list(range(1, 21))}}
+        result, maintained = self._payload([after_draw, original], draws=draws)
+        record = result['records'][0]
+        self.assertEqual(record['snapshot_id'], 'original')
+        reference = record['current_version_reference']
+        self.assertEqual(reference['snapshot_id'], 'after-draw')
+        self.assertEqual(reference['prediction_audit']['reason'], 'prediction_at_or_after_draw')
+        self.assertFalse(reference['accuracy_eligible'])
+        self.assertEqual([row['snapshot_id'] for row in maintained], ['original'])
+
+    def test_no_reference_when_current_snapshot_is_itself_the_original(self):
+        current = self._snapshot('current', 10)
+        result, _ = self._payload([current])
+        self.assertIsNone(result['records'][0]['current_version_reference'])
+
+    def test_absent_unreadable_and_inconsistent_files_cannot_supply_reference_metadata(self):
+        original = self._snapshot('original', 10, version='kl8-v10.17')
+        current = self._snapshot('current', 11)
+        for replacement in (None, [], {}, {**current, 'version': 'different-version'},
+                            {**current, 'snapshot_id': 'different-id'},
+                            {**current, 'is_experiment': True},
+                            {**current, 'predicted_at': '2026-09-08T09:00:00+08:00'},
+                            {**current, 'select_6': []},
+                            {**current, 'select_6': [1, 2, 3]},
+                            {**current, 'fu_shi_7': [1, 2, 3]}):
+            with self.subTest(replacement=replacement):
+                result, _ = self._payload([original, current],
+                                           file_overrides={'current': replacement})
+                self.assertIsNone(result['records'][0]['current_version_reference'])
+        result, _ = self._payload([original, current], missing={'current'})
+        self.assertIsNone(result['records'][0]['current_version_reference'])
+
+    def test_skips_invalid_future_data_boundaries_and_unknown_prediction_times(self):
+        original = self._snapshot('original', 10, version='kl8-v10.17')
+        invalid_candidates = [
+            self._snapshot('same-issue', 11, based_on_issue='2026242'),
+            self._snapshot('future-issue', 12, based_on_issue='2026243'),
+            self._snapshot('invalid-issue', 13, based_on_issue='unknown'),
+            self._snapshot('unknown-time', 14, predicted_at='2026-09-08T14:00:00'),
+            self._snapshot('old-time', 9),
+        ]
+        result, _ = self._payload([original, *invalid_candidates])
+        self.assertIsNone(result['records'][0]['current_version_reference'])
+
+    def test_missing_newest_file_falls_back_to_latest_valid_saved_reference(self):
+        original = self._snapshot('original', 10, version='kl8-v10.17')
+        valid = self._snapshot('valid', 11, start=11)
+        missing = self._snapshot('missing', 12, start=21)
+        result, _ = self._payload([original, missing, valid], missing={'missing'})
+        self.assertEqual(result['records'][0]['current_version_reference']['snapshot_id'], 'valid')
+
+
 if __name__ == '__main__':
     unittest.main()

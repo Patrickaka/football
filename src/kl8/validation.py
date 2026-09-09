@@ -34,6 +34,7 @@ from .analyzer import (
 from .backtest import (
     KL8RollingBacktest,
 )
+from .main_play_validation import MAIN_PLAYS, MainPlayGate, is_main_play, play_family
 
 def validate_and_activate_strategy(
     play_type: str,
@@ -123,6 +124,9 @@ def validate_and_activate_strategy(
 
     # ── 三段式分割 ──
     bt = KL8RollingBacktest(analyzer)
+    main_gate = MainPlayGate(bt) if is_main_play(play_type) else None
+    if main_gate and main_gate.error:
+        return {'error': main_gate.error, 'activated': False}
     try:
         split = bt._split_three_stage(n)
     except ValueError as e:
@@ -186,6 +190,24 @@ def validate_and_activate_strategy(
 
     from .backtest import _safe_fdr_p_value
     raw_p_value = _safe_fdr_p_value(perm_result.get('p_value'))
+    main_p_values = {play_type: raw_p_value}
+    if main_gate:
+        for companion in MAIN_PLAYS:
+            if companion == play_type:
+                continue
+            companion_perm = bt._permutation_test(
+                feature_weights, model_weights, start_idx=val_range[0], end_idx=val_range[1],
+                pick_n=_parse_play_pick_n(companion), play_type=companion, metric='mean_hits',
+                n_permutations=n_permutations, window_size=window_size,
+                repeat_direction=repeat_direction, repeat_avoid_score=repeat_avoid_score,
+                repeat_non_avoid_score=repeat_non_avoid_score, repeat_follow_score=repeat_follow_score,
+                repeat_non_follow_score=repeat_non_follow_score, pool_diversify=pool_diversify,
+                pool_max_last_numbers=pool_max_last_numbers, frequency_mode=frequency_mode,
+                final_selection_mode=final_selection_mode,
+            )
+            main_p_values[companion] = (1.0 if 'error' in companion_perm
+                                        else _safe_fdr_p_value(companion_perm.get('p_value')))
+        raw_p_value = max(main_p_values.values())
 
     strategy_dict = {
         'strategy_id': f'{play_type}_w{window_size}_{hashlib.sha256(json.dumps(feature_weights, sort_keys=True, separators=(",", ":")).encode()).hexdigest()[:6]}',
@@ -202,11 +224,16 @@ def validate_and_activate_strategy(
         'frequency_mode': frequency_mode,
         'final_selection_mode': final_selection_mode,
     }
+    main_val_check = main_gate.compare(strategy_dict, val_result, val_range,
+                                       minimum=_cfg.BACKTEST_MIN_OOS_PERIODS) if main_gate else None
     # Each attempt has its own identity, even for repeated requests in one second.
     trial_record = {
         **strategy_dict,
         'trial_id': uuid.uuid4().hex,
         'play_type': play_type,
+        'validation_family': play_family(play_type),
+        'main_play_p_values': main_p_values,
+        'main_play_validation': main_val_check,
         'raw_p_value': raw_p_value,
         'validation_lift': round(val_lift, 4),
         'n_permutations': n_permutations,
@@ -218,7 +245,8 @@ def validate_and_activate_strategy(
 
     # v8: 全量BH FDR校正 — 对同一玩法下所有候选策略的p值统一校正
     # 收集同玩法的所有试验记录
-    same_play_trials = [t for t in _cfg.STRATEGY_TRIAL_RESULTS if t.get('play_type') == play_type
+    same_play_trials = [t for t in _cfg.STRATEGY_TRIAL_RESULTS if isinstance(t, dict)
+                        and play_family(t.get('play_type')) == play_family(play_type)
                         and t.get('tournament_round') != 'holdout_exposure']
     same_play_p_values = [_safe_fdr_p_value(t.get('raw_p_value')) for t in same_play_trials]
 
@@ -272,6 +300,8 @@ def validate_and_activate_strategy(
             continue
 
         sub_lift = _play_lift(sub_result, play_type)
+        if main_gate:
+            sub_lift = min(_play_lift(sub_result, companion) for companion in MAIN_PLAYS)
 
         sub_window_lifts.append(sub_lift)
 
@@ -281,7 +311,8 @@ def validate_and_activate_strategy(
     # A failed/previously opened final period cannot qualify an activation.
     from .holdout import reserve_final_holdout
     holdout = {'available': False, 'reason': 'validation_not_qualified'}
-    if condition_1_lift_positive and condition_2_fdr_significant and condition_3_stability:
+    if (condition_1_lift_positive and condition_2_fdr_significant and condition_3_stability
+            and (not main_gate or main_val_check['passed'])):
         holdout = reserve_final_holdout(
             play_type, strategy_dict, analyzer.history_data, final_test_range,
             _cfg.STRATEGY_TRIAL_RESULTS, _records_mod._persist_trial_results,
@@ -309,6 +340,9 @@ def validate_and_activate_strategy(
     final_test_lift = None
     if 'error' not in final_test_result:
         final_test_lift = _play_lift(final_test_result, play_type)
+    main_final_check = (main_gate.compare(strategy_dict, final_test_result, final_test_range,
+                                         minimum=BACKTEST_FINAL_TEST_PERIODS)
+                        if main_gate and holdout['available'] else None)
 
     # ── v9: 条件4 — 关键奖级概率不低于随机 ──
     # 不只看平均命中Lift，还要看关键中奖档位的概率
@@ -342,6 +376,7 @@ def validate_and_activate_strategy(
     condition_4_final_passed = (
         holdout['available'] and final_test_lift is not None and math.isfinite(final_test_lift)
         and final_test_lift > 0
+        and (not main_gate or (main_final_check and main_final_check['passed']))
         and all(isinstance(final_probabilities.get(tier), (int, float))
                 and not isinstance(final_probabilities[tier], bool)
                 and math.isfinite(final_probabilities[tier])
@@ -355,6 +390,7 @@ def validate_and_activate_strategy(
         and condition_4_final_passed
         and prize_tier_passed
         and roi_not_significantly_worse
+        and (not main_gate or main_val_check['passed'])
     )
 
     # 生成 strategy_id
@@ -433,7 +469,18 @@ def validate_and_activate_strategy(
         'activated': activated,
         'auto_activate': auto_activate,
         'version': KL8_PREDICTOR_VERSION,
+        'data_cutoff_issue': history[0].get('issue', '') if history else '',
     }
+    if main_gate:
+        report['main_play_validation'] = main_gate.evidence(
+            strategy_dict, main_val_check, main_final_check,
+            adjusted_p=adjusted_p, permutation_p_values=main_p_values,
+            positive_sub_windows=n_positive_sub_windows,
+        )
+        report['conditions']['condition_7_main_plays_not_worse'] = {
+            'passed': bool(main_val_check['passed'] and main_final_check and main_final_check['passed']),
+            'detail': '选6及选5复式的3/4/5+、平均命中、零命中率均不得较当前策略退步',
+        }
 
     if final_test_lift is not None:
         report['final_test_result_summary'] = {
@@ -446,10 +493,17 @@ def validate_and_activate_strategy(
 
     # ── 激活（若条件通过 + auto_activate=True）───
     if all_conditions_passed and auto_activate:
-        _snapshots_mod.activate_verified_strategy(play_type, strategy_dict, report)
-        activated = True
-        report['activated'] = True
-        log.info(f'快乐8: 策略已激活 {play_type} -> {strategy_id}')
+        activation = _snapshots_mod.activate_verified_strategy(play_type, strategy_dict, report)
+        activated = activation is True if main_gate else activation is not False
+        report['activated'] = activated
+        report['activation_target'] = play_family(play_type)
+        if not activated:
+            report['recommendation'] = 'keep_disabled'
+            report['activation_error'] = 'joint_evidence_rejected_or_current_strategy_changed'
+        if activated:
+            log.info(f'快乐8: 策略已激活 {play_type} -> {strategy_id}')
+        else:
+            log.warning('快乐8: 激活被拒绝 %s：联合证据或当前基线已变化', play_type)
     elif all_conditions_passed and not auto_activate:
         log.info(f'快乐8: 策略验证通过 {play_type}，但auto_activate=False，需人工确认')
 

@@ -3,6 +3,7 @@ from bisect import bisect_right
 import hashlib
 import json
 import threading
+from .main_play_validation import play_family
 
 _lock = threading.RLock()
 EXPOSURE_KIND = 'holdout_exposure'
@@ -15,7 +16,8 @@ def reserve_final_holdout(play_type, strategy, history, bounds, trials, persist,
             or minimum < 1 or bounds[0] < 0 or bounds[1] > len(rows) or bounds[0] >= bounds[1]):
         return {'available': False, 'reason': 'invalid_holdout_issue_boundary'}
     with _lock:
-        prior = [t for t in trials if isinstance(t, dict) and t.get('play_type') == play_type]
+        family = play_family(play_type)
+        prior = [t for t in trials if isinstance(t, dict) and play_family(t.get('play_type')) == family]
         exposures = [t for t in prior if t.get('tournament_round') == EXPOSURE_KIND]
         if any(len(str(t.get('last_issue', ''))) != 7 or not str(t.get('last_issue', '')).isdigit()
                for t in exposures):
@@ -35,7 +37,8 @@ def reserve_final_holdout(play_type, strategy, history, bounds, trials, persist,
         digest = hashlib.sha256(json.dumps(strategy, sort_keys=True, ensure_ascii=False,
                                            separators=(',', ':')).encode()).hexdigest()
         reservation = {
-            'play_type': play_type, 'strategy_id': strategy.get('strategy_id', ''),
+            'play_type': family, 'requested_play_type': play_type,
+            'strategy_id': strategy.get('strategy_id', ''),
             'strategy_fingerprint': digest, 'version': version, 'evidence_schema': 2,
             'tournament_round': EXPOSURE_KIND, 'first_issue': selected[0], 'last_issue': selected[-1],
             'issue_count': len(selected), 'issues_sha256': hashlib.sha256('|'.join(selected).encode()).hexdigest(),

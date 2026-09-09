@@ -129,11 +129,25 @@ def activate_verified_strategy(play_type: str, strategy: Dict, report: Dict):
         strategy: 完整策略配置（含 feature_weights, model_weights, window_size 等）
         report: 验证报告（含 data_cutoff_issue 等元信息）
     """
+    from .main_play_validation import has_main_play_evidence, is_main_play, play_family, unsupported_main_options
+    requested_play_type = play_type
+    main_play = is_main_play(play_type)
+    play_type = play_family(play_type)
     fingerprint = _strategy_fingerprint(strategy)
 
     # 策略替换、持久化与预测共用一把可重入锁。否则 predict_all 逐玩法解析
     # 策略时可能前半读取旧配置、后半读取新配置，最终生成一份混合版本结果。
     with _prediction_run_lock:
+        if main_play:
+            from .strategies import resolve_play_strategy
+            incumbent = resolve_play_strategy('select_6')
+            evidence = report.get('main_play_validation', {}) if isinstance(report, dict) else {}
+            if (unsupported_main_options(strategy) or not has_main_play_evidence(report)
+                    or evidence.get('candidate_fingerprint') != fingerprint
+                    or not incumbent
+                    or evidence.get('incumbent_fingerprint') != _strategy_fingerprint(incumbent)):
+                log.warning('快乐8: 主玩法联合证据缺失、参数不一致或当前策略已变化，拒绝激活 %s', requested_play_type)
+                return False
         _cfg.ACTIVE_STRATEGIES[play_type] = {
             **strategy,
             'strategy_id': f'{play_type}_{fingerprint}',
@@ -148,6 +162,7 @@ def activate_verified_strategy(play_type: str, strategy: Dict, report: Dict):
         clear_cache()
         strategy_id = _cfg.ACTIVE_STRATEGIES[play_type]['strategy_id']
     log.info(f'快乐8: 策略已激活 {play_type} -> {strategy_id}')
+    return True
 
 
 def mark_strategy_degradation(

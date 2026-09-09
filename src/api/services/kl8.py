@@ -611,6 +611,75 @@ def _load_kl8_record(snapshot, snapshot_dir, settlement_dir, fushi_config,
     return record
 
 
+def _load_current_version_kl8_reference(original, candidates, runtime_version,
+                                       snapshot_dir, settlement_dir, fushi_config,
+                                       clean_pick_numbers, draw=None):
+    """Read one independently saved current-version reference, never a new forecast.
+
+    The original remains the only primary record.  Index metadata is checked
+    against the immutable file before its version, time or numbers are exposed.
+    Unknown times cannot establish that a revision is newer than the original.
+    """
+    from src.kl8.record_selection import _prediction_time, audit_prediction
+
+    original_at, _ = _prediction_time(original)
+    if original_at is None:
+        return None
+    target_issue = str(original.get('target_issue') or '')
+    options = []
+    for candidate in candidates:
+        if (not isinstance(candidate, dict)
+                or candidate.get('is_experiment') is not False
+                or candidate.get('version') != runtime_version
+                or str(candidate.get('target_issue') or '') != target_issue
+                or not candidate.get('snapshot_id')
+                or candidate.get('snapshot_id') == original.get('snapshot_id')):
+            continue
+        candidate_at, _ = _prediction_time(candidate)
+        if candidate_at is not None and candidate_at > original_at:
+            options.append((candidate_at, str(candidate['snapshot_id']), candidate))
+
+    for candidate_at, _, candidate in sorted(options, key=lambda item: item[:2], reverse=True):
+        filename = candidate.get('file')
+        if not isinstance(filename, str) or Path(filename).name != filename:
+            continue
+        try:
+            raw = json.loads((snapshot_dir / filename).read_text(encoding='utf-8'))
+        except (OSError, ValueError, TypeError):
+            continue
+        if not isinstance(raw, dict):
+            continue
+        issue, based = str(raw.get('target_issue') or ''), str(raw.get('based_on_issue') or '')
+        actual_at, _ = _prediction_time(raw)
+        if (raw.get('snapshot_id') != candidate['snapshot_id']
+                or raw.get('version') != runtime_version
+                or raw.get('is_experiment') is not False
+                or issue != target_issue
+                or not re.fullmatch(r'[0-9]{7}', issue)
+                or not re.fullmatch(r'[0-9]{7}', based) or based >= issue
+                or actual_at is None or actual_at != candidate_at):
+            continue
+        verified = {**candidate, **raw, 'file': filename,
+                    'prediction_audit': audit_prediction(raw, draw)}
+        reference = _load_kl8_record(
+            verified, snapshot_dir, settlement_dir, fushi_config, clean_pick_numbers, draw=draw,
+        )
+        # A readable metadata shell is insufficient: both main-play tickets
+        # must actually have been saved by this snapshot.
+        if (len(clean_pick_numbers(reference['predicted'].get('select_6', []), 6)) != 6
+                or len(reference['predicted'].get('fu_shi_7', [])) != 7):
+            continue
+        reference.update({
+            'record_role': 'current_version_reference', 'reference_only': True,
+            'runtime_version': runtime_version,
+            'accuracy_eligible': False,
+            'accuracy_exclusion_reason': 'current_version_reference',
+            'reference_note': '当前版本另存参考，不计入本期首推命中统计。',
+        })
+        return reference
+    return None
+
+
 def _kl8_records_maintenance_worker(snapshots):
     """在展示请求之外补结算并校验旧奖金，避免 GET 被分析器冷启动阻塞。"""
     global _kl8_records_maintenance_running
@@ -678,7 +747,9 @@ def kl8_records_payload(params=None):
 
         from src.kl8.records import _load_record_draws
         draw_records = _load_record_draws()
-        snapshots = _dedupe_kl8_snapshots(kl8_list_snapshots(), draw_records)
+        runtime_version = _current_kl8_predictor_version()
+        all_snapshots = kl8_list_snapshots()
+        snapshots = _dedupe_kl8_snapshots(all_snapshots, draw_records)
         total = len(snapshots)
         page, page_size, total_pages, paginated = _kl8_records_page_options(
             params, total,
@@ -699,17 +770,27 @@ def kl8_records_payload(params=None):
             )
             for snapshot in visible_snapshots
         ]
+        for snapshot, record in zip(visible_snapshots, records):
+            record['record_role'] = 'original_forecast'
+            record['runtime_version'] = runtime_version
+            record['current_version_reference'] = _load_current_version_kl8_reference(
+                snapshot, all_snapshots, runtime_version, snapshot_dir, settlement_dir,
+                FUSHI_CONFIG, _clean_pick_numbers,
+                draw=draw_records.get(str(snapshot.get('target_issue'))),
+            )
 
         # 删号重算必须绑定来源快照，不能把同一期不同模型版本的轨迹串在一起。
+        display_records = [item for record in records
+                           for item in (record, record.get('current_version_reference')) if item]
         visible_ids = {
-            str(record.get('snapshot_id') or '') for record in records
+            str(record.get('snapshot_id') or '') for record in display_records
         }
         recalculations_by_snapshot = {}
         for item in kl8_list_recalculations():
             source_id = str(item.get('source_snapshot_id') or '')
             if source_id and source_id in visible_ids:
                 recalculations_by_snapshot.setdefault(source_id, []).append(item)
-        for rec in records:
+        for rec in display_records:
             rounds = recalculations_by_snapshot.get(str(rec.get('snapshot_id') or ''), [])
             actual = set((rec.get('settlement') or {}).get('actual_numbers') or [])
             enriched = []
@@ -725,6 +806,7 @@ def kl8_records_payload(params=None):
         maintenance_running = _schedule_kl8_records_maintenance(snapshots)
         return {
             'result': {
+                'runtime_version': runtime_version,
                 'records': records,
                 'count': total,
                 'settled_count': settled,
@@ -1046,6 +1128,8 @@ def kl8_activate_payload(params):
         repeat_follow_score/repeat_non_follow_score: 跟随重号分数
         pool_diversify: 是否启用候选池分散化
         pool_max_last_numbers: 候选池最多保留上期号码数量
+        frequency_mode: 频率方向 hot/mean_reversion
+        final_selection_mode: 最终选池模式，按实际配置验证
         auto_activate: 是否自动激活（默认false，需人工确认）
         n_permutations: 置换检验次数（默认1000）
     """
@@ -1061,6 +1145,8 @@ def kl8_activate_payload(params):
         repeat_non_follow_score_str = (params.get('repeat_non_follow_score') or ['0.50'])[0]
         pool_diversify_str = (params.get('pool_diversify') or ['true'])[0]
         pool_max_last_numbers_str = (params.get('pool_max_last_numbers') or [''])[0]
+        frequency_mode = (params.get('frequency_mode') or ['mean_reversion'])[0].strip().lower()
+        final_selection_mode = (params.get('final_selection_mode') or ['balanced'])[0].strip().lower()
         auto_activate_str = (params.get('auto_activate') or ['false'])[0]
         n_permutations_str = (params.get('n_permutations') or ['1000'])[0]
 
@@ -1087,6 +1173,15 @@ def kl8_activate_payload(params):
 
         if repeat_direction not in ('neutral', 'avoid', 'follow'):
             return {'error': 'repeat_direction必须是 neutral/avoid/follow'}
+
+        from src.domain.numeric.kl8.pools import MODE_BUILDERS, BEST_VARIANT
+        if frequency_mode not in ('hot', 'mean_reversion'):
+            return {'error': 'frequency_mode必须是 hot/mean_reversion'}
+        if final_selection_mode not in (*MODE_BUILDERS, BEST_VARIANT):
+            return {'error': 'final_selection_mode不是支持的选池模式'}
+        for key in ('final_min_last_numbers', 'final_max_last_numbers'):
+            if str((params.get(key) or [''])[0]).strip():
+                return {'error': f'当前验证入口尚不支持{key}，不能忽略该参数后激活不同的策略'}
 
         try:
             repeat_avoid_score = float(repeat_avoid_score_str)
@@ -1125,6 +1220,8 @@ def kl8_activate_payload(params):
             repeat_non_follow_score=repeat_non_follow_score,
             pool_diversify=pool_diversify,
             pool_max_last_numbers=pool_max_last_numbers,
+            frequency_mode=frequency_mode,
+            final_selection_mode=final_selection_mode,
             auto_activate=auto_activate,
             n_permutations=n_permutations,
         )
