@@ -2399,8 +2399,11 @@ def get_prediction_records(include_hidden: bool = False,
     return records
 
 
-def get_prediction_export() -> Dict:
-    """返回可用于离线回测/校准的完整预测记录（不包含数据库配置）。"""
+def get_prediction_export(*, include_stats: bool = True) -> Dict:
+    """返回完整预测记录；只消费 records 的监控可跳过额外的导出统计。
+
+    默认仍包含完整统计，保持下载导出和离线回测接口兼容。
+    """
     from .prediction_events import hydrate_prediction_events
     export_fields = (
         'match_id', 'league', 'home', 'away', 'match_time',
@@ -2440,8 +2443,10 @@ def get_prediction_export() -> Dict:
         for record in complete_records
     ]
     records.sort(key=lambda item: item.get('match_time', ''))
-    stats = _global_history.get_stats()
-    stats['frozen_event_evaluation'] = _global_history.get_frozen_evaluation_stats()
+    stats = {}
+    if include_stats:
+        stats = _global_history.get_stats()
+        stats['frozen_event_evaluation'] = _global_history.get_frozen_evaluation_stats()
     return {
         'schema_version': 'football-prediction-export-v3',
         'exported_at': datetime.now().astimezone().isoformat(),

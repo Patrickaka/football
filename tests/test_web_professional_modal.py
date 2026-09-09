@@ -6,6 +6,16 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 class WebProfessionalModalTests(unittest.TestCase):
+    def test_home_defers_professional_status_until_modal_open(self):
+        with open(os.path.join(ROOT, 'web', 'index.html'), encoding='utf-8') as handle:
+            html = handle.read()
+        home = html.split('async function loadMatches() {', 1)[1].split(
+            'let footballProfessionalStatus =', 1)[0]
+        self.assertNotIn('loadFootballProfessionalStatus()', home)
+        modal = html.split('function openFootballProfessionalModal()', 1)[1].split(
+            'function closeFootballProfessionalModal()', 1)[0]
+        self.assertIn('loadFootballProfessionalStatus()', modal)
+
     def test_professional_metrics_are_modal_only(self):
         path = os.path.join(ROOT, 'web', 'index.html')
         with open(path, encoding='utf-8') as handle:

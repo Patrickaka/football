@@ -4103,9 +4103,8 @@ function showFootballLoadError(text) {
 async function loadMatches() {
   loading('正在联网获取今日比赛列表…');
   try {
-    // 首屏走 BFF：一次拿到比赛列表、职业化状态、以及后台已经算好的预测。
-    // 后端只读缓存、绝不代跑分析，所以这一次请求很快；没算好的那几场
-    // 会如实列在 pending 里，由 loadAllPredictions 单独去补。
+    // 首屏只取赛程和预测缓存；专业验证在打开弹窗时加载。
+    // 未命中的比赛由已有批量接口补齐。
     const data = await fetchJson('/api/bff/football/home');
     if (data.error) {
       const source = data.source_status?.source || 'unknown';
@@ -4116,8 +4115,6 @@ async function loadMatches() {
     if (data.professional_status && !data.professional_status.error) {
       footballProfessionalStatus = data.professional_status.result || data.professional_status;
       renderFootballProfessionalStatus();
-    } else {
-      loadFootballProfessionalStatus();
     }
     await loadAllPredictions(data.predictions);
   } catch (e) {

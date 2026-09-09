@@ -14,13 +14,17 @@
 """
 
 import logging
+from time import perf_counter
 from typing import Dict, List
 
 log = logging.getLogger('api.services.bff')
 
 
 def football_home_payload(params=None) -> Dict:
-    """足球首屏：比赛列表 + 职业化状态 + 已算好的预测。
+    """足球首屏：比赛列表 + 已算好的预测，可选职业化状态。
+
+    Web 路由传 include_professional=False，历史监控由弹窗按需请求，
+    避免导出与回测统计阻塞比赛加载；直接调用默认兼容原聚合结果。
 
     返回里把预测分成两拨：
     - `ready`：缓存命中的，前端可以立刻渲染。
@@ -38,7 +42,9 @@ def football_home_payload(params=None) -> Dict:
         analysis_cache_key,
     )
 
+    started = perf_counter()
     matches_payload = football_service.matches_payload()
+    schedule_elapsed = perf_counter() - started
     if matches_payload.get('error'):
         return {'error': matches_payload['error'],
                 'source_status': matches_payload.get('source_status')}
@@ -69,10 +75,16 @@ def football_home_payload(params=None) -> Dict:
         else:
             pending.append(match.get('match_id'))
 
+    professional_status = (
+        _professional_status()
+        if (params or {}).get('include_professional', True) else None
+    )
+    log.info('足球首页: matches=%d ready=%d schedule=%.3fs total=%.3fs',
+             len(matches), len(ready), schedule_elapsed, perf_counter() - started)
     return {
         'matches': matches,
         'source_status': matches_payload.get('source_status'),
-        'professional_status': _professional_status(),
+        'professional_status': professional_status,
         'predictions': {'ready': ready, 'pending': pending},
         'coverage': {'total': len(matches), 'ready': len(ready),
                      'pending': len(pending)},

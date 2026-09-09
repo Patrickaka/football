@@ -204,6 +204,19 @@ class Resilience(unittest.TestCase):
 
 class Endpoint(unittest.TestCase):
 
+    def test_home_route_does_not_compute_professional_monitoring(self):
+        with mock.patch.object(football_service, 'matches_payload',
+                               return_value={'matches': list(MATCHES)}), \
+             mock.patch.object(football_service, 'football_professional_status_payload',
+                               side_effect=AssertionError('首屏不能计算历史监控')) as status, \
+             mock.patch('src.football.config.get_cache', return_value=None):
+            with make_client() as client:
+                response = client.get('/api/bff/football/home')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.json()['matches']), len(MATCHES))
+        self.assertIsNone(response.json()['professional_status'])
+        status.assert_not_called()
+
     def test_the_route_exists(self):
         app = create_app(auth_settings=AuthSettings(credentials={}))
         self.assertIn('/api/bff/football/home', app.openapi()['paths'])

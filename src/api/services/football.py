@@ -461,7 +461,7 @@ def football_professional_status_payload():
         from src.football.result_sync import get_prediction_export
         disk = disk_status()
         monitoring = build_professional_monitoring(
-            get_prediction_export().get('records') or []
+            get_prediction_export(include_stats=False).get('records') or []
         )
         model = validation.get('model') or {}
         market = validation.get('market') or {}
