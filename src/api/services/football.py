@@ -329,6 +329,74 @@ def predict_batch_payload(body):
     return {'results': results}
 
 
+def football_analysis_start_payload(body):
+    """Register bounded background work; never calculate a match in HTTP."""
+    from src.api.runtime.football_analysis_jobs import (
+        FootballAnalysisQueueFull, get_manager,
+    )
+    if not isinstance(body, dict):
+        return {'error': '请求体必须是JSON对象', 'code': 'invalid_request'}
+    raw_matches = body.get('matches')
+    if not isinstance(raw_matches, list) or not raw_matches or len(raw_matches) > 80:
+        return {'error': '一次任务需要1至80场比赛', 'code': 'invalid_request'}
+    if any(not isinstance(row, dict) or not str(row.get('match_id') or '').strip()
+           for row in raw_matches):
+        return {'error': '每场比赛必须包含match_id', 'code': 'invalid_request'}
+    ids = [str(row['match_id']).strip() for row in raw_matches]
+    if len(set(ids)) != len(ids):
+        return {'error': '同一任务不能重复提交相同比赛', 'code': 'invalid_request'}
+    force_refresh = body.get('force_refresh', False)
+    if not isinstance(force_refresh, bool):
+        return {'error': 'force_refresh必须是布尔值', 'code': 'invalid_request'}
+    try:
+        # Reuse the exact existing request normalization and trusted schedule
+        # enrichment. This reads a saved schedule, never fetches the upstream.
+        snapshot = _prediction_schedule_snapshot()
+        matches = [_with_current_market_context(match_from_json(row), snapshot) for row in raw_matches]
+        manager = get_manager()
+        from src.football.analysis_budget import limit
+        from src.football.config import FOOTBALL_PREDICTION_LOGIC_VERSION
+
+        def analyze(match):
+            with limit(manager.match_timeout):
+                value = analyze_match(match, force_refresh=force_refresh)
+                if not isinstance(value, dict) or value.get('error'):
+                    raise ValueError((value or {}).get('error') if isinstance(value, dict)
+                                     else '预测结果格式错误')
+                from src.api.runtime.http_util import _sanitize_json, _json_default
+                return json.loads(json.dumps(_sanitize_json(value), default=_json_default,
+                                             allow_nan=False))
+
+        job = manager.submit(matches, analyze, force_refresh=force_refresh,
+                             context_token=FOOTBALL_PREDICTION_LOGIC_VERSION)
+        return {'success': True, 'result': job}
+    except FootballAnalysisQueueFull as exc:
+        return {'error': str(exc), 'code': 'queue_full'}
+    except (TypeError, ValueError) as exc:
+        return {'error': str(exc), 'code': 'invalid_request'}
+    except Exception:
+        log.exception('无法启动足球分析任务')
+        return {'error': '无法启动足球分析任务，请稍后重试', 'code': 'start_failed'}
+
+
+def football_analysis_status_payload(params):
+    """Memory-only progress; independent of the blocking analysis executor."""
+    from src.api.runtime.football_analysis_jobs import get_manager
+    job_id = str((params.get('job_id') or [''])[0])
+    if not re.fullmatch(r'[0-9a-f]{32}', job_id):
+        return {'error': '缺少或无效的任务编号', 'code': 'invalid_request'}
+    try:
+        after_revision = int((params.get('after_revision') or ['0'])[0])
+        if after_revision < 0:
+            raise ValueError
+    except (TypeError, ValueError):
+        return {'error': '无效的进度游标', 'code': 'invalid_request'}
+    job = get_manager().get(job_id, after_revision=after_revision)
+    if job is None:
+        return {'error': '任务已过期或服务已重启，请刷新后继续', 'code': 'job_not_found'}
+    return {'success': True, 'result': job}
+
+
 def football_clear_cache_payload():
     """清除足球模块缓存"""
     try:

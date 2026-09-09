@@ -26,7 +26,8 @@ def called_paths():
     """网页里 fetch 出去的接口地址（去掉查询串与模板插值）。"""
     html = INDEX.read_text(encoding='utf-8')
     found = set()
-    for match in re.finditer(r"""fetchJson[A-Za-z]*\(\s*['"`]([^'"`]+)""", html):
+    for match in re.finditer(
+            r"""(?:fetchJson[A-Za-z]*|footballJobRequest(?:WithRetry)?)\(\s*['"`]([^'"`]+)""", html):
         raw = match.group(1)
         path = raw.split('?')[0].split('#')[0]
         path = re.sub(r'\$\{[^}]*\}', '{}', path)
@@ -71,6 +72,8 @@ class FrontendPaths(unittest.TestCase):
         paths = called_paths()
         self.assertGreater(len(paths), 20)
         self.assertIn('/api/bff/football/home', paths)
+        self.assertIn('/api/predict/batch/start', paths)
+        self.assertIn('/api/predict/batch/status', paths)
 
 
 if __name__ == '__main__':

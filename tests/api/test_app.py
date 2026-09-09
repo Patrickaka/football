@@ -53,7 +53,7 @@ class ExecutorWorkersWiringTests(unittest.TestCase):
 class LifespanShutdownOrderTests(unittest.TestCase):
     """回归测试：优雅停机必须先排空 SWR 刷新，再停消费者，最后释放消费者
     依赖的资源，顺序为
-    cache.wait_for_refreshes → tasks.shutdown → shutdown_executor → db.dispose。
+    cache.wait_for_refreshes → tasks.shutdown → football jobs → shutdown_executor → db.dispose。
 
     SWR 刷新线程是 daemon，进程退出即被杀，`finally: self.l2.unlock(key)`
     得不到执行，会在 Redis 残留一把 TTL 最长 lock_timeout 秒的锁——不先
@@ -94,6 +94,8 @@ class LifespanShutdownOrderTests(unittest.TestCase):
                 mock.patch('src.api.app.build_database', return_value=fake_db), \
                 mock.patch('src.api.app.background.shutdown',
                            side_effect=recording_background_shutdown), \
+                mock.patch('src.api.app.football_analysis_jobs.shutdown',
+                           side_effect=lambda wait=True: order.append('football_jobs.shutdown')), \
                 mock.patch(
                     'src.api.app.shutdown_executor', side_effect=recording_shutdown_executor
                 ):
@@ -103,7 +105,8 @@ class LifespanShutdownOrderTests(unittest.TestCase):
 
         self.assertEqual(
             order,
-            ['cache.wait_for_refreshes', 'tasks.shutdown', 'shutdown_executor', 'db.dispose'],
+            ['cache.wait_for_refreshes', 'tasks.shutdown', 'football_jobs.shutdown',
+             'shutdown_executor', 'db.dispose'],
         )
 
 

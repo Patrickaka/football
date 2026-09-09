@@ -15,6 +15,7 @@ import pathlib
 
 from fastapi import APIRouter, Body, Depends, HTTPException
 from fastapi.responses import FileResponse
+from fastapi.responses import JSONResponse
 
 from src.api.deps import query_params, run_blocking
 from src.api.services import football as service
@@ -40,6 +41,24 @@ async def predict_batch(body: dict = Body(default=None)):
     在这里用 pydantic 模型挡一道会把中文错误换成 422 的 detail。
     """
     return await run_blocking(service.predict_batch_payload, body)
+
+
+def _analysis_control_response(payload, success_status=200):
+    code = payload.get('code')
+    status = ({'invalid_request': 400, 'queue_full': 429, 'job_not_found': 404,
+               'start_failed': 503}.get(code, 500) if payload.get('error') else success_status)
+    return JSONResponse(payload, status_code=status)
+
+
+@router.post('/api/predict/batch/start', status_code=202)
+async def predict_batch_start(body=Body(default=None)):
+    # Do not queue control traffic behind slow analyses in run_blocking.
+    return _analysis_control_response(service.football_analysis_start_payload(body), 202)
+
+
+@router.get('/api/predict/batch/status')
+async def predict_batch_status(params: dict = Depends(query_params)):
+    return _analysis_control_response(service.football_analysis_status_payload(params))
 
 
 @router.get('/api/football/clear_cache')

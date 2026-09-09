@@ -8,8 +8,10 @@ import re
 import time
 import gzip
 import json
+import string
 import urllib.request
 import urllib.error
+import urllib.parse
 import random
 import threading
 from collections import OrderedDict
@@ -21,6 +23,7 @@ from ..common.paths import data_path
 
 log = setup_logger('football')
 from . import config as _cfg
+from . import analysis_budget as _budget
 
 from .config import (
     HEADERS, _MATCH_LIST_STATUS,
@@ -135,7 +138,7 @@ def _await_fetch_throttle():
             remaining = _fetch_throttle_until - time.time()
         if remaining <= 0:
             return
-        time.sleep(min(remaining, 0.5))
+        _budget.sleep(min(remaining, 0.5))
 
 
 def _await_rate_slot():
@@ -149,21 +152,23 @@ def _await_rate_slot():
         _fetch_next_slot = slot + interval
     delay = slot - time.time()
     if delay > 0:
-        time.sleep(delay)
+        _budget.sleep(delay)
 
 
 def fetch(url, encoding='gbk', referer=None):
     """抓取网页，自动处理 gzip 压缩和编码（带 TTL 复用与并发去重）"""
+    _budget.check()
     cache_key = (url, encoding)
     cached = _fetch_cache_get(cache_key)
     if cached is not None:
         return cached
-    with _fetch_url_lock(cache_key):
+    with _budget.acquire(_fetch_url_lock(cache_key)):
         cached = _fetch_cache_get(cache_key)
         if cached is not None:
             return cached
-        with _fetch_semaphore:
+        with _budget.acquire(_fetch_semaphore):
             result = _fetch_raw(url, encoding, referer)
+        _budget.check()
         _fetch_cache_set(cache_key, result)
         return result
 
@@ -172,6 +177,7 @@ def _fetch_raw(url, encoding='gbk', referer=None):
     """发起网络抓取（无缓存），对源站限流做全局退避重试"""
     last_error = None
     for attempt in range(FETCH_RETRY_ATTEMPTS):
+        _budget.check()
         _await_fetch_throttle()
         _await_rate_slot()
         try:
@@ -189,20 +195,114 @@ def _fetch_raw(url, encoding='gbk', referer=None):
     raise last_error
 
 
+def _read_response(response):
+    """Check the shared wall deadline even when a response trickles in."""
+    if _budget.remaining() is None:
+        return response.read()
+    read = getattr(response, 'read1', None)
+    if not callable(read):
+        data = response.read()
+        _budget.check()
+        return data
+    chunks = []
+    while True:
+        timeout = _budget.remaining(20)
+        sock = getattr(getattr(getattr(response, 'fp', None), 'raw', None), '_sock', None)
+        if sock is not None:
+            sock.settimeout(timeout)
+        chunk = read(65536)
+        _budget.check()
+        if not chunk:
+            return b''.join(chunks)
+        chunks.append(chunk)
+
+
+class _BudgetHTTPRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Keep urllib's redirect rules, but share the match's wall deadline."""
+
+    def http_error_302(self, req, fp, code, msg, headers):
+        try:
+            remaining = _budget.remaining()
+        except _budget.AnalysisTimeout:
+            fp.close()
+            raise
+        if remaining is None:
+            return super().http_error_302(req, fp, code, msg, headers)
+        if 'location' in headers:
+            newurl = headers['location']
+        elif 'uri' in headers:
+            newurl = headers['uri']
+        else:
+            return
+
+        # Match HTTPRedirectHandler's URL validation and escaping. Reuse its
+        # redirect_request below for method/header handling (including POST).
+        parts = urllib.parse.urlparse(newurl)
+        if parts.scheme not in ('http', 'https', 'ftp', ''):
+            raise urllib.error.HTTPError(
+                newurl, code,
+                "%s - Redirection to url '%s' is not allowed" % (msg, newurl),
+                headers, fp,
+            )
+        if not parts.path and parts.netloc:
+            parts = list(parts)
+            parts[2] = '/'
+        newurl = urllib.parse.quote(
+            urllib.parse.urlunparse(parts), encoding='iso-8859-1',
+            safe=string.punctuation,
+        )
+        newurl = urllib.parse.urljoin(req.full_url, newurl)
+        new = self.redirect_request(req, fp, code, msg, headers, newurl)
+        if new is None:
+            return
+
+        if hasattr(req, 'redirect_dict'):
+            visited = new.redirect_dict = req.redirect_dict
+            if (visited.get(newurl, 0) >= self.max_repeats or
+                    len(visited) >= self.max_redirections):
+                raise urllib.error.HTTPError(
+                    req.full_url, code, self.inf_msg + msg, headers, fp,
+                )
+        else:
+            visited = new.redirect_dict = req.redirect_dict = {}
+        visited[newurl] = visited.get(newurl, 0) + 1
+
+        # The redirect body can also trickle: don't let urllib's unbounded
+        # fp.read() spend the rest of the deadline and then start a new hop.
+        try:
+            _read_response(fp)
+        finally:
+            fp.close()
+        timeout = req.timeout if isinstance(req.timeout, (int, float)) else 20
+        return self.parent.open(new, timeout=_budget.remaining(min(20, timeout)))
+
+    http_error_301 = http_error_303 = http_error_307 = http_error_308 = http_error_302
+
+
+def _open_request(request, *handlers):
+    """Only install a private redirect opener when an analysis has a budget."""
+    if _budget.remaining() is None:
+        if not handlers:
+            return urllib.request.urlopen(request, timeout=20)
+        opener = urllib.request.build_opener(*handlers)
+    else:
+        opener = urllib.request.build_opener(_BudgetHTTPRedirectHandler(), *handlers)
+    return opener.open(request, timeout=_budget.remaining(20))
+
+
 def _fetch_once(url, encoding='gbk', referer=None):
     """真正发起一次网络抓取（无缓存、不重试）"""
     start = time.perf_counter()
     headers = {**HEADERS, 'Referer': referer} if referer else HEADERS
     req = urllib.request.Request(url, headers=headers)
     try:
-        with urllib.request.urlopen(req, timeout=20) as resp:
-            raw = resp.read()
+        with _open_request(req) as resp:
+            raw = _read_response(resp)
     except urllib.error.HTTPError:
         from http import cookiejar
         cj = cookiejar.CookieJar()
-        opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cj))
-        with opener.open(req, timeout=20) as resp:
-            raw = resp.read()
+        with _open_request(req, urllib.request.HTTPCookieProcessor(cj)) as resp:
+            raw = _read_response(resp)
 
     # 自动解压 gzip
     if raw[:2] == b'\x1f\x8b':
@@ -228,6 +328,7 @@ def fetch_json(url, referer=None):
 
 def fetch_json_post(url, payload, referer=None):
     """POST JSON，复用足球抓取层的 TTL、并发去重、限速和退避。"""
+    _budget.check()
     body = json.dumps(
         payload, ensure_ascii=True, sort_keys=True, separators=(',', ':')
     ).encode('utf-8')
@@ -235,13 +336,14 @@ def fetch_json_post(url, payload, referer=None):
     cached = _fetch_cache_get(cache_key)
     if cached is not None:
         return cached
-    with _fetch_url_lock(cache_key):
+    with _budget.acquire(_fetch_url_lock(cache_key)):
         cached = _fetch_cache_get(cache_key)
         if cached is not None:
             return cached
         last_error = None
-        with _fetch_semaphore:
+        with _budget.acquire(_fetch_semaphore):
             for attempt in range(FETCH_RETRY_ATTEMPTS):
+                _budget.check()
                 _await_fetch_throttle()
                 _await_rate_slot()
                 try:
@@ -253,11 +355,12 @@ def fetch_json_post(url, payload, referer=None):
                     if referer:
                         headers['Referer'] = referer
                     request = urllib.request.Request(url, data=body, headers=headers)
-                    with urllib.request.urlopen(request, timeout=20) as response:
-                        raw = response.read()
+                    with _open_request(request) as response:
+                        raw = _read_response(response)
                     if raw[:2] == b'\x1f\x8b':
                         raw = gzip.decompress(raw)
                     result = json.loads(raw.decode('utf-8'))
+                    _budget.check()
                     _fetch_cache_set(cache_key, result)
                     return result
                 except urllib.error.HTTPError as exc:
