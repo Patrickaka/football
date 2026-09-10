@@ -74,10 +74,10 @@ class FootballRecordsWithoutMatches(unittest.TestCase):
         self.assertIn('setPredictionDateToday()', loader)
         self.assertIn('record.match_num', loader)
         self.assertIn('record.lottery_offer_matched === false', loader)
-        self.assertIn('让球胜平负${handicapText}预测', loader)
-        self.assertIn('主队 ${Number(handicap)', loader)
-        self.assertIn('const hasSpf = spf.available', loader)
-        self.assertIn('const hasRqspf = rqspf.available', loader)
+        self.assertIn('renderPredictionRecordMarkets(record)', loader)
+        self.assertIn('主队 ${Number(record.lottery_handicap)', HTML)
+        self.assertIn('const hasSpf = Object.keys(record.predicted_1x2', loader)
+        self.assertIn('const hasRqspf = Object.keys(record.predicted_rqspf', loader)
         self.assertNotIn("detail: '暂无预测'", loader)
 
 

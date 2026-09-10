@@ -59,7 +59,7 @@ class WebProfessionalModalTests(unittest.TestCase):
         self.assertIn('class="fixture-completeness">信息完整度', html)
         self.assertIn("预测可信度", html)
         self.assertIn("本场专业证据审计", html)
-        self.assertIn("胜平负预测", html)
+        self.assertIn("renderPredictionRecordMarkets(record)", html)
         self.assertIn("让球胜平负", html)
         self.assertIn("赛后比分", html)
         self.assertIn("setFootballQualityFilter('upset')", html)

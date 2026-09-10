@@ -2383,6 +2383,11 @@ def get_prediction_records(include_hidden: bool = False,
             'hit_top3': None if is_future_settled else record.get('hit_top3'),
             # 直接返回当时保存的比分概率，记录页仅作 Top3 参考，不重新预测。
             'predicted_scores': deepcopy(record.get('predicted_scores') or {}),
+            'recommendation_snapshot': {
+                key: deepcopy((record.get('professional_snapshot') or {}).get(key))
+                for key in ('accuracy_gate', 'decision_gate')
+            },
+            'lottery_spf_odds': deepcopy(lottery_snapshot.get('spf_odds') or {}),
             'predicted_1x2': predicted_1x2 if spf_was_offered else {},
             'predicted_rqspf': predicted_rqspf if rqspf_was_offered else {},
             'lottery_handicap': lottery_handicap,
