@@ -27,6 +27,8 @@ class RecordRecommendations(unittest.TestCase):
                  'formatAccuracyGateValidation', 'getAccuracyGatePresentation',
                  'footballMarketDirectionsCompatible', 'getFootballResultTier',
                  'renderWebMarketRecommendation', 'renderProbabilityStrip',
+                 'predictionRecordActualScore', 'renderPredictionMarketOutcome',
+                 'renderPredictionScoreReference',
                  'renderPredictionRecordMarkets')
         functions = []
         for name in names:
@@ -72,6 +74,30 @@ delete record.recommendation_snapshot;
 out = renderPredictionRecordMarkets(record);
 assert(out.includes('未保存当时的推荐筛选结果'));
 assert(!out.includes('<strong>胜</strong>'));
+const barca = {settled:true, actual_score:'5-1', lottery_handicap:-3,
+  predicted_scores:{'4-0':.106,'3-0':.087,'4-1':.068}};
+let outcome = renderPredictionMarketOutcome(barca, 'rqspf', {status:'abstain'},
+  {'让胜':.410,'让平':.199,'让负':.391});
+assert(outcome.includes('模型参考（非推荐）：让胜'));
+assert(outcome.includes('✅ 命中'));
+assert(!outcome.includes('推荐结果：'));
+outcome = renderPredictionScoreReference(barca);
+assert(outcome.includes('Top1：❌ 未命中') && outcome.includes('Top3：❌ 未命中'));
+const stuttgart = {settled:true, actual_score:'3-1', lottery_handicap:-2,
+  predicted_scores:{'3-0':.095,'4-0':.088,'3-1':.075}};
+outcome = renderPredictionMarketOutcome(stuttgart, 'rqspf', {status:'abstain'},
+  {'让胜':.405,'让平':.213,'让负':.382});
+assert(outcome.includes('❌ 未命中') && outcome.includes('实际让平'));
+outcome = renderPredictionScoreReference(stuttgart);
+assert(outcome.includes('Top1：❌ 未命中') && outcome.includes('Top3：✅ 命中（第3位）'));
+outcome = renderPredictionMarketOutcome(stuttgart, 'rqspf', {status:'selected',pick:'让平'},
+  {'让胜':.405,'让平':.213,'让负':.382});
+assert(outcome.includes('推荐结果：让平') && outcome.includes('✅ 命中'));
+assert.equal(renderPredictionMarketOutcome({...barca,settled:false}, 'rqspf', {status:'abstain'}, {}), '');
+assert(!renderPredictionScoreReference({...barca,settled:false}).includes('命中'));
+assert(renderPredictionMarketOutcome({...barca,lottery_handicap:null}, 'rqspf',
+  {status:'selected',pick:'让胜'}, {}).includes('暂无法判定'));
+assert(renderPredictionScoreReference({...barca,actual_score:null}).includes('暂无法判定'));
 '''
         result = subprocess.run([shutil.which('node'), '-'], input=script,
                                 text=True, encoding='utf-8', capture_output=True)

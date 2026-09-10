@@ -8781,6 +8781,40 @@ function footballMarketDirectionsCompatible(standardPick, handicapPick, handicap
   return Math.max(bounds[0], rqBounds[0]) <= Math.min(bounds[1], rqBounds[1]);
 }
 
+function predictionRecordActualScore(record) {
+  if (record.settled !== true) return null;
+  const match = String(record.actual_score || '').trim().match(/^(\d+)\s*[-:]\s*(\d+)$/);
+  return match ? [Number(match[1]), Number(match[2])] : null;
+}
+
+function renderPredictionMarketOutcome(record, key, state, probabilities) {
+  if (record.settled !== true) return '';
+  const score = predictionRecordActualScore(record);
+  const aliases = {H:'胜', D:'平', A:'负', home:'胜', draw:'平', away:'负', '主胜':'胜', '平局':'平', '客胜':'负'};
+  const selected = state.status === 'selected';
+  const ranked = Object.entries(probabilities).filter(([, value]) =>
+    value !== null && value !== '' && typeof value !== 'boolean'
+    && Number.isFinite(Number(value)) && Number(value) >= 0 && Number(value) <= 1)
+    .sort((a, b) => Number(b[1]) - Number(a[1]));
+  const pick = selected ? (aliases[state.pick] || state.pick) : ranked[0]?.[0];
+  const label = selected ? '推荐结果' : '模型参考（非推荐）';
+  let actual = null;
+  if (score) {
+    if (key === 'spf') actual = score[0] > score[1] ? '胜' : score[0] < score[1] ? '负' : '平';
+    else {
+      const raw = record.lottery_handicap;
+      const line = raw == null || raw === '' || typeof raw === 'boolean' ? NaN : Number(raw);
+      if (Number.isInteger(line)) {
+        const margin = score[0] + line - score[1];
+        actual = margin > 0 ? '让胜' : margin < 0 ? '让负' : '让平';
+      }
+    }
+  }
+  const validPick = (key === 'spf' ? ['胜','平','负'] : ['让胜','让平','让负']).includes(pick);
+  const verdict = actual && validPick ? (pick === actual ? '✅ 命中' : '❌ 未命中') : '暂无法判定';
+  return `<p class="market-reason">${label}：${validPick ? esc(pick) : '无有效预测'} · <b>${verdict}</b>${actual ? ` · 实际${esc(actual)}` : ''}</p>`;
+}
+
 function renderPredictionRecordMarkets(record) {
   const aliases = {H:'胜', D:'平', A:'负', home:'胜', draw:'平', away:'负', '胜':'胜', '平':'平', '负':'负'};
   const standard = Object.fromEntries(Object.entries(record.predicted_1x2 || {})
@@ -8808,7 +8842,8 @@ function renderPredictionRecordMarkets(record) {
       state.reasons = ['该记录未保存当时的推荐筛选结果，仅展示赛前概率'];
     }
     rows.push(renderWebMarketRecommendation(label, state, state.pick,
-      renderProbabilityStrip(probabilities, keys)));
+      renderProbabilityStrip(probabilities, keys)
+      + renderPredictionMarketOutcome(record, key, state, probabilities)));
   }
   return rows.join('');
 }
@@ -8826,7 +8861,17 @@ function renderPredictionScoreReference(record) {
       `<span style="white-space:nowrap"><b>${esc(score)}</b> <span style="color:var(--muted)">${(Number(probability) * 100).toFixed(1)}%</span></span>`
     ).join('<span style="color:var(--muted)"> · </span>')
     : '<span style="color:var(--muted)">暂无已保存的比分预测</span>';
-  return `<div style="margin-top:8px;font-size:12px"><span style="color:var(--muted)">比分参考 Top3（非主推）：</span>${detail}</div>`;
+  const actual = predictionRecordActualScore(record);
+  let verdict = '';
+  if (record.settled === true) {
+    if (actual && scores.length) {
+      const rank = scores.findIndex(([score]) => score.split('-').map(Number).every((v, i) => v === actual[i]));
+      verdict = `<div style="margin-top:4px">比分 Top1：${rank === 0 ? '✅ 命中' : '❌ 未命中'} · Top3：${rank >= 0 ? `✅ 命中（第${rank + 1}位）` : '❌ 未命中'}</div>`;
+    } else {
+      verdict = '<div style="margin-top:4px;color:var(--muted)">比分命中：暂无法判定</div>';
+    }
+  }
+  return `<div style="margin-top:8px;font-size:12px"><span style="color:var(--muted)">比分参考 Top3（非主推）：</span>${detail}${verdict}</div>`;
 }
 
 async function loadPredictions() {
