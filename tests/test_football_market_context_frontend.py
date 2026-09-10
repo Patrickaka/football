@@ -156,7 +156,7 @@ console.log('market evidence completeness cases passed');
         for name in ("calculateFootballPredictionReliability", "accuracyGateReasonText",
                      "getFootballMarketContext", "getFootballTotalCandidate",
                      "formatAccuracyGateValidation", "getAccuracyGatePresentation",
-                     "getFootballResultTier"):
+                     "footballMarketDirectionsCompatible", "getFootballResultTier"):
             start = html.index("function " + name + "(")
             end = re.search(r"\n(?:async )?function ", html[start + 1:])
             self.assertIsNotNone(end)
@@ -259,7 +259,7 @@ console.log('expanded market probability cases passed');
         for name in ("calculateFootballPredictionReliability", "accuracyGateReasonText",
                      "getFootballMarketContext", "getFootballTotalCandidate",
                      "formatAccuracyGateValidation", "getAccuracyGatePresentation",
-                     "getFootballResultTier", "renderWebMarketRecommendation",
+                     "footballMarketDirectionsCompatible", "getFootballResultTier", "renderWebMarketRecommendation",
                      "renderProbabilityStrip", "getFootballDirectionState",
                      "renderFootballHandicapProbabilities", "renderFootballDirectionAnalysis",
                      "renderMarketEvidence"):

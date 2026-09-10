@@ -5067,10 +5067,7 @@ function getFootballResultTier(item) {
       '主胜':'胜', '平局':'平', '客胜':'负'}[spfState.pick] || spfState.pick) : standardDirection;
     const lineMatch = String(lottery.handicap?.handicap ?? '').match(/[-+]?\d+(?:\.\d+)?/);
     const line = lineMatch ? Number(lineMatch[0]) : NaN;
-    const bounds = {'胜':[1, Infinity], '平':[0, 0], '负':[-Infinity, -1]}[standardPick];
-    const rqBounds = {'让胜':[1 - line, Infinity], '让平':[-line, -line], '让负':[-Infinity, -1 - line]}[rqspfState.pick];
-    const valid = Number.isInteger(line) && Math.abs(line) <= 5 && bounds && rqBounds;
-    const compatible = valid ? Math.max(bounds[0], rqBounds[0]) <= Math.min(bounds[1], rqBounds[1]) : null;
+    const compatible = footballMarketDirectionsCompatible(standardPick, rqspfState.pick, line);
     if (compatible !== true) {
       const reason = compatible === false
         ? (bothSelected ? '胜平负与让球胜平负方向互斥，不能同时推荐' : '让球推荐与胜平负主方向互斥，转为观望')
@@ -8775,6 +8772,15 @@ function preparePredictionCalendar(records) {
   if (!predictionCalendarMonth || predictionDateFilter) predictionCalendarMonth = anchor.slice(0, 7);
 }
 
+function footballMarketDirectionsCompatible(standardPick, handicapPick, handicap) {
+  const line = handicap === null || handicap === undefined || handicap === ''
+    || typeof handicap === 'boolean' ? NaN : Number(handicap);
+  const bounds = {'胜':[1, Infinity], '平':[0, 0], '负':[-Infinity, -1]}[standardPick];
+  const rqBounds = {'让胜':[1 - line, Infinity], '让平':[-line, -line], '让负':[-Infinity, -1 - line]}[handicapPick];
+  if (!Number.isInteger(line) || Math.abs(line) > 5 || !bounds || !rqBounds) return null;
+  return Math.max(bounds[0], rqBounds[0]) <= Math.min(bounds[1], rqBounds[1]);
+}
+
 function renderPredictionScoreReference(record) {
   const scores = Object.entries(record.predicted_scores || {})
     .filter(([score, probability]) => /^\d+-\d+$/.test(score)
@@ -8987,6 +8993,15 @@ async function loadPredictions() {
         const rqspf = marketSummary(record.predicted_rqspf, {});
         const hasSpf = spf.available;
         const hasRqspf = rqspf.available;
+        // 与赛事页一样按净胜球交集审核，保留 ±2 球下确实可同时成立的方向。
+        // 只约束方向展示；历史概率、命中记录和比分参考均不重算。
+        const rqCompatible = !hasSpf || !hasRqspf ? true
+          : footballMarketDirectionsCompatible(spf.pick, rqspf.pick, record.lottery_handicap);
+        const rqDirection = rqCompatible === true ? esc(rqspf.pick) : '观望';
+        const rqDirectionNote = rqCompatible === true ? ''
+          : `<div style="margin-top:4px;color:var(--muted)">${rqCompatible === false
+            ? '让球方向与胜平负方向不能同时成立，不作为组合推荐；下列概率保留原始记录。'
+            : '让球数缺失或无效，暂不展示让球推荐方向；下列概率保留原始记录。'}</div>`;
         const lotteryUnverified = record.lottery_offer_matched === false;
         const handicap = record.lottery_handicap;
         const handicapText = handicap === null || handicap === undefined || handicap === ''
@@ -9014,7 +9029,7 @@ async function loadPredictions() {
           // 已结算
           html += `<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--line);font-size:13px">
             ${hasSpf ? `<div><span style="color:var(--muted)">胜平负预测：</span><b>${esc(spf.pick)}</b> · ${spf.detail} ${record.hit_1x2 === true ? '✅' : record.hit_1x2 === false ? '❌' : ''}</div>` : ''}
-            ${hasRqspf ? `<div style="margin-top:4px"><span style="color:var(--muted)">让球胜平负${handicapText}预测：</span><b>${esc(rqspf.pick)}</b> · ${rqspf.detail} ${record.hit_rqspf === true ? '✅' : record.hit_rqspf === false ? '❌' : ''}</div>` : ''}
+            ${hasRqspf ? `<div style="margin-top:4px"><span style="color:var(--muted)">让球胜平负${handicapText}预测：</span><b>${rqDirection}</b>${rqDirectionNote} · ${rqspf.detail} ${rqCompatible === true ? (record.hit_rqspf === true ? '✅' : record.hit_rqspf === false ? '❌' : '') : ''}</div>` : ''}
             ${marketVerificationNote}
             <div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:6px">
             <div><span style="color:var(--muted)">赛后比分：</span><b style="color:var(--accent2)">${esc(record.actual_score || '-')}</b></div>
@@ -9032,7 +9047,7 @@ async function loadPredictions() {
           // 待同步
           html += `<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--line);font-size:12px">
             ${hasSpf ? `<div><span style="color:var(--muted)">胜平负预测：</span><b>${esc(spf.pick)}</b> · ${spf.detail}</div>` : ''}
-            ${hasRqspf ? `<div style="margin-top:4px"><span style="color:var(--muted)">让球胜平负${handicapText}预测：</span><b>${esc(rqspf.pick)}</b> · ${rqspf.detail}</div>` : ''}
+            ${hasRqspf ? `<div style="margin-top:4px"><span style="color:var(--muted)">让球胜平负${handicapText}预测：</span><b>${rqDirection}</b>${rqDirectionNote} · ${rqspf.detail}</div>` : ''}
             ${marketVerificationNote}
             ${record.sync_status === 'retry' && record.last_sync_error ? `<div style="color:var(--warn);margin-top:2px">上次失败：${esc(record.last_sync_error)}</div>` : ''}
             ${record.next_sync_at ? `<div style="color:var(--muted);margin-top:2px">预计同步：${record.next_sync_at?.replace('T', ' ').slice(0, 16) || '-'}</div>` : ''}
