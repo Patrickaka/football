@@ -287,6 +287,34 @@ def _complete_offered_lottery_predictions(
     return predicted_1x2, predicted_rqspf, resolved_handicap
 
 
+def _record_lottery_analysis(record, lottery_snapshot, handicap):
+    """Restore the list's presentation from prematch inputs, including old records."""
+    from ..domain.sports.football.lottery import lottery_market_probabilities
+
+    # The record's predicted_1x2 can be the model-only distribution, whereas
+    # the recommendation list uses the official-market blended distribution.
+    saved = deepcopy(lottery_snapshot)
+    if saved.get('direction_analysis') and saved.get('standard') and saved.get('handicap'):
+        return saved
+    candidates = []
+    for score, probability in (record.get('predicted_scores') or {}).items():
+        match = re.fullmatch(r'(\d+)-(\d+)', str(score))
+        if match:
+            candidates.append(((int(match[1]), int(match[2])), probability))
+    if not candidates:
+        return saved
+    restored = lottery_market_probabilities(
+        candidates, handicap,
+        spf_odds=saved.get('spf_odds'), rqspf_odds=saved.get('rqspf_odds'),
+        market_weight=(saved.get('standard') or {}).get('market_weight', 0.80),
+    )
+    # Reconstruct the entire presentation together so its standard direction,
+    # probabilities and conditional distribution use the same calculation.
+    for key in ('standard', 'handicap', 'direction_analysis'):
+        saved[key] = restored[key]
+    return saved
+
+
 def _lottery_match_key(match_num, match_time):
     """竞彩编号+开赛时间构成的跨源业务键；任一为空则不可用于对齐。"""
     num = str(match_num or '').replace(' ', '')
@@ -2354,6 +2382,7 @@ def get_prediction_records(include_hidden: bool = False,
             )
         )
 
+        lottery_analysis = _record_lottery_analysis(record, lottery_snapshot, lottery_handicap)
         records.append({
             'match_id': record.get('match_id'),
             'league': record.get('league'),
@@ -2389,7 +2418,11 @@ def get_prediction_records(include_hidden: bool = False,
             },
             'lottery_spf_odds': deepcopy(lottery_snapshot.get('spf_odds') or {}),
             # 复用赛前保存的同向情景，不能用独立玩法最大项拼接联合方向。
-            'lottery_direction_analysis': deepcopy(lottery_snapshot.get('direction_analysis')),
+            'lottery_direction_analysis': deepcopy(lottery_analysis.get('direction_analysis')),
+            'lottery_analysis': {
+                'standard': deepcopy(lottery_analysis.get('standard')) if spf_was_offered else None,
+                'handicap': deepcopy(lottery_analysis.get('handicap')) if rqspf_was_offered else None,
+            },
             'predicted_1x2': predicted_1x2 if spf_was_offered else {},
             'predicted_rqspf': predicted_rqspf if rqspf_was_offered else {},
             'lottery_handicap': lottery_handicap,

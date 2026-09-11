@@ -7,6 +7,36 @@ from unittest.mock import patch
 
 
 class RecordRecommendations(unittest.TestCase):
+    def test_legacy_record_restores_the_exact_recommendation_list_analysis(self):
+        from copy import deepcopy
+        from src.football import result_sync
+        from src.domain.sports.football.lottery import lottery_market_probabilities
+        for line, scores in [(1, {'1-0': .219, '1-1': .241, '0-1': .24, '0-2': .30}),
+                             (-1, {'1-0': .24, '2-0': .30, '1-1': .241, '0-1': .219})]:
+            with self.subTest(line=line):
+                odds = {'offer_matched': True, 'spf_available': True, 'rqspf_available': True,
+                        'spf_odds': {'胜': 4.5, '平': 3.6, '负': 1.8} if line > 0
+                        else {'胜': 1.8, '平': 3.6, '负': 4.5},
+                        'rqspf_odds': {'让胜': 2.1, '让平': 3.5, '让负': 3.0}}
+                candidates = [(tuple(map(int, score.split('-'))), p) for score, p in scores.items()]
+                expected = lottery_market_probabilities(candidates, line,
+                    spf_odds=odds['spf_odds'], rqspf_odds=odds['rqspf_odds'])
+                record = {'match_id': 'legacy', 'predicted_scores': scores,
+                          'predicted_1x2': {'H': .219, 'D': .241, 'A': .54},
+                          'predicted_rqspf': expected['handicap']['probabilities'],
+                          'lottery_handicap': line, 'odds_snapshot': {'lottery': odds}}
+                original = deepcopy(record)
+                with patch.object(result_sync._global_history, 'records', [record]):
+                    row = result_sync.get_prediction_records(include_hidden=True)[0]
+                self.assertTrue(row['lottery_direction_analysis']['available'])
+                self.assertEqual(row['lottery_direction_analysis'], expected['direction_analysis'])
+                self.assertEqual(row['lottery_analysis']['standard'], expected['standard'])
+                self.assertEqual(row['lottery_analysis']['handicap'], expected['handicap'])
+                self.assertEqual(record, original)
+                # A modern snapshot must keep its original market weights and probabilities.
+                record['odds_snapshot']['lottery'].update(expected)
+                self.assertEqual(result_sync._record_lottery_analysis(record, record['odds_snapshot']['lottery'], line)['direction_analysis'], expected['direction_analysis'])
+
     def test_api_returns_saved_gates_without_reconstructing_them(self):
         from src.football import result_sync
         snapshot = {'accuracy_gate': {'spf': {'selected': False, 'candidate': '胜',
@@ -109,6 +139,9 @@ for (const [pick, line, probs, conditional, compatible, incompatible] of [
   assert(out.includes(renderFootballDirectionAnalysis(lottery, true)));
   assert(out.includes('该情景不成立'));
   assert(!out.includes(`${pick}＋${incompatible[0]}`));
+  const modelDiffers = {...saved, predicted_1x2:{H:.8,D:.1,A:.1},
+    lottery_analysis:{standard:lottery.standard, handicap:lottery.handicap}};
+  assert(renderPredictionRecordMarkets(modelDiffers).includes(renderFootballHandicapProbabilities(lottery, true)));
   delete saved.lottery_direction_analysis;
   out = renderPredictionRecordMarkets(saved);
   assert(!out.includes('data-probability-basis="conditional_on_standard_result"'));

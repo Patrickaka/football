@@ -8817,9 +8817,12 @@ function renderPredictionMarketOutcome(record, key, state, probabilities) {
 
 function renderPredictionRecordMarkets(record) {
   const aliases = {H:'胜', D:'平', A:'负', home:'胜', draw:'平', away:'负', '胜':'胜', '平':'平', '负':'负'};
-  const standard = Object.fromEntries(Object.entries(record.predicted_1x2 || {})
+  const savedStandard = Object.fromEntries(Object.entries(record.predicted_1x2 || {})
     .filter(([key]) => aliases[key]).map(([key, value]) => [aliases[key], value]));
-  const handicap = record.predicted_rqspf || {};
+  const standard = Object.keys(savedStandard).length
+    ? (record.lottery_analysis?.standard?.probabilities || savedStandard) : {};
+  const handicap = Object.keys(record.predicted_rqspf || {}).length
+    ? (record.lottery_analysis?.handicap?.probabilities || record.predicted_rqspf) : {};
   const snapshot = record.recommendation_snapshot || {};
   const lottery = {
     offer_matched: record.lottery_offer_matched === true,
