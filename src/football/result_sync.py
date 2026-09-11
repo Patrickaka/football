@@ -2388,6 +2388,8 @@ def get_prediction_records(include_hidden: bool = False,
                 for key in ('accuracy_gate', 'decision_gate')
             },
             'lottery_spf_odds': deepcopy(lottery_snapshot.get('spf_odds') or {}),
+            # 复用赛前保存的同向情景，不能用独立玩法最大项拼接联合方向。
+            'lottery_direction_analysis': deepcopy(lottery_snapshot.get('direction_analysis')),
             'predicted_1x2': predicted_1x2 if spf_was_offered else {},
             'predicted_rqspf': predicted_rqspf if rqspf_was_offered else {},
             'lottery_handicap': lottery_handicap,

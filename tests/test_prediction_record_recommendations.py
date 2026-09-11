@@ -19,6 +19,21 @@ class RecordRecommendations(unittest.TestCase):
         self.assertEqual(row['recommendation_snapshot'], snapshot)
         self.assertIsNot(row['recommendation_snapshot']['accuracy_gate'], snapshot['accuracy_gate'])
 
+    def test_api_exposes_saved_direction_without_changing_market_probabilities(self):
+        from src.football import result_sync
+        direction = {'available': True, 'conditional_probabilities': {'让胜': 0, '让平': .4, '让负': .6}}
+        record = {'match_id': 'saved-direction', 'predicted_1x2': {'H': .2, 'D': .25, 'A': .55},
+                  'predicted_rqspf': {'让胜': .5, '让平': .2, '让负': .3},
+                  'lottery_handicap': 1, 'odds_snapshot': {'lottery': {
+                      'offer_matched': True, 'spf_available': True, 'spf_odds': {'胜': 4},
+                      'rqspf_available': True, 'rqspf_odds': {'让胜': 2},
+                      'direction_analysis': direction}}}
+        with patch.object(result_sync._global_history, 'records', [record]):
+            row = result_sync.get_prediction_records(include_hidden=True)[0]
+        self.assertEqual(row['lottery_direction_analysis'], direction)
+        self.assertIsNot(row['lottery_direction_analysis']['conditional_probabilities'], direction['conditional_probabilities'])
+        self.assertEqual(row['predicted_rqspf'], record['predicted_rqspf'])
+
     @unittest.skipUnless(shutil.which('node'), 'Node required')
     def test_record_uses_the_same_recommendation_states_and_renderer(self):
         html = Path('web/index.html').read_text(encoding='utf-8')
@@ -27,6 +42,8 @@ class RecordRecommendations(unittest.TestCase):
                  'formatAccuracyGateValidation', 'getAccuracyGatePresentation',
                  'footballMarketDirectionsCompatible', 'getFootballResultTier',
                  'renderWebMarketRecommendation', 'renderProbabilityStrip',
+                 'getFootballDirectionState', 'renderFootballHandicapProbabilities',
+                 'renderFootballDirectionAnalysis',
                  'predictionRecordActualScore', 'renderPredictionMarketOutcome',
                  'renderPredictionScoreReference',
                  'renderPredictionRecordMarkets')
@@ -74,6 +91,29 @@ delete record.recommendation_snapshot;
 out = renderPredictionRecordMarkets(record);
 assert(out.includes('未保存当时的推荐筛选结果'));
 assert(!out.includes('<strong>胜</strong>'));
+for (const [pick, line, probs, conditional, compatible, incompatible] of [
+  ['负', 1, {H:.219,D:.241,A:.54}, {'让胜':0,'让平':.4,'让负':.6}, ['让平','让负'], ['让胜']],
+  ['胜', -1, {H:.54,D:.241,A:.219}, {'让胜':.6,'让平':.4,'让负':0}, ['让胜','让平'], ['让负']],
+]) {
+  const lottery = {standard:{prediction:pick, probabilities:pick === '负' ? {'胜':.219,'平':.241,'负':.54} : {'胜':.54,'平':.241,'负':.219}},
+    handicap:{handicap:line, probabilities:record.predicted_rqspf},
+    direction_analysis:{available:true, standard_prediction:pick, standard_probability:.54,
+      handicap:line, probability_basis:'conditional_on_standard_result',
+      conditional_probabilities:conditional,
+      joint_probabilities:Object.fromEntries(Object.entries(conditional).map(([k,v]) => [k,v*.54])),
+      compatible_handicap_predictions:compatible, incompatible_handicap_predictions:incompatible}};
+  const saved = {...record, predicted_1x2:probs, lottery_handicap:line,
+    lottery_direction_analysis:lottery.direction_analysis};
+  out = renderPredictionRecordMarkets(saved);
+  assert(out.includes(renderFootballHandicapProbabilities(lottery, true)));
+  assert(out.includes(renderFootballDirectionAnalysis(lottery, true)));
+  assert(out.includes('该情景不成立'));
+  assert(!out.includes(`${pick}＋${incompatible[0]}`));
+  delete saved.lottery_direction_analysis;
+  out = renderPredictionRecordMarkets(saved);
+  assert(!out.includes('data-probability-basis="conditional_on_standard_result"'));
+  assert(out.includes('全场概率参考'));
+}
 const barca = {settled:true, actual_score:'5-1', lottery_handicap:-3,
   predicted_scores:{'4-0':.106,'3-0':.087,'4-1':.068}};
 let outcome = renderPredictionMarketOutcome(barca, 'rqspf', {status:'abstain'},

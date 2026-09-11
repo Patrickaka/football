@@ -8825,12 +8825,15 @@ function renderPredictionRecordMarkets(record) {
     offer_matched: record.lottery_offer_matched === true,
     spf_available: record.lottery_spf_available,
     spf_odds: record.lottery_spf_odds || {},
-    standard: {probabilities: standard},
+    standard: {probabilities: standard, prediction: record.lottery_direction_analysis?.standard_prediction},
     handicap: {handicap: record.lottery_handicap, probabilities: handicap},
+    direction_analysis: record.lottery_direction_analysis,
     accuracy_gate: snapshot.accuracy_gate || {},
   };
   // 使用赛事推荐页的同一状态计算与组件；不从概率最大值推导“已推荐”。
   const states = getFootballResultTier({result: {lottery, decision_gate: snapshot.decision_gate}}).markets;
+  const spfEnabled = Object.keys(standard).length > 0;
+  const direction = getFootballDirectionState(lottery, spfEnabled);
   const rows = [];
   for (const [key, label, probabilities, keys] of [
     ['spf', '胜平负', standard, ['胜', '平', '负']],
@@ -8841,9 +8844,17 @@ function renderPredictionRecordMarkets(record) {
     if (!snapshot.accuracy_gate?.[key]) {
       state.reasons = ['该记录未保存当时的推荐筛选结果，仅展示赛前概率'];
     }
+    const distribution = key === 'rqspf'
+      ? renderFootballHandicapProbabilities(lottery, spfEnabled)
+      : `<p class="market-direction-label">${esc(direction.available
+        ? `分析方向：${direction.standardName}（${direction.standard}） · 全场概率`
+        : '胜平负 · 全场概率')}</p>${renderProbabilityStrip(probabilities, keys)}`;
     rows.push(renderWebMarketRecommendation(label, state, state.pick,
-      renderProbabilityStrip(probabilities, keys)
+      distribution
       + renderPredictionMarketOutcome(record, key, state, probabilities)));
+  }
+  if (Object.keys(handicap).length) {
+    rows.push(`<details class="football-direction-reference"><summary>胜平负与让球的对应分析</summary>${renderFootballDirectionAnalysis(lottery, spfEnabled)}</details>`);
   }
   return rows.join('');
 }
