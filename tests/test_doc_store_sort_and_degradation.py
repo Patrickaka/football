@@ -16,25 +16,25 @@ from src.common import doc_store
 class DocStoreLoadAllSorting(unittest.TestCase):
 
     def setUp(self):
-        self._orig_query = doc_store.db.query
+        self._orig_query = doc_store.db.iter_query
         self._orig_fallback = doc_store._fallback_load_all
         self.executed = []
         doc_store.clear_degradation('t')
 
     def tearDown(self):
-        doc_store.db.query = self._orig_query
+        doc_store.db.iter_query = self._orig_query
         doc_store._fallback_load_all = self._orig_fallback
         doc_store.clear_degradation('t')
 
     def _fake_query(self, rows):
         def query(sql, params=None):
             self.executed.append(sql)
-            return rows
+            return iter(rows)
         return query
 
     def test_sql_never_asks_mysql_to_sort(self):
         rows = [{'created_at': '2026-09-01', 'match_id': 'b', 'doc': '{"id": 1}'}]
-        doc_store.db.query = self._fake_query(rows)
+        doc_store.db.iter_query = self._fake_query(rows)
 
         doc_store.load_all('t', order_by='created_at, match_id')
 
@@ -47,7 +47,7 @@ class DocStoreLoadAllSorting(unittest.TestCase):
             {'created_at': '2026-08-30', 'match_id': 'z', 'doc': json.dumps({'n': 1})},
             {'created_at': '2026-09-01', 'match_id': 'a', 'doc': json.dumps({'n': 2})},
         ]
-        doc_store.db.query = self._fake_query(rows)
+        doc_store.db.iter_query = self._fake_query(rows)
 
         loaded = doc_store.load_all('t', order_by='created_at, match_id')
 
@@ -58,14 +58,14 @@ class DocStoreLoadAllSorting(unittest.TestCase):
             {'created_at': '2026-09-01', 'match_id': 'a', 'doc': json.dumps({'n': 2})},
             {'created_at': None, 'match_id': 'a', 'doc': json.dumps({'n': 1})},
         ]
-        doc_store.db.query = self._fake_query(rows)
+        doc_store.db.iter_query = self._fake_query(rows)
 
         loaded = doc_store.load_all('t', order_by='created_at, match_id')
 
         self.assertEqual([r['n'] for r in loaded], [1, 2])
 
     def test_order_columns_are_selected_alongside_doc(self):
-        doc_store.db.query = self._fake_query([])
+        doc_store.db.iter_query = self._fake_query([])
 
         doc_store.load_all('t', order_by='id')
 
@@ -75,14 +75,14 @@ class DocStoreLoadAllSorting(unittest.TestCase):
 class DocStoreDegradationVisibility(unittest.TestCase):
 
     def setUp(self):
-        self._orig_query = doc_store.db.query
+        self._orig_query = doc_store.db.iter_query
         self._orig_fallback = doc_store._fallback_load_all
         self._orig_connection = doc_store.db.get_connection
         self._orig_upsert_fallback = doc_store._fallback_upsert_one
         doc_store.clear_degradation('t')
 
     def tearDown(self):
-        doc_store.db.query = self._orig_query
+        doc_store.db.iter_query = self._orig_query
         doc_store._fallback_load_all = self._orig_fallback
         doc_store.db.get_connection = self._orig_connection
         doc_store._fallback_upsert_one = self._orig_upsert_fallback
@@ -91,7 +91,7 @@ class DocStoreDegradationVisibility(unittest.TestCase):
     def test_load_failure_records_a_visible_degradation(self):
         def boom(sql, params=None):
             raise RuntimeError('Out of sort memory')
-        doc_store.db.query = boom
+        doc_store.db.iter_query = boom
         doc_store._fallback_load_all = lambda table: [{'n': 1}]
 
         loaded = doc_store.load_all('t', order_by='id')
@@ -105,7 +105,7 @@ class DocStoreDegradationVisibility(unittest.TestCase):
 
     def test_successful_load_clears_a_previous_degradation(self):
         doc_store._record_degradation('t', RuntimeError('boom'))
-        doc_store.db.query = lambda sql, params=None: []
+        doc_store.db.iter_query = lambda sql, params=None: iter([])
 
         doc_store.load_all('t', order_by='id')
 

@@ -1,3 +1,4 @@
+import json
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from threading import RLock
@@ -118,7 +119,9 @@ def test_nested_archives_export_every_original_event_and_preserve_evaluation():
     before = evaluate_frozen_events([row], include_confidence_intervals=False)
     stored = encode_record(row, now=NOW)
     assert is_archived(stored)
-    with patch('src.common.doc_store.load_all', return_value=[stored]):
+    stored_row = {'created_at': stored.get('created_at'), 'match_id': stored.get('match_id'),
+                  'doc': json.dumps(stored, ensure_ascii=False)}
+    with patch('src.common.db.iter_query', return_value=iter([stored_row])):
         restored = repositories.football_prediction_load()[0]
     assert restored == row
     assert evaluate_frozen_events([restored], include_confidence_intervals=False) == before

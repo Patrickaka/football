@@ -357,10 +357,23 @@ class PredictionHistory:
         self._load()
     
     def _load(self):
-        """从 MySQL 加载记录"""
+        """从 MySQL 加载记录，已结算多日的时间线在逐行反序列化时就精简掉。
+
+        整表解析完再裁剪没有用：Python 堆的高水位不会回落，线上 185 MB JSON
+        解析后进程常驻 1.75 GB。精简必须发生在每一行进列表之前。
+        """
+        now = datetime.now()
+        offloaded = 0
+
+        def offload(record):
+            nonlocal offloaded
+            offloaded += self._offload_record(record, now)
+            return record
+
         try:
-            self.records = repositories.football_prediction_load()
-            log.debug("已加载 %d 条预测历史记录", len(self.records))
+            self.records = repositories.football_prediction_load(transform=offload)
+            log.info("已加载 %d 条预测历史记录，其中 %d 条加载时只保留最后一条时间线快照",
+                     len(self.records), offloaded)
         except FootballStorageError:
             # A corrupt archive is not an empty history. Propagate so callers
             # cannot proceed to overwrite the store with an empty collection.
@@ -377,13 +390,19 @@ class PredictionHistory:
         offloaded = 0
         with self._records_lock:
             for record in self.records:
-                if _timeline_offloadable(record, now):
-                    record['market_timeline'] = record['market_timeline'][-1:]
-                    record[TIMELINE_OFFLOADED] = True
-                    offloaded += 1
+                offloaded += self._offload_record(record, now)
         if offloaded:
             log.info("预测历史时间线已精简: %d 条记录只保留最后一条快照", offloaded)
         return offloaded
+
+    @staticmethod
+    def _offload_record(record, now):
+        """把一条已结算多日记录的时间线截到最后一条，返回是否截断。"""
+        if not _timeline_offloadable(record, now):
+            return 0
+        record['market_timeline'] = record['market_timeline'][-1:]
+        record[TIMELINE_OFFLOADED] = True
+        return 1
 
     def _stored_timeline(self, record):
         stored = repositories.football_prediction_get(record.get('match_id'))

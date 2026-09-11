@@ -18,10 +18,11 @@ from pathlib import Path
 
 try:
     import pymysql
-    from pymysql.cursors import DictCursor
+    from pymysql.cursors import DictCursor, SSDictCursor
 except ImportError:
     pymysql = None
     DictCursor = None
+    SSDictCursor = None
 
 _SCHEMA_FILE = Path(__file__).resolve().parent / 'schema.sql'
 _local = threading.local()
@@ -98,6 +99,18 @@ def query(sql, params=None):
     with get_connection().cursor() as cur:
         cur.execute(sql, params or ())
         return cur.fetchall()
+
+
+def iter_query(sql, params=None):
+    """流式执行查询，逐行产出字典行。
+
+    大 JSON 列的整表读取不能先 fetchall：919 行 185 MB 的字符串同时驻留，
+    释放后 glibc 也不还给系统。无缓冲游标一次只把一行拉进进程。
+    """
+    with get_connection().cursor(SSDictCursor) as cur:
+        cur.execute(sql, params or ())
+        for row in cur:
+            yield row
 
 
 def query_one(sql, params=None):

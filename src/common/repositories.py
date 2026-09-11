@@ -30,9 +30,12 @@ def _football_prediction_row(r):
     )
 
 
-def football_prediction_load():
-    return [decode_record(record) for record in
-            doc_store.load_all('football_prediction', order_by='created_at, match_id')]
+def football_prediction_load(transform=None):
+    """整表读取；`transform` 对每条解码后的记录逐行执行，用于加载即精简。"""
+    transform = transform or (lambda record: record)
+    return doc_store.load_all(
+        'football_prediction', order_by='created_at, match_id',
+        transform=lambda stored: transform(decode_record(stored)))
 
 
 def football_prediction_save(records):

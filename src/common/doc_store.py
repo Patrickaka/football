@@ -80,23 +80,41 @@ def _sort_key(row, columns):
     return tuple((row.get(c) is not None, row.get(c)) for c in columns)
 
 
-def load_all(table, order_by):
+class _StoreUnavailable(Exception):
+    """MySQL 读取中途失败；只有这类错误才允许回落到本地快照。"""
+
+
+def _db_rows(sql):
+    try:
+        for row in db.iter_query(sql):
+            yield row
+    except Exception as e:
+        raise _StoreUnavailable(e) from e
+
+
+def load_all(table, order_by, transform=None):
     """读取整表，反序列化 doc 列为 dict 列表。
 
     **排序放在 Python 侧**：doc 是大 JSON 列（football_prediction 单条约 40KB），
     交给 MySQL `ORDER BY` 会把整列塞进 sort buffer，行数一多就
     `ERROR 1038 Out of sort memory`，整表读取失败后静默回落到过期快照。
+
+    **逐行流式读取并立刻 `transform`**：整表的原始字符串与完整对象从不同时
+    驻留，Python 堆的高水位只有精简后的体积。`transform` 抛出的错误原样上抛，
+    解码失败的归档不能被当成「库不可用」换成过期快照。
     """
     columns = [c.strip() for c in order_by.split(',') if c.strip()]
     select_cols = ', '.join(columns + ['doc'])
+    transform = transform or (lambda record: record)
     try:
-        rows = list(db.query(f"SELECT {select_cols} FROM {table}"))
-    except Exception as e:
-        _record_degradation(table, e)
-        return _fallback_load_all(table)
+        keyed = [(_sort_key(r, columns), transform(json.loads(r['doc'])))
+                 for r in _db_rows(f"SELECT {select_cols} FROM {table}")]
+    except _StoreUnavailable as e:
+        _record_degradation(table, e.__cause__)
+        return [transform(record) for record in _fallback_load_all(table)]
     clear_degradation(table)
-    rows.sort(key=lambda r: _sort_key(r, columns))
-    return [json.loads(r['doc']) for r in rows]
+    keyed.sort(key=lambda item: item[0])
+    return [record for _, record in keyed]
 
 
 def load_one(table, key_col, key_value):

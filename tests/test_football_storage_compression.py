@@ -174,6 +174,12 @@ class RecordArchiveTests(unittest.TestCase):
             storage.encode_record({**large_record(), '_timeline_offloaded': True})
 
 
+def stored_rows(*docs):
+    """模拟 football_prediction 表的原始行：promoted 列 + doc JSON 字符串。"""
+    return [{'created_at': doc.get('created_at'), 'match_id': doc.get('match_id'),
+             'doc': json.dumps(doc, ensure_ascii=False)} for doc in docs]
+
+
 class RepositoryArchiveTests(unittest.TestCase):
     def test_upsert_get_load_boundaries_are_lossless_and_secondary_table_is_unchanged(self):
         record = large_record()
@@ -183,7 +189,7 @@ class RepositoryArchiveTests(unittest.TestCase):
         self.assertTrue(storage.is_archived(persisted))
         with patch.object(repositories.doc_store, 'load_one', return_value=persisted):
             self.assertEqual(repositories.football_prediction_get(record['match_id']), record)
-        with patch.object(repositories.doc_store, 'load_all', return_value=[persisted]):
+        with patch.object(repositories.doc_store.db, 'iter_query', return_value=iter(stored_rows(persisted))):
             self.assertEqual(repositories.football_prediction_load(), [record])
         with patch.object(repositories.doc_store, 'load_all', return_value=[record]):
             self.assertEqual(repositories.prediction_record_load(), [record])
@@ -196,7 +202,8 @@ class RepositoryArchiveTests(unittest.TestCase):
     def test_corrupt_archive_read_and_batch_write_do_not_silently_drop_rows(self):
         packed = storage.encode_record(large_record(), now=NOW)
         packed[storage.ARCHIVE_KEY]['sha256'] = '0' * 64
-        with patch.object(repositories.doc_store, 'load_all', return_value=[large_record(), packed]):
+        with patch.object(repositories.doc_store.db, 'iter_query',
+                          return_value=iter(stored_rows(large_record(), packed))):
             with self.assertRaises(storage.FootballStorageError):
                 repositories.football_prediction_load()
         with patch.object(repositories.doc_store, 'replace_all') as write:
