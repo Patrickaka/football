@@ -167,14 +167,23 @@ assert(outcome.includes('模型参考（非推荐）：让胜'));
 assert(outcome.includes('✅ 命中'));
 assert(!outcome.includes('推荐结果：'));
 outcome = renderPredictionScoreReference(barca);
-assert(outcome.includes('Top1：❌ 未命中') && outcome.includes('Top3：❌ 未命中'));
+assert.equal((outcome.match(/data-score-status="miss"/g) || []).length, 3);
+assert(!outcome.includes('prediction-score-outcome'));
 const stuttgart = {settled:true, actual_score:'3-1', lottery_handicap:-2,
   predicted_scores:{'3-0':.095,'4-0':.088,'3-1':.075}};
 outcome = renderPredictionMarketOutcome(stuttgart, 'rqspf', {status:'abstain'},
   {'让胜':.405,'让平':.213,'让负':.382});
 assert(outcome.includes('❌ 未命中') && outcome.includes('实际让平'));
 outcome = renderPredictionScoreReference(stuttgart);
-assert(outcome.includes('Top1：❌ 未命中') && outcome.includes('Top3：✅ 命中（第3位）'));
+assert(outcome.includes('data-score="3-1" data-score-status="hit"'));
+assert.equal((outcome.match(/data-score-status="miss"/g) || []).length, 2);
+assert.equal((outcome.match(/record-score-status hit/g) || []).length, 1);
+assert(outcome.indexOf('data-score="3-1"') < outcome.indexOf('record-score-status hit'));
+const second = renderPredictionScoreReference({settled:true, actual_score:'2-0', predicted_scores:{'2-1':.106,'2-0':.105,'3-0':.095}});
+assert(second.includes('data-score="2-0" data-score-status="hit"'));
+assert(second.includes('data-score="2-1" data-score-status="miss"'));
+assert(second.includes('data-score="3-0" data-score-status="miss"'));
+assert(!second.includes('比分 Top1'));
 outcome = renderPredictionMarketOutcome(stuttgart, 'rqspf', {status:'selected',pick:'让平'},
   {'让胜':.405,'让平':.213,'让负':.382});
 assert(outcome.includes('推荐结果：让平') && outcome.includes('✅ 命中'));

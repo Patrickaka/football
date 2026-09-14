@@ -3465,7 +3465,18 @@ body.ui-shell .bottom-nav-item.active { color: var(--color-accent) !important; b
 .ui-shell #panel-predictions .football-compact-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); padding: var(--space-sm) 0 0 !important; }
 .ui-shell #panel-predictions .market-section-heading { grid-column: 1 / -1; }
 .ui-shell #panel-predictions .prediction-record-score { flex-wrap: wrap; }
-.ui-shell #panel-predictions .prediction-score-outcome { flex-basis: 100%; font-size: 12px; }
+.ui-shell #panel-predictions .prediction-record-score .score-options { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); flex: 1; width: 100%; gap: 12px; }
+.ui-shell #panel-predictions .prediction-record-score .record-score-option { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; padding: 12px 14px; border: 1px solid transparent !important; border-radius: 8px !important; background: transparent; }
+.ui-shell #panel-predictions .prediction-record-score .record-score-option.is-hit { background: #edf7f0; border-color: #c8e4d2 !important; }
+.ui-shell #panel-predictions .record-score-option.is-hit .score-value { color: #246b43; }
+.record-score-status { display: inline-flex; align-items: center; gap: 5px; padding: 3px 8px; border-radius: 5px; font-size: 11px; line-height: 1.5; font-weight: 500; }
+.record-score-status.hit { color: #246b43; background: #dcefe2; }
+.record-score-status.miss { color: #777f87; background: #f1f2f4; }
+.record-score-status.unknown { color: var(--muted); background: var(--bg2); }
+@media (max-width: 480px) {
+  .ui-shell #panel-predictions .prediction-record-score .score-options { gap: 6px; }
+  .ui-shell #panel-predictions .prediction-record-score .record-score-option { padding: 10px 6px; }
+}
 .prediction-tools { margin-bottom: 16px; }
 .prediction-tools > summary { cursor: pointer; color: var(--muted); padding: 10px 0; font-size: 12px; }
 @media (max-width: 700px) {
@@ -8867,22 +8878,19 @@ function renderPredictionScoreReference(record) {
       && Number(probability) > 0 && Number(probability) <= 1)
     .sort((a, b) => Number(b[1]) - Number(a[1]))
     .slice(0, 3);
-  const detail = scores.length
-    ? scores.map(([score, probability]) =>
-      `<div class="score-option"><div class="score-value">${esc(score)}<span>${(Number(probability) * 100).toFixed(1)}%</span></div></div>`
-    ).join('')
-    : '<span style="color:var(--muted)">暂无已保存的比分预测</span>';
   const actual = predictionRecordActualScore(record);
-  let verdict = '';
-  if (record.settled === true) {
-    if (actual && scores.length) {
-      const rank = scores.findIndex(([score]) => score.split('-').map(Number).every((v, i) => v === actual[i]));
-      verdict = `<div style="margin-top:4px">比分 Top1：${rank === 0 ? '✅ 命中' : '❌ 未命中'} · Top3：${rank >= 0 ? `✅ 命中（第${rank + 1}位）` : '❌ 未命中'}</div>`;
-    } else {
-      verdict = '<div style="margin-top:4px;color:var(--muted)">比分命中：暂无法判定</div>';
-    }
-  }
-  return `<div class="football-score-reference prediction-record-score"><div class="score-section-heading">比分参考 Top3（非主推）</div><div class="score-options">${detail}</div>${verdict ? `<div class="prediction-score-outcome">${verdict}</div>` : ''}</div>`;
+  const detail = scores.length
+    ? scores.map(([score, probability]) => {
+      const hit = actual && score.split('-').map(Number).every((value, index) => value === actual[index]);
+      const status = record.settled !== true ? '' : !actual ? 'unknown' : hit ? 'hit' : 'miss';
+      const label = status === 'hit' ? '命中' : status === 'miss' ? '未命中' : '暂无法判定';
+      return `<div class="score-option record-score-option${status === 'hit' ? ' is-hit' : ''}" data-score="${esc(score)}" data-score-status="${status || 'pending'}">
+        <div class="score-value">${esc(score)}<span>${(Number(probability) * 100).toFixed(1)}%</span></div>
+        ${status ? `<span class="record-score-status ${status}">${status === 'hit' ? '<span aria-hidden="true">✓</span>' : ''}${label}</span>` : ''}
+      </div>`;
+    }).join('')
+    : '<span style="color:var(--muted)">暂无已保存的比分预测</span>';
+  return `<div class="football-score-reference prediction-record-score"><div class="score-section-heading">比分参考 Top3（非主推）</div><div class="score-options">${detail}</div></div>`;
 }
 
 async function loadPredictions() {
