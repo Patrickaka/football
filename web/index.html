@@ -4945,30 +4945,20 @@ function renderFootballHandicapProbabilities(lottery, spfEnabled = true) {
   const probabilities = lottery?.handicap?.probabilities;
   // 胜平负未开售时没有联合条件，仍按独立让球玩法显示整场概率。
   if (!spfEnabled) return `<div data-probability-basis="full_match"><p class="market-direction-label">独立玩法 · 全场概率</p>${renderProbabilityStrip(probabilities, keys)}</div>`;
-  const reference = `<div class="handicap-marginal-reference" data-probability-basis="full_match">
-    <span>全场概率参考 · 推荐筛选按此判断</span><p class="market-direction-label">各玩法单独统计，不代表组合推荐</p>
-    ${renderProbabilityStrip(probabilities, keys)}
-  </div>`;
   const state = getFootballDirectionState(lottery, spfEnabled);
-  if (!state.available) return `<p class="market-direction-label">${esc(state.reason)}</p>${reference}`;
+  // Linked results must never fall back to an incompatible independent maximum.
+  if (!state.available) return `<p class="market-direction-label">${esc(state.reason)}</p>`;
   const percentage = value => (value * 100).toFixed(1) + '%';
-  // 只展示审核后的条件分布，不能把独立玩法最高项或旧 linked 回退当作同向分析。
-  const outcomes = keys.map(key => {
-    const branch = state.branches.find(item => item.key === key);
-    return `<div class="probability-outcome" data-handicap-result="${esc(key)}" data-compatible="${Boolean(branch)}">
-      <div class="probability-value"><span>${esc(key)}</span><strong>${branch ? percentage(state.conditional[key]) : '—'}</strong></div>
-      <span class="probability-track" aria-hidden="true"><i style="width:${branch ? state.conditional[key] * 100 : 0}%"></i></span>
-      <span class="conditional-outcome-note">${branch ? `${esc(branch.meaning)}<br>联合估计 ${percentage(state.joint[key])}` : '该情景不成立'}</span>
-    </div>`;
-  }).join('');
-  return `${reference}<details class="handicap-scenario-details">
-    <summary>假设${esc(state.standardName)}成立时的情景分析（非推荐）</summary>
-    <div class="handicap-conditional-probabilities" data-probability-basis="conditional_on_standard_result">
+  const outcomes = state.branches.map(({key, meaning}) => `<div class="probability-outcome" data-handicap-result="${esc(key)}" data-compatible="true">
+    <div class="probability-value"><span>${esc(key)}</span><strong>${percentage(state.conditional[key])}</strong></div>
+    <span class="probability-track" aria-hidden="true"><i style="width:${state.conditional[key] * 100}%"></i></span>
+    <span class="conditional-outcome-note">${esc(meaning)}<br>联合估计 ${percentage(state.joint[key])}</span>
+  </div>`).join('');
+  return `<div class="handicap-conditional-probabilities" data-probability-basis="conditional_on_standard_result">
     <p class="market-direction-label">在${esc(state.standardName)}（${esc(state.standard)}）成立时 · 条件概率</p>
-    <div class="probability-strip" style="--outcomes:3">${outcomes}</div>
-    <p class="direction-note">联合估计为两项同时发生的概率；条件100%不代表整场命中。</p>
-    <p class="direction-note">此处按胜平负概率重构情景分布，联合估计不等同于上方独立让球玩法的全场概率；“该情景不成立”仅指当前假设内不成立。</p>
-  </div></details>`;
+    <div class="probability-strip" style="--outcomes:${state.branches.length}">${outcomes}</div>
+    <p class="direction-note">仅显示与${esc(state.standard)}相容的让球结果；条件100%不代表整场命中。</p>
+  </div>`;
 }
 
 function renderFootballDirectionAnalysis(lottery, spfEnabled = true) {
@@ -8861,7 +8851,8 @@ function renderPredictionRecordMarkets(record) {
       : `<p class="market-direction-label">胜平负 · 全场概率</p>${renderProbabilityStrip(probabilities, keys)}`;
     rows.push(renderWebMarketRecommendation(label, state, state.pick,
       distribution
-      + renderPredictionMarketOutcome(record, key, state, probabilities)));
+      + renderPredictionMarketOutcome(record, key, state, key === 'rqspf' && spfEnabled
+        ? (direction.available ? direction.conditional : {}) : probabilities)));
   }
   return rows.join('');
 }

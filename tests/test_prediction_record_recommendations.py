@@ -149,7 +149,7 @@ for (const [pick, line, probs, conditional, compatible, incompatible] of [
   out = renderPredictionRecordMarkets(saved);
   assert(out.includes(renderFootballHandicapProbabilities(lottery, true)));
   assert(!out.includes('football-direction-reference'));
-  assert(out.includes('该情景不成立'));
+  for (const key of incompatible) assert(!out.includes(`data-handicap-result="${key}"`));
   assert(!out.includes(`${pick}＋${incompatible[0]}`));
   const modelDiffers = {...saved, predicted_1x2:{H:.8,D:.1,A:.1},
     lottery_analysis:{standard:lottery.standard, handicap:lottery.handicap}};
@@ -157,7 +157,7 @@ for (const [pick, line, probs, conditional, compatible, incompatible] of [
   delete saved.lottery_direction_analysis;
   out = renderPredictionRecordMarkets(saved);
   assert(!out.includes('data-probability-basis="conditional_on_standard_result"'));
-  assert(out.includes('全场概率参考'));
+  assert(out.includes('待重新分析'));
 }
 const barca = {settled:true, actual_score:'5-1', lottery_handicap:-3,
   predicted_scores:{'4-0':.106,'3-0':.087,'4-1':.068}};

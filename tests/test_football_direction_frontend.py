@@ -42,10 +42,7 @@ function getFootballResultTier(item) {
 }
 function makeItem(standard, probability, handicap, conditional, compatible, incompatible) {
   return {match:{home:'主队', away:'客队'}, result:{lottery:{
-    standard:{prediction:standard, probabilities:standard === '负'
-      ? {'胜':.276, '平':.253, '负':probability}
-      : standard === '平' ? {'胜':.3, '平':probability, '负':.3}
-      : {'胜':probability, '平':.236, '负':.218}},
+    standard:{prediction:standard, probabilities:Object.fromEntries(['胜','平','负'].map(key => [key, key === standard ? probability : (1-probability)/2]))},
     handicap:{handicap, prediction:handicap > 0 ? '让胜' : '让负', probabilities:handicap > 0
       ? {'让胜':.523, '让平':.222, '让负':.256}
       : {'让胜':.316, '让平':.238, '让负':.446}},
@@ -76,264 +73,69 @@ function marketRow(main, label) {
                                 capture_output=True, text=True, encoding="utf-8")
         self.assertEqual(result.returncode, 0, result.stderr)
 
-    def test_screenshot_away_win_uses_only_compatible_plus_one_branches(self):
+    def test_linked_results_exclude_impossible_combinations(self):
         self.run_renderer(r"""
-const item = makeItem('负', .471, 1, {'让胜':0, '让平':.45, '让负':.55}, ['让平','让负'], ['让胜']);
-const card = renderMatchItem(item);
-const {main, reference} = parts(card, item);
-assert.ok(reference.includes('客胜（负） 47.1%'));
-assert.ok(reference.includes('假设客胜成立 · 主队让球 +1'));
-assert.ok(reference.includes('条件概率 55.0%'));
-assert.ok(reference.includes('负＋让负 · 联合估计 25.9%'));
-assert.ok(reference.includes('让平 · 客队赢1球'));
-assert.ok(reference.includes('让负 · 客队赢至少2球'));
-assert.ok(reference.includes('让胜：该情景下不可能'));
-assert.ok(!reference.includes('data-handicap-result="让胜"'));
-assert.ok(!reference.includes('负＋让胜'));
-const spf = marketRow(main, '胜平负');
-const rqspf = marketRow(main, '让球胜平负');
-for (const percentage of ['27.6%', '25.3%', '47.1%']) {
-  assert.ok(spf.includes(`<strong>${percentage}</strong>`), `${percentage} requires expansion`);
-}
-for (const percentage of ['52.3%', '22.2%', '25.6%']) {
-  assert.ok(rqspf.includes(percentage), `${percentage} original full-match probability was hidden`);
-  assert.ok(rqspf.split('<details')[0].includes(`<strong>${percentage}</strong>`), `${percentage} must be the primary full-match value`);
-}
-assert.ok(spf.includes('胜平负 · 全场概率'));
-assert.ok(!spf.includes('分析方向：'));
-assert.ok(rqspf.includes('在客胜（负）成立时 · 条件概率'));
-assert.ok(rqspf.includes('45.0%'));
-assert.ok(rqspf.includes('55.0%'));
-assert.ok(rqspf.includes('25.9%'));
-assert.ok(rqspf.includes('该情景不成立'));
-assert.ok(!rqspf.includes('is-pick'));
-assert.ok(!main.includes('模型候选'));
-assert.ok(!main.includes('class="market-candidate"'));
-assert.ok(!main.includes('football-marginal-reference'));
-assert.ok(card.includes('暂无通过筛选的推荐'));
-assert.ok(card.includes('模型概率不足'));
-assert.ok(card.includes('独立验证尚未完成'));
-assert.ok(main.includes('<h3>玩法分析</h3><span>赛前概率参考</span>'));
-assert.ok(!main.includes('比赛方向分析'));
-assert.ok(!card.includes('football-direction-reference'));
-""")
-
-    def test_screenshot_home_win_uses_only_compatible_minus_one_branches(self):
-        self.run_renderer(r"""
-const item = makeItem('胜', .546, -1, {'让胜':.57, '让平':.43, '让负':0}, ['让胜','让平'], ['让负']);
-const {main, reference} = parts(renderMatchItem(item), item);
-assert.ok(reference.includes('主胜（胜） 54.6%'));
-assert.ok(reference.includes('假设主胜成立 · 主队让球 -1'));
-assert.ok(reference.includes('条件概率 57.0%'));
-assert.ok(reference.includes('胜＋让胜 · 联合估计 31.1%'));
-assert.ok(reference.includes('让平 · 主队赢1球'));
-assert.ok(reference.includes('让胜 · 主队赢至少2球'));
-assert.ok(reference.includes('让负：该情景下不可能'));
-assert.ok(!reference.includes('data-handicap-result="让负"'));
-assert.ok(!reference.includes('胜＋让负'));
-const spf = marketRow(main, '胜平负');
-const rqspf = marketRow(main, '让球胜平负');
-for (const percentage of ['54.6%', '23.6%', '21.8%']) {
-  assert.ok(spf.includes(`<strong>${percentage}</strong>`), `${percentage} requires expansion`);
-}
-for (const percentage of ['31.6%', '23.8%', '44.6%']) assert.ok(rqspf.includes(percentage));
-assert.ok(spf.includes('胜平负 · 全场概率'));
-assert.ok(!spf.includes('分析方向：'));
-assert.ok(rqspf.includes('在主胜（胜）成立时 · 条件概率'));
-assert.ok(rqspf.includes('57.0%'));
-assert.ok(rqspf.includes('43.0%'));
-assert.ok(rqspf.includes('31.1%'));
-assert.ok(rqspf.includes('该情景不成立'));
-assert.ok(rqspf.split('<details')[0].includes('<strong>44.6%</strong>'));
-assert.ok(!main.includes('is-pick'), 'watch status must not highlight a candidate');
-""")
-
-    def test_conditional_certainty_is_not_promoted_to_full_match_probability(self):
-        self.run_renderer(r"""
-const item = makeItem('平', .4, 1, {'让胜':1, '让平':0, '让负':0}, ['让胜'], ['让平','让负']);
-const {main, reference} = parts(renderMatchItem(item), item);
-assert.ok(reference.includes('平局（平） 40.0%'));
-assert.ok(reference.includes('假设平局成立'));
-assert.ok(reference.includes('让胜 · 双方打平'));
-assert.ok(reference.includes('条件概率 100.0%'));
-assert.ok(reference.includes('平＋让胜 · 联合估计 40.0%'));
-assert.ok(reference.includes('条件概率 100% 也不代表整场必然命中'));
-const rqspf = marketRow(main, '让球胜平负');
-assert.ok(rqspf.includes('在平局（平）成立时 · 条件概率'));
-assert.ok(rqspf.includes('100.0%'));
-assert.ok(rqspf.includes('联合估计'));
-assert.ok(rqspf.includes('40.0%'));
-assert.ok(!rqspf.includes('is-pick'));
-assert.ok(main.includes('52.3%'), 'true marginal probability stays visible without expansion');
-assert.ok(main.includes('<strong>40.0%</strong>'));
-assert.ok(!main.includes('fixture-pick">让球胜平负'));
-""")
-
-    def test_missing_old_or_invalid_joint_analysis_never_falls_back_to_marginal_maximum(self):
-        self.run_renderer(r"""
-const original = makeItem('负', .471, 1, {'让胜':0, '让平':.45, '让负':.55}, ['让平','让负'], ['让胜']);
-for (const value of [undefined, {available:false,reasons:['比分样本不完整']},
-    {...original.result.lottery.direction_analysis, probability_basis:'marginal'},
-    {...original.result.lottery.direction_analysis, compatible_handicap_predictions:['让胜','让平','让负'], incompatible_handicap_predictions:[]},
-    {...original.result.lottery.direction_analysis, joint_probabilities:{'让胜':0,'让平':.8,'让负':.9}},
-    {...original.result.lottery.direction_analysis, conditional_probabilities:{'让胜':null,'让平':.45,'让负':.55}}]) {
-  const item = JSON.parse(JSON.stringify(original));
-  item.result.lottery.direction_analysis = value;
-  item.result.lottery.linked_recommendation = {handicap_prediction:'让胜',standard_prediction:'负'};
-  const {main, reference} = parts(renderMatchItem(item), item);
-  assert.ok(reference.includes('待重新分析'));
-  assert.ok(!reference.includes('data-handicap-result'));
-  assert.ok(!reference.includes('47.1%'));
-  assert.ok(!reference.includes('52.3%'));
-  assert.ok(main.includes('47.1%'));
-  assert.ok(main.includes('52.3%'));
-  const rqspf = marketRow(main, '让球胜平负');
-  assert.ok(rqspf.includes('待重新分析'));
-  assert.ok(rqspf.includes('<strong>52.3%</strong>'), 'independent market remains visible');
-  assert.ok(!rqspf.includes('data-probability-basis="conditional_on_standard_result"'));
-  assert.ok(!rqspf.includes('is-pick'));
-}
-""")
-
-    def test_unsold_standard_market_does_not_create_a_joint_direction(self):
-        self.run_renderer(r"""
-const item = makeItem('负', .471, 1, {'让胜':0, '让平':.45, '让负':.55}, ['让平','让负'], ['让胜']);
-Object.assign(item.result.lottery, {offer_matched:true, spf_available:false, rqspf_available:true});
-const {main, reference} = parts(renderMatchItem(item), item);
-assert.ok(!main.includes('aria-label="胜平负"'));
-assert.ok(main.includes('52.3%'));
-assert.ok(marketRow(main, '让球胜平负').includes('<strong>52.3%</strong>'));
-assert.ok(!marketRow(main, '让球胜平负').includes('条件概率'));
-assert.ok(!main.includes('假设客胜成立'));
-assert.ok(!main.includes('客胜（负） 47.1%'));
-assert.ok(reference.includes('竞彩胜平负未开售'));
-assert.ok(!reference.includes('假设客胜成立'));
-assert.ok(!main.includes('aria-label="胜平负"'), 'unsold standard probabilities must not be presented as available');
-""")
-
-    def test_handicap_margin_explanations_work_beyond_one_goal(self):
-        self.run_renderer(r"""
-for (const [standard, handicap] of [['胜',-2], ['负',2], ['胜',-3], ['负',3]]) {
-  const item = makeItem(standard, standard === '胜' ? .546 : .471, handicap,
-    {'让胜':.4, '让平':.3, '让负':.3}, ['让胜','让平','让负'], []);
-  const {reference} = parts(renderMatchItem(item), item);
-  const team = standard === '胜' ? '主队' : '客队';
-  const line = Math.abs(handicap);
-  assert.ok(reference.includes(`让平 · ${team}赢${line}球`));
-  assert.ok(reference.includes(`${team}赢至少${line + 1}球`));
-  assert.ok(reference.includes(line === 2 ? `${team}赢1球` : `${team}赢1至2球`));
-}
-""")
-
-    def test_mixed_snapshot_anchor_or_handicap_is_rejected(self):
-        self.run_renderer(r"""
-const original = makeItem('负', .471, 1, {'让胜':0, '让平':.45, '让负':.55}, ['让平','让负'], ['让胜']);
-for (const mutate of [
-  lottery => { lottery.handicap.handicap = -1; },
-  lottery => { lottery.standard.prediction = '胜'; },
-  lottery => { lottery.standard.probabilities = {'胜':.3, '平':.3, '负':.4}; },
-  lottery => { lottery.standard.probabilities = {'胜':.5, '平':.029, '负':.471}; },
-  lottery => {
-    const analysis = lottery.direction_analysis;
-    lottery.handicap.handicap = analysis.handicap = 6;
-    analysis.compatible_handicap_predictions = ['让胜','让平','让负'];
-    analysis.incompatible_handicap_predictions = [];
-    analysis.conditional_probabilities = {'让胜':.3, '让平':.3, '让负':.4};
-    analysis.joint_probabilities = {'让胜':.471 * .3, '让平':.471 * .3, '让负':.471 * .4};
+for (const [pick, line, conditional, compatible, incompatible] of [
+  ['胜', -1, {'让胜':.45,'让平':.55,'让负':0}, ['让胜','让平'], ['让负']],
+  ['负', -1, {'让胜':0,'让平':0,'让负':1}, ['让负'], ['让胜','让平']],
+  ['平', -1, {'让胜':0,'让平':0,'让负':1}, ['让负'], ['让胜','让平']],
+  ['负', 1, {'让胜':0,'让平':.45,'让负':.55}, ['让平','让负'], ['让胜']],
+  ['胜', 1, {'让胜':1,'让平':0,'让负':0}, ['让胜'], ['让平','让负']],
+  ['胜', -2, {'让胜':.4,'让平':.3,'让负':.3}, ['让胜','让平','让负'], []],
+  ['负', 2, {'让胜':.3,'让平':.3,'让负':.4}, ['让胜','让平','让负'], []],
+]) {
+  const item = makeItem(pick, .54, line, conditional, compatible, incompatible);
+  const before = JSON.stringify(item);
+  const {main} = parts(renderMatchItem(item), item);
+  const rq = marketRow(main, '让球胜平负');
+  assert.equal(JSON.stringify(item), before);
+  assert(rq.includes('data-probability-basis="conditional_on_standard_result"'));
+  assert(!rq.includes('data-probability-basis="full_match"'));
+  assert(!rq.includes('handicap-marginal-reference'));
+  assert(!rq.includes('<details'));
+  for (const key of compatible) {
+    assert(rq.includes(`data-handicap-result="${key}"`));
+    assert(rq.includes(`<strong>${(conditional[key]*100).toFixed(1)}%</strong>`));
+    assert(rq.includes('联合估计 ' + (conditional[key]*.54*100).toFixed(1) + '%'));
   }
+  for (const key of incompatible) {
+    assert(!rq.includes(`data-handicap-result="${key}"`));
+    assert(!rq.includes(`<span>${key}</span>`));
+  }
+  assert(rq.includes('条件100%不代表整场命中'));
+  assert(!rq.includes('is-pick'));
+}
+""")
+
+    def test_missing_or_invalid_analysis_does_not_restore_independent_results(self):
+        self.run_renderer(r"""
+const original = makeItem('胜', .54, -1, {'让胜':.4,'让平':.6,'让负':0}, ['让胜','让平'], ['让负']);
+for (const mutate of [
+  lottery => { delete lottery.direction_analysis; },
+  lottery => { lottery.direction_analysis.available = false; },
+  lottery => { lottery.handicap.handicap = 1; },
+  lottery => { lottery.standard.prediction = '负'; },
+  lottery => { lottery.direction_analysis.joint_probabilities['让胜'] = .9; },
+  lottery => { lottery.direction_analysis.conditional_probabilities['让负'] = .1; },
 ]) {
   const item = JSON.parse(JSON.stringify(original));
   mutate(item.result.lottery);
-  const {reference, main} = parts(renderMatchItem(item), item);
-  assert.ok(reference.includes('待重新分析'));
-  assert.ok(!reference.includes('data-handicap-result'));
-  assert.ok(main.includes('52.3%'), 'a rejected auxiliary analysis must not hide original market data');
-}
-""")
-
-    def test_current_screenshot_probabilities_remain_visible_with_separate_conditional_basis(self):
-        self.run_renderer(r"""
-// The market numbers reproduce screenshots. Conditional distributions are
-// explicit synthetic test fixtures, not inferred from those marginal numbers.
-for (const [standard, handicap, ordinary, marginal, conditional, compatible, incompatible] of [
-  ['胜', -1, {'胜':.385,'平':.300,'负':.315}, {'让胜':.173,'让平':.217,'让负':.610},
-    {'让胜':.444,'让平':.556,'让负':0}, ['让胜','让平'], ['让负']],
-  ['胜', -1, {'胜':.477,'平':.244,'负':.279}, {'让胜':.261,'让平':.224,'让负':.515},
-    {'让胜':.538,'让平':.462,'让负':0}, ['让胜','让平'], ['让负']],
-  ['负', 1, {'胜':.268,'平':.251,'负':.481}, {'让胜':.511,'让平':.224,'让负':.265},
-    {'让胜':0,'让平':.45,'让负':.55}, ['让平','让负'], ['让胜']],
-  ['胜', -1, {'胜':.556,'平':.230,'负':.214}, {'让胜':.326,'让平':.235,'让负':.439},
-    {'让胜':.57,'让平':.43,'让负':0}, ['让胜','让平'], ['让负']]
-]) {
-  const item = makeItem(standard, ordinary[standard], handicap, conditional, compatible, incompatible);
-  item.result.lottery.standard.probabilities = ordinary;
-  item.result.lottery.handicap.probabilities = marginal;
-  const before = JSON.stringify(item);
   const {main} = parts(renderMatchItem(item), item);
-  assert.equal(JSON.stringify(item), before, 'rendering must not alter saved probabilities');
-  const spf = marketRow(main, '胜平负');
-  const rqspf = marketRow(main, '让球胜平负');
-  const [marginalHtml, conditionalHtml] = rqspf.split('<details class="handicap-scenario-details">');
-  assert.ok(!rqspf.includes('<details class="handicap-scenario-details" open'));
-  assert.ok(conditionalHtml.includes('联合估计不等同于'));
-  assert.ok(conditionalHtml.includes('data-probability-basis="conditional_on_standard_result"'));
-  assert.ok(marginalHtml.includes('data-probability-basis="full_match"'));
-  assert.ok(marginalHtml.includes('全场概率参考'));
-  for (const value of Object.values(ordinary)) {
-    assert.ok(spf.includes(`<strong>${(value * 100).toFixed(1)}%</strong>`));
-  }
-  for (const value of Object.values(marginal)) {
-    assert.ok(marginalHtml.includes((value * 100).toFixed(1) + '%'));
-  }
-  for (const key of compatible) {
-    assert.ok(conditionalHtml.includes(`data-handicap-result="${key}" data-compatible="true"`));
-    assert.ok(conditionalHtml.includes(`<strong>${(conditional[key] * 100).toFixed(1)}%</strong>`));
-    assert.ok(conditionalHtml.includes('联合估计 ' + (conditional[key] * ordinary[standard] * 100).toFixed(1) + '%'));
-  }
-  for (const key of incompatible) {
-    const outcome = conditionalHtml.match(new RegExp(`data-handicap-result="${key}" data-compatible="false"[\\s\\S]*?该情景不成立`));
-    assert.ok(outcome, `incompatible ${standard}/${key} must not appear as an outcome`);
-    assert.ok(outcome[0].includes('<strong>—</strong>'));
-  }
-  assert.ok(!rqspf.includes('is-pick'));
-  const independentMaximum = (Math.max(...Object.values(marginal)) * 100).toFixed(1) + '%';
-  assert.ok(!conditionalHtml.includes(independentMaximum));
-  assert.ok(marginalHtml.includes(independentMaximum));
+  const rq = marketRow(main, '让球胜平负');
+  assert(rq.includes('待重新分析'));
+  assert(!rq.includes('data-handicap-result'));
+  assert(!rq.includes('52.3%'));
+  assert(!rq.includes('data-probability-basis="full_match"'));
 }
 """)
 
-    def test_tied_probabilities_keep_the_server_anchor_without_highlighting_either_branch(self):
+    def test_unsold_standard_keeps_the_only_available_independent_market(self):
         self.run_renderer(r"""
-const item = makeItem('负', .4, 1, {'让胜':0, '让平':.5, '让负':.5}, ['让平','让负'], ['让胜']);
-item.result.lottery.standard.probabilities = {'胜':.4, '平':.2, '负':.4};
-const state = getFootballDirectionState(item.result.lottery);
-assert.equal(state.available, true);
-assert.equal(state.standard, '负');
+const item = makeItem('负', .54, 1, {'让胜':0,'让平':.4,'让负':.6}, ['让平','让负'], ['让胜']);
+Object.assign(item.result.lottery, {offer_matched:true, spf_available:false, rqspf_available:true});
 const {main} = parts(renderMatchItem(item), item);
-const spf = marketRow(main, '胜平负');
-const rqspf = marketRow(main, '让球胜平负');
-assert.ok(spf.includes('胜平负 · 全场概率'));
-assert.ok(!spf.includes('分析方向：'));
-assert.ok(!spf.includes('分析方向：主胜'));
-assert.equal((rqspf.match(/<strong>50\.0%<\/strong>/g) || []).length, 2);
-assert.ok(!rqspf.includes('is-pick'));
-assert.ok(!main.includes('唯一'));
-""")
-
-    def test_zero_handicap_conditional_certainty_still_has_non_certain_joint_probability(self):
-        self.run_renderer(r"""
-const item = makeItem('胜', .6, 0, {'让胜':1, '让平':0, '让负':0}, ['让胜'], ['让平','让负']);
-item.result.lottery.standard.probabilities = {'胜':.6, '平':.2, '负':.2};
-item.result.lottery.handicap.probabilities = {'让胜':.6, '让平':.2, '让负':.2};
-const {main} = parts(renderMatchItem(item), item);
-const rqspf = marketRow(main, '让球胜平负');
-const [marginalHtml, conditionalHtml] = rqspf.split('<details class="handicap-scenario-details">');
-assert.ok(conditionalHtml.includes('在主胜（胜）成立时 · 条件概率'));
-assert.ok(conditionalHtml.includes('<strong>100.0%</strong>'));
-assert.ok(conditionalHtml.includes('联合估计 60.0%'));
-assert.ok(conditionalHtml.includes('条件100%不代表整场命中'));
-assert.ok(!conditionalHtml.includes('is-pick'));
-assert.ok(!marginalHtml.includes('100.0%'));
-assert.ok(marginalHtml.includes('60.0%'));
-assert.ok(marginalHtml.includes('20.0%'));
+assert(!main.includes('aria-label="胜平负"'));
+const rq = marketRow(main, '让球胜平负');
+assert(rq.includes('独立玩法 · 全场概率'));
+assert(!rq.includes('条件概率'));
 """)
