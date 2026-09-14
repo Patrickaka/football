@@ -4946,7 +4946,7 @@ function renderFootballHandicapProbabilities(lottery, spfEnabled = true) {
   // 胜平负未开售时没有联合条件，仍按独立让球玩法显示整场概率。
   if (!spfEnabled) return `<div data-probability-basis="full_match"><p class="market-direction-label">独立玩法 · 全场概率</p>${renderProbabilityStrip(probabilities, keys)}</div>`;
   const reference = `<div class="handicap-marginal-reference" data-probability-basis="full_match">
-    <span>全场概率参考 · 推荐筛选按此判断</span>
+    <span>全场概率参考 · 推荐筛选按此判断</span><p class="market-direction-label">各玩法单独统计，不代表组合推荐</p>
     ${renderProbabilityStrip(probabilities, keys)}
   </div>`;
   const state = getFootballDirectionState(lottery, spfEnabled);
@@ -5591,9 +5591,7 @@ function renderFootballPredictions(results) {
         const totalGateState = resultTier.markets.total_goals;
         const totalDirection = getFootballTotalCandidate(accuracyGate.total_goals);
         const directionState = getFootballDirectionState(r.lottery, spfPredictionEnabled);
-        const standardCaption = directionState.available
-          ? `分析方向：${directionState.standardName}（${directionState.standard}） · 全场概率`
-          : '胜平负 · 全场概率';
+        const standardCaption = '胜平负 · 全场概率';
         itemHtml += `<div class="football-compact-summary">
           <div class="market-section-heading"><h3>玩法分析</h3><span>赛前概率参考</span></div>
           ${standardPrediction ? renderWebMarketRecommendation('胜平负', spfGateState, spfGateState.pick || selectedStandard, `<p class="market-direction-label">${esc(standardCaption)}</p>${compactProbLine(standardPrediction.probs, ['胜','平','负'])}`) : ''}
@@ -8860,9 +8858,7 @@ function renderPredictionRecordMarkets(record) {
     }
     const distribution = key === 'rqspf'
       ? renderFootballHandicapProbabilities(lottery, spfEnabled)
-      : `<p class="market-direction-label">${esc(direction.available
-        ? `分析方向：${direction.standardName}（${direction.standard}） · 全场概率`
-        : '胜平负 · 全场概率')}</p>${renderProbabilityStrip(probabilities, keys)}`;
+      : `<p class="market-direction-label">胜平负 · 全场概率</p>${renderProbabilityStrip(probabilities, keys)}`;
     rows.push(renderWebMarketRecommendation(label, state, state.pick,
       distribution
       + renderPredictionMarketOutcome(record, key, state, probabilities)));

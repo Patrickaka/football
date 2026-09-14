@@ -99,7 +99,8 @@ for (const percentage of ['52.3%', '22.2%', '25.6%']) {
   assert.ok(rqspf.includes(percentage), `${percentage} original full-match probability was hidden`);
   assert.ok(rqspf.split('<details')[0].includes(`<strong>${percentage}</strong>`), `${percentage} must be the primary full-match value`);
 }
-assert.ok(spf.includes('分析方向：客胜（负） · 全场概率'));
+assert.ok(spf.includes('胜平负 · 全场概率'));
+assert.ok(!spf.includes('分析方向：'));
 assert.ok(rqspf.includes('在客胜（负）成立时 · 条件概率'));
 assert.ok(rqspf.includes('45.0%'));
 assert.ok(rqspf.includes('55.0%'));
@@ -136,7 +137,8 @@ for (const percentage of ['54.6%', '23.6%', '21.8%']) {
   assert.ok(spf.includes(`<strong>${percentage}</strong>`), `${percentage} requires expansion`);
 }
 for (const percentage of ['31.6%', '23.8%', '44.6%']) assert.ok(rqspf.includes(percentage));
-assert.ok(spf.includes('分析方向：主胜（胜） · 全场概率'));
+assert.ok(spf.includes('胜平负 · 全场概率'));
+assert.ok(!spf.includes('分析方向：'));
 assert.ok(rqspf.includes('在主胜（胜）成立时 · 条件概率'));
 assert.ok(rqspf.includes('57.0%'));
 assert.ok(rqspf.includes('43.0%'));
@@ -310,7 +312,8 @@ assert.equal(state.standard, '负');
 const {main} = parts(renderMatchItem(item), item);
 const spf = marketRow(main, '胜平负');
 const rqspf = marketRow(main, '让球胜平负');
-assert.ok(spf.includes('分析方向：客胜（负） · 全场概率'));
+assert.ok(spf.includes('胜平负 · 全场概率'));
+assert.ok(!spf.includes('分析方向：'));
 assert.ok(!spf.includes('分析方向：主胜'));
 assert.equal((rqspf.match(/<strong>50\.0%<\/strong>/g) || []).length, 2);
 assert.ok(!rqspf.includes('is-pick'));
