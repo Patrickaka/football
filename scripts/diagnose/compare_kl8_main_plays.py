@@ -39,6 +39,29 @@ def candidate_slate(incumbent):
     return slate
 
 
+def bias_ablation_slate(incumbent):
+    """Test fixed cold/hot and overdue/repeat assumptions, one change per arm.
+
+    Keep the live selection pipeline and the linked seventh number. These
+    development candidates never inherit an incumbent's validation evidence.
+    """
+    slate = {'current': deepcopy(incumbent)}
+    for name, options in (
+        ('neutral_frequency', {'frequency_mode': 'neutral'}),
+        ('hot_frequency', {'frequency_mode': 'hot'}),
+        ('without_gap_repeat', {'repeat_direction': 'neutral', 'feature_weights': {
+            **incumbent['feature_weights'], 'gap': 0.0, 'repeat': 0.0}}),
+    ):
+        strategy = {**deepcopy(incumbent), **deepcopy(options)}
+        for key in ('validation_report', 'validation_scope', 'degradation_status'):
+            strategy.pop(key, None)
+        strategy.update(strategy_id=f'development_main_{name}_v1',
+                        status='reference_unvalidated', is_validated=False,
+                        prediction_mode='reference_unvalidated')
+        slate[name] = strategy
+    return slate
+
+
 def predict_pair(history, strategy):
     analyzer = analyzer_for(history)
     six, ranking = _predict_select6_primary(analyzer, strategy)
@@ -71,6 +94,11 @@ def compare(history, strategies, *, warmup=100, predictor=predict_pair):
     later = evaluate_main_play_pair(observations['current'][split:], observations[winner][split:])
     complete = {name: evaluate_main_play_pair(observations['current'], rows)
                 for name, rows in observations.items()}
+    recent = {
+        str(periods): {name: evaluate_main_play_pair(observations['current'][-periods:], rows[-periods:])
+                      for name, rows in observations.items()}
+        for periods in (30, 60, 100) if len(observations['current']) >= periods
+    }
     return {
         'version': KL8_PREDICTOR_VERSION, 'strategies': frozen,
         'strategy_sha256': hashlib.sha256(json.dumps(frozen, sort_keys=True, separators=(',', ':')).encode()).hexdigest(),
@@ -80,6 +108,9 @@ def compare(history, strategies, *, warmup=100, predictor=predict_pair):
         'locked_earlier_winner': winner,
         'development_later_check': later,
         'development_complete': complete,
+        'recent_diagnostics': recent,
+        'recent_diagnostics_role': 'descriptive_only_not_used_to_select_winner',
+        'latest_draw': {'issue': history[-1]['issue'], 'date': history[-1].get('date')},
         'observations': observations,
         'promotion_allowed': False,
         'data_role': 'previously_inspected_development_data',
@@ -91,12 +122,18 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--input', action='append', required=True, type=Path)
     parser.add_argument('--output', type=Path, default=ROOT / 'reports/kl8_main_play_comparison.json')
+    parser.add_argument('--slate', choices=('original', 'bias-ablation'), default='original')
+    parser.add_argument('--periods', type=int, help='Use the last N development targets, with earlier draws as warmup')
     args = parser.parse_args()
     history, sources = load_history(args.input)
     incumbent = resolve_play_strategy('select_6', allow_reference=True)
     if not incumbent:
         raise ValueError('No current select-6 strategy to compare')
-    report = {**compare(history, candidate_slate(incumbent)), 'data': sources}
+    warmup = 100 if args.periods is None else len(history) - args.periods
+    if args.periods is not None and (args.periods < 100 or warmup < 100):
+        parser.error('--periods requires at least 100 targets and 100 earlier draws')
+    slate = bias_ablation_slate if args.slate == 'bias-ablation' else candidate_slate
+    report = {**compare(history, slate(incumbent), warmup=warmup), 'data': sources}
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
     print(json.dumps({
