@@ -205,13 +205,15 @@ def resolve_play_strategy(play_type: str, allow_reference: bool = False) -> Opti
             'is_validated': False,
         },
         'select_6': {
-            # v10.10 keeps the automatic exclusion chain, but restores the
-            # v10.8 primary ranking.  The primary ticket is the accuracy
-            # target; covering almost all 80 numbers is not predictive lift.
-            'strategy_id': 'select_6_ref_transition_primary_v5',
+            # Explicit experimental reference revision: use observed hot
+            # frequency instead of the implicit mean-reversion preference.
+            # The 600-draw development comparison improved average hits but
+            # did not pass every joint gate; this is NOT a validated strategy.
+            'strategy_id': 'select_6_ref_hot_transition_primary_v6',
             'feature_weights': {'frequency': 0.18, 'gap': 0.14, 'trend': 0.12, 'next_transition': 0.22, 'pair_cooccurrence': 0.04, 'position_residual': 0.11, 'position_residual_cross': 0.08, 'road_residual': 0.08, 'repeat': 0.03, 'odd_even': 0.0, 'big_small': 0.0},
             'model_weights': {'rank': 1.0, 'bayesian': 0.0, 'markov': 0.0},
             'window_size': 100,
+            'frequency_mode': 'hot',
             'repeat_direction': 'follow',
             'pool_max_last_numbers': 3,
             'pool_diversify': False,

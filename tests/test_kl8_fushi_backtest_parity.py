@@ -167,7 +167,7 @@ class FushiBacktestParityTests(unittest.TestCase):
             return numbers
 
         options = {key: strategy[key] for key in (
-            'window_size', 'repeat_direction', 'pool_diversify', 'pool_max_last_numbers', 'final_selection_mode',
+            'window_size', 'frequency_mode', 'repeat_direction', 'pool_diversify', 'pool_max_last_numbers', 'final_selection_mode',
         )}
         backtest = KL8RollingBacktest(_analyzer(history))
         with patch.object(backtest_module, '_predict_select6_primary', side_effect=primary_spy), \
