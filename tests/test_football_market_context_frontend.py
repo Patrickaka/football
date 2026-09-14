@@ -237,8 +237,9 @@ for (const percentage of ['60.0%', '20.0%']) {
 }
 for (const percentage of ['30.0%', '25.0%', '45.0%']) {
   assert.ok(main.includes(percentage), `${percentage} full-match reference must remain visible`);
-  assert.ok(!main.includes(`<strong>${percentage}</strong>`), `${percentage} cannot replace missing conditional probabilities`);
+  assert.ok(main.includes(`<strong>${percentage}</strong>`), `${percentage} full-match probability must be the primary display`);
 }
+assert.ok(!main.includes('data-probability-basis="conditional_on_standard_result"'), 'missing scenario data must not be fabricated from marginal probabilities');
 assert.ok(!reference.includes('is-pick'));
 assert.ok(!main.includes('probability-outcome is-pick'), 'conditional analyses must never highlight recommendation picks');
 assert.ok(!main.includes('模型候选'));
