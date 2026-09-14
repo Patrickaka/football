@@ -136,7 +136,7 @@ for (const [pick, line, probs, conditional, compatible, incompatible] of [
     lottery_direction_analysis:lottery.direction_analysis};
   out = renderPredictionRecordMarkets(saved);
   assert(out.includes(renderFootballHandicapProbabilities(lottery, true)));
-  assert(out.includes(renderFootballDirectionAnalysis(lottery, true)));
+  assert(!out.includes('football-direction-reference'));
   assert(out.includes('该情景不成立'));
   assert(!out.includes(`${pick}＋${incompatible[0]}`));
   const modelDiffers = {...saved, predicted_1x2:{H:.8,D:.1,A:.1},

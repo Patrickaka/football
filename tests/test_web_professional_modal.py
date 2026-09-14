@@ -100,9 +100,9 @@ class WebProfessionalModalTests(unittest.TestCase):
 
         self.assertIn('const compactFootballView = true;', html)
         self.assertIn('class="football-compact-summary"', html)
-        self.assertIn('renderFootballDirectionAnalysis(r.lottery, spfPredictionEnabled)', html)
-        self.assertIn('<details class="football-direction-reference">', html)
-        self.assertIn('<summary>胜平负与让球的对应分析</summary>', html)
+        self.assertNotIn('renderFootballDirectionAnalysis(r.lottery, spfPredictionEnabled)', html)
+        self.assertNotIn('<details class="football-direction-reference">', html)
+        self.assertNotIn('<summary>胜平负与让球的对应分析</summary>', html)
         self.assertNotIn('renderFootballMarginalReference', html)
         self.assertIn('<h3>玩法分析</h3><span>赛前概率参考</span>', html)
         self.assertIn("compactProbLine(standardPrediction.probs, ['胜','平','负'])", html)

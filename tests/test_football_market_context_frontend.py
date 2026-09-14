@@ -70,7 +70,7 @@ const item = {match:{home:'主队', away:'客队'}, result:{
   upset:{confident:true, favorite:'胜', favorite_prob:.798, gap:.67}
 }};
 let card = renderMatchItem(item);
-assert.ok(card.includes('盘口强度分歧'));
+assert.ok(!card.includes('class="match-context"'));
 assert.ok(card.includes('暂无通过筛选的推荐'));
 assert.ok(!card.includes('胜平负 主胜 <b>80%</b>'));
 assert.ok(!card.includes('倾向较集中'));
@@ -228,10 +228,11 @@ let card = renderMatchItem(item);
 assert.ok(!card.includes('100%'), 'conditional certainty must never replace marginal probability');
 assert.ok(!card.includes('⇒ 首选'));
 assert.ok(card.includes('待重新分析'), 'legacy linked recommendation cannot stand in for audited direction analysis');
-assert.ok(card.includes('<details class="football-direction-reference">'));
+assert.ok(!card.includes('<details class="football-direction-reference">'));
 assert.ok(card.includes('<strong>让胜</strong>'), 'recommendation must follow selected gate.pick');
-const reference = card.match(/<details class="football-direction-reference">[\s\S]*?<\/details>/)[0];
-const main = card.replace(reference, '');
+const main = card;
+assert.ok(!main.includes('class="match-context"'));
+assert.ok(!main.includes('class="market-evidence"'));
 for (const percentage of ['60.0%', '20.0%']) {
   assert.ok(main.includes(`<strong>${percentage}</strong>`), `${percentage} must be visible without expansion`);
 }
@@ -240,7 +241,6 @@ for (const percentage of ['30.0%', '25.0%', '45.0%']) {
   assert.ok(main.includes(`<strong>${percentage}</strong>`), `${percentage} full-match probability must be the primary display`);
 }
 assert.ok(!main.includes('data-probability-basis="conditional_on_standard_result"'), 'missing scenario data must not be fabricated from marginal probabilities');
-assert.ok(!reference.includes('is-pick'));
 assert.ok(!main.includes('probability-outcome is-pick'), 'conditional analyses must never highlight recommendation picks');
 assert.ok(!main.includes('模型候选'));
 states.rqspf.status = 'watch';

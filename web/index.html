@@ -5556,10 +5556,6 @@ function renderFootballPredictions(results) {
             ${settlement ? `<div class="score-settlement">${esc(settlement)}</div>` : ''}
           </div>`;
         }).join('');
-        const asian = r.asian || r.odds_layers?.['T-24h']?.asian || {};
-        const asianDirection = asian.favor_desc || asian.handicap_trend || asian.water_trend || '方向稳定';
-        const euroPrediction = standardPrediction
-          ? (standardMarket?.prediction || standardPrediction.pred || '-') : null;
         const selectedStandard = standardPrediction
           ? (linkedSelections?.standardPredictions?.join('/') || standardPrediction.pred || '-') : '';
         const selectedHandicap = handicapCard
@@ -5569,8 +5565,6 @@ function renderFootballPredictions(results) {
         const rqspfGateState = resultTier.markets.rqspf;
         const totalGateState = resultTier.markets.total_goals;
         const totalDirection = getFootballTotalCandidate(accuracyGate.total_goals);
-        const correctionLabel = r.model?.joint_market_state?.applied ? ' · 已修正' : ' · 联合分析';
-        const marketContext = getFootballMarketContext(r);
         const directionState = getFootballDirectionState(r.lottery, spfPredictionEnabled);
         const standardCaption = directionState.available
           ? `分析方向：${directionState.standardName}（${directionState.standard}） · 全场概率`
@@ -5585,12 +5579,6 @@ function renderFootballPredictions(results) {
             <div class="score-section-heading">比分参考 Top3（非主推）</div>
             <div class="score-options">${compactScoreHtml || '<span class="empty-reference">暂无比分分布</span>'}</div>
           </div>
-          <section class="match-context" aria-label="盘口依据"><div class="context-heading"><h4>欧赔与亚盘水位${correctionLabel}</h4><span class="context-state${marketContext.conflict ? ' conflict' : ''}">${esc(marketContext.label)}</span></div><div class="context-content">
-            ${standardPrediction ? `欧赔基准：${esc(euroPrediction)} · ` : '竞彩胜平负未开售 · '}亚盘方向：${esc(asianDirection)}
-            <p>${esc(marketContext.detail)}</p>
-          </div></section>
-          ${renderMarketEvidence([['胜平负', spfGateState, Boolean(standardPrediction)], ['让球胜平负', rqspfGateState, Boolean(handicapCard)], ['大小球', totalGateState, true]])}
-          <details class="football-direction-reference"><summary>胜平负与让球的对应分析</summary>${renderFootballDirectionAnalysis(r.lottery, spfPredictionEnabled)}</details>
         </div>`;
       }
       const htfProbs = r.model && r.model.half_full_time && r.model.half_full_time.probs ? r.model.half_full_time.probs : [];
@@ -8853,9 +8841,6 @@ function renderPredictionRecordMarkets(record) {
     rows.push(renderWebMarketRecommendation(label, state, state.pick,
       distribution
       + renderPredictionMarketOutcome(record, key, state, probabilities)));
-  }
-  if (Object.keys(handicap).length) {
-    rows.push(`<details class="football-direction-reference"><summary>胜平负与让球的对应分析</summary>${renderFootballDirectionAnalysis(lottery, spfEnabled)}</details>`);
   }
   return rows.join('');
 }
