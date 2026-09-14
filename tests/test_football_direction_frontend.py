@@ -67,7 +67,8 @@ function marketRow(main, label) {
   const rows = [...main.matchAll(/<section class="market-row"[^>]*aria-label="([^"]+)"[\s\S]*?<\/section>/g)];
   const row = rows.find(match => match[1].startsWith(label));
   assert.ok(row, `missing market row: ${label}`);
-  assert.ok(!row[0].includes('<details'), `${label} probability data requires expansion`);
+  const visible = row[0].split('<details')[0];
+  assert.ok(visible.includes('probability-strip') || !row[0].includes('<details'), `${label} full-match probabilities require expansion`);
   return row[0];
 }
 """ + assertions
@@ -96,7 +97,7 @@ for (const percentage of ['27.6%', '25.3%', '47.1%']) {
 }
 for (const percentage of ['52.3%', '22.2%', '25.6%']) {
   assert.ok(rqspf.includes(percentage), `${percentage} original full-match probability was hidden`);
-  assert.ok(!rqspf.includes(`<strong>${percentage}</strong>`), `${percentage} was mislabeled as conditional`);
+  assert.ok(rqspf.split('<details')[0].includes(`<strong>${percentage}</strong>`), `${percentage} must be the primary full-match value`);
 }
 assert.ok(spf.includes('分析方向：客胜（负） · 全场概率'));
 assert.ok(rqspf.includes('在客胜（负）成立时 · 条件概率'));
@@ -141,7 +142,7 @@ assert.ok(rqspf.includes('57.0%'));
 assert.ok(rqspf.includes('43.0%'));
 assert.ok(rqspf.includes('31.1%'));
 assert.ok(rqspf.includes('该情景不成立'));
-assert.ok(!rqspf.includes('<strong>44.6%</strong>'));
+assert.ok(rqspf.split('<details')[0].includes('<strong>44.6%</strong>'));
 assert.ok(!main.includes('is-pick'), 'watch status must not highlight a candidate');
 """)
 
@@ -186,7 +187,8 @@ for (const value of [undefined, {available:false,reasons:['比分样本不完整
   assert.ok(main.includes('52.3%'));
   const rqspf = marketRow(main, '让球胜平负');
   assert.ok(rqspf.includes('待重新分析'));
-  assert.ok(!rqspf.includes('<strong>52.3%</strong>'), 'legacy marginal maximum cannot fill missing conditional probabilities');
+  assert.ok(rqspf.includes('<strong>52.3%</strong>'), 'independent market remains visible');
+  assert.ok(!rqspf.includes('data-probability-basis="conditional_on_standard_result"'));
   assert.ok(!rqspf.includes('is-pick'));
 }
 """)
@@ -252,6 +254,10 @@ for (const mutate of [
 // The market numbers reproduce screenshots. Conditional distributions are
 // explicit synthetic test fixtures, not inferred from those marginal numbers.
 for (const [standard, handicap, ordinary, marginal, conditional, compatible, incompatible] of [
+  ['胜', -1, {'胜':.385,'平':.300,'负':.315}, {'让胜':.173,'让平':.217,'让负':.610},
+    {'让胜':.444,'让平':.556,'让负':0}, ['让胜','让平'], ['让负']],
+  ['胜', -1, {'胜':.477,'平':.244,'负':.279}, {'让胜':.261,'让平':.224,'让负':.515},
+    {'让胜':.538,'让平':.462,'让负':0}, ['让胜','让平'], ['让负']],
   ['负', 1, {'胜':.268,'平':.251,'负':.481}, {'让胜':.511,'让平':.224,'让负':.265},
     {'让胜':0,'让平':.45,'让负':.55}, ['让平','让负'], ['让胜']],
   ['胜', -1, {'胜':.556,'平':.230,'负':.214}, {'让胜':.326,'让平':.235,'让负':.439},
@@ -265,7 +271,9 @@ for (const [standard, handicap, ordinary, marginal, conditional, compatible, inc
   assert.equal(JSON.stringify(item), before, 'rendering must not alter saved probabilities');
   const spf = marketRow(main, '胜平负');
   const rqspf = marketRow(main, '让球胜平负');
-  const [conditionalHtml, marginalHtml] = rqspf.split('<div class="handicap-marginal-reference"');
+  const [marginalHtml, conditionalHtml] = rqspf.split('<details class="handicap-scenario-details">');
+  assert.ok(!rqspf.includes('<details class="handicap-scenario-details" open'));
+  assert.ok(conditionalHtml.includes('联合估计不等同于'));
   assert.ok(conditionalHtml.includes('data-probability-basis="conditional_on_standard_result"'));
   assert.ok(marginalHtml.includes('data-probability-basis="full_match"'));
   assert.ok(marginalHtml.includes('全场概率参考'));
@@ -286,7 +294,7 @@ for (const [standard, handicap, ordinary, marginal, conditional, compatible, inc
     assert.ok(outcome[0].includes('<strong>—</strong>'));
   }
   assert.ok(!rqspf.includes('is-pick'));
-  const independentMaximum = handicap > 0 ? '51.1%' : '43.9%';
+  const independentMaximum = (Math.max(...Object.values(marginal)) * 100).toFixed(1) + '%';
   assert.ok(!conditionalHtml.includes(independentMaximum));
   assert.ok(marginalHtml.includes(independentMaximum));
 }
@@ -316,7 +324,7 @@ item.result.lottery.standard.probabilities = {'胜':.6, '平':.2, '负':.2};
 item.result.lottery.handicap.probabilities = {'让胜':.6, '让平':.2, '让负':.2};
 const {main} = parts(renderMatchItem(item));
 const rqspf = marketRow(main, '让球胜平负');
-const [conditionalHtml, marginalHtml] = rqspf.split('<div class="handicap-marginal-reference"');
+const [marginalHtml, conditionalHtml] = rqspf.split('<details class="handicap-scenario-details">');
 assert.ok(conditionalHtml.includes('在主胜（胜）成立时 · 条件概率'));
 assert.ok(conditionalHtml.includes('<strong>100.0%</strong>'));
 assert.ok(conditionalHtml.includes('联合估计 60.0%'));

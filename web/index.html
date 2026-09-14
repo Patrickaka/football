@@ -4920,14 +4920,9 @@ function renderFootballHandicapProbabilities(lottery, spfEnabled = true) {
   const probabilities = lottery?.handicap?.probabilities;
   // 胜平负未开售时没有联合条件，仍按独立让球玩法显示整场概率。
   if (!spfEnabled) return `<div data-probability-basis="full_match"><p class="market-direction-label">独立玩法 · 全场概率</p>${renderProbabilityStrip(probabilities, keys)}</div>`;
-  const fullPercentage = key => {
-    const value = probabilities?.[key];
-    return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1
-      ? (value * 100).toFixed(1) + '%' : '—';
-  };
   const reference = `<div class="handicap-marginal-reference" data-probability-basis="full_match">
     <span>全场概率参考 · 推荐筛选按此判断</span>
-    <div class="handicap-marginal-values">${keys.map(key => `<span>${esc(key)} <span>${fullPercentage(key)}</span></span>`).join('')}</div>
+    ${renderProbabilityStrip(probabilities, keys)}
   </div>`;
   const state = getFootballDirectionState(lottery, spfEnabled);
   if (!state.available) return `<p class="market-direction-label">${esc(state.reason)}</p>${reference}`;
@@ -4941,11 +4936,14 @@ function renderFootballHandicapProbabilities(lottery, spfEnabled = true) {
       <span class="conditional-outcome-note">${branch ? `${esc(branch.meaning)}<br>联合估计 ${percentage(state.joint[key])}` : '该情景不成立'}</span>
     </div>`;
   }).join('');
-  return `<div class="handicap-conditional-probabilities" data-probability-basis="conditional_on_standard_result">
+  return `${reference}<details class="handicap-scenario-details">
+    <summary>假设${esc(state.standardName)}成立时的情景分析（非推荐）</summary>
+    <div class="handicap-conditional-probabilities" data-probability-basis="conditional_on_standard_result">
     <p class="market-direction-label">在${esc(state.standardName)}（${esc(state.standard)}）成立时 · 条件概率</p>
     <div class="probability-strip" style="--outcomes:3">${outcomes}</div>
     <p class="direction-note">联合估计为两项同时发生的概率；条件100%不代表整场命中。</p>
-  </div>${reference}`;
+    <p class="direction-note">此处按胜平负概率重构情景分布，联合估计不等同于上方独立让球玩法的全场概率；“该情景不成立”仅指当前假设内不成立。</p>
+  </div></details>`;
 }
 
 function renderFootballDirectionAnalysis(lottery, spfEnabled = true) {
