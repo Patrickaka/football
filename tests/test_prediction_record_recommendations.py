@@ -7,6 +7,18 @@ from unittest.mock import patch
 
 
 class RecordRecommendations(unittest.TestCase):
+    def test_records_share_market_layout_and_collapse_management_controls(self):
+        html = (Path(__file__).resolve().parents[1] / 'web/index.html').read_text(encoding='utf-8')
+        loader = html.split('async function loadPredictions() {', 1)[1].split('async function exportPredictionRecords()', 1)[0]
+        self.assertIn('class="card prediction-record-card"', loader)
+        self.assertIn('${renderPredictionRecordMarkets(record)}${renderPredictionScoreReference(record)}</div>', loader)
+        self.assertIn('<details class="prediction-tools"><summary>', loader)
+        self.assertNotIn('<details class="prediction-tools" open', loader)
+        self.assertLess(loader.index('class="prediction-tools"'), loader.index('onclick="triggerSync()"'))
+        self.assertLess(loader.index("html += '</details>';"), loader.index('pageRecords.forEach'))
+        self.assertIn(':is(#panel-football, #panel-predictions) .probability-value', html)
+        self.assertIn('football-score-reference prediction-record-score', html)
+
     def test_legacy_record_restores_the_exact_recommendation_list_analysis(self):
         from copy import deepcopy
         from src.football import result_sync
