@@ -803,7 +803,15 @@ def kl8_records_payload(params=None):
             rec['exclude_recalculations'] = enriched
 
         settled = sum(1 for snapshot in snapshots if snapshot.get('has_settlement'))
-        maintenance_running = _schedule_kl8_records_maintenance(snapshots)
+        # 同期新版参考也需要补结算；去重后的首推列表不包含这些快照。
+        # 只加入已校验且实际展示的参考，统计仍只使用首推列表。
+        maintenance_snapshots = list(snapshots)
+        maintained_ids = {row.get('snapshot_id') for row in snapshots}
+        for record in display_records:
+            if record.get('snapshot_id') not in maintained_ids:
+                maintenance_snapshots.append(record)
+                maintained_ids.add(record.get('snapshot_id'))
+        maintenance_running = _schedule_kl8_records_maintenance(maintenance_snapshots)
         return {
             'result': {
                 'runtime_version': runtime_version,

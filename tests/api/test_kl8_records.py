@@ -520,7 +520,7 @@ class CurrentVersionReference(unittest.TestCase):
         self.assertTrue(reference['reference_only'])
         self.assertFalse(reference['accuracy_eligible'])
         self.assertEqual(reference['accuracy_exclusion_reason'], 'current_version_reference')
-        self.assertEqual([row['snapshot_id'] for row in maintained], ['original'])
+        self.assertEqual([row['snapshot_id'] for row in maintained], ['original', 'new-latest'])
 
     def test_original_and_reference_keep_their_own_recalculation_chains(self):
         original = self._snapshot('original', 10, version='kl8-v10.17')
@@ -539,6 +539,27 @@ class CurrentVersionReference(unittest.TestCase):
         self.assertEqual([row['source_snapshot_id'] for row in
                           record['current_version_reference']['exclude_recalculations']], ['new'])
 
+    def test_settled_original_does_not_leave_current_reference_unsettled(self):
+        original = self._snapshot('original', 10, version='kl8-v10.17', has_settlement=True)
+        reference = self._snapshot('new', 11, start=21)
+        result, maintained = self._payload([reference, original])
+        self.assertEqual(result['settled_count'], 1)
+        self.assertEqual(result['pending_count'], 0)
+        numbers = list(range(1, 21))
+        analyzer = mock.Mock(history_data=[{'issue': '2026242', 'numbers': numbers}])
+        analyzer.settle_prediction.return_value = {
+            'success': True, 'settlement': {'actual_numbers': numbers},
+        }
+        with mock.patch.object(service, '_kl8_draw_map_from_history_file',
+                               return_value={'2026242': numbers}), \
+                mock.patch.object(service, 'get_kl8_analyzer', return_value=analyzer):
+            service.kl8_backfill_settlements(maintained)
+        analyzer.settle_prediction.assert_called_once_with(
+            'snapshot_new.json', '2026242', numbers,
+        )
+        self.assertTrue(maintained[1]['has_settlement'])
+        self.assertFalse(result['records'][0]['current_version_reference']['accuracy_eligible'])
+
     def test_post_draw_reference_retains_time_audit_but_never_counts_as_primary(self):
         original = self._snapshot('original', 10, version='kl8-v10.17')
         after_draw = self._snapshot('after-draw', 22, start=21)
@@ -551,7 +572,7 @@ class CurrentVersionReference(unittest.TestCase):
         self.assertEqual(reference['snapshot_id'], 'after-draw')
         self.assertEqual(reference['prediction_audit']['reason'], 'prediction_at_or_after_draw')
         self.assertFalse(reference['accuracy_eligible'])
-        self.assertEqual([row['snapshot_id'] for row in maintained], ['original'])
+        self.assertEqual([row['snapshot_id'] for row in maintained], ['original', 'after-draw'])
 
     def test_no_reference_when_current_snapshot_is_itself_the_original(self):
         current = self._snapshot('current', 10)
