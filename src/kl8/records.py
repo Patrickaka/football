@@ -200,7 +200,7 @@ def _strategy_fingerprint(strategy: Dict) -> str:
     # Exclusion rounds can use another selection mode or a nested first-round
     # strategy while round 0 stays unchanged. Keep legacy hashes when neither
     # option is configured, but include the complete override when present.
-    for key in ('exclusion_selection_mode', 'first_exclusion_strategy'):
+    for key in ('exclusion_selection_mode', 'first_exclusion_strategy', 'early_exclusion_strategy'):
         if key in strategy:
             fp_data[key] = strategy[key]
     return hashlib.sha256(

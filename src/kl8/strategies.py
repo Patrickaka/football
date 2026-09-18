@@ -67,14 +67,18 @@ def _strategy_is_usable(strategy: Dict) -> bool:
 
 
 def resolve_exclusion_strategy(strategy: Dict, play_type: str, excluded_numbers) -> Dict:
-    """Optionally rerank the first select-6 exclusion without altering round 0.
+    """Optionally rerank exclusions 1/2 without altering round 0.
 
     Linked fushi calculations pass the select-6 exclusion set here too. Later
-    rounds retain the base ranking; all returned picks still obey exclusions.
+    rounds (3 onward) retain the base ranking; picks still obey exclusions.
     A configured experimental ranking never inherits validated status.
     """
-    override = strategy.get('first_exclusion_strategy')
-    if play_type != 'select_6' or len(set(excluded_numbers)) != 6 or not override:
+    count = len(set(excluded_numbers))
+    if play_type != 'select_6' or count not in (6, 12):
+        return strategy
+    override = strategy.get('first_exclusion_strategy') if count == 6 else None
+    override = override or strategy.get('early_exclusion_strategy')
+    if not override:
         return strategy
     result = deepcopy(strategy)
     for key in (

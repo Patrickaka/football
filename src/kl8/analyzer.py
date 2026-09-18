@@ -1599,7 +1599,7 @@ class KL8Analyzer:
                 'is_validated': strategy['is_validated'],
             }
 
-            for key in ('exclusion_selection_mode', 'first_exclusion_strategy'):
+            for key in ('exclusion_selection_mode', 'first_exclusion_strategy', 'early_exclusion_strategy'):
                 if key in strategy:
                     resolved_strategies[s_key][key] = deepcopy(strategy[key])
 
@@ -1816,7 +1816,7 @@ class KL8Analyzer:
                 'is_validated': strategy['is_validated'],
             }
 
-            for key in ('exclusion_selection_mode', 'first_exclusion_strategy'):
+            for key in ('exclusion_selection_mode', 'first_exclusion_strategy', 'early_exclusion_strategy'):
                 if key in strategy:
                     resolved_strategies[fushi_key][key] = deepcopy(strategy[key])
 
