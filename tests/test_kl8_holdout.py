@@ -7,6 +7,7 @@ from unittest.mock import patch
 import pytest
 
 from src.kl8.holdout import reserve_final_holdout
+from tests.trial_store_support import trial_store
 from src.kl8 import config, records, snapshots, validation
 from src.kl8.backtest import KL8RollingBacktest
 
@@ -100,10 +101,8 @@ def test_standalone_activation_requires_final_success_and_cannot_retry(final_lif
             final_calls.append(kwargs)
             result.update(lift=final_lift, probabilities=probabilities)
         return {'select_6': result, 'fu_shi_7': {**deepcopy(metrics), 'n_tests': result['n_tests']}}
-    trials = []
-    with patch.object(validation, 'get_kl8_analyzer', return_value=SimpleNamespace(history_data=history())), \
-         patch.object(config, 'STRATEGY_TRIAL_RESULTS', trials), \
-         patch.object(records, '_persist_trial_results', return_value=True), \
+    with trial_store(), \
+         patch.object(validation, 'get_kl8_analyzer', return_value=SimpleNamespace(history_data=history())), \
          patch.object(KL8RollingBacktest, '_rolling_backtest_parametric', side_effect=rolling), \
          patch.object(KL8RollingBacktest, '_permutation_test', return_value={'p_value': .001}), \
          patch.object(snapshots, 'activate_verified_strategy', return_value=True) as activate:

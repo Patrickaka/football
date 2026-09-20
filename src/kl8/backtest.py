@@ -19,6 +19,7 @@ log = setup_logger('kl8')
 from . import snapshots as _snapshots_mod
 from . import records as _records_mod
 from . import config as _cfg
+from . import trial_sync as _trial_sync
 
 from .config import (
     ABLATION_FEATURES, BACKTEST_FINAL_TEST_PERIODS, BACKTEST_MIN_OOS_PERIODS, BACKTEST_PERMUTATION_COUNT, BACKTEST_STABILITY_THRESHOLD, BACKTEST_STABILITY_WINDOWS, BACKTEST_TOTAL_REQUIRED_PERIODS, BACKTEST_TRAIN_PERIODS, CANDIDATE_STRATEGIES, FEATURE_CONFIG, FUSHI_CONFIG, FUSHI_PLAY_KEYS, KL8_DEFAULT_HISTORY, KL8_PREDICTOR_VERSION, REFERENCE_STRATEGY, SELECT_PLAY_KEYS, SELECT_TYPES, VALIDATION_CANDIDATES,
@@ -1591,25 +1592,27 @@ class KL8RollingBacktest:
                 'tournament_round': 'per_play_validation',
                 'evidence_schema': 2,
             }
-            _cfg.STRATEGY_TRIAL_RESULTS.append(trial_record)
+            _trial_sync.record_trial(trial_record)
             # Keep this attempt's identity even if another run appends a trial.
-            val_candidates[-1]['trial_identity'] = id(trial_record)
-            _records_mod._persist_trial_results()
+            # 四元键而不是 id()：记录来自库，每次查出来都是新对象。
+            val_candidates[-1]['trial_identity'] = _trial_sync.trial_key(trial_record)
 
         # The gate and persisted report must use the identical cumulative
         # family, including earlier standalone and tournament attempts.
-        same_play_trials = [trial for trial in list(_cfg.STRATEGY_TRIAL_RESULTS)
-                            if isinstance(trial, dict) and play_family(trial.get('play_type')) == play_family(play_type)
-                            and trial.get('tournament_round') != 'holdout_exposure']
+        same_play_trials = _trial_sync.family_trials(play_type)
         fdr_adjusted = benjamini_hochberg_fdr([
             _safe_fdr_p_value(trial.get('raw_p_value')) for trial in same_play_trials
         ])
         adjusted_by_trial = {}
         for trial, adjusted in zip(same_play_trials, fdr_adjusted):
-            adjusted_by_trial[id(trial)] = adjusted
-            trial['fdr_adjusted_p'] = round(adjusted, 6)
-        if same_play_trials:
-            _records_mod._persist_trial_results()
+            adjusted_by_trial[_trial_sync.trial_key(trial)] = adjusted
+        # 只回写本批新增的那几条。历史条的 fdr_adjusted_p 是纯派生值——
+        # 全仓没有任何地方读它做决策，而整族回写意味着每轮更新几千行。
+        for candidate in val_candidates:
+            adjusted = adjusted_by_trial.get(candidate.get('trial_identity'))
+            if adjusted is not None:
+                _trial_sync.update_fdr_by_key(candidate['trial_identity'],
+                                              round(adjusted, 6))
         fdr_audit = {
             'method': 'benjamini_hochberg',
             'scope': 'all_recorded_trials_same_play',
@@ -1674,9 +1677,12 @@ class KL8RollingBacktest:
         final_selection_mode = strategy.get('final_selection_mode', 'balanced')
 
         from .holdout import reserve_final_holdout
+        # holdout 要看全族**含曝光记录**的历史，并靠 persist 的返回值确认
+        # 预留是否真的落库——没落库就不能当作已曝光。
+        prior_trials = _trial_sync.family_trials(play_type, include_exposures=True)
         holdout = reserve_final_holdout(
             play_type, strategy, self.analyzer.history_data, final_test_range,
-            _cfg.STRATEGY_TRIAL_RESULTS, _records_mod._persist_trial_results,
+            prior_trials, lambda: _trial_sync.record_trial(prior_trials[-1]),
             version=KL8_PREDICTOR_VERSION, minimum=BACKTEST_FINAL_TEST_PERIODS,
         )
         if not holdout['available']:
@@ -1906,6 +1912,8 @@ class KL8RollingBacktest:
         val_results = {}
         val_best_name = None
         val_best_lift = -999
+        #: 本轮新增试验的四元键。FDR 算完只回写这几条，历史条不动。
+        batch_keys = []
 
         for name, strategy in train_survivors.items():
             fw = strategy.get('feature_weights', {})
@@ -2013,8 +2021,8 @@ class KL8RollingBacktest:
                 'tested_at': time.strftime('%Y-%m-%dT%H:%M:%S'),
                 'tournament_round': 'validation',
             }
-            _cfg.STRATEGY_TRIAL_RESULTS.append(trial_record)
-            _records_mod._persist_trial_results()
+            _trial_sync.record_trial(trial_record)
+            batch_keys.append(_trial_sync.trial_key(trial_record))
 
             val_results[name] = {
                 's5_lift': round(s5_lift, 4),
@@ -2074,14 +2082,16 @@ class KL8RollingBacktest:
                 }
 
         # ── 全量 BH-FDR 校正 ──
-        same_play_trials = [t for t in _cfg.STRATEGY_TRIAL_RESULTS if t['play_type'] == 'select_5'
-                            and t.get('tournament_round') != 'holdout_exposure']
+        same_play_trials = _trial_sync.family_trials('select_5')
         same_play_p_values = [t['raw_p_value'] for t in same_play_trials]
         if len(same_play_p_values) > 1:
             fdr_adjusted = benjamini_hochberg_fdr(same_play_p_values)
-            for i, trial in enumerate(same_play_trials):
-                trial['fdr_adjusted_p'] = round(fdr_adjusted[i], 6)
-            _records_mod._persist_trial_results()
+            # 只回写本轮新增的那几条；历史条的 fdr_adjusted_p 是纯派生值。
+            adjusted_by_key = {_trial_sync.trial_key(trial): adjusted
+                               for trial, adjusted in zip(same_play_trials, fdr_adjusted)}
+            for key in batch_keys:
+                if key in adjusted_by_key:
+                    _trial_sync.update_fdr_by_key(key, round(adjusted_by_key[key], 6))
 
         return {
             'total_candidates': len(candidate_strategies),

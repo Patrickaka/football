@@ -38,7 +38,11 @@ NUMERIC_STRATEGY_TRIAL = Table(
     Column('strategy_id', String(64), primary_key=True),
     Column('play_type', String(16), primary_key=True),
     Column('tournament_round', String(32), primary_key=True),
-    Column('tested_at', String(32), primary_key=True),
+    # 通常是 19 字符的 ISO 时间戳，但 holdout 预留那条把它赋成 issues_sha256
+    # （`holdout.py` 里 `reservation['tested_at'] = reservation['issues_sha256']`），
+    # 那是 64 字符。线上 sql_mode 带 STRICT_TRANS_TABLES，短了会直接插入失败
+    # 而不是截断——现有 33839 条全是时间戳，所以这条路至今没被走到过。
+    Column('tested_at', String(64), primary_key=True),
     # 权重字典的键随版本增删——线上一共出现过 13 种特征名，而单条记录只带
     # 其中几个。拆成列的话每加一个特征就要改表，而它们没有任何查询需求。
     Column('feature_weights', Text),
@@ -57,6 +61,12 @@ NUMERIC_STRATEGY_TRIAL = Table(
     Column('final_selection_mode', String(32)),
     Column('practical_score', Float),
     Column('optional_present', Text),
+    # 没有建模的字段整体存这里，不逐个开列。记录里除上面这些还带
+    # trial_id / evidence_schema / validation_family / main_play_p_values /
+    # main_play_validation，且随版本增删；漏掉一个不会报错，只会让读回来的
+    # 记录少一个键——`holdout.py` 正是用 `evidence_schema != 2` 分辨新旧证据，
+    # 少了它每条都会被判成 legacy。它们没有按列查询的需求，所以整体存 JSON。
+    Column('extra', Text),
 )
 
 

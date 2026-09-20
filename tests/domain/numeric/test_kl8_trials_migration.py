@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from scripts.migrate.kl8_trials_to_store import migrate, read_trials, verify
+from scripts.migrate.kl8_trials_to_store import backfill, migrate, read_trials, verify
 from src.domain.numeric.repository import create_all
 from src.domain.numeric.trial_store import TrialStore
 from src.foundation.store import Database, make_engine
@@ -134,3 +134,32 @@ class VerifyTests(_Base):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class BackfillTests(_Base):
+    """`extra` 列是后加的，先于它写入的行读回来会缺 trial_id/evidence_schema。
+
+    `append_many` 对已存在的键不覆盖，补不了这些字段，所以回填单独走一趟。
+    """
+
+    def test_fills_fields_missing_from_already_stored_rows(self):
+        bare = _trial()
+        self.store.append(bare)
+        enriched = _trial(trial_id='abc123', evidence_schema=2)
+
+        self.assertEqual(backfill(self._file([enriched]), self.db), 1)
+
+        stored = self.store.load()[0]
+        self.assertEqual(stored['trial_id'], 'abc123')
+        self.assertEqual(stored['evidence_schema'], 2)
+
+    def test_ignores_trials_that_are_not_in_the_store(self):
+        self.assertEqual(backfill(self._file([_trial()]), self.db), 0)
+
+    def test_is_idempotent(self):
+        self.store.append(_trial())
+        path = self._file([_trial(trial_id='abc123')])
+        backfill(path, self.db)
+        backfill(path, self.db)
+        self.assertEqual(len(self.store.load()), 1)
+        self.assertEqual(self.store.load()[0]['trial_id'], 'abc123')

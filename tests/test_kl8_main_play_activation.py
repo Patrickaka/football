@@ -6,6 +6,7 @@ from unittest.mock import patch
 import pytest
 
 from src.kl8 import config, records, snapshots, strategies, validation
+from tests.trial_store_support import trial_store
 from src.kl8.backtest import KL8RollingBacktest
 from src.kl8.holdout import reserve_final_holdout
 from src.kl8.main_play_validation import (
@@ -154,10 +155,9 @@ def test_both_entrypoints_require_both_main_plays(entrypoint, defect):
     def permutation(*args, **kwargs):
         return {'p_value': .2 if defect == 'companion_p' and kwargs['play_type'] == 'fu_shi_7' else .001}
     analyzer = SimpleNamespace(history_data=history())
-    with patch.object(config, 'ACTIVE_STRATEGIES', {'select_6': {}, 'fu_shi_7': {}}), \
-         patch.object(config, 'STRATEGY_TRIAL_RESULTS', trials), \
+    with trial_store(trials), \
+         patch.object(config, 'ACTIVE_STRATEGIES', {'select_6': {}, 'fu_shi_7': {}}), \
          patch.object(validation, 'get_kl8_analyzer', return_value=analyzer), \
-         patch.object(records, '_persist_trial_results', return_value=True), \
          patch.object(KL8RollingBacktest, '_rolling_backtest_parametric', side_effect=rolling), \
          patch.object(KL8RollingBacktest, '_permutation_test', side_effect=permutation) as perm, \
          patch.object(snapshots, '_persist_active_strategies') as save_active, \
@@ -179,10 +179,9 @@ def test_both_entrypoints_require_both_main_plays(entrypoint, defect):
 
 
 def test_auto_activate_false_keeps_live_state_even_when_pair_passes():
-    with patch.object(config, 'ACTIVE_STRATEGIES', {'select_6': {}, 'fu_shi_7': {}}), \
-         patch.object(config, 'STRATEGY_TRIAL_RESULTS', []), \
+    with trial_store(), \
+         patch.object(config, 'ACTIVE_STRATEGIES', {'select_6': {}, 'fu_shi_7': {}}), \
          patch.object(validation, 'get_kl8_analyzer', return_value=SimpleNamespace(history_data=history())), \
-         patch.object(records, '_persist_trial_results', return_value=True), \
          patch.object(KL8RollingBacktest, '_rolling_backtest_parametric',
                       side_effect=lambda *args, **kw: metrics(kw['end_idx'] - kw['start_idx'])), \
          patch.object(KL8RollingBacktest, '_permutation_test', return_value={'p_value': .001}), \
@@ -208,7 +207,8 @@ def test_unsupported_current_rules_are_rejected_without_running_a_different_back
 @pytest.mark.parametrize('cap', [None, 0, 2])
 def test_explicit_final_cap_is_rejected_even_when_none(cap):
     proposed = {**candidate(), 'final_max_last_numbers': cap}
-    with patch.object(config, 'ACTIVE_STRATEGIES', {}), \
+    with trial_store(), \
+         patch.object(config, 'ACTIVE_STRATEGIES', {}), \
          patch.object(KL8RollingBacktest, '_rolling_backtest_parametric') as rolling:
         report = KL8RollingBacktest(SimpleNamespace(history_data=history())).run_candidate_tournament_per_play_type(
             'select_6', {'candidate': proposed})
@@ -255,7 +255,8 @@ def test_incomplete_candidate_configuration_cannot_be_validated_or_activated(key
         del proposed[key]
     else:
         proposed[key] = value
-    with patch.object(config, 'ACTIVE_STRATEGIES', {}), \
+    with trial_store(), \
+         patch.object(config, 'ACTIVE_STRATEGIES', {}), \
          patch.object(KL8RollingBacktest, '_rolling_backtest_parametric') as rolling, \
          patch.object(snapshots, '_persist_active_strategies') as persist:
         report = KL8RollingBacktest(SimpleNamespace(history_data=history())).run_candidate_tournament_per_play_type(

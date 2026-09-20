@@ -5,7 +5,10 @@ from unittest.mock import patch
 
 import pytest
 
-from src.kl8 import backtest as backtest_module, config, records, snapshots, validation
+from src.domain.numeric.repository import create_all
+from src.domain.numeric.trial_store import TrialStore
+from src.foundation.store import Database, make_engine
+from src.kl8 import backtest as backtest_module, records, snapshots, trial_sync, validation
 from src.kl8.analyzer import KL8Analyzer
 from src.kl8.backtest import KL8RollingBacktest
 
@@ -19,19 +22,38 @@ def tournament(history_trials, *, play='select_6', raw_p=.01):
                'probabilities': {'>=1': .9, '>=3': .3, '>=4': .15, '>=5': .08, '>=6': .005, '>=7': .001},
                'theoretical_probs': {'>=3': .2, '>=4': .1, '>=5': .05},
                'profit_roi': -.3, 'random_profit_roi': -.5}
-    trials = deepcopy(history_trials)
-    with patch.object(config, 'STRATEGY_TRIAL_RESULTS', trials), \
-         patch.object(records, '_persist_trial_results', return_value=True), \
-         patch.object(snapshots, 'activate_verified_strategy', return_value=True) as activation, \
-         patch.object(backtest, '_rolling_backtest_parametric', side_effect=lambda *a, **kw: {
-             key: {**metrics, 'n_tests': kw['end_idx'] - kw['start_idx']}
-             for key in {'select_6', 'fu_shi_7', play}}) as rolling, \
-         patch.object(backtest, '_permutation_test', return_value={'p_value': raw_p}) as permutation:
-        report = backtest.run_candidate_tournament_per_play_type(play, {
-            'current': {'strategy_id': 'current', 'feature_weights': {'frequency': 1.0},
-                        'model_weights': {'rank': 1.0}, 'window_size': 100},
-        }, n_permutations=10)
-    return report, trials, activation, rolling, permutation
+    store = _memory_store(history_trials)
+    trial_sync.set_store(store)
+    try:
+        with patch.object(snapshots, 'activate_verified_strategy', return_value=True) as activation, \
+             patch.object(backtest, '_rolling_backtest_parametric', side_effect=lambda *a, **kw: {
+                 key: {**metrics, 'n_tests': kw['end_idx'] - kw['start_idx']}
+                 for key in {'select_6', 'fu_shi_7', play}}) as rolling, \
+             patch.object(backtest, '_permutation_test', return_value={'p_value': raw_p}) as permutation:
+            report = backtest.run_candidate_tournament_per_play_type(play, {
+                'current': {'strategy_id': 'current', 'feature_weights': {'frequency': 1.0},
+                            'model_weights': {'rank': 1.0}, 'window_size': 100},
+            }, n_permutations=10)
+    finally:
+        trial_sync.reset_store()
+    return report, store.load(), activation, rolling, permutation
+
+
+def _memory_store(history_trials):
+    db = Database(make_engine('sqlite+pysqlite:///:memory:'))
+    create_all(db)
+    store = TrialStore(db, game='kl8')
+    store.append_many(deepcopy(history_trials))
+    return store
+
+
+def _round(trials, name):
+    """按轮次取记录。
+
+    不再按下标取：记录从库里查出来是按 tested_at 排的，而 holdout 预留那条
+    的 tested_at 是 issues_sha256，排到哪个位置并不确定。
+    """
+    return [t for t in trials if (t.get('tournament_round') or '') == name]
 
 
 def test_earlier_trials_change_the_real_gate_and_block_opening_the_final_slice():
@@ -44,7 +66,7 @@ def test_earlier_trials_change_the_real_gate_and_block_opening_the_final_slice()
     assert all(call.kwargs['start_idx'] != 600 for call in rolling.call_args_list)
     assert report['val_results']['current']['raw_p_value'] == .01
     assert report['val_results']['current']['fdr_adjusted_p'] == pytest.approx(.1)
-    assert trials[-1]['fdr_adjusted_p'] == pytest.approx(.1)
+    assert _round(trials, 'per_play_validation')[-1]['fdr_adjusted_p'] == pytest.approx(.1)
     assert report['fdr_audit']['family_size'] == 10
 
 
@@ -59,9 +81,11 @@ def test_other_plays_do_not_contaminate_the_family_and_new_attempt_uses_its_own_
     activation_report = activation.call_args.args[2]
     assert activation_report['adjusted_p'] == pytest.approx(.02)
     assert activation_report['fdr_audit']['family_size'] == 2
-    assert trials[-2]['fdr_adjusted_p'] == pytest.approx(.02)
-    assert trials[-1]['tournament_round'] == 'holdout_exposure'
-    assert trials[0]['fdr_adjusted_p'] == .9
+    assert _round(trials, 'per_play_validation')[-1]['fdr_adjusted_p'] == pytest.approx(.02)
+    assert len(_round(trials, 'holdout_exposure')) == 1
+    # 历史条的 fdr_adjusted_p 不再被整族回写（它是纯派生值），
+    # 但它必须仍留在族里参与校正——上面的 family_size==2 已经证明了这点。
+    assert _round(trials, '')[0]['raw_p_value'] == .9
     assert {call.kwargs['play_type'] for call in permutation.call_args_list} == {'select_6', 'fu_shi_7'}
     assert report['fdr_audit']['controls_repeated_final_test_access'] is True
 
@@ -71,11 +95,14 @@ def test_malformed_p_values_never_pass_and_historical_failures_remain_in_family(
     report, _, activation, _, _ = tournament([], raw_p=invalid_p)
     assert report['all_failed'] is True
     activation.assert_not_called()
+    # 九条必须各自可区分：四元键是库里的主键，键相同的记录只会留下一条，
+    # 族就从 10 缩成 2。旧的内存列表靠 trial_id 区分同秒重复，库不靠它。
     report, trials, activation, _, _ = tournament([
-        {'play_type': 'select_6', 'raw_p_value': invalid_p} for _ in range(9)
+        {'strategy_id': f'past-{i}', 'play_type': 'select_6', 'raw_p_value': invalid_p}
+        for i in range(9)
     ])
     assert report['all_failed'] is True
-    assert trials[-1]['fdr_adjusted_p'] == pytest.approx(.1)
+    assert _round(trials, 'per_play_validation')[-1]['fdr_adjusted_p'] == pytest.approx(.1)
     activation.assert_not_called()
 
 
@@ -122,7 +149,7 @@ def test_both_validation_entrypoints_declare_the_compound_play():
              'fu_shi_7': {'pool_mean_hits': 2, 'pool_expected_random': 1.75}}), \
          patch.object(KL8RollingBacktest, '_permutation_test', return_value={
              'error': 'stop before persistence'}) as standalone_permutation, \
-         patch.object(records, '_persist_trial_results', side_effect=AssertionError('no storage')):
+         patch.object(trial_sync, 'record_trial', side_effect=AssertionError('no storage')):
         report = validation.validate_and_activate_strategy(
             'fu_shi_7', {'frequency': 1}, {'rank': 1}, 100,
         )

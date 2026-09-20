@@ -19,6 +19,7 @@ log = setup_logger('kl8')
 from . import snapshots as _snapshots_mod
 from . import records as _records_mod
 from . import config as _cfg
+from . import trial_sync as _trial_sync
 
 from .config import (
     BACKTEST_FINAL_TEST_PERIODS, BACKTEST_PERMUTATION_COUNT, BACKTEST_STABILITY_THRESHOLD, BACKTEST_STABILITY_WINDOWS, KL8_PREDICTOR_VERSION,
@@ -240,21 +241,17 @@ def validate_and_activate_strategy(
         'tested_at': time.strftime('%Y-%m-%dT%H:%M:%S'),
         'evidence_schema': 2,
     }
-    _cfg.STRATEGY_TRIAL_RESULTS.append(trial_record)
-    _records_mod._persist_trial_results()  # v9: 每次新增试验后持久化
+    _trial_sync.record_trial(trial_record)
 
     # v8: 全量BH FDR校正 — 对同一玩法下所有候选策略的p值统一校正
-    # 收集同玩法的所有试验记录
-    same_play_trials = [t for t in _cfg.STRATEGY_TRIAL_RESULTS if isinstance(t, dict)
-                        and play_family(t.get('play_type')) == play_family(play_type)
-                        and t.get('tournament_round') != 'holdout_exposure']
+    same_play_trials, current_idx = _trial_sync.family_with_current(play_type,
+                                                                    trial_record)
     same_play_p_values = [_safe_fdr_p_value(t.get('raw_p_value')) for t in same_play_trials]
 
     # 如果只有1个p值（当前刚添加的），FDR校正等于不校正
     # 但随着候选策略增多，FDR校正越来越有意义
     if len(same_play_p_values) > 1:
         adjusted_p_values = benjamini_hochberg_fdr(same_play_p_values)
-        current_idx = next(i for i, trial in enumerate(same_play_trials) if trial is trial_record)
         adjusted_p = adjusted_p_values[current_idx]
     else:
         adjusted_p = raw_p_value  # 单次检验时FDR校正等于原始p值
@@ -313,9 +310,13 @@ def validate_and_activate_strategy(
     holdout = {'available': False, 'reason': 'validation_not_qualified'}
     if (condition_1_lift_positive and condition_2_fdr_significant and condition_3_stability
             and (not main_gate or main_val_check['passed'])):
+        # holdout 要看全族**含曝光记录**的历史，再把新的预留 append 进这个
+        # 列表、调 persist 确认落库；没落库就不能当作已曝光，所以回传的必须
+        # 是真实写入结果，不能恒为 True。
+        prior_trials = _trial_sync.family_trials(play_type, include_exposures=True)
         holdout = reserve_final_holdout(
             play_type, strategy_dict, analyzer.history_data, final_test_range,
-            _cfg.STRATEGY_TRIAL_RESULTS, _records_mod._persist_trial_results,
+            prior_trials, lambda: _trial_sync.record_trial(prior_trials[-1]),
             version=KL8_PREDICTOR_VERSION, minimum=BACKTEST_FINAL_TEST_PERIODS,
         )
     if holdout['available']:

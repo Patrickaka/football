@@ -382,7 +382,9 @@ def _persist_final_test_report(report: Dict):
         return False
 
 
-_cfg.STRATEGY_TRIAL_RESULTS.extend(_load_trial_results())
+# 策略试验记录不再在导入时全量载入内存。33839 条约占 57 MB，而用到它们的
+# 只有 FDR 校正——那是按玩法族取一小段，`trial_sync` 按需查库即可。
+# `data/kl8_strategy_trials.json` 就此停写，作为迁移前的历史备份保留。
 
 
 loaded_strategies = _load_active_strategies()

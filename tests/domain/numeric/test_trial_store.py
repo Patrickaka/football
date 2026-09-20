@@ -182,3 +182,99 @@ class GameIsolationTests(_Base):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class UnmodeledFieldsTests(_Base):
+    """表只建模了十来个字段，而记录里还有别的——它们不能在入库时蒸发。
+
+    `evidence_schema` 尤其要命：`holdout.py` 用 `!= 2` 分辨新旧证据格式，
+    字段丢了就会把每一条都判成 legacy，安静地改掉 holdout 的决策。
+    """
+
+    def test_round_trip_preserves_fields_without_columns(self):
+        trial = _trial(trial_id='a1b2c3', evidence_schema=2,
+                       validation_family='select_6',
+                       main_play_p_values={'select_6': 0.04, 'fu_shi_7': 0.06},
+                       main_play_validation={'passed': True})
+        self.store.append(trial)
+        self.assertEqual(self.store.load()[0], trial)
+
+    def test_absent_key_stays_absent(self):
+        """「没有这个键」与「值为 None」是两件事，补默认值等于凭空造结论。"""
+        self.store.append(_trial())
+        self.assertNotIn('evidence_schema', self.store.load()[0])
+
+
+class FamilyQueryTests(_Base):
+    """FDR 的族是 MAIN_PLAYS=('select_6','fu_shi_7') 合成的，不是单个 play_type。"""
+
+    def test_spans_every_play_type_in_the_family_ordered_by_tested_at(self):
+        self.store.append(_trial(play_type='fu_shi_7', tested_at='2026-06-26T14:00:02'))
+        self.store.append(_trial(play_type='select_6', tested_at='2026-06-26T14:00:01'))
+        found = self.store.family_trials(('select_6', 'fu_shi_7'))
+        self.assertEqual([t['tested_at'] for t in found],
+                         ['2026-06-26T14:00:01', '2026-06-26T14:00:02'])
+
+    def test_excludes_the_named_rounds(self):
+        self.store.append(_trial(play_type='select_6', tournament_round='validation'))
+        self.store.append(_trial(play_type='select_6', tournament_round='holdout_exposure'))
+        found = self.store.family_trials(('select_6',), exclude_rounds=('holdout_exposure',))
+        self.assertEqual([t['tournament_round'] for t in found], ['validation'])
+
+
+class UpdateTests(_Base):
+    def test_updates_only_the_addressed_trial(self):
+        first = _trial(tested_at='2026-06-26T14:00:01')
+        second = _trial(tested_at='2026-06-26T14:00:02')
+        self.store.append_many([first, second])
+
+        self.store.update_fields(first, fdr_adjusted_p=0.123456)
+
+        by_time = {t['tested_at']: t for t in self.store.load()}
+        self.assertEqual(by_time['2026-06-26T14:00:01']['fdr_adjusted_p'], 0.123456)
+        self.assertEqual(by_time['2026-06-26T14:00:02']['fdr_adjusted_p'],
+                         second['fdr_adjusted_p'])
+
+    def test_update_keeps_the_other_fields_intact(self):
+        trial = _trial(trial_id='keepme', evidence_schema=2)
+        self.store.append(trial)
+        self.store.update_fields(trial, fdr_adjusted_p=0.5)
+        stored = self.store.load()[0]
+        self.assertEqual(stored['trial_id'], 'keepme')
+        self.assertEqual(stored['evidence_schema'], 2)
+        self.assertEqual(stored['feature_weights'], trial['feature_weights'])
+
+
+class ReplaceTests(_Base):
+    def test_replaces_an_existing_trial_wholesale(self):
+        self.store.append(_trial())
+        self.assertTrue(self.store.replace(_trial(trial_id='added-later',
+                                                  fdr_adjusted_p=0.4)))
+        stored = self.store.load()[0]
+        self.assertEqual(stored['trial_id'], 'added-later')
+        self.assertEqual(stored['fdr_adjusted_p'], 0.4)
+
+    def test_does_not_insert_when_the_key_is_absent(self):
+        self.assertFalse(self.store.replace(_trial()))
+        self.assertEqual(self.store.load(), [])
+
+
+class BooleanPValueTests(_Base):
+    """bool 是 int 的子类，存进 Float 列会变成 1.0/0.0。
+
+    对 p 值来说 0.0 看起来像「极其显著」，而 False 其实是个非法输入。
+    调用方的 `_safe_fdr_p_value` 认得出 False，认不出往返后的 0.0——
+    这条路径会把一个无效策略静默判成显著。
+    """
+
+    def test_false_p_value_does_not_come_back_as_zero(self):
+        self.store.append(_trial(raw_p_value=False))
+        self.assertIsNone(self.store.load()[0]['raw_p_value'])
+
+    def test_true_p_value_does_not_come_back_as_one(self):
+        self.store.append(_trial(raw_p_value=True))
+        self.assertIsNone(self.store.load()[0]['raw_p_value'])
+
+    def test_real_numbers_are_untouched(self):
+        self.store.append(_trial(raw_p_value=0.0))
+        self.assertEqual(self.store.load()[0]['raw_p_value'], 0.0)

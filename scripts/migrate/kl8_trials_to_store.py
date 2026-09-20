@@ -49,6 +49,23 @@ def migrate(path, db, dry_run=False, batch_size=BATCH_SIZE):
     return stats
 
 
+def backfill(path, db):
+    """用文件内容把已入库的行整行刷新一遍，返回刷新条数。
+
+    `extra` 列是后加的，先于它写入的行读回来会缺 trial_id / evidence_schema
+    等键——而 `holdout.py` 正是用 `evidence_schema != 2` 分辨新旧证据，缺了
+    它每一条都会被判成 legacy。`append_many` 对已存在的键保持原样、不覆盖，
+    补不了这些字段，所以单独走一趟。
+
+    顺带也把 `fdr_adjusted_p` 对齐到文件里的值：它是派生值，文件里那个是更
+    晚一次校正算出来的。
+    """
+    store = TrialStore(db, game=GAME)
+    stored = {_key(trial) for trial in store.load()}
+    return sum(1 for trial in read_trials(path)
+               if _key(trial) in stored and store.replace(trial))
+
+
 def verify(path, db):
     """比对条数与抽样内容。
 
@@ -93,6 +110,8 @@ def main():
     parser = argparse.ArgumentParser(description='kl8 策略试验记录迁移')
     parser.add_argument('--dry-run', action='store_true')
     parser.add_argument('--verify-only', action='store_true')
+    parser.add_argument('--backfill', action='store_true',
+                        help='用文件内容整行刷新已入库的记录（补 extra 等后加的列）')
     parser.add_argument('--file', default=None)
     args = parser.parse_args()
 
@@ -104,6 +123,11 @@ def main():
     create_all(db)
 
     if args.verify_only:
+        _report(verify(path, db))
+        return
+
+    if args.backfill:
+        log.info('已刷新 %d 条已入库记录', backfill(path, db))
         _report(verify(path, db))
         return
 

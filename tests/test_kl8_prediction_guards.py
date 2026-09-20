@@ -11,6 +11,7 @@ from src.kl8 import config as kl8_config
 from src.kl8 import records as kl8_records
 from src.kl8 import snapshots as kl8_snapshots
 from src.kl8 import strategies as kl8_strategies
+from tests.trial_store_support import trial_store
 from src.kl8 import (
     KL8RollingBacktest,
     KL8Analyzer,
@@ -1519,6 +1520,11 @@ class KL8PredictionGuardTests(unittest.TestCase):
         original_activate = kl8_snapshots.activate_verified_strategy
         original_persist = kl8_records._persist_trial_results
         original_trials = kl8_config.STRATEGY_TRIAL_RESULTS
+        # 试验记录改走库了，这里挂一个内存库。下面两个全局仍旧照常还原，
+        # 免得这里的赋值漏到别的用例上。
+        _trials_db = trial_store()
+        _trials_db.__enter__()
+        self.addCleanup(_trials_db.__exit__, None, None, None)
 
         try:
             backtest._rolling_backtest_parametric = fake_rolling
@@ -1580,6 +1586,11 @@ class KL8PredictionGuardTests(unittest.TestCase):
 
         original_persist = kl8_records._persist_trial_results
         original_trials = kl8_config.STRATEGY_TRIAL_RESULTS
+        # 试验记录改走库了，这里挂一个内存库。下面两个全局仍旧照常还原，
+        # 免得这里的赋值漏到别的用例上。
+        _trials_db = trial_store()
+        _trials_db.__enter__()
+        self.addCleanup(_trials_db.__exit__, None, None, None)
 
         try:
             backtest._rolling_backtest_parametric = fake_rolling
