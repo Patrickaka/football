@@ -34,7 +34,7 @@ class GetCacheGetDbTests(unittest.TestCase):
     """
 
     def setUp(self):
-        settings = Settings(redis_url=None, mysql_url='sqlite+pysqlite:///:memory:')
+        settings = Settings(redis_url=None, database_url='sqlite+pysqlite:///:memory:')
         self.cache = build_cache(settings)
         self.db = build_database(settings)
 

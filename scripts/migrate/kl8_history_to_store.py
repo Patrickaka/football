@@ -104,10 +104,10 @@ def main():
     args = parser.parse_args()
 
     from src.common.paths import data_path
-    from src.foundation.store import Database, make_engine, mysql_url_from_env
+    from src.foundation.store import Database, make_engine, database_url_from_env
 
     path = args.file or data_path('kl8_history.json')
-    db = Database(make_engine(mysql_url_from_env()))
+    db = Database(make_engine(database_url_from_env()))
     create_all(db)
 
     if args.verify_only:

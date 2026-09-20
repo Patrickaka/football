@@ -8,7 +8,7 @@ from typing import Optional
 from fastapi import Request
 
 from src.foundation.cache import Cache, MemoryBackend, RedisBackend
-from src.foundation.store import Database, make_engine, mysql_url_from_env
+from src.foundation.store import Database, make_engine, database_url_from_env
 
 log = logging.getLogger('api.deps')
 
@@ -18,7 +18,7 @@ _executor: Optional[ThreadPoolExecutor] = None
 @dataclass
 class Settings:
     redis_url: Optional[str] = 'redis://127.0.0.1:6379/0'
-    mysql_url: Optional[str] = None
+    database_url: Optional[str] = None
     cache_default_ttl: int = 300
     max_task_workers: int = 2
     executor_workers: int = 4
@@ -49,7 +49,7 @@ class Settings:
         env = os.environ if env is None else env
         return cls(
             redis_url=env.get('REDIS_URL', 'redis://127.0.0.1:6379/0'),
-            mysql_url=env.get('MYSQL_URL') or None,
+            database_url=env.get('DATABASE_URL') or None,
             cache_default_ttl=int(env.get('CACHE_DEFAULT_TTL', '300')),
             max_task_workers=int(env.get('MAX_TASK_WORKERS', '2')),
             executor_workers=int(env.get('EXECUTOR_WORKERS', '4')),
@@ -102,7 +102,7 @@ def build_cache(settings):
 
 
 def build_database(settings):
-    url = settings.mysql_url or mysql_url_from_env()
+    url = settings.database_url or database_url_from_env()
     return Database(make_engine(url))
 
 

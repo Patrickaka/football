@@ -12,7 +12,7 @@ from src.api.deps import Settings
 
 class HealthTests(unittest.TestCase):
     def setUp(self):
-        self.app = create_app(Settings(redis_url=None, mysql_url='sqlite+pysqlite:///:memory:'))
+        self.app = create_app(Settings(redis_url=None, database_url='sqlite+pysqlite:///:memory:'))
         # TestClient 只有在作为上下文管理器使用时才会触发 ASGI lifespan
         # （Starlette/FastAPI 标准行为），app.state 上的 cache/db/tasks 由
         # lifespan 装配；用 ExitStack + addCleanup 保证测试结束时退出

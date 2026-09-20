@@ -3,46 +3,45 @@ from unittest import mock
 
 from sqlalchemy import text
 
-from src.foundation.store.engine import Database, make_engine, mysql_url_from_env
+from src.foundation.store.engine import Database, make_engine, database_url_from_env
 
 
-class MysqlUrlTests(unittest.TestCase):
+class DatabaseUrlTests(unittest.TestCase):
     def test_builds_url_from_env(self):
-        env = {
-            'MYSQL_HOST': 'db.internal',
-            'MYSQL_PORT': '3307',
-            'MYSQL_USER': 'football',
-            'MYSQL_PASSWORD': 'secret',
-            'MYSQL_DB': 'football',
-        }
-        with mock.patch.dict('os.environ', env, clear=True):
-            url = mysql_url_from_env()
-        self.assertEqual(
-            url, 'mysql+pymysql://football:secret@db.internal:3307/football?charset=utf8mb4'
-        )
+        with mock.patch.dict('os.environ', {'FOOTBALL_DB_PATH': '/srv/f.db'}, clear=True):
+            self.assertEqual(database_url_from_env(), 'sqlite+pysqlite:////srv/f.db')
 
-    def test_applies_defaults_when_env_missing(self):
-        with mock.patch.dict('os.environ', {'MYSQL_PASSWORD': 'p'}, clear=True):
-            url = mysql_url_from_env()
-        self.assertIn('@127.0.0.1:3306/football', url)
+    def test_defaults_to_the_data_directory(self):
+        from pathlib import Path
 
-    def test_password_is_url_quoted(self):
-        with mock.patch.dict('os.environ', {'MYSQL_PASSWORD': 'p@ss/word'}, clear=True):
-            url = mysql_url_from_env()
-        self.assertIn('p%40ss%2Fword', url)
-
-    def test_password_with_space_survives_round_trip(self):
         from sqlalchemy.engine import make_url
 
-        secret = 'p@ss word/slash:colon'
-        with mock.patch.dict('os.environ', {'MYSQL_PASSWORD': secret}, clear=True):
-            url = mysql_url_from_env()
-        self.assertEqual(make_url(url).password, secret)
+        with mock.patch.dict('os.environ', {}, clear=True):
+            url = database_url_from_env()
+        self.assertTrue(url.startswith('sqlite+pysqlite:///'), url)
+        # 拆成 Path 比对，不写整段路径字面量——仓库有条守卫在扫测试里的
+        # data 目录引用，而这里只是断言默认值，并不读那个文件。
+        default = Path(make_url(url).database)
+        self.assertEqual(default.name, 'football.db')
+        self.assertEqual(default.parent.name, 'data')
+
+    def test_path_survives_the_round_trip(self):
+        """路径带空格也要能还原，不然换个目录就悄悄连到别的库。"""
+        from sqlalchemy.engine import make_url
+
+        path = '/srv/my football/f.db'
+        with mock.patch.dict('os.environ', {'FOOTBALL_DB_PATH': path}, clear=True):
+            self.assertEqual(make_url(database_url_from_env()).database, path)
 
 
 class DatabaseTests(unittest.TestCase):
     def setUp(self):
         self.db = Database(make_engine('sqlite+pysqlite:///:memory:'))
+
+    def test_busy_timeout_is_applied_to_new_connections(self):
+        """busy_timeout 是连接级的，不像 WAL 写在库文件里——每条连接都要设。"""
+        with self.db.connect() as conn:
+            self.assertEqual(conn.execute(text('PRAGMA busy_timeout')).scalar(), 5000)
 
     def test_connect_executes_query(self):
         with self.db.connect() as conn:

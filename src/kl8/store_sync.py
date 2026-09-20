@@ -22,9 +22,9 @@ GAME = 'kl8'
 
 def _open_store():
     """按需建库连接。抓取路径不常跑，没必要为它常驻一个连接池。"""
-    from src.foundation.store import Database, make_engine, mysql_url_from_env
+    from src.foundation.store import Database, make_engine, database_url_from_env
 
-    db = Database(make_engine(mysql_url_from_env()))
+    db = Database(make_engine(database_url_from_env()))
     return DrawStore(db, game=GAME)
 
 

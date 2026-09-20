@@ -34,11 +34,12 @@ MATCHES_COLS = [
 _MATCHES_UPSERT = (
     "INSERT INTO matches (" + ",".join(MATCHES_COLS) + ") "
     "VALUES (" + ",".join(["%s"] * len(MATCHES_COLS)) + ") "
-    "ON DUPLICATE KEY UPDATE "
-    "fthg=VALUES(fthg), ftag=VALUES(ftag), ftr=VALUES(ftr), "
-    "hthg=VALUES(hthg), htag=VALUES(htag), htr=VALUES(htr), "
-    "odds=VALUES(odds), stats=VALUES(stats), settled=VALUES(settled), "
-    "updated_at=VALUES(updated_at)"
+    # 冲突列是 match_id 上的 UNIQUE 约束（见 schema.sql）。
+    "ON CONFLICT(match_id) DO UPDATE SET "
+    "fthg=excluded.fthg, ftag=excluded.ftag, ftr=excluded.ftr, "
+    "hthg=excluded.hthg, htag=excluded.htag, htr=excluded.htr, "
+    "odds=excluded.odds, stats=excluded.stats, settled=excluded.settled, "
+    "updated_at=excluded.updated_at"
 )
 
 
@@ -188,10 +189,13 @@ def season_from_date(date_str):
     return f"{(y - 1) % 100:02d}{y:02d}"
 
 
+# 还原成 CSV 里的写法（日期 dd/mm/yyyy、时间 HH:MM）。
+# 库里 match_date 存 'YYYY-MM-DD'、match_time 存 'HH:MM:SS'，strftime 按这个读。
+# 这里不用 `%%` 转义：占位符换成 `?` 之后 `%` 不再有特殊含义。
 _SELECT_SQL = (
     "SELECT league_code, "
-    "DATE_FORMAT(match_date, '%%d/%%m/%%Y') AS match_date, "
-    "TIME_FORMAT(match_time, '%%H:%%i') AS match_time, "
+    "strftime('%d/%m/%Y', match_date) AS match_date, "
+    "strftime('%H:%M', match_time) AS match_time, "
     "home_team, away_team, fthg, ftag, ftr, hthg, htag, htr, odds, stats "
     "FROM matches"
 )

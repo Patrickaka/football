@@ -66,3 +66,8 @@ catboost_info/
 
 # SDD 执行工作区（账本/简报/审查包，非产物）
 .superpowers/
+
+# SQLite 库与它的 WAL/SHM 边车文件，属于运行时数据
+data/football.db
+data/football.db-wal
+data/football.db-shm

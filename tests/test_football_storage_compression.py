@@ -232,7 +232,7 @@ class RepositoryArchiveTests(unittest.TestCase):
 
 
 class ArchiveMaintenanceTests(unittest.TestCase):
-    def test_mysql_dry_run_and_cas_preserve_exact_document_and_business_columns(self):
+    def test_dry_run_and_cas_preserve_exact_document_and_business_columns(self):
         record = large_record()
         raw = json.dumps(record, ensure_ascii=False)
         with patch.object(repositories.db, 'query_one', return_value={'raw_doc': raw}), \
@@ -245,7 +245,9 @@ class ArchiveMaintenanceTests(unittest.TestCase):
         self.assertEqual(report['status'], 'archived')
         sql, params = write.call_args.args
         self.assertIn('SET doc=%s WHERE match_id=%s', sql)
-        self.assertIn('AS BINARY', sql)
+        # CAS 的条件必须是拿刚读出的 doc 原文去比。SQLite 的 TEXT 原样存取，
+        # 相等比较本身就是精确的，不像 MySQL 的 JSON 列要 CAST 成 BINARY 才比得了。
+        self.assertIn('AND doc=%s', sql)
         self.assertEqual(params[1:], (record['match_id'], raw))
         self.assertEqual(storage.decode_record(json.loads(params[0])), record)
 
@@ -260,7 +262,7 @@ class ArchiveMaintenanceTests(unittest.TestCase):
         self.assertEqual(write.call_count, 1)
         fallback.assert_not_called()
 
-    def test_failed_or_uncertain_mysql_update_never_writes_stale_fallback(self):
+    def test_failed_or_uncertain_update_never_writes_stale_fallback(self):
         with patch.object(repositories.db, 'query_one', return_value={'raw_doc': json.dumps(large_record())}), \
              patch.object(repositories.db, 'execute', side_effect=OSError('connection lost')), \
              patch.object(repositories, '_football_archive_fallback') as fallback:

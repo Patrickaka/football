@@ -32,7 +32,7 @@ class ExecutorWorkersWiringTests(unittest.TestCase):
     def test_lifespan_seeds_executor_with_configured_worker_count(self):
         settings = Settings(
             redis_url=None,
-            mysql_url='sqlite+pysqlite:///:memory:',
+            database_url='sqlite+pysqlite:///:memory:',
             executor_workers=7,
         )
         app = create_app(settings)
@@ -43,7 +43,7 @@ class ExecutorWorkersWiringTests(unittest.TestCase):
     def test_lifespan_shares_app_cache_with_service_layer(self):
         settings = Settings(
             redis_url=None,
-            mysql_url='sqlite+pysqlite:///:memory:',
+            database_url='sqlite+pysqlite:///:memory:',
         )
         app = create_app(settings)
         with TestClient(app):
@@ -88,7 +88,7 @@ class LifespanShutdownOrderTests(unittest.TestCase):
         def recording_shutdown_executor():
             order.append('shutdown_executor')
 
-        settings = Settings(redis_url=None, mysql_url='sqlite+pysqlite:///:memory:')
+        settings = Settings(redis_url=None, database_url='sqlite+pysqlite:///:memory:')
 
         with mock.patch('src.api.app.build_cache', return_value=fake_cache), \
                 mock.patch('src.api.app.build_database', return_value=fake_db), \

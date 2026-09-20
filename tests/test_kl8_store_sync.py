@@ -46,7 +46,7 @@ class StoreBindingTests(unittest.TestCase):
     def test_opens_the_kl8_game(self):
         engine = make_engine('sqlite+pysqlite:///:memory:')
         with mock.patch('src.foundation.store.make_engine', lambda url: engine), \
-             mock.patch('src.foundation.store.mysql_url_from_env',
+             mock.patch('src.foundation.store.database_url_from_env',
                         lambda: 'sqlite+pysqlite:///:memory:'):
             store = store_sync._open_store()
         self.assertEqual(store.game, 'kl8')
@@ -56,7 +56,7 @@ class StoreBindingTests(unittest.TestCase):
         db = Database(make_engine('sqlite+pysqlite:///:memory:'))
         create_all(db)
         with mock.patch('src.foundation.store.make_engine', lambda url: db.engine), \
-             mock.patch('src.foundation.store.mysql_url_from_env',
+             mock.patch('src.foundation.store.database_url_from_env',
                         lambda: 'sqlite+pysqlite:///:memory:'):
             store_sync.mirror_to_store([_record('2026227')])
         self.assertEqual(DrawStore(db, game='kl8').count(), 1)

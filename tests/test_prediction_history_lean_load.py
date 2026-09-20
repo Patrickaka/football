@@ -4,6 +4,7 @@
 进程启动即 1.75 GB。裁剪必须发生在每一行反序列化之后、追加进列表之前。
 """
 import json
+import types
 import unittest
 from datetime import datetime
 from unittest import mock
@@ -33,8 +34,9 @@ def _row(record, created_at='2026-08-20'):
 
 class _FakeCursor:
 
-    def __init__(self, rows):
+    def __init__(self, rows, conn=None):
         self.rows = rows
+        self._conn = conn
 
     def __enter__(self):
         return self
@@ -45,6 +47,10 @@ class _FakeCursor:
     def execute(self, sql, params=None):
         self.sql = sql
 
+    def fetchall(self):
+        self._conn.fetchall_calls += 1
+        return self.rows
+
     def __iter__(self):
         return iter(self.rows)
 
@@ -53,23 +59,25 @@ class _FakeConnection:
 
     def __init__(self, rows):
         self.rows = rows
-        self.cursor_classes = []
+        self.fetchall_calls = 0
 
-    def cursor(self, cursor_class=None):
-        self.cursor_classes.append(cursor_class)
-        return _FakeCursor(self.rows)
+    def cursor(self, *args, **kwargs):
+        return _FakeCursor(self.rows, self)
 
 
 class IterQueryTests(unittest.TestCase):
 
-    def test_iter_query_streams_rows_through_an_unbuffered_dict_cursor(self):
+    def test_iter_query_streams_rows_instead_of_materialising_them(self):
+        """整表读大 JSON 列不能先 fetchall：919 行 185 MB 同时驻留，
+        释放后 glibc 也不还给系统。游标一次只拉一行。"""
         from src.common import db
         conn = _FakeConnection([{'doc': '1'}, {'doc': '2'}])
         with mock.patch.object(db, 'get_connection', return_value=conn):
             rows = db.iter_query('SELECT doc FROM t')
+            self.assertIsInstance(rows, types.GeneratorType)
             self.assertEqual([r['doc'] for r in rows], ['1', '2'])
 
-        self.assertEqual(conn.cursor_classes, [db.SSDictCursor])
+        self.assertEqual(conn.fetchall_calls, 0)
 
 
 class LoadAllTransformTests(unittest.TestCase):

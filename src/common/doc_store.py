@@ -175,10 +175,12 @@ def upsert_one(table, columns, row_values, key_cols):
     """
     placeholders = ",".join(["%s"] * len(columns))
     update_cols = [c for c in columns if c not in key_cols]
-    update_clause = ",".join(f"{c}=VALUES({c})" for c in update_cols)
+    update_clause = ",".join(f"{c}=excluded.{c}" for c in update_cols)
+    # SQLite 的 ON CONFLICT 必须写明冲突列，MySQL 的 ON DUPLICATE KEY 会
+    # 自动匹配任意唯一键——所以这里要显式带上 key_cols。
     sql = (
         f"INSERT INTO {table} ({','.join(columns)}) VALUES ({placeholders})"
-        f" ON DUPLICATE KEY UPDATE {update_clause}"
+        f" ON CONFLICT({','.join(key_cols)}) DO UPDATE SET {update_clause}"
     )
     try:
         conn = db.get_connection()

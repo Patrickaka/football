@@ -21,8 +21,9 @@ log = setup_logger('kv_store')
 _UPSERT = (
     "INSERT INTO kv_store (k, json_value, cache_date, updated_at) "
     "VALUES (%s, %s, %s, %s) "
-    "ON DUPLICATE KEY UPDATE "
-    "json_value=VALUES(json_value), cache_date=VALUES(cache_date), updated_at=VALUES(updated_at)"
+    "ON CONFLICT(k) DO UPDATE SET "
+    "json_value=excluded.json_value, cache_date=excluded.cache_date, "
+    "updated_at=excluded.updated_at"
 )
 
 _FALLBACK_FILE = None

@@ -206,9 +206,9 @@ def main():
     logging.basicConfig(level=logging.INFO, format='%(levelname)s %(message)s')
 
     from src.common import kv_store
-    from src.foundation.store import Database, make_engine, mysql_url_from_env
+    from src.foundation.store import Database, make_engine, database_url_from_env
 
-    db = Database(make_engine(mysql_url_from_env()))
+    db = Database(make_engine(database_url_from_env()))
     create_all(db)
 
     if args.verify_only:

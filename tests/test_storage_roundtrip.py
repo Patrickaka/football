@@ -1,63 +1,40 @@
 # -*- coding: utf-8 -*-
-"""MySQL 存储层测试。
+"""存储层往返测试。
 
-非破坏性：在独立的 `<MYSQL_DB>_test` 库上建表/读写/清理，不触碰业务库。
-无法连接 MySQL 时整体 skip，便于本地无库环境跑其余测试。
+这套测试以前挂着 `skipUnless(_can_connect())`——本地和 CI 都没有 MySQL，
+所以它**从来没真正跑过**，是一直绿着的假绿。换成 SQLite 之后不依赖任何
+外部服务，每次都真跑。
+
+库文件建在临时目录，绝不碰 data/ 下的真实库。
 """
 import os
 import sys
+import tempfile
 import unittest
+from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import pymysql
-
-from src.common import db, kv_store, doc_store, repositories as repo
+from src.common import db, kv_store, repositories as repo
 
 
-def _can_connect():
-    cfg = {
-        'host': os.getenv('MYSQL_HOST', '127.0.0.1'),
-        'port': int(os.getenv('MYSQL_PORT', '3306')),
-        'user': os.getenv('MYSQL_USER', 'root'),
-        'password': os.getenv('MYSQL_PASSWORD', ''),
-        'connect_timeout': 2,
-    }
-    try:
-        conn = pymysql.connect(**cfg)
-        conn.close()
-        return True
-    except Exception:
-        return False
-
-
-@unittest.skipUnless(_can_connect(), "无可用 MySQL，跳过存储层测试")
-class MySQLStorageTest(unittest.TestCase):
+class StorageRoundTripTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls._orig_db = os.environ.get('MYSQL_DB', 'football')
-        test_db = cls._orig_db + '_test'
-        conn = pymysql.connect(
-            host=os.getenv('MYSQL_HOST', '127.0.0.1'),
-            port=int(os.getenv('MYSQL_PORT', '3306')),
-            user=os.getenv('MYSQL_USER', 'root'),
-            password=os.getenv('MYSQL_PASSWORD', ''),
-        )
-        with conn.cursor() as cur:
-            cur.execute(f"CREATE DATABASE IF NOT EXISTS {test_db} CHARACTER SET utf8mb4")
-        conn.close()
-        os.environ['MYSQL_DB'] = test_db
-        cls._test_db = test_db
-        db._local.conn = None
+        cls._dir = tempfile.TemporaryDirectory()
+        cls._prev = os.environ.get('FOOTBALL_DB_PATH')
+        os.environ['FOOTBALL_DB_PATH'] = str(Path(cls._dir.name) / 'roundtrip.db')
+        db.close_connection()
         db.init_db()
 
     @classmethod
     def tearDownClass(cls):
-        try:
-            db.execute(f"DROP DATABASE IF EXISTS {cls._test_db}")
-        finally:
-            os.environ['MYSQL_DB'] = cls._orig_db
-            db._local.conn = None
+        db.close_connection()
+        if cls._prev is None:
+            os.environ.pop('FOOTBALL_DB_PATH', None)
+        else:
+            os.environ['FOOTBALL_DB_PATH'] = cls._prev
+        cls._dir.cleanup()
 
     def test_kv_roundtrip(self):
         obj = {'a': 1, 'b': [1, 2, 3], '中文': '值'}

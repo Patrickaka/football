@@ -1,16 +1,15 @@
 """定时维护清理，防止磁盘被写满。
 
 背景：生产曾因 MySQL binlog 无限增长（叠加历史上 football_prediction 的整表重写）
-把磁盘写满。整表重写已在写入层修复；本模块负责「按周期自动回收可再生数据」，
+把磁盘写满。整表重写已在写入层修复，binlog 则随着换用 SQLite 一并消失——
+**这个模块不再有 binlog 可清**。它现在负责「按周期自动回收可再生数据」，
 免去人工手动清理。
 
 清理边界（务必守住）：
-- 只删「可再生 / 已轮转」的东西：过期 binlog、旧的滚动日志文件。
+- 只删「可再生 / 已轮转」的东西：旧的滚动日志文件、过期报告产物。
 - 绝不删除业务数据：足球历史只允许经校验的无损压缩；kl8 快照/结算、开奖历史、校准库不动。
+  SQLite 的库文件本身当然也不归这里管。
 - 每步独立 try/except：一步失败不影响其余，且绝不让维护线程崩溃退出。
-
-binlog 的主策略应是 MySQL 服务端配置 `binlog_expire_logs_seconds`（由 MySQL
-自身滚动过期，最可靠）；本模块的 purge 只是兜底，防止配置缺失时 binlog 失控。
 """
 import os
 import shutil
@@ -25,11 +24,9 @@ from .logger import setup_logger, LOG_DIR
 log = setup_logger('maintenance')
 
 # 保留窗口与调度间隔，均可用环境变量覆盖
-BINLOG_RETENTION_DAYS = int(os.getenv('MYSQL_BINLOG_RETENTION_DAYS', '3'))
 LOG_RETENTION_DAYS = int(os.getenv('LOG_RETENTION_DAYS', '3'))
 MAINTENANCE_INTERVAL_HOURS = float(os.getenv('MAINTENANCE_INTERVAL_HOURS', '6'))
-# 磁盘压力下只保留最近一天 binlog，并立即删除全部可再生的轮转日志/报告。
-EMERGENCY_BINLOG_RETENTION_DAYS = int(os.getenv('EMERGENCY_BINLOG_RETENTION_DAYS', '1'))
+# 磁盘压力下立即删除全部可再生的轮转日志/报告。
 EMERGENCY_ARTIFACT_RETENTION_DAYS = int(os.getenv('EMERGENCY_ARTIFACT_RETENTION_DAYS', '0'))
 # 生产磁盘可能已满，首次维护不能再延迟到预热任务之后。
 MAINTENANCE_STARTUP_DELAY_SECONDS = int(os.getenv('MAINTENANCE_STARTUP_DELAY_SECONDS', '0'))
@@ -44,7 +41,6 @@ DISK_CHECK_INTERVAL_SECONDS = max(
 PRESSURE_CLEANUP_COOLDOWN_SECONDS = max(
     60, int(os.getenv('PRESSURE_CLEANUP_COOLDOWN_SECONDS', '300')),
 )
-PRESSURE_BINLOG_RETENTION_DAYS = int(os.getenv('PRESSURE_BINLOG_RETENTION_DAYS', '2'))
 PRESSURE_ARTIFACT_RETENTION_DAYS = int(os.getenv('PRESSURE_ARTIFACT_RETENTION_DAYS', '1'))
 ACTIVE_LOG_MAX_BYTES = max(
     1024 * 1024,
@@ -153,23 +149,6 @@ def cleanup_regenerable_artifacts(
     }
 
 
-def purge_binlogs(retention_days: int = None) -> bool:
-    """兜底清理过期 binlog，保留最近 retention_days 天。
-
-    需 MySQL 账号具备 BINLOG_ADMIN/SUPER 权限；未开 binlog 或无权限时安全跳过。
-    """
-    retention_days = BINLOG_RETENTION_DAYS if retention_days is None else retention_days
-    cutoff = (datetime.now() - timedelta(days=retention_days)).strftime('%Y-%m-%d %H:%M:%S')
-    try:
-        db.execute("PURGE BINARY LOGS BEFORE %s", (cutoff,))
-        log.info(f"binlog 清理完成：已删除 {cutoff} 之前的日志（保留最近 {retention_days} 天）")
-        return True
-    except Exception as e:
-        # 常见原因：无权限 / 未启用 binlog / MySQL 降级中。记录即可，不阻断维护。
-        log.warning(f"binlog 清理跳过（{e}）——若长期出现，请改用 MySQL 的 binlog_expire_logs_seconds")
-        return False
-
-
 def cleanup_rotated_logs(retention_days: int = None) -> int:
     """清理旧的滚动日志文件（football.log.*），返回删除数量。
 
@@ -232,15 +211,12 @@ def run_maintenance(force_emergency: bool = False, status: dict = None) -> dict:
     level = 'critical' if force_emergency else _pressure_level(before)
     emergency = level == 'critical'
     if emergency:
-        binlog_retention = EMERGENCY_BINLOG_RETENTION_DAYS
         artifact_retention = EMERGENCY_ARTIFACT_RETENTION_DAYS
         rotated_log_retention = 0
     elif level == 'warning':
-        binlog_retention = PRESSURE_BINLOG_RETENTION_DAYS
         artifact_retention = PRESSURE_ARTIFACT_RETENTION_DAYS
         rotated_log_retention = PRESSURE_ARTIFACT_RETENTION_DAYS
     else:
-        binlog_retention = BINLOG_RETENTION_DAYS
         artifact_retention = ARTIFACT_RETENTION_DAYS
         rotated_log_retention = LOG_RETENTION_DAYS
     log.debug(
@@ -248,11 +224,6 @@ def run_maintenance(force_emergency: bool = False, status: dict = None) -> dict:
         level, before['free_gb'], before['free_percent'],
     )
     result = {'emergency': emergency, 'pressure_level': level, 'disk_before': before}
-    try:
-        result['binlog_purged'] = purge_binlogs(binlog_retention)
-    except Exception as e:
-        log.error(f"binlog 清理异常：{e}")
-        result['binlog_purged'] = False
     try:
         result['logs_removed'] = cleanup_rotated_logs(rotated_log_retention)
     except Exception as e:
@@ -294,14 +265,13 @@ def run_maintenance(force_emergency: bool = False, status: dict = None) -> dict:
     emit(
         "维护清理完成: level=%s, rotated_logs=%s, active_logs=%s, "
         "artifacts=%s, freed_mb=%.2f, "
-        "free_gb=%.3f→%.3f, binlog_purged=%s, errors=%s",
+        "free_gb=%.3f→%.3f, errors=%s",
         level,
         result.get('logs_removed', 0),
         active_log_result.get('truncated_count', 0),
         artifact_result.get('removed_count', 0),
         bytes_freed / (1024 ** 2),
         before['free_gb'], after['free_gb'],
-        result.get('binlog_purged', False),
         len(artifact_result.get('errors') or []),
     )
     return result
@@ -377,7 +347,7 @@ if __name__ == '__main__':
     import argparse
     import json
 
-    parser = argparse.ArgumentParser(description='清理可再生日志、报告和过期 MySQL binlog')
+    parser = argparse.ArgumentParser(description='清理可再生日志与过期报告产物')
     parser.add_argument('--emergency', action='store_true', help='立即采用磁盘压力保留策略')
     args = parser.parse_args()
     print(json.dumps(run_maintenance(force_emergency=args.emergency), ensure_ascii=False, indent=2))

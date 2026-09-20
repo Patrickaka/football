@@ -124,8 +124,10 @@ def _football_archive_fallback(match_id, *, now, archive_after_days, dry_run):
 def football_prediction_archive_one(match_id, *, now=None, archive_after_days=None, dry_run=False):
     """Archive one stored document without overwriting concurrent result changes.
 
-    MySQL uses a binary comparison against the exact JSON text read from the
-    server. A failed/uncertain UPDATE never falls back to writing a stale copy.
+    条件更新比对的是刚读出来的那段 doc 原文：SQLite 的 TEXT 原样存取，
+    读到什么就能拿什么去比，不像 MySQL 的 JSON 列会重排键、去空格，
+    非得 CAST 成字符串才比得了。UPDATE 没命中（说明这期间有人改过）时
+    绝不退回去写一份旧副本。
     The maintenance caller must hold PredictionHistory._records_lock, including
     during fallback file operations. No business timestamps or indices change.
     """
@@ -133,7 +135,7 @@ def football_prediction_archive_one(match_id, *, now=None, archive_after_days=No
     empty = {'match_id': match_id, 'before_bytes': 0, 'after_bytes': 0, 'bytes_saved': 0}
     try:
         try:
-            row = db.query_one('SELECT CAST(doc AS CHAR CHARACTER SET utf8mb4) AS raw_doc '
+            row = db.query_one('SELECT doc AS raw_doc '
                                'FROM football_prediction WHERE match_id=%s', (match_id,))
         except Exception as exc:
             backend = 'fallback'
@@ -153,8 +155,7 @@ def football_prediction_archive_one(match_id, *, now=None, archive_after_days=No
         if encoded is None or dry_run:
             return {**empty, **report}
         affected = db.execute(
-            'UPDATE football_prediction SET doc=%s WHERE match_id=%s '
-            'AND CAST(CAST(doc AS CHAR CHARACTER SET utf8mb4) AS BINARY)=CAST(%s AS BINARY)',
+            'UPDATE football_prediction SET doc=%s WHERE match_id=%s AND doc=%s',
             (_J(encoded), match_id, raw),
         )
         if affected != 1:
@@ -204,7 +205,8 @@ def _sync_elo_ratings(cur, ratings, updated):
     if ratings:
         cur.executemany(
             "INSERT INTO elo_rating (team, rating, updated_at) VALUES (%s,%s,%s)"
-            " ON DUPLICATE KEY UPDATE rating=VALUES(rating), updated_at=VALUES(updated_at)",
+            " ON CONFLICT(team) DO UPDATE SET"
+            " rating=excluded.rating, updated_at=excluded.updated_at",
             [(t, v, updated) for t, v in ratings.items()],
         )
     stored = {r['team'] for r in db.query("SELECT team FROM elo_rating")}

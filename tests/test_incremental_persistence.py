@@ -118,7 +118,7 @@ class EloSaveWritesOnlyWhatChanged(unittest.TestCase):
         )
 
         statements = _statements(sink)
-        self.assertTrue(any('ON DUPLICATE KEY UPDATE' in s for s in statements))
+        self.assertTrue(any('ON CONFLICT(team) DO UPDATE' in s for s in statements))
         self.assertFalse([s for s in statements if s.startswith('DELETE FROM elo_rating')])
 
     def test_teams_that_disappeared_are_removed(self):

@@ -4,6 +4,15 @@ import tempfile
 
 import pytest
 
+# **必须在模块顶层设，不能只放进 fixture。** fixture 在收集完成之后才跑，
+# 而有模块在 import 期就连库（kl8.records 顶层会读一次激活策略），那时候
+# SQLite 已经把 data/football.db 建出来了。conftest 本身在收集开始时就被
+# import，是唯一足够早的位置。setdefault 留给 CI 覆盖。
+os.environ.setdefault(
+    'FOOTBALL_DB_PATH',
+    os.path.join(tempfile.mkdtemp(prefix='football-test-db-'), 'test.db'),
+)
+
 _POLLUTING_FILES = [
     'data/kl8_active_strategies.json',
     'data/kl8_strategy_trials.json',
@@ -24,6 +33,15 @@ def isolate_football_intelligence(tmp_path_factory):
         patch.setenv('FOOTBALL_INTELLIGENCE_CACHE_DIR',
                      str(tmp_path_factory.mktemp('football-intelligence')))
         yield
+
+
+@pytest.fixture(scope='session', autouse=True)
+def database_is_isolated():
+    """守住上面那条：库路径必须指向临时目录，绝不能是 data/ 下的真实库。"""
+    path = os.environ.get('FOOTBALL_DB_PATH', '')
+    assert path and 'football-test-db-' in path, (
+        f'测试库路径没有被隔离: {path!r}')
+    yield
 
 
 @pytest.fixture(scope='session', autouse=True)

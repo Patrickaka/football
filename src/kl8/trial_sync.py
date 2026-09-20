@@ -34,8 +34,8 @@ def _open_store():
     with _store_lock:
         if _store is None:
             from src.foundation.store import (Database, make_engine,
-                                              mysql_url_from_env)
-            _store = TrialStore(Database(make_engine(mysql_url_from_env())),
+                                              database_url_from_env)
+            _store = TrialStore(Database(make_engine(database_url_from_env())),
                                 game=GAME)
         return _store
 

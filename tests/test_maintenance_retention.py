@@ -98,14 +98,12 @@ class MaintenanceRetentionTests(unittest.TestCase):
         recovered = {**pressured, 'free_gb': 5.0, 'free_percent': 20.0,
                      'under_pressure': False}
         with patch.object(maintenance, 'disk_status', side_effect=[pressured, recovered]), \
-             patch.object(maintenance, 'purge_binlogs', return_value=True) as purge, \
              patch.object(maintenance, 'cleanup_rotated_logs', return_value=4) as logs, \
              patch.object(maintenance, 'cleanup_regenerable_artifacts', return_value={
                  'removed_count': 3, 'bytes_freed': 1024, 'errors': [],
              }) as artifacts:
             result = maintenance.run_maintenance()
 
-        purge.assert_called_once_with(maintenance.EMERGENCY_BINLOG_RETENTION_DAYS)
         logs.assert_called_once_with(0)
         artifacts.assert_called_once_with(maintenance.EMERGENCY_ARTIFACT_RETENTION_DAYS)
         self.assertTrue(result['emergency'])
@@ -118,14 +116,12 @@ class MaintenanceRetentionTests(unittest.TestCase):
             'total_bytes': 100, 'used_bytes': 50, 'free_bytes': 50,
         }
         with patch.object(maintenance, 'disk_status', side_effect=[healthy, healthy]), \
-             patch.object(maintenance, 'purge_binlogs', return_value=True) as purge, \
              patch.object(maintenance, 'cleanup_rotated_logs', return_value=0) as logs, \
              patch.object(maintenance, 'cleanup_regenerable_artifacts', return_value={
                  'removed_count': 0, 'bytes_freed': 0, 'errors': [],
              }) as artifacts:
             result = maintenance.run_maintenance(force_emergency=True)
 
-        purge.assert_called_once_with(maintenance.EMERGENCY_BINLOG_RETENTION_DAYS)
         logs.assert_called_once_with(0)
         artifacts.assert_called_once_with(maintenance.EMERGENCY_ARTIFACT_RETENTION_DAYS)
         self.assertTrue(result['emergency'])
@@ -139,14 +135,12 @@ class MaintenanceRetentionTests(unittest.TestCase):
         healthy = {**warning, 'free_gb': 20.0, 'free_percent': 20.0,
                    'under_pressure': False, 'pressure_level': 'healthy'}
         with patch.object(maintenance, 'disk_status', return_value=healthy), \
-             patch.object(maintenance, 'purge_binlogs', return_value=True) as purge, \
              patch.object(maintenance, 'cleanup_rotated_logs', return_value=1) as logs, \
              patch.object(maintenance, 'cleanup_regenerable_artifacts', return_value={
                  'removed_count': 1, 'bytes_freed': 1024, 'errors': [],
              }) as artifacts:
             result = maintenance.run_maintenance(status=warning)
 
-        purge.assert_called_once_with(maintenance.PRESSURE_BINLOG_RETENTION_DAYS)
         logs.assert_called_once_with(maintenance.PRESSURE_ARTIFACT_RETENTION_DAYS)
         artifacts.assert_called_once_with(maintenance.PRESSURE_ARTIFACT_RETENTION_DAYS)
         self.assertFalse(result['emergency'])

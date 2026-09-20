@@ -43,9 +43,9 @@ def _build_context():
 
 def _build_database():
     try:
-        from src.foundation.store import Database, make_engine, mysql_url_from_env
+        from src.foundation.store import Database, make_engine, database_url_from_env
 
-        return Database(make_engine(mysql_url_from_env()))
+        return Database(make_engine(database_url_from_env()))
     except Exception as exc:
         log.warning('篮球领域服务未连上数据库，退化为纯市场价格: %s', exc)
         return None
