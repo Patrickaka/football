@@ -81,6 +81,22 @@ def sqlite_type(mysql_type):
     return 'TEXT'
 
 
+def order_keys(columns):
+    """挑出用来给两边排序的列。
+
+    **大文本列绝不能进 ORDER BY**：MySQL 会把整列塞进 sort buffer，
+    football_prediction 的 doc 列有 302 MB，直接撞
+    `(1038, 'Out of sort memory')`。有主键就用主键，没有就用所有小列；
+    要是一张表全是大列，那就不排——顺序由自然顺序决定，总比排爆强。
+    """
+    primary = [name for name, _type, _null, key in columns if key == 'PRI']
+    if primary:
+        return primary
+    return [name for name, column_type, _null, _key in columns
+            if not any(kind in column_type.lower()
+                       for kind in ('text', 'json', 'blob'))]
+
+
 def create_table_ddl(table, columns):
     """按 MySQL 的列定义生成 SQLite 建表语句。
 
@@ -174,19 +190,22 @@ def copy_table(mysql, sqlite, table, columns, batch_size=BATCH_SIZE):
 def verify_table(mysql, sqlite, table, columns):
     """逐行全量比对，返回问题描述列表。
 
-    两边都按全部列排序后并排走，避免依赖主键——有的遗留表压根没有主键。
+    两边按 `order_keys` 选出的列排序后并排走。不能按全部列排——大 JSON 列
+    进 ORDER BY 会撞 MySQL 的 1038 Out of sort memory。
     """
     import pymysql.cursors
 
     names = [name for name, *_ in columns]
     my_cols = ','.join(f'`{name}`' for name in names)
     lite_cols = ','.join(f'"{name}"' for name in names)
-    order = ','.join(str(i + 1) for i in range(len(names)))
+    keys = order_keys(columns)
+    my_order = (' ORDER BY ' + ','.join(f'`{k}`' for k in keys)) if keys else ''
+    lite_order = (' ORDER BY ' + ','.join(f'"{k}"' for k in keys)) if keys else ''
 
     problems = []
     with mysql.cursor(pymysql.cursors.SSCursor) as cur:
-        cur.execute(f'SELECT {my_cols} FROM `{table}` ORDER BY {order}')
-        lite = sqlite.execute(f'SELECT {lite_cols} FROM "{table}" ORDER BY {order}')
+        cur.execute(f'SELECT {my_cols} FROM `{table}`{my_order}')
+        lite = sqlite.execute(f'SELECT {lite_cols} FROM "{table}"{lite_order}')
         index = 0
         while True:
             left = cur.fetchone()

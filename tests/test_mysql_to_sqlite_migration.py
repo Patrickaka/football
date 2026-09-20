@@ -11,7 +11,7 @@ import sqlite3
 import unittest
 
 from scripts.migrate.mysql_to_sqlite import (create_table_ddl, normalize,
-                                             sqlite_type)
+                                             order_keys, sqlite_type)
 
 
 class TypeMappingTests(unittest.TestCase):
@@ -88,3 +88,34 @@ class DdlTests(unittest.TestCase):
         conn = sqlite3.connect(':memory:')
         conn.execute(create_table_ddl('t', columns))
         conn.execute(create_table_ddl('t', columns))
+
+
+class OrderKeyTests(unittest.TestCase):
+    """校验要逐行并排比对，就得让两边按同样的顺序出行。
+
+    但**大文本列绝不能进 ORDER BY**：MySQL 会把整列塞进 sort buffer，
+    football_prediction 的 doc 列有 302 MB，直接撞
+    `(1038, 'Out of sort memory')`——这正是第一次跑迁移挂掉的地方。
+    """
+
+    def test_primary_key_is_preferred(self):
+        columns = [('match_id', 'varchar(128)', 'NO', 'PRI'),
+                   ('league', 'varchar(64)', 'YES', ''),
+                   ('doc', 'json', 'NO', '')]
+        self.assertEqual(order_keys(columns), ['match_id'])
+
+    def test_large_text_columns_never_appear(self):
+        columns = [('id', 'bigint', 'NO', 'PRI'), ('doc', 'json', 'NO', ''),
+                   ('body', 'longtext', 'YES', ''), ('note', 'text', 'YES', '')]
+        for name in ('doc', 'body', 'note'):
+            self.assertNotIn(name, order_keys(columns))
+
+    def test_falls_back_to_small_columns_when_there_is_no_primary_key(self):
+        columns = [('team', 'varchar(128)', 'NO', ''),
+                   ('rating', 'double', 'YES', ''),
+                   ('doc', 'json', 'YES', '')]
+        self.assertEqual(order_keys(columns), ['team', 'rating'])
+
+    def test_a_table_of_only_large_columns_yields_no_keys(self):
+        """排不了就别排——顺序由自然顺序决定，总比撞 1038 强。"""
+        self.assertEqual(order_keys([('doc', 'json', 'NO', '')]), [])
