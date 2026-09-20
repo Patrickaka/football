@@ -11,7 +11,8 @@ import sqlite3
 import unittest
 
 from scripts.migrate.mysql_to_sqlite import (create_table_ddl, normalize,
-                                             order_keys, sqlite_type)
+                                             mysql_order_term, order_keys,
+                                             sqlite_type)
 
 
 class TypeMappingTests(unittest.TestCase):
@@ -119,3 +120,25 @@ class OrderKeyTests(unittest.TestCase):
     def test_a_table_of_only_large_columns_yields_no_keys(self):
         """排不了就别排——顺序由自然顺序决定，总比撞 1038 强。"""
         self.assertEqual(order_keys([('doc', 'json', 'NO', '')]), [])
+
+
+class CollationTests(unittest.TestCase):
+    """两边的字符串排序规则必须一致，否则逐行并排比对会整体错位。
+
+    库默认 utf8mb4_unicode_ci 把 'lottery_dlt…' 排在 'lottery3d' 前面，
+    而 SQLite 按字节码（'3'=0x33 < '_'=0x5F）正好相反——第一次校验就是
+    在 kv_store 第 9 行被这个绊住的，而数据本身完全没问题。
+    """
+
+    def test_text_columns_are_forced_to_binary_collation(self):
+        self.assertEqual(mysql_order_term('k', 'varchar(128)'),
+                         '`k` COLLATE utf8mb4_bin')
+
+    def test_numeric_columns_take_no_collation(self):
+        """数值列加 COLLATE 是语法错误。"""
+        self.assertEqual(mysql_order_term('id', 'bigint(20)'), '`id`')
+        self.assertEqual(mysql_order_term('rating', 'double'), '`rating`')
+
+    def test_binary_collation_matches_python_byte_order(self):
+        """SQLite 的默认排序就是字节序，与 Python 的字符串比较同序。"""
+        self.assertLess('lottery3d', 'lottery_dlt_online_predictions')

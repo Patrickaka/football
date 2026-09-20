@@ -97,6 +97,20 @@ def order_keys(columns):
                        for kind in ('text', 'json', 'blob'))]
 
 
+def mysql_order_term(name, column_type):
+    """MySQL 侧的排序项。
+
+    **字符串列必须强制二进制 collation**：库默认 utf8mb4_unicode_ci，它把
+    'lottery_dlt…' 排在 'lottery3d' 前面，而 SQLite 默认按字节码
+    （'3'=0x33 < '_'=0x5F）正好相反。两边顺序不同，逐行并排比对就整体错位，
+    报出来的却是「某行内容不一致」——看着像数据坏了，其实是校验自己排错了。
+    数值列加 COLLATE 是语法错误，所以只对字符列加。
+    """
+    if any(kind in column_type.lower() for kind in ('char', 'text')):
+        return f'`{name}` COLLATE utf8mb4_bin'
+    return f'`{name}`'
+
+
 def create_table_ddl(table, columns):
     """按 MySQL 的列定义生成 SQLite 建表语句。
 
@@ -198,8 +212,10 @@ def verify_table(mysql, sqlite, table, columns):
     names = [name for name, *_ in columns]
     my_cols = ','.join(f'`{name}`' for name in names)
     lite_cols = ','.join(f'"{name}"' for name in names)
+    types = {name: column_type for name, column_type, *_ in columns}
     keys = order_keys(columns)
-    my_order = (' ORDER BY ' + ','.join(f'`{k}`' for k in keys)) if keys else ''
+    my_order = (' ORDER BY ' + ','.join(mysql_order_term(k, types[k])
+                                        for k in keys)) if keys else ''
     lite_order = (' ORDER BY ' + ','.join(f'"{k}"' for k in keys)) if keys else ''
 
     problems = []
