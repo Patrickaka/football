@@ -86,6 +86,7 @@ def resolve_exclusion_strategy(strategy: Dict, play_type: str, excluded_numbers)
         'repeat_avoid_score', 'repeat_non_avoid_score', 'repeat_follow_score',
         'repeat_non_follow_score', 'pool_max_last_numbers', 'frequency_mode',
         'final_selection_mode', 'exclusion_selection_mode',
+        'exclusion_windows',
     ):
         if key in override:
             result[key] = deepcopy(override[key])

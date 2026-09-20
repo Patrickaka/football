@@ -1024,13 +1024,15 @@ class KL8Analyzer:
 
         excluded_set = set(excluded)
         strategy = _strategies_mod.resolve_exclusion_strategy(strategy, play_type, excluded_set)
-        pool_result = self.build_pool_by_strategy(
+        from .exclusion import exclusion_candidates
+        ranked_candidates = exclusion_candidates(
+            self,
             strategy,
             pool_size=min(KL8_NUM_RANGE, max(40, pick_n + len(excluded) + 20)),
         )
         candidates = [
             (num, score)
-            for num, score in pool_result.get('candidates', [])
+            for num, score in ranked_candidates
             if num not in excluded_set
         ]
         if len(candidates) < pick_n:
