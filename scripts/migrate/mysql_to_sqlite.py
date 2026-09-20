@@ -81,6 +81,11 @@ def sqlite_type(mysql_type):
     return 'TEXT'
 
 
+def primary_keys(columns):
+    """主键列。空表示这张表没有主键（遗留表可能没有）。"""
+    return [name for name, _type, _null, key in columns if key == 'PRI']
+
+
 def order_keys(columns):
     """挑出用来给两边排序的列。
 
@@ -89,7 +94,7 @@ def order_keys(columns):
     `(1038, 'Out of sort memory')`。有主键就用主键，没有就用所有小列；
     要是一张表全是大列，那就不排——顺序由自然顺序决定，总比排爆强。
     """
-    primary = [name for name, _type, _null, key in columns if key == 'PRI']
+    primary = primary_keys(columns)
     if primary:
         return primary
     return [name for name, column_type, _null, _key in columns
@@ -204,15 +209,66 @@ def copy_table(mysql, sqlite, table, columns, batch_size=BATCH_SIZE):
 def verify_table(mysql, sqlite, table, columns):
     """逐行全量比对，返回问题描述列表。
 
-    两边按 `order_keys` 选出的列排序后并排走。不能按全部列排——大 JSON 列
-    进 ORDER BY 会撞 MySQL 的 1038 Out of sort memory。
+    有主键的表**不排序**：MySQL 一旦 filesort 就得把整行放进 sort buffer，
+    football_prediction 的 doc 列有 302 MB，直接撞 1038。（给排序列加
+    COLLATE 也会让它用不上主键索引，同样退化成 filesort——那正是第二次
+    踩的坑。）改成流式读 MySQL、按主键去 SQLite 点查，再比总行数：
+    每行都能对上且两边条数相等，主键唯一，就等于两边一致。
     """
+    keys = primary_keys(columns)
+    if not keys:
+        return _verify_by_order(mysql, sqlite, table, columns)
+    return _verify_by_key(mysql, sqlite, table, columns, keys)
+
+
+def _row_problems(table, index, names, expected, actual):
+    return [f'{table} 第 {index} 行 {name} 不一致：'
+            f'MySQL {want!r} SQLite {got!r}'
+            for name, want, got in zip(names, expected, actual) if want != got]
+
+
+def _verify_by_key(mysql, sqlite, table, columns, keys):
     import pymysql.cursors
 
     names = [name for name, *_ in columns]
     my_cols = ','.join(f'`{name}`' for name in names)
     lite_cols = ','.join(f'"{name}"' for name in names)
+    where = ' AND '.join(f'"{k}"=?' for k in keys)
+    key_at = [names.index(k) for k in keys]
+
+    problems = []
+    seen = 0
+    with mysql.cursor(pymysql.cursors.SSCursor) as cur:
+        cur.execute(f'SELECT {my_cols} FROM `{table}`')
+        for index, row in enumerate(cur):
+            seen += 1
+            expected = tuple(normalize(v) for v in row)
+            key = tuple(expected[i] for i in key_at)
+            found = sqlite.execute(
+                f'SELECT {lite_cols} FROM "{table}" WHERE {where}', key).fetchone()
+            if found is None:
+                problems.append(f'{table}: SQLite 缺少主键 {key}')
+            else:
+                problems.extend(_row_problems(
+                    table, index, names, expected,
+                    tuple(normalize(v) for v in found)))
+            if len(problems) >= 20:
+                return problems
+
+    stored = sqlite.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0]
+    if stored != seen:
+        problems.append(f'{table}: 条数不一致 MySQL {seen} SQLite {stored}')
+    return problems
+
+
+def _verify_by_order(mysql, sqlite, table, columns):
+    """没有主键的遗留表：按小列排序后并排走。这些表都没有大 JSON 列。"""
+    import pymysql.cursors
+
+    names = [name for name, *_ in columns]
     types = {name: column_type for name, column_type, *_ in columns}
+    my_cols = ','.join(f'`{name}`' for name in names)
+    lite_cols = ','.join(f'"{name}"' for name in names)
     keys = order_keys(columns)
     my_order = (' ORDER BY ' + ','.join(mysql_order_term(k, types[k])
                                         for k in keys)) if keys else ''
@@ -233,14 +289,9 @@ def verify_table(mysql, sqlite, table, columns):
                 break
             expected = tuple(normalize(v) for v in left)
             actual = tuple(normalize(v) for v in right)
-            if expected != actual:
-                for name, want, got in zip(names, expected, actual):
-                    if want != got:
-                        problems.append(
-                            f'{table} 第 {index} 行 {name} 不一致：'
-                            f'MySQL {want!r} SQLite {got!r}')
-                if len(problems) >= 20:
-                    return problems
+            problems.extend(_row_problems(table, index, names, expected, actual))
+            if len(problems) >= 20:
+                return problems
             index += 1
     return problems
 
