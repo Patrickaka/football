@@ -322,16 +322,43 @@ def _lottery_match_key(match_num, match_time):
     return (num, when) if num and when else None
 
 
-#: 已结算超过这么久的记录，内存里只留 market_timeline 的最后一条快照。
+#: 已结算超过这么久的记录，内存副本只留各字段的摘要。
 TIMELINE_OFFLOAD_AFTER_MINUTES = 3 * 24 * 60
-#: 标记内存副本的时间线已截断，写库前必须先从库里读回完整时间线。
+#: 标记内存副本已被精简，写库前必须先从库里读回全文。键名沿用历史值，
+#: `football_storage.encode_record` 按这个名字拦截写回。
 TIMELINE_OFFLOADED = '_timeline_offloaded'
+#: 这条记录上哪些字段被换成了摘要，hydrate 按它从库恢复。
+TRIMMED_FIELDS = '_trimmed_fields'
+
+#: `monitoring.has_timed_snapshot` / `has_closing_snapshot` 检查的键。
+_TIMED_SNAPSHOT_KEYS = ('T-24h', 'T-6h', 'T-1h', 'T-15min')
 
 
-def _timeline_offloadable(record, now):
+def _summarize_odds_layers(value):
+    """只留这四个键的真假。
+
+    `odds_layers` 是骨架里最大的一项（线上 25.55 MB），而它的唯一消费者
+    `monitoring` 只判断这几个键有没有值，一个字节的内容都不读。
+    """
+    layers = value or {}
+    return {key: True for key in _TIMED_SNAPSHOT_KEYS if layers.get(key)}
+
+
+#: 已结算多日的记录，内存里对这些字段只留下游真正要用的那点信息。
+#: 摘要返回 None 表示整个字段没有任何消费者，内存副本里直接去掉。
+#: **写库与导出前一律按 `TRIMMED_FIELDS` 从库读回全文**——拿摘要覆盖
+#: 会让全文永久消失，而且一声不响。
+#: 不在这张表里的字段一律原样保留，比如领域层回测要读内容的 `time_layers`。
+_MEMORY_SUMMARIES = {
+    'market_timeline': lambda value: value[-1:],
+    'odds_layers': _summarize_odds_layers,
+    'closing_odds_snapshot': lambda value: True,
+    'last_prematch_odds_snapshot': lambda value: None,
+}
+
+
+def _trimmable(record, now):
     if not record.get('settled') or record.get(TIMELINE_OFFLOADED):
-        return False
-    if len(record.get('market_timeline') or []) <= 1:
         return False
     try:
         return _is_match_settle_due(record.get('match_time'),
@@ -367,7 +394,7 @@ class PredictionHistory:
 
         def offload(record):
             nonlocal offloaded
-            offloaded += self._offload_record(record, now)
+            offloaded += self._trim_record(record, now)
             return record
 
         try:
@@ -384,54 +411,84 @@ class PredictionHistory:
             self.records = []
         self.offload_stale_timelines()
 
-    def offload_stale_timelines(self, now=None):
-        """把已结算多日记录的时间线截到最后一条，返回本次截断的条数。"""
+    def trim_stale_records(self, now=None):
+        """把已结算多日记录的大字段换成摘要，返回本次精简的条数。"""
         now = now or datetime.now()
-        offloaded = 0
+        trimmed = 0
         with self._records_lock:
             for record in self.records:
-                offloaded += self._offload_record(record, now)
-        if offloaded:
-            log.info("预测历史时间线已精简: %d 条记录只保留最后一条快照", offloaded)
-        return offloaded
+                trimmed += self._trim_record(record, now)
+        if trimmed:
+            log.info("预测历史内存副本已精简: %d 条记录的大字段只留摘要", trimmed)
+        return trimmed
+
+    #: 旧名字，保留给既有调用点。
+    offload_stale_timelines = trim_stale_records
 
     @staticmethod
-    def _offload_record(record, now):
-        """把一条已结算多日记录的时间线截到最后一条，返回是否截断。"""
-        if not _timeline_offloadable(record, now):
+    def _trim_record(record, now):
+        """把一条已结算多日记录的大字段换成摘要，返回是否精简过。
+
+        空值跳过——它本来就不占地方，而把 `None` 换成 `True` 会凭空造出
+        一个「有收盘快照」的假象。
+        """
+        if not _trimmable(record, now):
             return 0
-        record['market_timeline'] = record['market_timeline'][-1:]
+        trimmed = []
+        for field, summarize in _MEMORY_SUMMARIES.items():
+            value = record.get(field)
+            if not value:
+                continue
+            summary = summarize(value)
+            if summary == value:
+                continue
+            if summary is None:
+                record.pop(field, None)
+            else:
+                record[field] = summary
+            trimmed.append(field)
+        if not trimmed:
+            return 0
         record[TIMELINE_OFFLOADED] = True
+        record[TRIMMED_FIELDS] = trimmed
         return 1
 
-    def _stored_timeline(self, record):
+    def _stored_fields(self, record):
+        """从库读回这条记录被精简掉的字段，读不到返回 None。
+
+        返回 None 的含义是「拿不到全文」，调用方必须放弃写回而不是拿摘要
+        顶上——摘要覆盖全文之后，原始数据就再也找不回来了。
+        """
+        fields = record.get(TRIMMED_FIELDS) or []
         stored = repositories.football_prediction_get(record.get('match_id'))
-        timeline = (stored or {}).get('market_timeline')
-        if not timeline:
-            log.warning("预测记录 %s 无法从库读回完整时间线，沿用内存副本",
+        if not stored:
+            log.warning("预测记录 %s 无法从库读回全文，本次不写回",
                         record.get('match_id'))
             return None
-        return timeline
+        return {field: stored[field] for field in fields if field in stored}
 
     def _hydrate_timeline(self, record):
-        """就地补回完整时间线；只在即将修改该记录时调用。"""
+        """就地补回被精简的字段；只在即将修改该记录时调用。"""
         if not record.get(TIMELINE_OFFLOADED):
             return record
-        stored = self._stored_timeline(record)
-        if stored:
-            record['market_timeline'] = stored
+        stored = self._stored_fields(record)
+        if stored is None:
+            return record
+        record.update(stored)
         record.pop(TIMELINE_OFFLOADED, None)
+        record.pop(TRIMMED_FIELDS, None)
         return record
 
     def _persistable(self, record):
-        """返回可写库/导出的完整记录；精简副本会合并库里的时间线，不改内存。"""
+        """返回可写库/导出的完整记录；读不回全文时返回 None，不改内存。"""
         if not record.get(TIMELINE_OFFLOADED):
             return record
-        merged = dict(record)
+        stored = self._stored_fields(record)
+        if stored is None:
+            return None
+        merged = {**record, **stored}
         merged.pop(TIMELINE_OFFLOADED, None)
-        stored = self._stored_timeline(record)
-        if stored:
-            merged['market_timeline'] = stored
+        merged.pop(TRIMMED_FIELDS, None)
         return merged
 
     def _save(self):
@@ -443,7 +500,10 @@ class PredictionHistory:
         try:
             if any(r.get(TIMELINE_OFFLOADED) for r in self.records):
                 for record in self.records:
-                    repositories.football_prediction_upsert(self._persistable(record))
+                    payload = self._persistable(record)
+                    if payload is None:
+                        continue
+                    repositories.football_prediction_upsert(payload)
             else:
                 repositories.football_prediction_save(self.records)
         except Exception as e:
@@ -452,7 +512,11 @@ class PredictionHistory:
     def _save_record(self, record):
         """仅 UPSERT 单条记录，把每请求写入量从 O(表行数) 降到 O(1)。"""
         try:
-            backend = repositories.football_prediction_upsert(self._persistable(record))
+            payload = self._persistable(record)
+            if payload is None:
+                # 读不回全文就不写。拿摘要覆盖等于把原始数据抹掉。
+                return 'skipped'
+            backend = repositories.football_prediction_upsert(payload)
             if backend == 'fallback':
                 log.warning(
                     "MySQL预测记录写入失败，已降级本地存储: match_id=%s",
@@ -2491,8 +2555,11 @@ def get_prediction_export(*, include_stats: bool = True) -> Dict:
     # Export a stable view while prediction writers may compact event lists.
     # The archive and hot list must come from the same version of each row.
     with _global_history._records_lock:
-        complete_records = [deepcopy(_global_history._persistable(row))
-                            for row in _global_history.records]
+        # 读不回全文的记录整条跳过——导出一条字段被换成摘要的记录，
+        # 比少导出一条更糟：拿到的人无从分辨那是摘要还是真值。
+        persistable = [_global_history._persistable(row)
+                       for row in _global_history.records]
+        complete_records = [deepcopy(row) for row in persistable if row is not None]
     records = [
         {**{key: deepcopy(record.get(key)) for key in export_fields if key in record},
          **({'prediction_events': hydrate_prediction_events(record)}
